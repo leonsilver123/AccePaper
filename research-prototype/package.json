@@ -1,0 +1,17 @@
+{
+  "name": "research-engine-prototype",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure-logic 16-step research engine prototype (no Cordis). Ported into @deepseek-ai/dsh-research-core at P1.6.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "tsx": "^4.22.4"
+  }
+}
