@@ -6,8 +6,11 @@
 // process restart before any member resumes, and evaluated live per tool call
 // against the durable root-log projection — immune to the per-activation
 // re-install timing gap that would otherwise leave a cold-resumed member
-// unguarded. The guard is deny-only and passes every non-research caller
-// through unchanged (host calls, unrelated forks, provider-owned workers).
+// unguarded. The guard is deny-only: it passes provably non-research callers
+// through unchanged (host calls, unrelated forks, provider-owned workers) and
+// FAILS CLOSED on a caller whose research lineage cannot be proven — a live
+// member whose Lead is offline, or a worker of an unknown offline parent
+// (P2-2) — by denying every tool before any scope check.
 //
 // The decision itself is the PURE `decideResearchToolCall` from the pure layer;
 // this module only adapts the concrete runtime `ToolExecution` into the pure
@@ -16,7 +19,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolGuard, ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { GuardMembership, GuardToolExecution, ResearchScopePolicy } from './scope-guard.ts'
+import type { GuardMembershipResolution, GuardToolExecution, ResearchScopePolicy } from './scope-guard.ts'
 import { decideResearchToolCall, pathFromArgs } from './scope-guard.ts'
 import type { ResearchRoster } from './roster.ts'
 
@@ -37,11 +40,12 @@ export function installResearchGuard(
   scopeCheckedTools: ResearchScopeCheckedTools,
 ): () => void {
   const policy: ResearchScopePolicy = {
-    resolveMembership: (agentId: string): GuardMembership | undefined => {
-      const membership = roster.tryMembershipById(agentId)
-      return membership === undefined
-        ? undefined
-        : { memberId: membership.memberId, role: membership.role }
+    resolveMembership: (agentId: string): GuardMembershipResolution => {
+      const resolution = roster.classifyById(agentId)
+      if (resolution === undefined) return undefined
+      if (resolution.kind === 'unattributed') return 'unattributed'
+      if (resolution.kind === 'not-member') return undefined
+      return { memberId: resolution.membership.memberId, role: resolution.membership.role }
     },
     isScopeCheckedTool: (toolName: string): boolean => scopeCheckedTools.has(toolName),
     pathOf: (arguments_: Readonly<Record<string, unknown>>): string | undefined => {

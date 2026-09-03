@@ -137,7 +137,9 @@ export class ResearchTeamService extends Service {
     return this.roster.membership(agent)
   }
 
-  /** Resolve a caller without throwing (observers and the guard resolver). */
+  /** Resolve a caller without throwing (observers and legacy membership
+   *  paths; the write-scope guard consumes the roster's three-way
+   *  classification directly so unprovable lineages fail closed, P2-2). */
   tryMembership(agent: Agent): ResearchMembership | undefined {
     return this.roster.tryMembership(agent)
   }

@@ -526,6 +526,47 @@ describe('write-scope guard — host integration', () => {
     }
   })
 
+  it('denies a live member whose Lead is offline, even for an in-scope write (P2-2 fail-closed)', async () => {
+    const host = await bootHost({ scopeCheckedTools: ['write_file'] })
+    try {
+      const spawned = await host.service.spawnMember(asAgent(host.lead), spawnRequest('researcher-a'))
+      const member = host.agents.get(spawned.id)
+      if (member === undefined) throw new Error('member agent did not materialize')
+      const task = await host.service.createTask(asAgent(host.lead), {
+        subject: 'claim',
+        description: 'scope the member before the lead goes offline',
+      })
+      const claimed = await host.service.updateTask(asAgent(member), {
+        taskId: task.id,
+        expectedRevision: 1,
+        action: 'claim',
+        writeScopes: ['drafts/'],
+      })
+      if (!claimed.ok) throw new Error(`claim failed: ${claimed.error.message}`)
+      const inScopeWrite = {
+        agent: { id: member.id },
+        name: 'write_file',
+        arguments: { file: 'drafts/report.md' },
+      }
+
+      // Lead live: the member's in-scope write is allowed.
+      expect(host.guardCall(inScopeWrite)).toBeUndefined()
+
+      // The Lead leaves the live registry while the member stays live (a
+      // resumed member whose Lead is not running). The lineage can no longer
+      // be proven research-free, so the guard FAILS CLOSED on the same call
+      // instead of passing the member through unguarded.
+      host.agents.delete(host.lead.id)
+      expect(host.guardCall(inScopeWrite))
+        .toContain('cannot attribute the caller to a research team membership')
+      // Legacy membership resolution still maps the unattributable caller to
+      // undefined (membership() throws); only classifyById carries the signal.
+      expect(host.service.tryMembership(asAgent(member))).toBeUndefined()
+    } finally {
+      await host.dispose()
+    }
+  })
+
   it('denies non-allowlisted tools and path-less writes for members', async () => {
     const { host, member } = await teamWithClaim()
     try {
