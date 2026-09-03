@@ -29,6 +29,92 @@ interface Koffi {
 }
 
 /**
+ * Stable typed error for native binding load failures: distinguishes a koffi
+ * import / module-shape failure (`DSH_NATIVE_KOFFI_IMPORT_FAILED`) from a DLL
+ * load failure (`DSH_NATIVE_DLL_LOAD_FAILED`). The latter carries `dllName`
+ * so callers can see WHICH native library failed to load. A DLL load failure
+ * is not assumed to mean a missing `@koromix/koffi-win32-*` binary — it may
+ * equally be an architecture mismatch, permission, ABI, or loader error, so
+ * the code names the failure mode (load failed) rather than one hypothesis
+ * (binary missing). Surfaces as-is — there is no runtime fallback here (per
+ * the 2026-08-04 note; the startup browse降级 in `resolve.ts:50` stays
+ * unchanged). Upper layers still rethrow as-is; they now propagate a stable
+ * typed error instead of an opaque one.
+ *
+ * NOTE: this is error-handling hardening, NOT proof of a real crash root cause.
+ * B-PICK remains open until a real Windows repro confirms the guarded path is
+ * the failure surface and the fix removes the original error.
+ */
+export class Win32BindingsLoadError extends Error {
+  readonly code: 'DSH_NATIVE_KOFFI_IMPORT_FAILED' | 'DSH_NATIVE_DLL_LOAD_FAILED'
+  readonly dllName?: string
+  constructor(
+    code: Win32BindingsLoadError['code'],
+    message: string,
+    cause?: unknown,
+    dllName?: string,
+  ) {
+    super(message)
+    this.name = 'Win32BindingsLoadError'
+    this.code = code
+    // Inherited from ES2022 Error.cause (mutable, typed `unknown`): set only when
+    // provided so an absent cause stays absent (exactOptionalPropertyTypes-safe).
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
+    // dllName only meaningful for DSH_NATIVE_DLL_LOAD_FAILED; left absent
+    // otherwise (and when not provided).
+    if (dllName !== undefined) this.dllName = dllName
+  }
+}
+
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  return String(e)
+}
+
+/**
+ * Import koffi and validate the module shape: a successful `import('koffi')`
+ * whose default lacks a callable `load` (a corrupted/odd module shape) is
+ * reported as `DSH_NATIVE_KOFFI_IMPORT_FAILED`, never misreported as a DLL
+ * load failure. Factoring this here keeps both call sites consistent and
+ * guarantees a malformed module never reaches `loadDll` (which would misfile
+ * it as `DSH_NATIVE_DLL_LOAD_FAILED`).
+ */
+async function loadKoffi(): Promise<Koffi> {
+  let imported: { default?: unknown }
+  try {
+    imported = await import('koffi')
+  } catch (e) {
+    throw new Win32BindingsLoadError(
+      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
+      `import('koffi') failed: ${errMessage(e)}`,
+      e,
+    )
+  }
+  const koffi = imported.default as unknown as Koffi
+  if (!koffi || typeof koffi.load !== 'function') {
+    throw new Win32BindingsLoadError(
+      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
+      "import('koffi') resolved but the module default has no callable load() — module-shape error, not a DLL load failure",
+    )
+  }
+  return koffi
+}
+
+/** Load a native DLL via koffi, rethrowing load failures as Win32BindingsLoadError. */
+function loadDll(koffi: Koffi, dll: string): KoffiLibrary {
+  try {
+    return koffi.load(dll)
+  } catch (e) {
+    throw new Win32BindingsLoadError(
+      'DSH_NATIVE_DLL_LOAD_FAILED',
+      `koffi.load('${dll}') failed: ${errMessage(e)}`,
+      e,
+      dll,
+    )
+  }
+}
+
+/**
  * Read a NUL-terminated UTF-16 string at a native address. koffi's
  * `_Out_ void **` out-params surface a raw address, and
  * `koffi.decode(addr, 'str16')` would dereference it as a pointer — crash
@@ -88,10 +174,10 @@ const IID_IFILE_OPEN_DIALOG = guidBytes('d57c7288-d4ad-4768-be02-9d969532d960')
  * @returns the bindings {@link runFolderDialog} sequences against.
  */
 export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
-  const koffi = (await import('koffi')).default as unknown as Koffi
-  const ole32 = koffi.load('ole32.dll')
-  const user32 = koffi.load('user32.dll')
-  const kernel32 = koffi.load('kernel32.dll')
+  const koffi = await loadKoffi()
+  const ole32 = loadDll(koffi, 'ole32.dll')
+  const user32 = loadDll(koffi, 'user32.dll')
+  const kernel32 = loadDll(koffi, 'kernel32.dll')
 
   // Vtable slots and out-pointers are pointer-width offsets: 8 on x64/arm64,
   // 4 on ia32 — koffi reports the running process's width.
@@ -180,8 +266,8 @@ export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
  * @param threadId - the dialog thread's native id (from the `showing` notice).
  */
 export async function closeThreadWindows(threadId: number): Promise<void> {
-  const koffi = (await import('koffi')).default as unknown as Koffi
-  const user32 = koffi.load('user32.dll')
+  const koffi = await loadKoffi()
+  const user32 = loadDll(koffi, 'user32.dll')
   const enumThreadWindows = user32.func('__stdcall', 'EnumThreadWindows', 'int', ['uint32', 'void *', 'intptr'])
   const postMessageW = user32.func('__stdcall', 'PostMessageW', 'int', ['void *', 'uint32', 'uintptr', 'intptr'])
   const protoEnumProc = koffi.proto('int __stdcall DshEnumThreadWndProc(void *hwnd, intptr lparam)')

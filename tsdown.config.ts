@@ -16,7 +16,12 @@ function isBuildFaceClient(value: unknown): boolean {
 export default defineConfig(({ env }) => {
   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
   return {
-    workspace: ['vendor/*', 'packages/*/*', 'apps/cli'],
+    // dsh-research-core is a standalone pure-TS domain core (no Cordis). It builds itself via
+    // a package-local tsdown.config (src/index.ts → lib/index.js, src/host.ts → lib/host.js)
+    // + tsc -p tsconfig.json emits lib/types. It is INCLUDED in the workspace build (no longer
+    // excluded) so its lib/index.js is produced for the adapter's production import. The main
+    // entry exports NO trust capability; the `./host` subpath is the only approval path.
+    workspace: { include: ['vendor/*', 'packages/*/*', 'apps/cli'] },
     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
     outDir: 'lib',
     format: ['esm'],

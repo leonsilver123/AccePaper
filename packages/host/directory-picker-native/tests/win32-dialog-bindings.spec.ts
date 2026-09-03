@@ -10,6 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HRESULT_CANCELLED, runFolderDialog } from '../src/win32-dialog-logic.ts'
+import type { Win32BindingsLoadError as LoadError } from '../src/win32-dialog-bindings.ts'
 
 const E_FAIL = 0x80004005 | 0
 const WM_CLOSE = 0x10
@@ -30,6 +31,8 @@ interface ComWorld {
   /** Contexts `SetThreadDpiAwarenessContext` accepts; others return NULL. */
   supportedDpiContexts: number[]
   enumThrows: boolean
+  /** 若设置，fake 的 koffi.load 命中即抛此错误（模拟原生二进制缺失/加载失败）。 */
+  loadThrows?: Error
   path: string
   titles: string[]
   options: number[]
@@ -90,40 +93,43 @@ function installFakeKoffi(world: ComWorld): void {
 
   vi.doMock('koffi', () => ({
     default: {
-      load: (dll: string) => ({
-        func: (_convention: string, name: string, _result: string, _args: string[]) => {
-          switch (name) {
-            case 'CoInitializeEx': return () => world.coInitHr
-            case 'CoUninitialize': return () => { world.uninitialized += 1 }
-            case 'CoCreateInstance': return (...args: unknown[]) => {
-              if (world.coCreateHr < 0) return world.coCreateHr
-              // The out-pointer must be allocated at the fake's pointer width.
-              if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
-                throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
+      load: (dll: string) => {
+        if (world.loadThrows) throw world.loadThrows
+        return {
+          func: (_convention: string, name: string, _result: string, _args: string[]) => {
+            switch (name) {
+              case 'CoInitializeEx': return () => world.coInitHr
+              case 'CoUninitialize': return () => { world.uninitialized += 1 }
+              case 'CoCreateInstance': return (...args: unknown[]) => {
+                if (world.coCreateHr < 0) return world.coCreateHr
+                // The out-pointer must be allocated at the fake's pointer width.
+                if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
+                  throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
+                }
+                outBuffers.set(args[4], dialogPtr)
+                return 0
               }
-              outBuffers.set(args[4], dialogPtr)
-              return 0
-            }
-            case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
-            case 'GetCurrentThreadId': return () => 31337
-            case 'SetThreadDpiAwarenessContext': {
-              if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
-              return (context: unknown) => {
-                world.dpiContexts.push(context)
-                return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
+              case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
+              case 'GetCurrentThreadId': return () => 31337
+              case 'SetThreadDpiAwarenessContext': {
+                if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
+                return (context: unknown) => {
+                  world.dpiContexts.push(context)
+                  return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
+                }
               }
+              case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
+                if (world.enumThrows) throw new Error('EnumThreadWindows refused')
+                callback.fn({ kind: 'hwnd', n: 1 }, lparam)
+                callback.fn({ kind: 'hwnd', n: 2 }, lparam)
+                return 1
+              }
+              case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
+              default: throw new Error(`unexpected native import ${dll}/${name}`)
             }
-            case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
-              if (world.enumThrows) throw new Error('EnumThreadWindows refused')
-              callback.fn({ kind: 'hwnd', n: 1 }, lparam)
-              callback.fn({ kind: 'hwnd', n: 2 }, lparam)
-              return 1
-            }
-            case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
-            default: throw new Error(`unexpected native import ${dll}/${name}`)
-          }
-        },
-      }),
+          },
+        }
+      },
       proto: (declaration: string) => ({ declaration }),
       pointer: (type: unknown) => type,
       sizeof: (type: string) => { void type; return FAKE_POINTER_SIZE },
@@ -359,5 +365,81 @@ describe('the worker entry over a mocked process boundary', () => {
     process.env.DSH_DIALOG_TITLE = 'Pick'
     delete (process as { send?: unknown }).send
     await expect(import('../src/win32-dialog-worker.ts')).rejects.toThrow('must run as a child process')
+  })
+})
+
+// B-PICK 保持开放: 下列注入式测试证明守卫将 koffi 加载异常转为稳定 Win32BindingsLoadError
+// 且不破坏成功路径——即"错误处理加固覆盖"。它不证明真实 Windows 崩溃根因;后者须真 Windows
+// 复现 + 加守卫后原错误转为 Win32BindingsLoadError 且上层正常 surface 方可关闭 B-PICK。
+describe('native load failure hardening (B-PICK stays OPEN: error-handling coverage, NOT real-crash root-cause)', () => {
+  // Win32BindingsLoadError is a runtime-destructured value (the class); LoadError (a static
+  // type import) is its instance type, so `as` casts typecheck. The outer cast narrows the
+  // .catch union (Win32DialogBindings | thrown error) to the error type, making .code / .cause
+  // / .message reachable without per-access casts.
+  it('L1: rethrows a koffi.load failure as Win32BindingsLoadError DSH_NATIVE_DLL_LOAD_FAILED carrying dllName', async () => {
+    const original = new Error('Could not load native module')
+    const world = comWorld({ loadThrows: original })
+    installFakeKoffi(world)
+    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
+    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
+    expect(err).toBeInstanceOf(Win32BindingsLoadError)
+    expect(err.code).toBe('DSH_NATIVE_DLL_LOAD_FAILED')
+    expect(err.dllName).toBe('ole32.dll')
+  })
+
+  it('L2: preserves the original load failure as .cause', async () => {
+    const original = new Error('Could not load native module')
+    const world = comWorld({ loadThrows: original })
+    installFakeKoffi(world)
+    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
+    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
+    expect(err).toBeInstanceOf(Win32BindingsLoadError)
+    expect(err.cause).toBe(original)
+  })
+
+  it('L3: names the first failing DLL (ole32.dll) in the message', async () => {
+    const world = comWorld({ loadThrows: new Error('Could not load native module') })
+    installFakeKoffi(world)
+    const { loadWin32DialogBindings } = await loadBindingsModule()
+    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as Error
+    expect(String(err.message)).toContain('ole32.dll')
+  })
+
+  it('L4: rethrows an import(koffi) failure as Win32BindingsLoadError DSH_NATIVE_KOFFI_IMPORT_FAILED', async () => {
+    vi.doMock('koffi', () => { throw new Error('koffi module missing') })
+    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
+    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
+    expect(err).toBeInstanceOf(Win32BindingsLoadError)
+    expect(err.code).toBe('DSH_NATIVE_KOFFI_IMPORT_FAILED')
+  })
+
+  it('L5: success path is transparent — returns usable bindings (no regression)', async () => {
+    const world = comWorld()
+    installFakeKoffi(world)
+    const { loadWin32DialogBindings } = await loadBindingsModule()
+    const bindings = await loadWin32DialogBindings()
+    expect(runFolderDialog(bindings, 'Pick', vi.fn())).toBe('C:\\选中\\directory')
+    expect(world.released).toEqual(['item', 'dialog'])
+  })
+
+  it('L6: closeThreadWindows rethrows a koffi.load failure as DSH_NATIVE_DLL_LOAD_FAILED (user32.dll)', async () => {
+    const world = comWorld({ loadThrows: new Error('Could not load native module') })
+    installFakeKoffi(world)
+    const { closeThreadWindows, Win32BindingsLoadError } = await loadBindingsModule()
+    const err = (await closeThreadWindows(777).catch((e: unknown) => e)) as LoadError
+    expect(err).toBeInstanceOf(Win32BindingsLoadError)
+    expect(err.code).toBe('DSH_NATIVE_DLL_LOAD_FAILED')
+    expect(err.dllName).toBe('user32.dll')
+  })
+
+  it('L7: a koffi module whose default lacks a callable load() is KOFFI_IMPORT_FAILED (not misreported as DLL_LOAD_FAILED)', async () => {
+    // §三.3: verify the dynamic import actually has a callable load() — a
+    // module-shape error must NOT be misclassified as a DLL load failure.
+    vi.doMock('koffi', () => ({ default: { sizeof: () => 8 } }))
+    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
+    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
+    expect(err).toBeInstanceOf(Win32BindingsLoadError)
+    expect(err.code).toBe('DSH_NATIVE_KOFFI_IMPORT_FAILED')
+    expect(err.dllName).toBeUndefined()
   })
 })
