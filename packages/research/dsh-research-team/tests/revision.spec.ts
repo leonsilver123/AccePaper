@@ -18,7 +18,8 @@ import {
   overlapOnlyWarn,
   scopeContains,
 } from '../src/revision.ts'
-import type { ResearchTask, SessionId, TaskActor, TaskMutationInput } from '../src/types.ts'
+import type { TaskActor, TaskMutationInput } from '../src/revision.ts'
+import type { ResearchTask, SessionId } from '../src/types.ts'
 import { ResearchTeamError, sessionId, taskId } from '../src/types.ts'
 
 const M1 = sessionId('member-1')

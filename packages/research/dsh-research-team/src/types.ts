@@ -118,7 +118,7 @@ export function researchTeamError(
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') {
-    for (const key of Object.keys(value as object)) {
+    for (const key of Object.keys(value)) {
       deepFreeze((value as Record<string, unknown>)[key])
     }
     Object.freeze(value)
@@ -129,7 +129,7 @@ function deepFreeze<T>(value: T): T {
 /** Deep-freeze a structured-cloneable value into an independent Readonly
  *  snapshot (clone-first, freeze-second — no live reference escapes). */
 export function freezeValue<T>(value: T): Readonly<T> {
-  return deepFreeze(structuredClone(value)) as Readonly<T>
+  return deepFreeze(structuredClone(value))
 }
 
 // ───────────────────────────── Domain types ────────────────────────────────
