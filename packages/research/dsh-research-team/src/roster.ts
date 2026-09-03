@@ -8,15 +8,21 @@
 // recovery pass reconciles any provisioning-only prefix against the persisted
 // child Session).
 //
-// Membership resolution (`tryMembership`) is the resolver the global tool
-// guard consults on every call (§4 of the frozen spec):
+// Membership resolution is the resolver the global tool guard consults on
+// every call (§4 of the frozen spec), via `classifyById`:
 //   - only an exact-live Agent is an authority (`ctx.agents.get(id) === agent`);
-//   - the durable parent chain is climbed to the nearest research member: a
-//     one-shot subagent spawned by a member acts under that member's claim;
-//   - a direct child on the durable roster is a teammate (provisioning or
+//   - the durable parent chain is climbed to the nearest research member; a
+//     direct child on the durable roster is a teammate (provisioning or
 //     active); the top-most live agent is its own research Lead;
-//   - a provider-owned child that never resolves to a roster row is not a
-//     member at all (falls through to the non-member passthrough).
+//   - a provider-owned child of a LIVE parent that never resolves to a roster
+//     row is provably NOT a member (P2-1: today this includes one-shot
+//     descendants of a member — they pass through, and the member's own
+//     toolFilter is the backstop; if a member tool set ever gains delegation
+//     tools, this must rise to P1 and fold to the nearest member instead);
+//   - a live agent whose lineage CANNOT be proven research-free (the
+//     referenced parent is not in the live registry, e.g. a resumed member
+//     whose Lead is offline) classifies as `unattributed` — the guard FAILS
+//     CLOSED and denies, never passing such a caller through (P2-2).
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
@@ -53,6 +59,15 @@ export interface ResearchMembership {
   readonly role: 'lead' | 'teammate'
   readonly name: string
 }
+
+/** Outcome of resolving one exact-live Agent against the durable roster.
+ *  - `member`: the agent resolves to a live Lead or a roster teammate;
+ *  - `not-member`: the live lineage is provably research-free (P-a passthrough);
+ *  - `unattributed`: lineage cannot be proven (P2-2 — guard must fail closed). */
+export type ResearchMemberResolution =
+  | { readonly kind: 'member'; readonly membership: ResearchMembership }
+  | { readonly kind: 'not-member' }
+  | { readonly kind: 'unattributed' }
 
 /** Request body for creating one durable research member. */
 export interface SpawnMemberRequest {
@@ -99,50 +114,87 @@ export class ResearchRoster {
   }
 
   /**
-   * Resolve a caller without throwing for the guard resolver and lifecycle
-   * observers. Non-research agents (host, unrelated forks, provider-owned
-   * workers) map to undefined — the pure decision treats that as passthrough.
+   * Resolve a caller without throwing for lifecycle observers and legacy
+   * authorization paths. `unattributed` callers (lineage cannot be proven)
+   * map to undefined too, but the guard MUST NOT rely on this method — it
+   * consumes `classifyById` so it can tell `unattributed` from `not-member`
+   * and fail closed (P2-2).
    * @param agent - candidate exact live Agent.
-   * @returns research membership, or undefined when the agent is not a member.
+   * @returns research membership, or undefined for non-members, stale ids,
+   * and unprovable lineages.
    */
   tryMembership(agent: Agent): ResearchMembership | undefined {
-    if (this.ctx.agents.get(agent.id) !== agent) return undefined
-    // Climb the durable parent chain to the nearest research member. A
-    // one-shot subagent spawned by a teammate keeps its ancestor's identity.
+    const resolution = this.classify(agent)
+    return resolution.kind === 'member' ? resolution.membership : undefined
+  }
+
+  /**
+   * Classify one exact-live Agent without throwing. The guard adapter reads
+   * this three-way result so a provably non-member passes through (P-a) while
+   * an unattributable lineage is denied (P2-2). Non-live handles cannot be an
+   * authority and return `undefined` (they cannot originate a tool call).
+   * @param agentId - candidate agent Session identity.
+   * @returns the classification, or undefined when the id is not live.
+   */
+  classifyById(agentId: string): ResearchMemberResolution | undefined {
+    const agent = this.ctx.agents.get(brandString<CoreSessionId>(agentId))
+    return agent === undefined ? undefined : this.classify(agent)
+  }
+
+  /**
+   * Classify one exact-live Agent against the durable roster. See the module
+   * header for the per-case semantics (member / not-member / unattributed).
+   */
+  private classify(agent: Agent): ResearchMemberResolution {
+    // Only an exact-live Agent is an authority; a stale handle cannot be
+    // trusted as either a member or a non-member.
+    if (this.ctx.agents.get(agent.id) !== agent) return { kind: 'unattributed' }
+    // Climb the durable parent chain to the nearest live research member.
     let current: Agent = agent
     for (;;) {
       const parentId = current.session.header.parentSession
-      const parent = parentId === undefined ? undefined : this.ctx.agents.get(parentId)
-      if (parent === undefined) break
+      if (parentId === undefined) {
+        // Top of the live chain: the agent owns its own root. A detached
+        // continuation with no recorded delegating parent cannot be
+        // attributed; anything else is its own Lead (the pure layer's U-A
+        // lead exemption is exercised only for the coordinator).
+        if (this.subagentDescriptor(current)) return { kind: 'unattributed' }
+        return { kind: 'member', membership: this.leadMembership(current) }
+      }
+      const parent = this.ctx.agents.get(parentId)
+      if (parent === undefined) {
+        // The referenced parent is NOT in the live registry, so we cannot rule
+        // out a research Lead above (a resumed member whose Lead is offline
+        // lands here). Fail closed instead of passing the caller through.
+        return { kind: 'unattributed' }
+      }
       const row = this.memberRow(parent, current.id)
       if (row !== undefined && row.phase !== 'failed') {
         return {
-          root: parent,
-          id: TeamId(parent.id),
-          memberId: sessionId(current.id),
-          role: 'teammate',
-          name: row.name,
+          kind: 'member',
+          membership: {
+            root: parent,
+            id: TeamId(parent.id),
+            memberId: sessionId(current.id),
+            role: 'teammate',
+            name: row.name,
+          },
         }
       }
-      if (this.subagentDescriptor(current)) return undefined
+      if (this.subagentDescriptor(current)) {
+        // Provider-owned child of a LIVE parent that is not a roster row:
+        // provably not a research member (P2-1 — one-shot descendants of a
+        // member land here too and pass through, toolFilter is the backstop).
+        return { kind: 'not-member' }
+      }
       current = parent
-    }
-    // Top of the live chain. A provider-owned worker with no live parent is
-    // not a research Lead; anything else owns its own root (lead exemption is
-    // the pure layer's U-A decision, exercised only for the coordinator).
-    if (this.subagentDescriptor(current)) return undefined
-    return {
-      root: current,
-      id: TeamId(current.id),
-      memberId: sessionId(current.id),
-      role: 'lead',
-      name: 'lead',
     }
   }
 
   /**
-   * Resolve membership by Session identity without an Agent handle (the tool
-   * guard carries only `exec.agent.id`). Non-live identities resolve undefined.
+   * Resolve membership by Session identity WITHOUT distinguishing unprovable
+   * lineages (legacy parity: `unattributed` → undefined). The tool guard
+   * consumes `classifyById` instead, so it can fail closed on `unattributed`.
    * @param agentId - candidate agent Session identity.
    * @returns research membership, or undefined for non-members and stale ids.
    */
@@ -389,6 +441,17 @@ export class ResearchRoster {
       return row
     } catch {
       return undefined
+    }
+  }
+
+  /** Lead membership for the top-most live agent of its own root. */
+  private leadMembership(root: Agent): ResearchMembership {
+    return {
+      root,
+      id: TeamId(root.id),
+      memberId: sessionId(root.id),
+      role: 'lead',
+      name: 'lead',
     }
   }
 

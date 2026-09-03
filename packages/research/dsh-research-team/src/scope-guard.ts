@@ -7,9 +7,10 @@
 // ({@link GuardToolExecution}) and every dynamic lookup is injected through
 // {@link ResearchScopePolicy}.
 //
-// Decision order (§4 pseudocode):
+// Decision order (§4 pseudocode + P2-2 fail-closed):
 //   1. no agent (host/system)            → allow
-//   2. agent is not a research member     → allow   (P-a regression)
+//   2. agent is provably not a member     → allow   (P-a regression)
+//   2b. agent lineage cannot be proven    → deny    (P2-2: never pass through)
 //   3. agent is the team lead             → allow   (U-A lead exemption)
 //   4. tool is not scope-checkable        → deny    (member tool whitelist)
 //   5. no path argument to check          → deny
@@ -35,11 +36,17 @@ export interface GuardMembership {
   readonly role: TeamRole
 }
 
+/** Resolution of one agent id for the guard: the member to check, the literal
+ *  `'unattributed'` marker when the caller's research lineage cannot be proven
+ *  (P2-2 — the guard must fail closed and deny), or `undefined` when the agent
+ *  is provably not a research member (P-a — pass through). */
+export type GuardMembershipResolution = GuardMembership | 'unattributed' | undefined
+
 /** Injected dynamic lookups (pure decide() stays host-free and unit-testable
  *  with a mock resolver). */
 export interface ResearchScopePolicy {
   /** Map an agent id to its research membership, if any. */
-  readonly resolveMembership: (agentId: string) => GuardMembership | undefined
+  readonly resolveMembership: (agentId: string) => GuardMembershipResolution
   /** True when the tool's writes are expressible as one path to scope-check. */
   readonly isScopeCheckedTool: (toolName: string) => boolean
   /** Extract the write path from a checked tool's arguments. */
@@ -58,6 +65,15 @@ export function decideResearchToolCall(
   if (exec.agent === undefined) return undefined
   const membership = policy.resolveMembership(exec.agent.id)
   if (membership === undefined) return undefined
+  // P2-2 fail-closed: a caller whose research lineage cannot be proven (a live
+  // member whose Lead is offline, a delegation worker of an unknown offline
+  // parent) is denied outright — never passed through as a non-member.
+  if (membership === 'unattributed') {
+    return (
+      `research team guard denied tool ${exec.name} for ${exec.agent.id}: `
+      + 'cannot attribute the caller to a research team membership'
+    )
+  }
   if (membership.role === 'lead') return undefined
   if (!policy.isScopeCheckedTool(exec.name)) {
     return (

@@ -1,8 +1,10 @@
 // @deepseek-ai/dsh-research-team — scope-guard.ts pure decision spec.
 //
-// Pins the frozen T20 §4 decision order (pure decide(), no ctx):
+// Pins the frozen T20 §4 decision order (pure decide(), no ctx) plus the
+// P2-2 fail-closed branch:
 //   1. no agent (host/system)           → allow
-//   2. agent is not a research member   → allow   (P-a passthrough)
+//   2. agent is provably not a member   → allow   (P-a passthrough)
+//   2b. agent lineage cannot be proven  → deny    (P2-2 fail-closed)
 //   3. agent is the team lead           → allow   (U-A lead exemption)
 //   4. tool is not scope-checkable      → deny    (member tool whitelist)
 //   5. no path argument to check        → deny
@@ -126,7 +128,23 @@ describe('decideResearchToolCall — allowances (order steps 1-3, 6-allow)', () 
   })
 })
 
-describe('decideResearchToolCall — denials (order steps 4-6)', () => {
+describe('decideResearchToolCall — denials (order steps 2b/4-6)', () => {
+  it('denies an agent whose lineage cannot be attributed before any tool checks (P2-2 fail-closed)', () => {
+    const touched: string[] = []
+    const result = decideResearchToolCall(
+      exec({ agent: { id: 'orphan-member' } }),
+      policy({
+        resolveMembership: () => 'unattributed',
+        isScopeCheckedTool: () => { touched.push('isScopeCheckedTool'); return true },
+        pathOf: () => { touched.push('pathOf'); return 'x.md' },
+        memberMayWrite: () => { touched.push('memberMayWrite'); return true },
+      }),
+    )
+    expect(result).toContain('cannot attribute the caller to a research team membership')
+    // Fail-closed denies unconditionally: no scope/claim check runs at all.
+    expect(touched).toEqual([])
+  })
+
   it('denies member calls to tools that are not scope-checked, before path checks', () => {
     const result = decideResearchToolCall(
       exec({ name: 'ask_user' }),
