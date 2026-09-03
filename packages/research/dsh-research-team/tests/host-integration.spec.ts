@@ -22,6 +22,7 @@ import type { SessionEvent, SessionHeader, SessionId as CoreSessionId } from '@d
 import { SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
 import { ResearchTeamError, TeamId, sessionId } from '../src/types.ts'
 import type { TeamState } from '../src/types.ts'
+import type { RedTeamPersona } from '../src/redteam/personas.ts'
 import ResearchTeamService from '../src/index.ts'
 import type { ResearchTeamServiceConfig } from '../src/index.ts'
 import { ResearchJournal } from '../src/journal.ts'
@@ -71,9 +72,9 @@ interface AgentStub {
   readonly options: { readonly model?: string }
 }
 
-function agentStub(id: string, parent?: CoreSessionId): AgentStub {
+function agentStub(id: string, parent?: CoreSessionId, model = 'mock-model'): AgentStub {
   const session = new MemorySession(id, parent)
-  return { id: session.id, session, status: 'idle', options: { model: 'mock-model' } }
+  return { id: session.id, session, status: 'idle', options: { model } }
 }
 
 const asAgent = (stub: AgentStub): Agent => stub as unknown as Agent
@@ -127,6 +128,28 @@ interface StartCall {
   provider: string
   label: string
   parentId: string
+  /** T21 heterogeneous-fleet pass-through (absent when the caller set none). */
+  persona?: string
+  agentOptions?: { readonly model?: string }
+  toolFilter?: { readonly allow?: ReadonlyArray<string> }
+}
+
+/** One captured `subagents.sendMessage` delivery (Lead → fleet member). */
+interface SendMessageCall {
+  senderId: string
+  targetId: CoreSessionId
+  content: unknown
+}
+
+/** Concatenated `text` of a captured `ContentBlock[]` payload ('' when absent). */
+function textOf(call: SendMessageCall | undefined): string {
+  if (call === undefined) return ''
+  const blocks = call.content as readonly { readonly text?: unknown }[] | undefined
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .map(block => block.text)
+    .filter((text): text is string => typeof text === 'string')
+    .join(' ')
 }
 
 /** Hand-rolled services mounted on one real cordis root Context. */
@@ -153,6 +176,10 @@ interface Host {
     release: Promise<void>
     fail: (error: Error) => void
   }
+  /** Captured Lead → member assignment deliveries. */
+  readonly sends: SendMessageCall[]
+  /** Persisted child sessions consulted by resume reconciliation. */
+  readonly persisted: Map<string, { events: SessionEvent[]; parentSession: CoreSessionId }>
 }
 
 interface BootOptions extends ResearchTeamServiceConfig {
@@ -207,6 +234,7 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
 
   // startContinuable control.
   const calls: StartCall[] = []
+  const sends: SendMessageCall[] = []
   let markStarted: (() => void) | undefined
   let release!: () => void
   let fail!: (error: Error) => void
@@ -218,13 +246,21 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
       childId: CoreSessionId
       provider: string
       label: string
-      request: { parent: Agent }
+      request: {
+        parent: Agent
+        persona?: string
+        agentOptions?: { readonly model?: string }
+        toolFilter?: { readonly allow?: ReadonlyArray<string> }
+      }
     }) => {
       calls.push({
         childId: spec.childId,
         provider: spec.provider,
         label: spec.label,
         parentId: spec.request.parent.id,
+        ...spec.request.persona === undefined ? {} : { persona: spec.request.persona },
+        ...spec.request.agentOptions === undefined ? {} : { agentOptions: spec.request.agentOptions },
+        ...spec.request.toolFilter === undefined ? {} : { toolFilter: spec.request.toolFilter },
       })
       markStarted?.()
       if (options.failStart === true) {
@@ -233,7 +269,10 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
       if (options.holdStart === true) {
         await gate
       }
-      const stub = agentStub(spec.childId, spec.request.parent.id)
+      // The host broker merges child agentOptions into the spawned Agent, so
+      // the stand-in mirrors the routed model on the child's options.
+      const model = spec.request.agentOptions?.model ?? 'mock-model'
+      const stub = agentStub(spec.childId, spec.request.parent.id, model)
       agents.set(stub.id, stub)
       persisted.set(stub.id, {
         parentSession: spec.request.parent.id,
@@ -246,6 +285,9 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
             mode: 'continuable',
             provider: spec.provider,
             label: spec.label,
+            ...spec.request.persona === undefined ? {} : { persona: spec.request.persona },
+            ...spec.request.agentOptions === undefined ? {} : { agentOptions: spec.request.agentOptions },
+            ...spec.request.toolFilter === undefined ? {} : { toolFilter: spec.request.toolFilter },
           },
         }] as SessionEvent[],
       })
@@ -254,6 +296,14 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
       for (const id of childIds) {
         agents.delete(id)
       }
+    },
+    sendMessage: async (
+      sender: Agent,
+      targetId: CoreSessionId,
+      content: unknown,
+    ) => {
+      sends.push({ senderId: sender.id, targetId, content })
+      return `msg-${String(sends.length)}`
     },
   })
 
@@ -292,6 +342,8 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
       release: async () => { release() },
       fail,
     },
+    sends,
+    persisted,
   }
 }
 
@@ -818,6 +870,350 @@ describe('service lifecycle wiring — index.ts', () => {
         subject: 'blocked',
         description: 'must not commit on a latched fold',
       })).rejects.toThrow(/event targets team/)
+    } finally {
+      await host.dispose()
+    }
+  })
+})
+
+describe('red-team fleet orchestrator — host integration', () => {
+  /** Default five persona role names in deployment order. */
+  const FLEET_ROLES = ['red-method', 'red-stat', 'red-domain', 'red-skeptic', 'red-cross'] as const
+  /** Tier → routed host model used by the model-spread assertions. */
+  const MODEL_ROUTE = { pro: 'model-pro', flash: 'model-flash' }
+
+  it('deploy spawns the five default personas with persona text and tier model through startContinuable', async () => {
+    const host = await bootHost()
+    try {
+      const views = await host.service.fleet.deploy(asAgent(host.lead), { modelRoute: MODEL_ROUTE })
+      expect(views.map(view => view.name)).toEqual([...FLEET_ROLES])
+      expect(views.map(view => view.role)).toEqual(['teammate', 'teammate', 'teammate', 'teammate', 'teammate'])
+      // Member views expose the routed model per abstract tier.
+      const models = views.map(view => view.model)
+      expect(models).toEqual(['model-pro', 'model-flash', 'model-pro', 'model-flash', 'model-flash'])
+      // Persona text + optional model ride the startContinuable request.
+      const calls = host.startControl.calls
+      expect(calls).toHaveLength(5)
+      const methodCall = calls[0]
+      if (methodCall === undefined) throw new Error('no startContinuable call')
+      expect(methodCall.persona).toContain('你是学术方法学审稿人')
+      expect(methodCall.agentOptions).toEqual({ model: 'model-pro' })
+      // Default personas carry no toolFilter yet (T19 handoff), so none is sent.
+      expect(methodCall.toolFilter).toBeUndefined()
+      // The durable descriptor persisted by the child session carries persona.
+      const descriptor = host.persisted.get(methodCall.childId)
+      const data = descriptor?.events[0]?.data as Record<string, unknown> | undefined
+      expect(data?.persona).toContain('你是学术方法学审稿人')
+      expect((data?.agentOptions as { model?: string }).model).toBe('model-pro')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('deploy sends a read-only toolFilter and model override when the persona config carries them', async () => {
+    const host = await bootHost()
+    try {
+      const custom = [{
+        name: 'red-scan',
+        title: '自定义扫描审稿人',
+        stance: 'balanced',
+        persona: '你是自定义扫描审稿人。你只使用只读工具核验,绝不写产物。',
+        modelTier: 'pro',
+        toolFilter: ['read_file', 'cite_check'],
+      }] as const satisfies readonly RedTeamPersona[]
+      const views = await host.service.fleet.deploy(asAgent(host.lead), {
+        personas: custom,
+        roles: ['red-scan'],
+        modelRoute: { pro: 'model-scan' },
+      })
+      expect(views).toHaveLength(1)
+      expect(views[0]?.model).toBe('model-scan')
+      const call = host.startControl.calls[0]
+      if (call === undefined) throw new Error('no startContinuable call')
+      expect(call.persona).toContain('你是自定义扫描审稿人')
+      expect(call.toolFilter).toEqual({ allow: ['read_file', 'cite_check'] })
+      expect(call.agentOptions).toEqual({ model: 'model-scan' })
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('rejects fleet orchestration from a non-Lead member (NOT_AUTHORIZED)', async () => {
+    const host = await bootHost()
+    try {
+      const member = await host.service.spawnMember(asAgent(host.lead), spawnRequest('researcher-a'))
+      const memberAgent = host.agents.get(member.id)
+      if (memberAgent === undefined) throw new Error('member did not materialize')
+      await expect(host.service.fleet.deploy(asAgent(memberAgent)))
+        .rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_NOT_AUTHORIZED' })
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('startRebuttal opens one writeScopes=[] task per role and delivers one assignment per member', async () => {
+    const host = await bootHost()
+    try {
+      await host.service.fleet.deploy(asAgent(host.lead), {})
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-1',
+        gate: 'A2',
+      })
+      expect(result.round.status).toBe('pending')
+      expect(result.round.expectedRoles).toEqual([...FLEET_ROLES])
+      expect(result.assignments).toHaveLength(5)
+      // One assignment message was delivered to each fleet member.
+      expect(host.sends).toHaveLength(5)
+      const tasks = host.readTeam().tasks
+      const taskIds = result.assignments.map(assignment => assignment.taskId as unknown as string)
+      for (const id of taskIds) {
+        const task = tasks[id]
+        expect(task?.subject).toMatch(/^rebuttal:/)
+        expect(task?.writeScopes).toEqual([])
+        expect(task?.status).toBe('pending')
+      }
+      // Each delivery text names its round, claim, gate, and role.
+      const firstSend = host.sends[0]
+      expect(textOf(firstSend)).toContain(result.round.roundId)
+      expect(textOf(firstSend)).toContain('claim-1')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('round-tripping every role vote records rebuttal events and completes the round', async () => {
+    const host = await bootHost()
+    try {
+      const views = await host.service.fleet.deploy(asAgent(host.lead), { modelRoute: MODEL_ROUTE })
+      const memberIds = new Map(views.map(view => [view.name, view.id]))
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-trinity',
+        gate: 'C2',
+      })
+      const positions = ['support', 'refute', 'abstain', 'refute', 'support'] as const
+      let settled = result.round
+      for (let index = 0; index < result.assignments.length; index += 1) {
+        const assignment = result.assignments[index]
+        if (assignment === undefined) continue
+        const role = assignment.role
+        const memberId = memberIds.get(role)
+        if (memberId === undefined) throw new Error(`no member for ${role}`)
+        const member = host.agents.get(memberId)
+        if (member === undefined) throw new Error(`no live agent for ${role}`)
+        // The member claims its assignment before voting (the normal flow).
+        const claimed = await host.service.updateTask(asAgent(member), {
+          taskId: assignment.taskId,
+          expectedRevision: 1,
+          action: 'claim',
+        })
+        expect(claimed.ok).toBe(true)
+        settled = await host.service.fleet.submitRebuttal(asAgent(host.lead), {
+          roundId: result.round.roundId,
+          voterId: memberId,
+          message: {
+            voterRole: role,
+            position: positions[index],
+            rationale: `${role} 的核验理由`,
+          },
+        })
+      }
+      expect(settled.status).toBe('completed')
+      expect(settled.votes).toHaveLength(5)
+      // Every claimed assignment task was completed by the Lead.
+      for (const assignment of result.assignments) {
+        expect(host.readTeam().tasks[assignment.taskId as unknown as string]?.status).toBe('completed')
+      }
+      // The Lead-log carries one durable research/rebuttal event per vote and
+      // the projection deliberately leaves them unfolded (no failure latch).
+      const rebuttals = host.lead.session.events.filter(event => event.type === 'research/rebuttal')
+      expect(rebuttals).toHaveLength(5)
+      expect(host.readTeam().failure).toBeUndefined()
+      // The gate-facing projection carries the role + routed modelFamily.
+      const votes = host.service.roundVotes(result.round.roundId)
+      expect(votes.map(vote => vote.voterRole)).toEqual([...FLEET_ROLES])
+      expect(votes.map(vote => vote.modelFamily)).toEqual([
+        'model-pro', 'model-flash', 'model-pro', 'model-flash', 'model-flash',
+      ])
+      expect(votes.map(vote => vote.position)).toEqual([
+        'support', 'refute', 'abstain', 'refute', 'support',
+      ])
+      // Duplicate and post-completion votes are rejected.
+      const firstMemberId = memberIds.get('red-method')
+      if (firstMemberId === undefined) throw new Error('no red-method member')
+      await expect(host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: firstMemberId,
+        message: { voterRole: 'red-method', position: 'refute', rationale: '二次投票' },
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_INVALID_REBUTTAL' })
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('records a vote whose member never claimed its task (task stays pending)', async () => {
+    const host = await bootHost()
+    try {
+      const views = await host.service.fleet.deploy(asAgent(host.lead), {})
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-x',
+        gate: 'A2',
+      })
+      const memberId = views[0]?.id
+      if (memberId === undefined) throw new Error('no first member')
+      const settled = await host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: memberId,
+        message: { voterRole: 'red-method', position: 'abstain', rationale: '证据不足' },
+      })
+      expect(settled.status).toBe('submitted')
+      // The unclaimed assignment stays pending; the accepted vote still stands.
+      const task = result.assignments[0]
+      if (task === undefined) throw new Error('no first assignment')
+      expect(host.readTeam().tasks[task.taskId as unknown as string]?.status).toBe('pending')
+      expect(host.readTeam().tasks[task.taskId as unknown as string]?.ownerId).toBeUndefined()
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('records a vote without a live member (modelFamily absent) yet completes nothing', async () => {
+    const host = await bootHost()
+    try {
+      const views = await host.service.fleet.deploy(asAgent(host.lead), { modelRoute: MODEL_ROUTE })
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-offline',
+        gate: 'B1',
+      })
+      const memberId = views[0]?.id
+      if (memberId === undefined) throw new Error('no first member')
+      // The member is absent from the live registry when its vote arrives.
+      host.agents.delete(memberId)
+      const settled = await host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: memberId,
+        message: { voterRole: 'red-method', position: 'refute', rationale: '离线成员投票仍被记录' },
+      })
+      expect(settled.status).toBe('submitted')
+      const recorded = settled.votes[0]
+      expect(recorded?.modelFamily).toBeUndefined()
+      expect('modelFamily' in (recorded as Record<string, unknown>)).toBe(false)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('rejects a vote for an undeployed role, a mismatched member, and an unknown round', async () => {
+    const host = await bootHost()
+    try {
+      const views = await host.service.fleet.deploy(asAgent(host.lead), { roles: ['red-method'] })
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-y',
+        gate: 'A2',
+      })
+      // Undeployed role: the fleet ledger has no red-stat row.
+      await expect(host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: views[0]?.id ?? sessionId('none'),
+        message: { voterRole: 'red-stat', position: 'support', rationale: '不存在于本队' },
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_FLEET_NOT_DEPLOYED' })
+
+      // Mismatched member: the red-method row belongs to a different voter id.
+      const stranger = sessionId('someone-else')
+      await expect(host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: stranger,
+        message: { voterRole: 'red-method', position: 'support', rationale: '冒充成员' },
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_NOT_AUTHORIZED' })
+
+      // Unknown round on roundVotes.
+      expect(() => host.service.roundVotes('no-such-round'))
+        .toThrow(expect.objectContaining({ code: 'DSH_RESEARCH_TEAM_ROUND_NOT_FOUND' }))
+      // Unknown round on submit.
+      await expect(host.service.fleet.submitRebuttal(asAgent(host.lead), {
+        roundId: 'no-such-round',
+        voterId: sessionId('any'),
+        message: { voterRole: 'red-method', position: 'support', rationale: '无此轮' },
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_ROUND_NOT_FOUND' })
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('startRebuttal requires a deployed fleet and deployed polled roles', async () => {
+    const host = await bootHost()
+    try {
+      // No fleet deployed at all.
+      await expect(host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-z',
+        gate: 'A2',
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_FLEET_NOT_DEPLOYED' })
+      // A polled role that is not deployed.
+      await host.service.fleet.deploy(asAgent(host.lead), { roles: ['red-method'] })
+      await expect(host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-z',
+        gate: 'A2',
+        roles: ['red-cross'],
+      })).rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_FLEET_NOT_DEPLOYED' })
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('round-trips a polled-role subset so only those members receive assignments', async () => {
+    const host = await bootHost()
+    try {
+      await host.service.fleet.deploy(asAgent(host.lead), {})
+      const result = await host.service.fleet.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-subset',
+        gate: 'B1',
+        roles: ['red-skeptic', 'red-method'],
+      })
+      expect(result.round.expectedRoles).toEqual(['red-method', 'red-skeptic'])
+      expect(result.assignments.map(assignment => assignment.role))
+        .toEqual(['red-method', 'red-skeptic'])
+      expect(host.sends).toHaveLength(2)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('exposes the fleet flow through the TeamService wrapper surface (index.ts)', async () => {
+    const host = await bootHost()
+    try {
+      // Default deploy (no config / provider) exercises the wrapper defaults.
+      const views = await host.service.deployFleet(asAgent(host.lead))
+      expect(views.map(view => view.name)).toEqual([...FLEET_ROLES])
+      const memberId = views[0]?.id
+      if (memberId === undefined) throw new Error('no first fleet member')
+
+      const result = await host.service.startRebuttal(asAgent(host.lead), {
+        claimRef: 'claim-wrapper',
+        gate: 'A2',
+        roles: ['red-method'],
+      })
+      expect(result.round.expectedRoles).toEqual(['red-method'])
+      const assignment = result.assignments[0]
+      if (assignment === undefined) throw new Error('no assignment')
+      const member = host.agents.get(memberId)
+      if (member === undefined) throw new Error('first fleet member not live')
+      await host.service.updateTask(asAgent(member), {
+        taskId: assignment.taskId,
+        expectedRevision: 1,
+        action: 'claim',
+      })
+
+      const settled = await host.service.submitRebuttal(asAgent(host.lead), {
+        roundId: result.round.roundId,
+        voterId: memberId,
+        message: { voterRole: 'red-method', position: 'refute', rationale: '经 wrapper 提交' },
+      })
+      expect(settled.status).toBe('completed')
+      const votes = host.service.roundVotes(result.round.roundId)
+      expect(votes).toHaveLength(1)
+      expect(votes[0]?.voterRole).toBe('red-method')
+      // The wrapper path still commits the durable Lead-log event.
+      const rebuttals = host.lead.session.events.filter(event => event.type === 'research/rebuttal')
+      expect(rebuttals).toHaveLength(1)
     } finally {
       await host.dispose()
     }

@@ -49,6 +49,8 @@ import type { CreateResearchTaskRequest, UpdateResearchTaskRequest } from './tas
 import type { ResearchMemberView, ResearchTask, TeamMutationResult } from './types.ts'
 import type { TeamTaskId } from './types.ts'
 import type { SessionId } from './types.ts'
+import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
+import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
 // The package entry re-exports its caller-visible brands, errors, entities,
@@ -70,6 +72,61 @@ export { ResearchTaskBoard } from './task-board.ts'
 export type { CreateResearchTaskRequest, UpdateResearchTaskRequest } from './task-board.ts'
 export { researchTeamProjectionDefinition } from './research-projection.ts'
 export { ResearchJournal } from './journal.ts'
+// T21 red-team fleet surface: pure persona / config / rebuttal modules plus the
+// orchestrator adapter. Pure modules carry zero host imports; the orchestrator
+// composes the roster/journal/task-board into the Lead-driven rebuttal flow.
+export { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
+export type {
+  RebuttalStartInput,
+  RebuttalStartResult,
+  RebuttalSubmitInput,
+} from './redteam/orchestrator.ts'
+export {
+  defaultFleetPersonas,
+  normalizeReadOnlyTools,
+  personaByRole,
+  personaCharter,
+  RED_TEAM_MODEL_TIERS,
+  RED_TEAM_STANCES,
+  requirePersonaName,
+  validatePersona,
+  validatePersonas,
+  validateReadOnlyTools,
+} from './redteam/personas.ts'
+export type {
+  RedTeamModelTier,
+  RedTeamPersona,
+  RedTeamStance,
+} from './redteam/personas.ts'
+export {
+  resolveFleet,
+  resolveFleetRoles,
+  routedModel,
+  validateModelRoute,
+} from './redteam/fleet-config.ts'
+export type {
+  RedTeamFleetConfig,
+  RedTeamFleetMember,
+  ResolvedRedTeamFleet,
+} from './redteam/fleet-config.ts'
+export {
+  adjudicationVotes,
+  allRolesVoted,
+  castRebuttalVote,
+  closeRebuttalRound,
+  createRebuttalRound,
+  parseRebuttalPosition,
+  parseRebuttalVote,
+  REBUTTAL_POSITION_VALUES,
+  REBUTTAL_ROUND_STATUSES,
+} from './redteam/rebuttal.ts'
+export type {
+  ParsedRebuttalVote,
+  RebuttalPositionValue,
+  RebuttalRound,
+  RebuttalRoundStatus,
+  RebuttalVoteInput,
+} from './redteam/rebuttal.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -101,6 +158,8 @@ export class ResearchTeamService extends Service {
   private readonly journal: ResearchJournal
   private readonly roster: ResearchRoster
   private readonly tasks: ResearchTaskBoard
+  /** T21 red-team fleet orchestrator composing the roster/journal/task board. */
+  readonly fleet: ResearchFleetOrchestrator
 
   constructor(ctx: Context, config: ResearchTeamServiceConfig = {}) {
     super(ctx, 'agentTeams')
@@ -111,6 +170,7 @@ export class ResearchTeamService extends Service {
     this.journal = new ResearchJournal(ctx, () => {})
     this.roster = new ResearchRoster(ctx, this.journal)
     this.tasks = new ResearchTaskBoard(this.journal)
+    this.fleet = new ResearchFleetOrchestrator(ctx, this.journal, this.roster, this.tasks)
 
     // A resumed Lead (or member) must reconcile provisioning-only roster rows
     // before its next turn depends on them. Recovery is contained and logged,
@@ -195,6 +255,44 @@ export class ResearchTeamService extends Service {
    *  @returns the member's live Lead Agent, or undefined when not resolvable. */
   rootOfMember(memberId: SessionId): Agent | undefined {
     return this.roster.rootOfMember(memberId)
+  }
+
+  /** Deploy the red-team fleet personas as continuable members (T21).
+   *  @param caller - exact live research Lead Agent.
+   *  @param config - fleet config (defaults to the frozen five personas).
+   *  @param provider - continuation provider name ('spawn' default). */
+  async deployFleet(
+    caller: Agent,
+    config: Parameters<ResearchFleetOrchestrator['deploy']>[1] = {},
+    provider: Parameters<ResearchFleetOrchestrator['deploy']>[2] = 'spawn',
+  ): Promise<ReadonlyArray<ResearchMemberView>> {
+    return await this.fleet.deploy(caller, config, provider)
+  }
+
+  /** Open one red-team rebuttal round over a (claim × judgment point) (T21).
+   *  @param caller - exact live research Lead Agent.
+   *  @param input - claim reference, judgment point, and optional role subset. */
+  startRebuttal(
+    caller: Agent,
+    input: RebuttalStartInput,
+  ): ReturnType<ResearchFleetOrchestrator['startRebuttal']> {
+    return this.fleet.startRebuttal(caller, input)
+  }
+
+  /** Commit one fleet vote returned to the research Lead (T21).
+   *  @param caller - exact live research Lead Agent.
+   *  @param input - the round, the voting member, and the returned payload. */
+  submitRebuttal(
+    caller: Agent,
+    input: RebuttalSubmitInput,
+  ): ReturnType<ResearchFleetOrchestrator['submitRebuttal']> {
+    return this.fleet.submitRebuttal(caller, input)
+  }
+
+  /** The gate-facing adjudication-vote projection of one round (T21).
+   *  @param roundId - the open or closed round identity. */
+  roundVotes(roundId: string): ReturnType<ResearchFleetOrchestrator['roundVotes']> {
+    return this.fleet.roundVotes(roundId)
   }
 
   /** Queue one contained recovery pass after publication has unwound. */
