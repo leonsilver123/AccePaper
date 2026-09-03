@@ -86,6 +86,13 @@ export type ResearchTeamErrorSuffix =
   | 'DEPENDENCY_CYCLE'
   | 'TEAM_MISMATCH'
   | 'INVALID_EVENT'
+  | 'INVALID_PERSONA'
+  | 'INVALID_MODEL'
+  | 'INVALID_REBUTTAL'
+  | 'REBUTTAL_UNKNOWN_ROLE'
+  | 'DUPLICATE_VOTE'
+  | 'ROUND_NOT_FOUND'
+  | 'FLEET_NOT_DEPLOYED'
 
 /** Globally unique error codes thrown by this package's pure logic. */
 export type ResearchTeamErrorCode = `${typeof DSH_RESEARCH_TEAM_ERROR_PREFIX}${ResearchTeamErrorSuffix}`
@@ -243,10 +250,52 @@ export interface ResearchRevEvent {
   readonly rev: ResearchRev
 }
 
+// ─────────────────────── Red-team rebuttal (T21) ──────────────────────────
+// One fleet voter's stance on the claim under rebuttal. The durable rebuttal
+// event (`research/rebuttal`) is appended ONLY by the research Lead — fleet
+// members never write the lead log (write-scope boundary); each event mirrors
+// one accepted member vote. The projected TeamState deliberately does NOT fold
+// rebuttals: they are an audit trail feeding the future T22/judge gate, whose
+// pure reducer (`redteam/rebuttal.ts`) owns the round state machine.
+
+/** One fleet voter's stance on the claim under rebuttal (spec §0). */
+export type ResearchRebuttalPosition = 'support' | 'refute' | 'abstain'
+
+/** One accepted red-team rebuttal vote, durably recorded by the Lead.
+ *  `voterRole` is the persona/role name (never a model id); `modelFamily`
+ *  mirrors the member's live `options.model` so same-family votes can be
+ *  DETECTED + downweighted by the future gate (C3 — never report same-family
+ *  votes as genuine model heterogeneity). */
+export interface ResearchRebuttal {
+  /** Stable round identifier grouping one (claim × judgment point) review. */
+  readonly roundId: string
+  /** Claim reference text/id under rebuttal. */
+  readonly claimRef: string
+  /** Judgment point identifier (e.g. 'A2' / 'B1' / 'C2'), caller-owned. */
+  readonly gate: string
+  /** Fleet persona/role name that cast this vote (e.g. 'red-method'). */
+  readonly voterRole: string
+  /** Durable member Session identity that returned the vote. */
+  readonly voterId: SessionId
+  readonly position: ResearchRebuttalPosition
+  /** Non-empty human rationale backing the position. */
+  readonly rationale: string
+  /** The member's live model name, when resolvable at vote time. */
+  readonly modelFamily?: string
+}
+
+export interface ResearchRebuttalEvent {
+  readonly type: 'research/rebuttal'
+  readonly version: 1
+  readonly teamId: TeamId
+  readonly rebuttal: ResearchRebuttal
+}
+
 export type ResearchEvent =
   | ResearchMemberEvent
   | ResearchTaskEvent
   | ResearchRevEvent
+  | ResearchRebuttalEvent
 
 /** Projection state folded from a team's whole-value event log. */
 export interface TeamState {

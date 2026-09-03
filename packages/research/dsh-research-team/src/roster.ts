@@ -26,8 +26,9 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionId as CoreSessionId } from '@deepseek-ai/dsh-session'
@@ -82,6 +83,13 @@ export interface SpawnMemberRequest {
   readonly prompt: ContentBlock[]
   /** Cancellation governing creation only; the durable child outlives it. */
   readonly signal: AbortSignal
+  /** Optional red-team persona override (T21): shadowing system-prompt text
+   *  persisted in the child descriptor for cold resume. Absent = host default. */
+  readonly persona?: string
+  /** Optional per-child provider/model/reasoning overrides (T21 §1 lever ③). */
+  readonly agentOptions?: AgentOptions
+  /** Optional read-only tool allow/deny scope for the child (T21 §2 toolFilter). */
+  readonly toolFilter?: ToolRestriction
 }
 
 /** Owns research-team identities and the lifecycle of rostered continuable children. */
@@ -306,7 +314,16 @@ export class ResearchRoster {
         childId,
         provider,
         label: description,
-        request: { prompt: request.prompt, parent: root },
+        request: {
+          prompt: request.prompt,
+          parent: root,
+          // T21 heterogeneous-fleet pass-through: optional fields stay absent
+          // (default deployment behavior unchanged) unless the caller set them;
+          // the subagent manager snapshots them into the durable descriptor.
+          ...request.persona === undefined ? {} : { persona: request.persona },
+          ...request.agentOptions === undefined ? {} : { agentOptions: request.agentOptions },
+          ...request.toolFilter === undefined ? {} : { toolFilter: request.toolFilter },
+        },
         signal,
       })
     } catch (error: unknown) {

@@ -2,7 +2,9 @@
 //
 // PURE-LOGIC LAYER (T20). Folds the team's whole-value event log into a
 // {@link TeamState}: members by id, tasks by id (deleted tasks remain as
-// terminal tombstones), artifact revision heads by artifact id.
+// terminal tombstones), artifact revision heads by artifact id. `research/rebuttal`
+// events (T21) are validated at the log boundary but deliberately NOT folded —
+// votes are an audit trail for the future judge gate, not projected state.
 //
 // No ctx / host wiring here — `ctx.sessionProjections.register` is an adapter
 // concern (projection.ts of the later round). This module is a pure,
@@ -57,6 +59,13 @@ export function reduceTeamState(state: TeamState, event: ResearchEvent): TeamSta
       return withTask(state, event.task)
     case 'research/rev':
       return withRev(state, event.rev)
+    case 'research/rebuttal':
+      // Rebuttal votes are an audit trail consumed by the future T22/judge
+      // gate, not part of the projected TeamState (member/task/rev only).
+      // The event still crosses the validation seam before the fold, so a
+      // malformed persisted payload latches the projection like any other
+      // research event.
+      return state
     // v8 ignore next 3 -- event.type is a closed union; unknown variants are
     // rejected at the session-event boundary before they reach the fold.
     default:
