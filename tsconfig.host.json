@@ -116,7 +116,10 @@
     "scripts/client-bundle-css.spec.ts",
     "packages/typert/generator/tests/fixtures/**",
     "scripts/client-bundle-purity.spec.ts",
-    "packages/research/dsh-research-core/tests/**"
+    "packages/research/dsh-research-core/tests/**",
+    "packages/research/dsh-research-cordis/tests/**",
+    "packages/research/dsh-research-tools/tests/**",
+    "packages/research/dsh-research-team/tests/**"
   ],
   "references": [
     { "path": "./vendor/cosmokit" },
@@ -331,6 +334,8 @@
     { "path": "./packages/lsp/tool-lsp" },
     { "path": "./packages/research/dsh-research-core" },
     { "path": "./packages/research/dsh-research-cordis" },
+    { "path": "./packages/research/dsh-research-team" },
+    { "path": "./packages/research/dsh-research-tools" },
     { "path": "./apps/cli" }
   ]
 }
