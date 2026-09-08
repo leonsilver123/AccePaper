@@ -40,6 +40,21 @@ describe('export surface — the main entry has NO trust capability (P0-1-H1/H2)
 })
 
 describe('run lifecycle (INV-RUN-ISOLATION / INV-SEED-INPUT / INV-INPUT-FROZEN)', () => {
+  it('createRun falls back to a deterministic counter id when global crypto.randomUUID is unavailable', () => {
+    const store = freshStore()
+    const original = globalThis.crypto
+    // Simulate an environment without WebCrypto (e.g. older embedders) so the
+    // generateRunId fallback path (not the randomUUID fast path) executes.
+    try {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined })
+      const id = createRun(store)
+      expect(id.startsWith('r_')).toBe(true)
+      const id2 = createRun(store)
+      expect(id2).not.toBe(id) // counter advances; ids remain unique
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: original })
+    }
+  })
   it('createRun throws RUN_EXISTS on explicit runId collision (never clobbers state+audit)', () => {
     const store = freshStore()
     createRun(store, 'R1')

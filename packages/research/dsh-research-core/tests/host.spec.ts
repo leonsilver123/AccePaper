@@ -22,6 +22,11 @@ describe('host trust channel — P0-1 (RC-E hardened: WeakSet identity + channel
     it('TrustedHumanPrincipal.create is NOT exported (removed — RC-E E2)', () => {
       expect((TrustedHumanPrincipal as unknown as { create?: unknown }).create).toBeUndefined()
     })
+    it('registerPrincipal rejects empty and the reserved agent principalId (trust boundary)', () => {
+      const channel = createHostApprovalChannel('s')
+      expect(() => channel.registerPrincipal('')).toThrow(/PRINCIPAL_INVALID/)
+      expect(() => channel.registerPrincipal('agent')).toThrow(/PRINCIPAL_INVALID/)
+    })
     it('mintPrincipal rejects principalId agent/empty + missing approvalEventId', () => {
       const store = freshStore()
       const id = runFullPipeline(store)
