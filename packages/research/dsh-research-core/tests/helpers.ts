@@ -1,6 +1,6 @@
 import { STEP_BY_ID, STEPS } from '../src/engine/steps.ts'
 import { completeStep, createRun, recordArtifact, setRunInput, startStep, submitGateVerdict } from '../src/engine/state-machine.ts'
-import type { GateVerdict, ResearchRunStore, RunState, TrinityComponent } from '../src/engine/types.ts'
+import type { GateOutcome, GateVerdict, ResearchRunStore, RunState, TrinityComponent } from '../src/engine/types.ts'
 
 export function freshStore(): ResearchRunStore {
   return new Map<string, RunState>()
@@ -13,8 +13,19 @@ export function seedRun(store: ResearchRunStore, runId?: string): string {
   return id
 }
 
+/**
+ * Build a gate verdict. T19: `passed` is a derived projection of `outcome`
+ * (passed ⟺ outcome==='passed'); the write boundary rejects verdicts lacking a
+ * valid `outcome` (DSH_GATEVERDICT_MISSING_OUTCOME — no silent reinterpretation).
+ */
 export function verdict(component: TrinityComponent, passed: boolean): GateVerdict {
-  return { component, passed, evidence: 'evidence', rationale: 'rationale', timestamp: 1 }
+  const outcome: GateOutcome = passed ? 'passed' : 'failed'
+  return { component, outcome, passed, evidence: 'evidence', rationale: 'rationale', timestamp: 1 }
+}
+
+/** Build an abstained gate verdict (T19 hold_abstained): outcome 'abstained', passed false. */
+export function abstainVerdict(component: TrinityComponent): GateVerdict {
+  return { component, outcome: 'abstained', passed: false, evidence: 'evidence', rationale: 'rationale', timestamp: 1 }
 }
 
 /** Start a step, record all its declared outputs (dummy values), then adjudicate:
