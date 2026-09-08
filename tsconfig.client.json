@@ -17,6 +17,7 @@
     // Source-subpath test imports can arrive through workspace links whose
     // realpath semantics vary by host. Load package CSS declarations directly.
     "packages/client/*/src/css-modules.d.ts",
+    "packages/research/dsh-research-web/src/client/css-modules.d.ts",
     "packages/client/*/tests/**/*.ts",
     "packages/client/*/tests/**/*.tsx",
     "packages/*/*/tests/**/*.client.spec.ts",
@@ -102,6 +103,7 @@
     { "path": "./packages/client/ui-session" },
     { "path": "./packages/client/web" },
     { "path": "./packages/context/file-reference" },
+    { "path": "./packages/research/dsh-research-web" },
     { "path": "./apps/web" }
   ]
 }

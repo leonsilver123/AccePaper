@@ -1,0 +1,178 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mockBadge {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff4e5;
+  color: #b25e00;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.header .runId {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #5b6470;
+}
+
+.statusPill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.status-running { background: #e6f0ff; color: #1f6feb; }
+.status-completed { background: #e7f7ec; color: #1a7f37; }
+.status-abstained { background: #fdeef0; color: #c2410c; }
+.status-failed { background: #fdeef0; color: #c2410c; }
+.status-degraded { background: #fff4e5; color: #b25e00; }
+
+.section {
+  border: 1px solid #e6e8ec;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.sectionTitle {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5b6470;
+}
+
+.stepList, .gateList, .artifactList, .abstentionList, .degradationList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stepRow {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.stepIndex {
+  font-variant-numeric: tabular-nums;
+  color: #5b6470;
+  font-weight: 600;
+}
+
+.stepName {
+  display: flex;
+  flex-direction: column;
+}
+
+.stepName small {
+  color: #8a93a0;
+  font-size: 11px;
+}
+
+.stepMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.s-pending { background: #eef0f3; color: #5b6470; }
+.s-in_progress { background: #e6f0ff; color: #1f6feb; }
+.s-gated { background: #fff4e5; color: #b25e00; }
+.s-passed { background: #e7f7ec; color: #1a7f37; }
+.s-blocked { background: #fdeef0; color: #c2410c; }
+.s-failed { background: #fdeef0; color: #c2410c; }
+
+.gate-passed { background: #e7f7ec; color: #1a7f37; }
+.gate-blocked { background: #fdeef0; color: #c2410c; }
+.gate-failed { background: #fdeef0; color: #c2410c; }
+.gate-abstained { background: #fdeef0; color: #c2410c; }
+
+.humanGate {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.holdReason {
+  font-size: 11px;
+  color: #b25e00;
+}
+
+.artifactRow, .gateRow, .abstentionRow, .degradationRow {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.artifactRow .slug {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.artifactRow .summary {
+  color: #5b6470;
+  font-size: 12px;
+}
+
+.invalidated {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.humanPending {
+  border-color: #e0c3ff;
+  background: #faf5ff;
+}
+
+.note {
+  color: #5b6470;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+
+.empty {
+  color: #8a93a0;
+  font-style: italic;
+}
