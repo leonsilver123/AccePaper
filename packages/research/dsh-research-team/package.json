@@ -25,7 +25,8 @@
   },
   "dependencies": {
     "zod": "^4.4.3",
-    "@deepseek-ai/dsh-research-core": "workspace:^"
+    "@deepseek-ai/dsh-research-core": "workspace:^",
+    "@deepseek-ai/dsh-research-tools": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
