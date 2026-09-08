@@ -70,7 +70,7 @@
  */
 
 import type { ResearchRunStore, StepStatus } from './engine/types.ts'
-import { ResearchError, _applyHumanApproval } from './engine/state-machine.ts'
+import { ResearchError, _applyHumanApproval, getRunSnapshot } from './engine/state-machine.ts'
 
 /**
  * Module-private mint token. The sole value the TrustedHumanPrincipal constructor accepts; it
@@ -195,6 +195,19 @@ export function createHostApprovalChannel(hostSecret: string): HostApprovalChann
       }
       if (!registry.has(pPrincipalId)) {
         throw new ResearchError('DSH_PRINCIPAL_NOT_REGISTERED', `submit: principalId '${pPrincipalId}' is not in this channel's authenticated principal registry (P0-1-H5)`)
+      }
+      // T19 (hold_abstained) pre-guard (design §6): a step held by `gate_abstained` is
+      // evidence-insufficient and may ONLY be released via rollback→new attempt. Human approval
+      // must refuse it outright — approving an abstention would silently convert "no verdict"
+      // into 'passed', a generic science-gate backdoor. This fires BEFORE _applyHumanApproval
+      // so it also covers non-humanGate steps that are nonetheless held by abstention (those
+      // would otherwise throw DSH_NOT_HUMAN_GATE inside _applyHumanApproval).
+      const heldStep = getRunSnapshot(runs, runId).steps[stepId]
+      if (heldStep?.holdReason === 'gate_abstained') {
+        throw new ResearchError(
+          'DSH_ABSTENTION_REQUIRES_ROLLBACK',
+          `submit: step '${stepId}' is held by gate_abstained — human approval is refused; release only via rollback()→startStep() (T19, design §6)`,
+        )
       }
       // _applyHumanApproval re-checks status==='gated' (the current pending-approval step —
       // INV-APPROVAL-STATE) + step.humanGate + approvalEventId single-use (INV-REPLAY).

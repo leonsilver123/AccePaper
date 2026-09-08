@@ -23,6 +23,8 @@ import type {
   AuditEvent,
   AuditEventKind,
   CurrentAttemptSnapshot,
+  GateAbstentionRecord,
+  GateOutcome,
   GateVerdict,
   ResearchRunStore,
   RunSnapshot,
@@ -101,6 +103,9 @@ const LEGAL_TRANSITIONS: Readonly<Record<StepStatus, ReadonlySet<StepStatus>>> =
   failed: new Set<StepStatus>(),
 }
 
+/** Valid GateOutcome values (T19 — write-boundary allow-list, no silent reinterpretation). */
+const OUTCOMES: ReadonlySet<GateOutcome> = new Set<GateOutcome>(['passed', 'blocked', 'failed', 'abstained'])
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function ensureRun(store: ResearchRunStore, runId: string): RunState {
@@ -153,6 +158,7 @@ function snapshotOf(state: StepState): AttemptRecord {
     artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
     gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
     ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
+    ...(state.holdReason ? { holdReason: state.holdReason } : {}),
     superseded: true,
   }
 }
@@ -163,6 +169,7 @@ function resetStep(state: StepState): void {
   state.artifacts = {}
   state.gateResults = {}
   state.approval = undefined
+  state.holdReason = undefined
   state.startedAt = undefined
   state.finishedAt = undefined
 }
@@ -218,14 +225,19 @@ function computeTransitiveDependents(stepId: string): string[] {
  * NOT exported from the public entry.
  */
 function _apply(state: StepState, step: StepDefinition, to: StepStatus): void {
+  // LEGAL_TRANSITIONS is a total Record<StepStatus, ...> so state.status is always a valid key
+  // (no `undefined` branch) — index it directly.
   const allowed = LEGAL_TRANSITIONS[state.status]
-  if (!allowed || !allowed.has(to)) {
+  if (!allowed.has(to)) {
     throw new ResearchError('DSH_ILLEGAL_TRANSITION', `state-machine: illegal '${state.status}' -> '${to}' for '${step.id}'`)
   }
   if (to === 'passed' && step.humanGate && state.approval?.decision !== 'approved') {
     throw new ResearchError('DSH_HUMAN_GATE_NOT_APPROVED', `state-machine: humanGate step '${step.id}' cannot move to 'passed' without an approved human approval`)
   }
   state.status = to
+  // holdReason is meaningful ONLY while status==='gated'; clear it on any other transition
+  // (gated→passed/blocked via human approval, or any in_progress→terminal edge).
+  if (to !== 'gated') state.holdReason = undefined
   if (to === 'passed' || to === 'blocked' || to === 'failed') {
     state.finishedAt = Date.now()
   }
@@ -238,6 +250,20 @@ function _apply(state: StepState, step: StepDefinition, to: StepStatus): void {
  * non-humanGate → 'passed'.
  */
 function _adjudicate(state: StepState, step: StepDefinition): StepStatus {
+  // T19 (hold_abstained): abstained has priority over any other outcome — abstention is a
+  // "no verdict" freeze, not a fail/pass. Any required component with outcome==='abstained'
+  // holds the step at 'gated' with holdReason='gate_abstained'. The attempt is never auto-
+  // resolved; it is abandoned only via rollback→new attempt (design §4). No default-pass.
+  let anyAbstained = false
+  for (const comp of step.gate) {
+    const v = state.gateResults[comp]
+    if (v && v.outcome === 'abstained') anyAbstained = true
+  }
+  if (anyAbstained) {
+    state.holdReason = 'gate_abstained'
+    _apply(state, step, 'gated')
+    return state.status
+  }
   let anyFail = false
   let cFailOnFalsifiable = false
   for (const comp of step.gate) {
@@ -437,13 +463,35 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
   // then using snapshot.* everywhere makes the guard, the storage key, the stored object, AND
   // the audit all read the single cloned value — key == object.component == audit.component
   // (INV-VERDICT-IMMUTABLE, INV-VERDICT-SNAPSHOT).
-  const snapshot = cloneValue(verdict) as GateVerdict
+  const base = cloneValue(verdict) as GateVerdict
+  // T19 write-boundary: outcome is the single source of truth; reject any verdict lacking a
+  // valid outcome BEFORE any other check (no silent reinterpretation — design §3). This must
+  // fire before the in_progress status check so a missing-outcome resubmit on a settled step
+  // reports DSH_GATEVERDICT_MISSING_OUTCOME, not DSH_VERDICT_BAD_STATUS.
+  if (!OUTCOMES.has(base.outcome)) {
+    throw new ResearchError(
+      'DSH_GATEVERDICT_MISSING_OUTCOME',
+      `submitGateVerdict: verdict for '${stepId}' is missing a valid 'outcome' (expected one of ${[...OUTCOMES].join(', ')}) — outcome is the single source of truth and must be supplied at the write boundary (T19, no silent reinterpretation)`,
+    )
+  }
+  // Derive the legacy `passed` projection from `outcome` (passed ⟺ outcome==='passed') so the
+  // stored verdict can never carry a passed/outcome contradiction. Spread into a fresh object
+  // literal because GateVerdict.passed is readonly (INV-WRITE-ISOLATION already cloned `verdict`).
+  const snapshot: GateVerdict = { ...base, passed: base.outcome === 'passed' }
   const component = snapshot.component
   if (step.gate.indexOf(component) === -1) {
     throw new ResearchError('DSH_GATE_COMPONENT_NOT_DECLARED', `submitGateVerdict: component '${component}' is not in step '${stepId}' gate — INV-GATE-COMPONENT`)
   }
   const state = run.steps.get(stepId)
   if (!state) throw new ResearchError('DSH_NO_STATE', `submitGateVerdict: no state for '${stepId}'`)
+  // INV-VERDICT-IMMUTABLE (T19 hold_abstained): on a held 'gated' step, re-submitting an
+  // already-adjudicated component is rejected as DSH_VERDICT_ALREADY_SET BEFORE the status
+  // guard (design §4 — "覆盖路径不存在"). This is the one precedence override: a settled/passed
+  // step still reports DSH_VERDICT_BAD_STATUS for a re-submit (INV-VERDICT-STATUS), but a held
+  // abstention must never be silently overwritten, so the duplicate-component guard wins there.
+  if (state.status === 'gated' && component in state.gateResults) {
+    throw new ResearchError('DSH_VERDICT_ALREADY_SET', `submitGateVerdict: component '${component}' already has a verdict for '${stepId}' (held step) — INV-VERDICT-IMMUTABLE (re-adjudication requires rollback+restart)`)
+  }
   if (state.status !== 'in_progress') {
     throw new ResearchError('DSH_VERDICT_BAD_STATUS', `submitGateVerdict: step '${stepId}' status '${state.status}' !== 'in_progress' — INV-VERDICT-STATUS`)
   }
@@ -456,6 +504,35 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
     if (!(comp in state.gateResults)) return state.status
   }
   const result = _adjudicate(state, step)
+  // T19 hold_abstained: an abstained adjudication holds the step at 'gated' (holdReason=
+  // 'gate_abstained'). Emit the dedicated 'gate-abstention' audit and NEVER a 'step-completed'
+  // — the attempt is frozen until rollback→new attempt (design §4).
+  if (result === 'gated' && state.holdReason === 'gate_abstained') {
+    // Identify the abstained component and its verdict (defaults to the just-submitted `component`
+    // / `base` when the abstained one is the triggering submit — both are always present in
+    // gateResults at this point). Mirrors the `if (v && ...)` defensive style used in _adjudicate.
+    let abstainedComp: TrinityComponent = component
+    let av: GateVerdict = base
+    for (const c of step.gate) {
+      const v = state.gateResults[c]
+      if (v && v.outcome === 'abstained') {
+        abstainedComp = c
+        av = v
+        break
+      }
+    }
+    const record: GateAbstentionRecord = {
+      runId,
+      stepId,
+      attemptId: state.attempt_id,
+      component: abstainedComp,
+      reasonCode: 'gate_abstained',
+      evidenceRefs: [av.evidence],
+      recordedAt: new Date().toISOString(),
+    }
+    pushEvent(run, 'gate-abstention', stepId, state.attempt_id, record)
+    return result
+  }
   pushEvent(run, 'step-completed', stepId, state.attempt_id, { status: result })
   return result
 }
@@ -536,6 +613,7 @@ export function getAuditHistory(store: ResearchRunStore, runId: string, stepId: 
     artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
     gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
     ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
+    ...(state.holdReason ? { holdReason: state.holdReason } : {}),
     current: true,
   }
   return [...history, current]
@@ -551,6 +629,7 @@ function snapshotStep(state: StepState): StepSnapshot {
     artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
     gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
     ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
+    ...(state.holdReason ? { holdReason: state.holdReason } : {}),
     history: state.history.map(h => cloneValue(h) as AttemptRecord),
     ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
     ...(state.finishedAt !== undefined ? { finishedAt: state.finishedAt } : {}),
@@ -584,6 +663,11 @@ export function _applyHumanApproval(
   if (!step.humanGate) throw new ResearchError('DSH_NOT_HUMAN_GATE', `_applyHumanApproval: step '${stepId}' is not a humanGate step`)
   const state = run.steps.get(stepId)
   if (!state) throw new ResearchError('DSH_NO_STATE', `_applyHumanApproval: no state for '${stepId}'`)
+  // NOTE (T19 hold_abstained): the `gate_abstained` refusal guard lives in `host.ts`
+  // `HostApprovalChannel.submit` (pre-guard, before this function is called) — design §6.
+  // A held abstention is released ONLY via rollback→new attempt; human approval must never
+  // convert an abstention into 'passed'. Placing the guard here too would be dead code because
+  // the host pre-guard already rejects every held-abstention submit before reaching this point.
   if (state.status !== 'gated') {
     throw new ResearchError('DSH_APPROVAL_BAD_STATUS', `_applyHumanApproval: step '${stepId}' status '${state.status}' !== 'gated' — INV-APPROVAL-STATE`)
   }

@@ -490,7 +490,7 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     // DSH_VERDICT_ALREADY_SET — the overwrite is blocked (INV-VERDICT-IMMUTABLE).
     const makeTrick = () => {
       let n = 0
-      return { get component() { n++; return n === 2 ? 'C' : 'A' }, passed: true, evidence: 'e', rationale: 'r', timestamp: 1 } as unknown as ReturnType<typeof verdict>
+      return { get component() { n++; return n === 2 ? 'C' : 'A' }, outcome: 'passed', passed: true, evidence: 'e', rationale: 'r', timestamp: 1 } as unknown as ReturnType<typeof verdict>
     }
     expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(ResearchError)
     expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(/VERDICT_ALREADY_SET/)
@@ -536,7 +536,7 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
       let n = 0
       return {
         get component() { n++; return n === 2 ? 'C' : 'A' },
-        passed: true, evidence: 'e', rationale: 'r', timestamp: 1,
+        outcome: 'passed', passed: true, evidence: 'e', rationale: 'r', timestamp: 1,
       } as unknown as ReturnType<typeof verdict>
     }
     // A is NOT yet in gateResults (first submission), so this proceeds to storage (unlike #8,

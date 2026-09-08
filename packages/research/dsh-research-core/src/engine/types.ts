@@ -47,9 +47,25 @@ export interface StepDefinition {
 /** Runtime status of one step instance. */
 export type StepStatus = 'pending' | 'in_progress' | 'gated' | 'passed' | 'blocked' | 'failed'
 
+/**
+ * Explicit gate outcome — the single source of truth for a component verdict.
+ * T19 (hold_abstained): replaces the prior boolean-only `passed` as the
+ * discriminant. `passed` is retained as a derived projection (`passed ⟺
+ * outcome === 'passed'`); verdicts MUST carry a valid `outcome` at the write
+ * boundary (DSH_GATEVERDICT_MISSING_OUTCOME) — no silent reinterpretation,
+ * and `abstained` is stored verbatim (never compressed to `passed:false`).
+ */
+export type GateOutcome = 'passed' | 'blocked' | 'failed' | 'abstained'
+
+/** Reason a `gated` step is held (only present when status === 'gated'). */
+export type HoldReason = 'human_gate' | 'gate_abstained'
+
 /** Verdict of one trinity-component gate for one step. */
 export interface GateVerdict {
   readonly component: TrinityComponent
+  /** Discriminant truth — written verbatim, never reconciled against `passed`. */
+  readonly outcome: GateOutcome
+  /** Derived projection only: `passed ⟺ outcome === 'passed'`. */
   readonly passed: boolean
   readonly evidence: string
   readonly rationale: string
@@ -96,7 +112,25 @@ export type AuditEventKind =
   | 'gate-verdict'
   | 'step-completed'
   | 'human-approval'
+  | 'gate-abstention'
   | 'rollback'
+
+/**
+ * Append-only record of a gate-abstention freeze (T19 hold_abstained). Emitted at the
+ * all-components-adjudicated point when any required component outcome === 'abstained';
+ * never emits `step-completed`. Deep-cloned into the `detail` of the `'gate-abstention'`
+ * AuditEvent (INV-EVENTS-IMMUTABLE). `recordedAt` is ISO-8601 for reconciliation against
+ * the upstream AdjudicationResult.timestamp (C1).
+ */
+export interface GateAbstentionRecord {
+  readonly runId: string
+  readonly stepId: string
+  readonly attemptId: number
+  readonly component: TrinityComponent
+  readonly reasonCode: string
+  readonly evidenceRefs: ReadonlyArray<string>
+  readonly recordedAt: string
+}
 
 /**
  * Append-only run audit event. `detail` is a JSON-serializable snapshot deep-cloned
@@ -119,6 +153,7 @@ export interface AttemptRecord {
   readonly artifacts: Readonly<Record<string, unknown>>
   readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
   readonly approval?: Readonly<ApprovalRecord>
+  readonly holdReason?: HoldReason
   readonly superseded: true
 }
 
@@ -129,6 +164,7 @@ export interface CurrentAttemptSnapshot {
   readonly artifacts: Readonly<Record<string, unknown>>
   readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
   readonly approval?: Readonly<ApprovalRecord>
+  readonly holdReason?: HoldReason
   readonly current: true
 }
 
@@ -141,6 +177,7 @@ export interface StepState {
   artifacts: Record<string, unknown>
   gateResults: Partial<Record<TrinityComponent, GateVerdict>>
   approval?: ApprovalRecord | undefined
+  holdReason?: HoldReason | undefined
   history: AttemptRecord[]
   startedAt: number | undefined
   finishedAt: number | undefined
@@ -175,6 +212,7 @@ export interface StepSnapshot {
   readonly artifacts: Readonly<Record<string, unknown>>
   readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
   readonly approval?: Readonly<ApprovalRecord>
+  readonly holdReason?: HoldReason
   readonly history: ReadonlyArray<Readonly<AttemptRecord>>
   readonly startedAt?: number
   readonly finishedAt?: number
