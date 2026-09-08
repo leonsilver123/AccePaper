@@ -57,3 +57,9 @@ export * from './tools/figure/index.ts'
 // rendered as GitHub Markdown (exactly 3 horizontal rules) or LaTeX booktabs
 // (no vertical rules anywhere). Faithful: never alters/fills/infers data.
 export * from './tools/three-line-table/index.ts'
+
+// ── T18 roadmap (structured layered graph -> Mermaid / SVG; U4/U6) ──────────
+// renderRoadmap(graph, {format}, ts) — structural validation first (U4 leg 1),
+// then deterministic render (Mermaid source or layered SVG). VSDX export is
+// DEGRADED until a python `vsdx` adapter exists (U6/D17 allows that); pure.
+export * from './tools/roadmap/index.ts'
