@@ -3,10 +3,11 @@
 import type { RoadmapGraph, RoadmapValidation } from './model.ts'
 
 /**
- * Automatic structural check (U4 leg 1): duplicate ids, dangling edge refs,
- * self-loops, directed cycles, unreachable-from-root nodes, and nodes that
- * produce nothing but are not outputs. Returns errors (never throws on
- * structure — malformed input reports ok:false).
+ * Automatic structural check (U4 leg 1): duplicate ids, empty labels, dangling
+ * edge refs, self-loops, and directed cycles. (unreachable-from-root and
+ * produce-nothing-not-output checks are NOT yet implemented — they require a
+ * root/output declaration; tracked as follow-up). Returns errors (never throws
+ * on structure — malformed input reports ok:false).
  */
 export function validateRoadmap(graph: RoadmapGraph): Readonly<RoadmapValidation> {
   const errors: string[] = []
