@@ -13,6 +13,21 @@
  * internally only, so an importer cannot mutate `step.humanGate`/`step.gate`/`step.inputs`
  * to bypass the guards that read them live (and the `./src/*` subpath hatch is removed,
  * so steps.ts is not directly importable either).
+ *
+ * ── T19-B orchestration surface (additive, audited) ───────────────────────────
+ * Three narrow, safe additions serve the team runner WITHOUT opening the internals:
+ *   - `runStep` (execute phase only): the T19-A minimal pipeline — guarded, result-once,
+ *     timeout/abort-safe, all-or-nothing artifact writes, appends its own 'step-executed'
+ *     audit. It NEVER adjudicates a gate and NEVER moves a step to a terminal state; the
+ *     gate stays the sole province of `submitGateVerdict`/`completeStep`. It requires the
+ *     step to already be `in_progress` (via `startStep`) and throws otherwise.
+ *   - `getStepDefinitions()` / `getStepDefinitionById()`: read-only accessors returning
+ *     deep-frozen CLONES of the 16 step definitions. The internal STEPS array / STEP_BY_ID
+ *     Map are never handed out; callers cannot mutate or alias the live definitions.
+ *   - NO generic `appendAuditEvent` is exported: audit records can only be produced by the
+ *     engine's own functions (runStep → 'step-executed'; submitGateVerdict/completeStep →
+ *     'gate-verdict'/'gate-abstention'/'step-completed'), so no caller can forge arbitrary
+ *     audit history.
  */
 
 export type {
@@ -133,3 +148,19 @@ export type {
   FalsifiablePrediction,
   StateMachineGateIntent,
 } from './gates/index.ts'
+
+// ── T19-B orchestration (Wave 2, additive + audited) ─────────────────────────
+// `runStep` is the execute-phase pipeline (T19-A). It NEVER adjudicates gates and
+// never reaches a terminal state on its own — see the module docs above. The step
+// accessors return deep-frozen clones; the internal STEPS array / STEP_BY_ID Map are
+// not exported, and no generic appendAuditEvent is exported (audit events originate
+// only from engine functions).
+export { runStep } from './engine/pipeline.ts'
+export type {
+  StepExecContext,
+  StepExecutor,
+  RunStepOptions,
+  RunStepStatus,
+  RunStepResult,
+} from './engine/pipeline.ts'
+export { getStepDefinitions, getStepDefinitionById } from './engine/steps-accessor.ts'
