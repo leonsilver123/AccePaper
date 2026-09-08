@@ -11,6 +11,7 @@
     { "path": "../../../vendor/cosmokit" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../../vendor/cordis" },
+    { "path": "../dsh-research-core" },
     { "path": "../../util/brand" },
     { "path": "../../llm/llm" },
     { "path": "../../core/session" },
