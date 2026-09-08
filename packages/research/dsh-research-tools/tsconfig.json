@@ -6,5 +6,8 @@
     "emitDeclarationOnly": true,
     "declarationMap": false
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    { "path": "../dsh-research-core" }
+  ]
 }
