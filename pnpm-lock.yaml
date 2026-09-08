@@ -6632,6 +6632,9 @@ importers:
 
   packages/research/dsh-research-team:
     dependencies:
+      '@deepseek-ai/dsh-research-core':
+        specifier: workspace:^
+        version: link:../dsh-research-core
       zod:
         specifier: ^4.4.3
         version: 4.4.3

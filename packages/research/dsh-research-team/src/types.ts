@@ -93,6 +93,8 @@ export type ResearchTeamErrorSuffix =
   | 'DUPLICATE_VOTE'
   | 'ROUND_NOT_FOUND'
   | 'FLEET_NOT_DEPLOYED'
+  | 'JUDGE_ROUND_INCOMPLETE'
+  | 'INVALID_EXPERIMENT'
 
 /** Globally unique error codes thrown by this package's pure logic. */
 export type ResearchTeamErrorCode = `${typeof DSH_RESEARCH_TEAM_ERROR_PREFIX}${ResearchTeamErrorSuffix}`
