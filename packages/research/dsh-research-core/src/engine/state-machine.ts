@@ -127,6 +127,7 @@ function ensureEntry(run: RunState, stepId: string): StepState {
     history: [],
     startedAt: undefined,
     finishedAt: undefined,
+    outputs: (STEP_BY_ID.get(stepId) as StepDefinition).outputs,
   }
   run.steps.set(stepId, state)
   return state
@@ -148,6 +149,25 @@ function pushEvent(
     ...(detail !== undefined ? { detail: cloneValue(detail) } : {}),
   }
   run.events.push(event)
+}
+
+/**
+ * Append-only audit sink for sibling pure-logic modules (e.g. the T19-A P3 execution
+ * pipeline). Thin exported wrapper over the module-private {@link pushEvent}: deep-clones
+ * `detail` (INV-EVENTS-IMMUTABLE) and appends to the run's event log. Does NOT mutate step
+ * status — callers remain responsible for state transitions. `stepId`/`attemptId` may be
+ * undefined for run-level events.
+ */
+export function appendAuditEvent(
+  store: ResearchRunStore,
+  runId: string,
+  kind: AuditEventKind,
+  stepId: string | undefined,
+  attemptId: number | undefined,
+  detail?: unknown,
+): void {
+  const run = ensureRun(store, runId)
+  pushEvent(run, kind, stepId, attemptId, detail)
 }
 
 /** Deep-cloned superseded snapshot of a step's current attempt (INV-HISTORY-IMMUTABLE). */
@@ -633,6 +653,7 @@ function snapshotStep(state: StepState): StepSnapshot {
     history: state.history.map(h => cloneValue(h) as AttemptRecord),
     ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
     ...(state.finishedAt !== undefined ? { finishedAt: state.finishedAt } : {}),
+    outputs: state.outputs,
   }
 }
 

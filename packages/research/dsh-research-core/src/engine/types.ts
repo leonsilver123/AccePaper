@@ -113,6 +113,7 @@ export type AuditEventKind =
   | 'step-completed'
   | 'human-approval'
   | 'gate-abstention'
+  | 'step-executed'
   | 'rollback'
 
 /**
@@ -129,6 +130,28 @@ export interface GateAbstentionRecord {
   readonly component: TrinityComponent
   readonly reasonCode: string
   readonly evidenceRefs: ReadonlyArray<string>
+  readonly recordedAt: string
+}
+
+/**
+ * Append-only execution record of one {@link runStep} invocation (T19-A P3 minimal
+ * execution pipeline). Emitted as the `detail` of a single `'step-executed'` AuditEvent.
+ * `status` is the terminal disposition of that single execution; `success` means artifacts
+ * were written and the upper layer may continue the gate, while `error`/`timeout`/`cancelled`
+ * leave the step `in_progress` (rollback-able) with NO artifact written. Deep-cloned at
+ * append time (INV-EVENTS-IMMUTABLE). `recordedAt` is ISO-8601.
+ */
+export interface StepExecutedRecord {
+  readonly runId: string
+  readonly stepId: string
+  readonly attemptId: number
+  readonly status: 'success' | 'error' | 'timeout' | 'cancelled'
+  /** Wall-clock duration of the executor (rounded ms); undefined on timeout/cancelled before start. */
+  readonly durationMs?: number
+  /** Present only when status === 'error'. */
+  readonly errorMessage?: string
+  /** Slugs that were successfully written for status === 'success'. */
+  readonly outputSlugs: ReadonlyArray<string>
   readonly recordedAt: string
 }
 
@@ -181,6 +204,8 @@ export interface StepState {
   history: AttemptRecord[]
   startedAt: number | undefined
   finishedAt: number | undefined
+  /** Declared output slugs (mirrors the immutable StepDefinition; used by the execution pipeline's write-boundary). */
+  outputs: ReadonlyArray<string>
 }
 
 /** Mutable map of step runtime states, keyed by step id (within one run). */
@@ -216,6 +241,8 @@ export interface StepSnapshot {
   readonly history: ReadonlyArray<Readonly<AttemptRecord>>
   readonly startedAt?: number
   readonly finishedAt?: number
+  /** Declared output slugs (mirrors the immutable StepDefinition). */
+  readonly outputs: ReadonlyArray<string>
 }
 
 /** Artifact metadata (no value) for {@link RunSnapshot}; use `getArtifact` for the value (HOLE-4). */
