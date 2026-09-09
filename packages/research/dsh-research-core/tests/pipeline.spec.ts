@@ -11,7 +11,7 @@ import {
 import { runStep } from '../src/engine/pipeline.ts'
 import type { StepExecutedRecord } from '../src/engine/types.ts'
 import { freshStore, seedRun, verdict } from './helpers.ts'
-import { STEP_BY_ID } from '../src/engine/steps.ts'
+import { lookupStep } from '../src/engine/steps.ts'
 
 /**
  * T19-A P3 — minimal execution pipeline (src/engine/pipeline.ts).
@@ -28,7 +28,7 @@ import { STEP_BY_ID } from '../src/engine/steps.ts'
  */
 
 const STEP = 'A1-landscape'
-const OUTS = STEP_BY_ID.get(STEP)!.outputs // ['landscape-map','gap-list']
+const OUTS = lookupStep(STEP)!.outputs // ['landscape-map','gap-list']
 
 /** seed + start STEP so it is in_progress; returns [store, runId]. */
 function started(): [ReturnType<typeof freshStore>, string] {

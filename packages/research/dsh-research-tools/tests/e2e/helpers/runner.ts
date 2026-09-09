@@ -17,7 +17,7 @@
 
 import type { StepExecutor, StepStatus } from './imports.ts'
 import {
-  STEP_BY_ID,
+  lookupStep,
   STEPS,
   canStart,
   completeStep,
@@ -74,7 +74,7 @@ export async function runStepWithGate(
   stepId: string,
   opts: StepDriveOptions = {},
 ): Promise<StepDriveResult> {
-  const stepDef = STEP_BY_ID.get(stepId)
+  const stepDef = lookupStep(stepId)
   if (!stepDef) throw new Error(`E2E runner: unknown step '${stepId}'`)
 
   // Dependency-order guard: only pending steps whose inputs are satisfied may start.

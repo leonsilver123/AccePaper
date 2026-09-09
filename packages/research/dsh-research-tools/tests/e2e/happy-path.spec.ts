@@ -19,7 +19,7 @@ import {
   getArtifact,
   getRunSnapshot,
   setRunInput,
-  STEP_BY_ID,
+  lookupStep,
   STEPS,
 } from './helpers/imports.ts'
 import { driveAll, REAL_TOOL_STEP } from './helpers/runner.ts'
@@ -62,7 +62,7 @@ describe('E2E-1 Happy Path — 16 steps A1→E2, real figure tool on D1, stop at
 
     // 3) E2 is a humanGate step and was NOT auto-approved: no approval record, isComplete false.
     const e2Snap = getRunSnapshot(store, runId).steps['E2-submit']
-    expect(STEP_BY_ID.get('E2-submit')?.humanGate).toBe(true)
+    expect(lookupStep('E2-submit')?.humanGate).toBe(true)
     expect(e2Snap.approval).toBeUndefined()
     // isComplete on a humanGate step requires an approved approval for the current attempt.
     const { isComplete } = await import('./helpers/imports.ts')
