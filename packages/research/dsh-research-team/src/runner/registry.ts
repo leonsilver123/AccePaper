@@ -213,15 +213,27 @@ export interface StepExecutorEntry {
  * as artifact-level evidence that the declared executor actually ran. Frozen
  * tool artifacts are spread (their values copied) so the wrapper is writable.
  */
+export interface ArtifactChannelMeta {
+  /** Which invoker actually executed the capability (direct|agent-loop-toolruntime). */
+  readonly provenance: string
+  /** Channel truthfulness carried by the invoker (direct_fixture|cordis_tool_runtime). */
+  readonly invokerTruthfulness: string
+}
+
 export function tagArtifact(
   value: unknown,
   producer: string,
   kind: Truthfulness,
+  channelMeta?: ArtifactChannelMeta,
 ): Record<string, unknown> {
-  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    return { ...(value as Record<string, unknown>), __producer: producer, __kind: kind }
+  const branded: Record<string, unknown> = (value !== null && typeof value === 'object' && !Array.isArray(value))
+    ? { ...(value as Record<string, unknown>), __producer: producer, __kind: kind }
+    : { value, __producer: producer, __kind: kind }
+  if (channelMeta !== undefined) {
+    branded.__provenance = channelMeta.provenance
+    branded.__invokerTruthfulness = channelMeta.invokerTruthfulness
   }
-  return { value, __producer: producer, __kind: kind }
+  return branded
 }
 
 /** One tool capability that serves a pipeline step. A tool is a STEP CAPABILITY,
@@ -448,6 +460,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       A1_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
     'gap-list': tagArtifact(
       {
@@ -456,6 +469,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       A1_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
 }
@@ -485,7 +499,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = CANONICAL_PREDICTION
   return {
-    claim: tagArtifact(artifact.claim, A2_PRODUCER, 'real_tool_fixture_input'),
+    claim: tagArtifact(artifact.claim, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
       {
         text: CANONICAL_PREDICTION,
@@ -494,6 +508,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       A2_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
 }
@@ -800,6 +815,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
     'boundary-map': tagArtifact(
       {
@@ -814,6 +830,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
 }
@@ -905,6 +922,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       D1_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: figureInv.provenance, invokerTruthfulness: figureInv.truthfulness },
     ),
   }
 }
@@ -1114,6 +1132,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       E1_PRODUCER,
       'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
 }
@@ -1535,7 +1554,9 @@ export function perStepInvocationChannels(
       invokerKind: actual === 'agent-loop'
         ? 'AgentLoopResearchToolInvoker'
         : 'DirectResearchToolInvoker',
-      toolRuntimeExecutionId: actual === 'agent-loop' ? 'minted-by-agent-loop' : undefined,
+      // No real ToolRuntime execution id is observable from session events
+      // (audit F1-P2-3): the field stays undefined — never a fabricated id.
+      toolRuntimeExecutionId: undefined,
       truthfulness,
       fallbackReason: planned !== actual
         ? 'no AgentLoop invoker injected into the T19 drive path; default DirectResearchToolInvoker (direct_fixture)'

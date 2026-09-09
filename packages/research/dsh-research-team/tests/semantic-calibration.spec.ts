@@ -78,11 +78,13 @@ describe('R3 per-step invocation channel (planned vs actual)', () => {
     expect(rows.some(row => row.actualChannel === 'agent-loop')).toBe(false)
   })
 
-  it('agent-loop-injected mode records D1 as actual agent-loop with an execution id', () => {
+  it('agent-loop-injected mode records D1 as actual agent-loop WITHOUT a fabricated execution id', () => {
     const rows = perStepInvocationChannels('agent-loop-injected')
     const d1 = rows.find(row => row.stepId === 'D1-figure-map')!
     expect(d1.actualChannel).toBe('agent-loop')
     expect(d1.invokerKind).toBe('AgentLoopResearchToolInvoker')
-    expect(d1.toolRuntimeExecutionId).toBe('minted-by-agent-loop')
+    // No real ToolRuntime execution id is observable from session events; the
+    // field must stay undefined rather than invent a placeholder.
+    expect(d1.toolRuntimeExecutionId).toBeUndefined()
   })
 })
