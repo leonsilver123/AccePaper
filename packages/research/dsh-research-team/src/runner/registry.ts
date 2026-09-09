@@ -1367,3 +1367,57 @@ export const CANONICAL = {
 } as const
 
 export type { StepDefinition }
+
+
+// ── T19 semantic calibration (A3/R2): explicit research TASK per step ───────
+// Each canonical step first expresses its RESEARCH task; tool capabilities serve
+// it (STEP_CAPABILITIES) — a tool is never a step substitute. These labels are
+// asserted (non-empty, distinct from every tool id) so a step can never be
+// mistaken for, or replaced by, a tool.
+
+/** 16 步研究语义任务(语义先行)。键=canonical stepId。 */
+export const SEMANTIC_TASKS: Readonly<Record<string, string>> = {
+  'A1-landscape': '领域与文献景观扫描: 界定研究域并盘点相关文献(交通自适应信号控制)',
+  'A2-claim': '构造可证伪的研究 claim: 明确断言与可证伪预言(超越 SOTA 差距的实验判定)',
+  'A3-agenda': '研究议程与扩展: 规划多阶段研究任务与依赖(非关键词处理)',
+  'A4-venue': '期刊与审稿标准: 依中科院分区∪CCF 双体系确定目标投稿域与格式约束',
+  'B1-method': '方法推导: 从研究问题推导可执行方法(自适应策略形式化)',
+  'B2-data': '数据与复现基础: 声明数据来源/版本/种子与复现协议(mock 显式标记)',
+  'B3-baseline': 'baseline 与指标: 建立对照基线并定义评估指标(固定配时 10.0s)',
+  'C1-mvp': '方法 MVP: 最小可行实现并产出首轮实验结果(自适应变体)',
+  'C2-trinity-loop': '迭代实验与三一收敛: 以 A/B/C 三组件收敛 claim 判定',
+  'C3-boundary': '边界与反例: 以消融探测 claim 成立边界与反例',
+  'D1-figure-map': 'claim→图表映射: 为结果产出数据图/三线表/路线图',
+  'D2-framework': '论文结构: 由 claim 与证据组织论文骨架(与写作并行)',
+  'D3-writing': '由内向外写作: 从证据/图表生成论文正文段落(数字可追溯)',
+  'D4-rebuttal': 'rebuttal 演练: 生成可辩护的答辩意见(引用对应 claim/实验)',
+  'E1-format': '格式与复现包: 装配投稿格式稿件与可复现包(三线表为子能力)',
+  'E2-submit': '投稿前人工门禁: 由可信人工审阅后才允许提交(绝不自动)',
+}
+
+/** 语义诚实断言: 16 项全覆盖、非空、且任何一步的语义任务都不得是某工具。 */
+export function assertSemanticTasksHonest(): void {
+  const stepIds = new Set(PIPELINE_STEPS.map(step => step.id))
+  const capabilityToolIds = new Set<string>()
+  for (const capabilities of Object.values(STEP_CAPABILITIES)) {
+    for (const capability of capabilities) capabilityToolIds.add(capability.toolId)
+  }
+  const missing = [...stepIds].filter(id => SEMANTIC_TASKS[id] === undefined)
+  if (missing.length > 0) throw new Error(`SEMANTIC_TASKS missing: ${missing.join(',')}`)
+  for (const [stepId, task] of Object.entries(SEMANTIC_TASKS)) {
+    if (!stepIds.has(stepId)) throw new Error(`SEMANTIC_TASKS unknown step '${stepId}'`)
+    if (task.trim().length === 0) throw new Error(`SEMANTIC_TASKS empty for '${stepId}'`)
+    if (capabilityToolIds.has(stepId)) {
+      throw new Error(`step '${stepId}' collides with a tool id — tools are capabilities, never steps`)
+    }
+  }
+}
+
+/** 每步执行通道口径(静态,当前代码事实): direct|fixture|human。 */
+export function stepChannelBreakdown(): ReadonlyArray<{ stepId: string; channel: string }> {
+  const modelReadySteps = new Set(['D1-figure-map'])
+  return PIPELINE_STEPS.map(step => ({
+    stepId: step.id,
+    channel: step.id === 'E2-submit' ? 'human' : modelReadySteps.has(step.id) ? 'direct(model-ready-capable)' : 'direct|fixture',
+  }))
+}
