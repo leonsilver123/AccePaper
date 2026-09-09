@@ -145,12 +145,15 @@ export class ResearchEngine extends Service {
 
   /** Required registration path (research-bundle / T30 mode). */
   private async mountResearchTools(): Promise<void> {
-    let ready = false
-    await this.ctx.plugin(researchToolsPlugin, { verify: true, onReady: () => { ready = true } })
-    // `ready` is only flipped by the plugin's onReady callback (which runs on a
-    // context that may be an isolate), so control-flow analysis cannot see it.
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
-    if (!ready) {
+    const applied: { value: boolean } = { value: false }
+    await this.ctx.plugin(researchToolsPlugin, {
+      verify: true,
+      onReady: () => { applied.value = true },
+    })
+    // `applied.value` is only flipped by the plugin's onReady callback (which
+    // runs on a context that may be an isolate), so it is the authoritative
+    // success signal when the tools service was actually present.
+    if (!applied.value) {
       throw new Error(
         '[research-cordis] requireResearchTools: the seven research tools could not be '
         + 'registered (tools service absent or registration failed) — refusing to boot a '
