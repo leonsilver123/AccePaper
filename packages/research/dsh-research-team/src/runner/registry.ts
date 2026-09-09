@@ -1462,8 +1462,88 @@ export function stepChannelBreakdown(): ReadonlyArray<{ stepId: string; channel:
   }))
 }
 
-// ── R3: invocation-channel summary (real counts, asserted by spec) ──────────
+// ── R3: per-step invocation channel (planned vs ACTUAL, R3 corrected) ──────
 export type StepChannel = 'direct' | 'fixture' | 'human' | 'agent-loop'
+export type InvokerKind = 'DirectResearchToolInvoker' | 'AgentLoopResearchToolInvoker' | 'none(fixture)' | 'none(human-gate)'
+
+export interface StepInvocationChannel {
+  readonly stepId: string
+  /** Channel the step WOULD use when an AgentLoop invoker is injected (capability). */
+  readonly plannedChannel: StepChannel
+  /** Channel actually used in the current run/context (E2E defaults to Direct). */
+  readonly actualChannel: StepChannel
+  /** Which invoker implementation actually ran the tool capability (or none). */
+  readonly invokerKind: InvokerKind
+  /** Host ToolRuntime execution id when actualChannel=agent-loop; else undefined. */
+  readonly toolRuntimeExecutionId: string | undefined
+  readonly truthfulness: string
+  /** Why actual != planned, or why no invoker was used. */
+  readonly fallbackReason: string | undefined
+}
+
+const STEP_TRUTHFULNESS: Readonly<Record<string, string>> = {
+  'A1-landscape': 'real_tool_fixture_input',
+  'A2-claim': 'real_tool_fixture_input',
+  'C3-boundary': 'real_tool_fixture_input',
+  'D1-figure-map': 'real_tool_fixture_input',
+  'E1-format': 'real_tool_fixture_input',
+  'E2-submit': 'live human (offline: pending)',
+}
+
+/**
+ * Per-step channel table reflecting REALITY for the current invocation mode.
+ * Today no AgentLoop invoker is injected into the T19 drive path, so D1's
+ * actualChannel is 'direct' (default DirectResearchToolInvoker), with the
+ * agent-loop capability recorded only in plannedChannel + fallbackReason.
+ * @param mode - 'e2e-default' (no invoker injection) | 'agent-loop-injected'.
+ */
+export function perStepInvocationChannels(
+  mode: 'e2e-default' | 'agent-loop-injected' = 'e2e-default',
+): ReadonlyArray<StepInvocationChannel> {
+  const wired = new Set(['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format'])
+  const agentLoopInjected = mode === 'agent-loop-injected'
+  return PIPELINE_STEPS.map((step) => {
+    if (step.id === 'E2-submit') {
+      return {
+        stepId: step.id,
+        plannedChannel: 'human' as const,
+        actualChannel: 'human' as const,
+        invokerKind: 'none(human-gate)' as const,
+        truthfulness: STEP_TRUTHFULNESS[step.id] ?? 'fixture_executor',
+        toolRuntimeExecutionId: undefined,
+        fallbackReason: undefined,
+      }
+    }
+    if (!wired.has(step.id)) {
+      return {
+        stepId: step.id,
+        plannedChannel: 'fixture' as const,
+        actualChannel: 'fixture' as const,
+        invokerKind: 'none(fixture)' as const,
+        truthfulness: 'fixture_executor',
+        toolRuntimeExecutionId: undefined,
+        fallbackReason: undefined,
+      }
+    }
+    const planned: StepChannel = step.id === 'D1-figure-map' ? 'agent-loop' : 'direct'
+    const actual: StepChannel = step.id === 'D1-figure-map' && !agentLoopInjected ? 'direct' : planned
+    const truthfulness = STEP_TRUTHFULNESS[step.id] ?? 'real_tool_fixture_input'
+    return {
+      stepId: step.id,
+      plannedChannel: planned,
+      actualChannel: actual,
+      invokerKind: actual === 'agent-loop'
+        ? 'AgentLoopResearchToolInvoker'
+        : 'DirectResearchToolInvoker',
+      toolRuntimeExecutionId: actual === 'agent-loop' ? 'minted-by-agent-loop' : undefined,
+      truthfulness,
+      fallbackReason: planned !== actual
+        ? 'no AgentLoop invoker injected into the T19 drive path; default DirectResearchToolInvoker (direct_fixture)'
+        : undefined,
+    }
+  })
+}
+
 export interface ChannelStat {
   readonly channel: StepChannel
   readonly count: number
@@ -1471,13 +1551,8 @@ export interface ChannelStat {
 }
 export function invocationChannelSummary(): ReadonlyArray<ChannelStat> {
   const byChannel: Record<StepChannel, string[]> = { direct: [], fixture: [], human: [], 'agent-loop': [] }
-  for (const step of PIPELINE_STEPS) {
-    const caps = STEP_CAPABILITIES[step.id] ?? []
-    const hasCapability = caps.some(cap => cap.wired)
-    if (step.id === 'E2-submit') byChannel.human.push(step.id)
-    else if (step.id === 'D1-figure-map') byChannel['agent-loop'].push(step.id)
-    else if (hasCapability) byChannel.direct.push(step.id)
-    else byChannel.fixture.push(step.id)
+  for (const row of perStepInvocationChannels('e2e-default')) {
+    byChannel[row.actualChannel].push(row.stepId)
   }
   return (Object.keys(byChannel) as StepChannel[])
     .map(channel => ({ channel, count: byChannel[channel].length, stepIds: byChannel[channel] }))

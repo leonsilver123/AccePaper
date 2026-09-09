@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PIPELINE_STEPS,
   invocationChannelSummary,
+  perStepInvocationChannels,
   SEMANTIC_TASKS,
   STEP_CAPABILITIES,
   assertSemanticTasksHonest,
@@ -53,15 +54,35 @@ describe('T19 semantic calibration (semanticTask ≠ tool)', () => {
   })
 })
 
-describe('R3 invocation channel summary (real counts)', () => {
-  it('reports the true channel mix: 4 direct + 1 agent-loop-capable D1 + 10 fixture + 1 human', () => {
+describe('R3 per-step invocation channel (planned vs actual)', () => {
+  it('e2e-default ACTUAL channel mix: 5 direct (incl D1), 10 fixture, 1 human, 0 agent-loop', () => {
     const summary = invocationChannelSummary()
     const byName = Object.fromEntries(summary.map(stat => [stat.channel, stat]))
-    expect(byName.direct.count).toBe(4) // A1 A2 C3 E1; D1 counted agent-loop
+    expect(byName.direct.count).toBe(5) // A1 A2 C3 D1 E1 all default Direct in E2E
     expect(byName.fixture.count).toBe(10)
     expect(byName.human.count).toBe(1)
-    expect(byName['agent-loop'].count).toBe(1)
-    expect(byName['agent-loop'].stepIds).toEqual(['D1-figure-map'])
-    expect([...byName.direct.stepIds, ...byName.fixture.stepIds, ...byName.human.stepIds, ...byName['agent-loop'].stepIds].length).toBe(16)
+    expect(byName['agent-loop']).toBeUndefined()
+    expect([...byName.direct.stepIds, ...byName.fixture.stepIds, ...byName.human.stepIds]).toHaveLength(16)
+  })
+
+  it('separates PLANNED (agent-loop-capable D1) from ACTUAL (direct with fallbackReason)', () => {
+    const rows = perStepInvocationChannels('e2e-default')
+    const d1 = rows.find(row => row.stepId === 'D1-figure-map')!
+    expect(d1.plannedChannel).toBe('agent-loop')
+    expect(d1.actualChannel).toBe('direct')
+    expect(d1.invokerKind).toBe('DirectResearchToolInvoker')
+    expect(d1.toolRuntimeExecutionId).toBeUndefined()
+    expect(d1.truthfulness).toBe('real_tool_fixture_input')
+    expect(d1.fallbackReason).toMatch(/no AgentLoop invoker injected/)
+    // no step may claim an actual agent-loop channel in default E2E
+    expect(rows.some(row => row.actualChannel === 'agent-loop')).toBe(false)
+  })
+
+  it('agent-loop-injected mode records D1 as actual agent-loop with an execution id', () => {
+    const rows = perStepInvocationChannels('agent-loop-injected')
+    const d1 = rows.find(row => row.stepId === 'D1-figure-map')!
+    expect(d1.actualChannel).toBe('agent-loop')
+    expect(d1.invokerKind).toBe('AgentLoopResearchToolInvoker')
+    expect(d1.toolRuntimeExecutionId).toBe('minted-by-agent-loop')
   })
 })
