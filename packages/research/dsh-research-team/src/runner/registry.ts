@@ -79,7 +79,6 @@ import {
   THREE_LINE_TABLE_TOOL_ID,
   THREE_LINE_TABLE_TOOL_VERSION,
   constructClaim,
-  createMockAblationExecutor,
   mockLiteratureSearchAdapter,
   renderFigure,
   renderRoadmap,
@@ -462,16 +461,25 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 }
 
 /** A2-claim: real `constructClaim` producing a claim + falsifiable prediction. */
-function a2Executor(ctx: ExecCtx): Record<string, unknown> {
-  const artifact = constructClaim({
-    assertion: 'Adaptive signal control reduces peak-hour delay beyond the 8% SOTA gap.',
-    claimId: CANONICAL_CLAIM_ID,
-    now: FIXED_TS,
-    falsifiability: {
-      essentialDifference: 'control policy is adaptive (RL) rather than fixed-time',
-      experimentToFalsify: 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.',
+async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('a2-fixture')
+  const invocation = await invoker.invoke(
+    'claim-construct',
+    {
+      assertion: 'Adaptive signal control reduces peak-hour delay beyond the 8% SOTA gap.',
+      claimId: CANONICAL_CLAIM_ID,
+      now: FIXED_TS,
+      falsifiability: {
+        essentialDifference: 'control policy is adaptive (RL) rather than fixed-time',
+        experimentToFalsify: 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.',
+      },
     },
-  })
+    { timestamp: FIXED_TS },
+  )
+  if (!invocation.ok) {
+    throw new Error(`[A2-claim] claim-construct invocation failed: ${invocation.message}`)
+  }
+  const artifact = invocation.artifact as ReturnType<typeof constructClaim>
   // Wire the claim + prediction into the shared context for downstream C-gates.
   ctx.runCtx.claimId = CANONICAL_CLAIM_ID
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
@@ -769,9 +777,18 @@ const ABLATION_DEFINITION: AblationDefinition = {
 
 /** C3-boundary: real `runAblation` — boundary probing (variant vs baseline).
  *  Ablation lives HERE (canonical C3), not in B3-baseline (T19-S fix). */
-function c3Executor(ctx: ExecCtx): Record<string, unknown> {
+async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const verdict = readInput(ctx, 'converged-verdict')
-  const artifact = runAblation(ABLATION_DEFINITION, createMockAblationExecutor(), FIXED_TS)
+  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('c3-fixture')
+  const invocation = await invoker.invoke(
+    'ablation',
+    { definition: ABLATION_DEFINITION },
+    { timestamp: FIXED_TS },
+  )
+  if (!invocation.ok) {
+    throw new Error(`[C3-boundary] ablation invocation failed: ${invocation.message}`)
+  }
+  const artifact = invocation.artifact as ReturnType<typeof runAblation>
   return {
     'ablation-results': tagArtifact(
       {
@@ -804,40 +821,34 @@ function c3Executor(ctx: ExecCtx): Record<string, unknown> {
 /** D1-figure-map: real renders for ALL THREE figure families its canonical
  *  purpose names (数据图/三线表/路线图). figure-plan lists each figure with the
  *  evidence produced by its real tool execution. */
-function d1Executor(): Record<string, unknown> {
-  const figure = renderFigure(
-    {
-      kind: 'bar',
-      title: 'Peak-hour Delay by Control Policy (synthetic)',
-      width: 320,
-      height: 240,
-      series: [{ name: 'delay (s)', values: [SCENARIO.variantDelaySeconds, SCENARIO.baselineDelaySeconds] }],
-      tokens: { palette: ['#1f77b4'] },
-      seed: 7,
-    },
-    FIXED_TS,
-  )
-  const table = renderThreeLineTable(
-    {
-      title: 'Peak-hour Delay Comparison (synthetic)',
-      columns: [
-        { header: 'Method', decimals: 0 },
-        { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
+async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
+  const figureSpec = {
+    kind: 'bar',
+    title: 'Peak-hour Delay by Control Policy (synthetic)',
+    width: 320,
+    height: 240,
+    series: [{ name: 'delay (s)', values: [SCENARIO.variantDelaySeconds, SCENARIO.baselineDelaySeconds] }],
+    tokens: { palette: ['#1f77b4'] },
+    seed: 7,
+  }
+  const tableModel = {
+    title: 'Peak-hour Delay Comparison (synthetic)',
+    columns: [
+      { header: 'Method', decimals: 0 },
+      { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
+    ],
+    rows: [
+      [
+        { kind: 'text', text: 'Adaptive' },
+        { kind: 'number', value: SCENARIO.variantDelaySeconds },
       ],
-      rows: [
-        [
-          { kind: 'text', text: 'Adaptive' },
-          { kind: 'number', value: SCENARIO.variantDelaySeconds },
-        ],
-        [
-          { kind: 'text', text: 'Fixed-time' },
-          { kind: 'number', value: SCENARIO.baselineDelaySeconds },
-        ],
+      [
+        { kind: 'text', text: 'Fixed-time' },
+        { kind: 'number', value: SCENARIO.baselineDelaySeconds },
       ],
-    },
-    'markdown',
-    FIXED_TS,
-  )
+    ],
+  }
   const roadmapGraph: RoadmapGraph = {
     nodes: [
       { id: 'baseline-input', label: 'Fixed-time baseline', kind: 'input' },
@@ -851,11 +862,18 @@ function d1Executor(): Record<string, unknown> {
       { from: 'delay-experiment', to: 'reduction-outcome', label: 'verdict' },
     ],
   }
-  const roadmap = renderRoadmap(
-    roadmapGraph,
-    { format: 'mermaid', title: 'Adaptive Control Research Roadmap' },
-    FIXED_TS,
-  )
+  const base = { timestamp: FIXED_TS }
+  const [figureInv, tableInv, roadmapInv] = await Promise.all([
+    invoker.invoke('figure', figureSpec, base),
+    invoker.invoke('three-line-table', { model: tableModel, target: 'markdown' }, base),
+    invoker.invoke('roadmap', { graph: roadmapGraph, options: { format: 'mermaid', title: 'Adaptive Control Research Roadmap' } }, base),
+  ])
+  if (!figureInv.ok) throw new Error(`[D1-figure-map] figure invocation failed: ${figureInv.message}`)
+  if (!tableInv.ok) throw new Error(`[D1-figure-map] three-line-table invocation failed: ${tableInv.message}`)
+  if (!roadmapInv.ok) throw new Error(`[D1-figure-map] roadmap invocation failed: ${roadmapInv.message}`)
+  const figure = figureInv.artifact as ReturnType<typeof renderFigure>
+  const table = tableInv.artifact as ReturnType<typeof renderThreeLineTable>
+  const roadmap = roadmapInv.artifact as ReturnType<typeof renderRoadmap>
   return {
     'figure-plan': tagArtifact(
       {
@@ -1016,7 +1034,7 @@ function d4Executor(ctx: ExecCtx): Record<string, unknown> {
 /** E1-format: ASSEMBLES the formatted manuscript + reproducible package from the
  *  revised draft + venue scope. three-line-table is the REAL table sub-capability
  *  inside the assembly — E1 is the format STEP, not the table tool (T19-S fix). */
-function e1Executor(ctx: ExecCtx): Record<string, unknown> {
+async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const venue = readInput(ctx, 'venue')
   const venueScope = readInput(ctx, 'venue-scope')
   const revised = readInput(ctx, 'revised-draft')
@@ -1029,27 +1047,35 @@ function e1Executor(ctx: ExecCtx): Record<string, unknown> {
   const sections = sectionsOf(revised)
 
   // Real three-line-table sub-capability: the manuscript results table.
-  const artifact = renderThreeLineTable(
+  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
+  const invocation = await invoker.invoke(
+    'three-line-table',
     {
-      title: 'Peak-hour Delay Comparison (synthetic)',
-      columns: [
-        { header: 'Method', decimals: 0 },
-        { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
-      ],
-      rows: [
-        [
-          { kind: 'text', text: 'Adaptive' },
-          { kind: 'number', value: SCENARIO.variantDelaySeconds },
+      model: {
+        title: 'Peak-hour Delay Comparison (synthetic)',
+        columns: [
+          { header: 'Method', decimals: 0 },
+          { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
         ],
-        [
-          { kind: 'text', text: 'Fixed-time' },
-          { kind: 'number', value: SCENARIO.baselineDelaySeconds },
+        rows: [
+          [
+            { kind: 'text', text: 'Adaptive' },
+            { kind: 'number', value: SCENARIO.variantDelaySeconds },
+          ],
+          [
+            { kind: 'text', text: 'Fixed-time' },
+            { kind: 'number', value: SCENARIO.baselineDelaySeconds },
+          ],
         ],
-      ],
+      },
+      target: 'markdown',
     },
-    'markdown',
-    FIXED_TS,
+    { timestamp: FIXED_TS },
   )
+  if (!invocation.ok) {
+    throw new Error(`[E1-format] three-line-table invocation failed: ${invocation.message}`)
+  }
+  const artifact = invocation.artifact as ReturnType<typeof renderThreeLineTable>
 
   const body = sections.map(s => `## ${s.heading}\n\n${s.bodyText}`).join('\n\n')
   const scopeLine = scopeMatches.length > 0 ? `Scope match: ${scopeMatches.join('; ')}.` : ''

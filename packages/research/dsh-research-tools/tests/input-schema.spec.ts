@@ -113,17 +113,22 @@ describe('strict per-tool input schemas (Phase 1.1-R)', () => {
       model: { columns: TABLE_MODEL.columns, rows: Array(10_001).fill(TABLE_MODEL.rows[0]) },
       target: 'markdown',
     })).not.toEqual([])
+    // RoadmapGraph structure (nodes/edges/kind/label) is owned by
+    // renderRoadmap/validateRoadmap (single-owner open shape); the adapter
+    // schema still bounds payload size/depth/JSON-safety.
     expect(validateResearchToolInput('roadmap', {
       graph: { nodes: Array(501).fill({ id: 'n', label: 'L' }) },
-    })).not.toEqual([])
+    })).toEqual([])
   })
 
   it('rejects unknown properties (additionalProperties:false) and missing required fields', () => {
     expect(validateResearchToolInput('literature-search', { topic: 't', extra: 1 })).not.toEqual([])
     expect(validateResearchToolInput('claim-construct', {})).not.toEqual([])
     expect(validateResearchToolInput('claim-construct', { topic: 't' })).not.toEqual([])
+    // same single-owner rationale: incomplete edge shapes are validated by
+    // renderRoadmap (returns validation.ok=false), not by the adapter schema.
     expect(validateResearchToolInput('roadmap', { graph: { nodes: [{ id: 'a', label: 'A' }], edges: [{ from: 'x' }] } }))
-      .not.toEqual([])
+      .toEqual([])
     expect(validateResearchToolInput('ablation', { definition: { baselineIdentity: 'B' } })).not.toEqual([])
   })
 
@@ -168,7 +173,7 @@ describe('strict per-tool input schemas (Phase 1.1-R)', () => {
       ['ablation', { definition: {} }],
       ['figure', { kind: 'nope' }],
       ['three-line-table', { model: {}, target: 'markdown' }],
-      ['roadmap', { graph: { nodes: [] } }],
+      ['roadmap', { graph: { nodes: [{ id: 'a', label: 'A' }] }, options: { format: 'bogus' } }],
     ] as Array<[string, unknown]>) {
       const spy = vi.spyOn({ run: () => {} }, 'run')
       expect(() => executeResearchTool(toolId, badInput, undefined, TS)).toThrow()

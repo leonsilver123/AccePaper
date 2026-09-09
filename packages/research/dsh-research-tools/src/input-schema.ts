@@ -402,6 +402,7 @@ export const RESEARCH_TOOL_INPUT_SCHEMAS: Readonly<Record<string, FieldRule>> = 
                 header: { type: 'string', required: true, minLength: 1, maxLength: 200 },
                 decimals: { type: 'number', integer: true, minimum: 0, maximum: 20 },
                 unit: { type: 'string', maxLength: 32 },
+                metricDirection: { type: 'string', enum: ['lower-is-better', 'higher-is-better'] },
               },
             },
           },
@@ -434,34 +435,13 @@ export const RESEARCH_TOOL_INPUT_SCHEMAS: Readonly<Record<string, FieldRule>> = 
       graph: {
         type: 'object',
         required: true,
-        properties: {
-          nodes: {
-            type: 'array', required: true, minItems: 1, maxItems: 500,
-            items: {
-              type: 'object', required: true,
-              properties: {
-                id: { type: 'string', required: true, minLength: 1, maxLength: 64 },
-                label: { type: 'string', required: true, minLength: 1, maxLength: 200 },
-                layer: { type: 'number', integer: true, minimum: 0, maximum: 100 },
-              },
-            },
-          },
-          edges: {
-            type: 'array', maxItems: 2000,
-            items: {
-              type: 'object', required: true,
-              properties: {
-                from: { type: 'string', required: true, minLength: 1, maxLength: 64 },
-                to: { type: 'string', required: true, minLength: 1, maxLength: 64 },
-              },
-            },
-          },
-        },
+        open: true, // RoadmapGraph shape owned by renderRoadmap/validateRoadmap (nodes carry kind/label/layer; edges from/to/label)
       },
       options: {
         type: 'object',
         properties: {
           format: { type: 'string', enum: ['mermaid', 'svg'] },
+          title: { type: 'string', maxLength: 500 },
         },
       },
     },
