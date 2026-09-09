@@ -51,7 +51,7 @@ export interface RegisteredTool {
 /** Structural face of the ctx.tools registry (ToolRuntime). */
 export interface ToolRegistryFace {
   register(definition: RegisteredTool): () => void
-  guard(guard: (execution: Readonly<{ agent?: unknown }>) => string | undefined): () => void
+  guard(guard: (execution: Readonly<{ agent?: unknown; name?: string }>) => string | undefined): () => void
   get(name: string): RegisteredTool | undefined
 }
 
@@ -119,9 +119,13 @@ export const RESEARCH_TOOL_REGISTRATION: Readonly<Record<string, ResearchToolReg
 export function researchToolExposureGuard(
   toolId: string,
   exposure: ModelExposure,
-): (execution: Readonly<{ agent?: unknown }>) => string | undefined {
-  return () => {
+): (execution: Readonly<{ agent?: unknown; name?: string }>) => string | undefined {
+  return (execution) => {
     if (exposure === 'model_ready') return undefined
+    // Guards are GLOBAL in the registry: a guard must only affect executions
+    // of ITS OWN tool name, otherwise one pipeline_only guard would deny every
+    // model_ready call too (regression caught by the AgentLoop closed loop).
+    if (execution.name !== toolId) return undefined
     return `[${toolId}] is pipeline-only (injected-adapter/fixture input); `
       + 'it is registered for discovery and internal pipeline use only — not executable through the agent tool runtime'
   }

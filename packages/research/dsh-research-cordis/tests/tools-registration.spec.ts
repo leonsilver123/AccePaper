@@ -136,21 +136,28 @@ describe('research tool runtime registration (T13-R)', () => {
   })
 
   it('exposure guard denies pipeline_only tools ALWAYS (never trusts agent-less) and lets model_ready through', () => {
-    const agentExec = { agent: {} } as Readonly<{ agent?: unknown }>
-    const noAgentExec = {} as Readonly<{ agent?: unknown }>
-    const emptyAgentExec = { agent: {} } as Readonly<{ agent?: unknown }>
-    const copiedExec = { agent: Object.freeze({}) } as Readonly<{ agent?: unknown }>
-    const attackExecs = [agentExec, noAgentExec, emptyAgentExec, copiedExec]
+    type GuardExec = Readonly<{ agent?: unknown; name?: string }>
+    const attackExecs: GuardExec[] = [
+      { name: 'x', agent: {} },
+      { name: 'x' }, // absent agent
+      { name: 'x', agent: {} },
+      { name: 'x', agent: Object.freeze({}) },
+    ]
     for (const entry of RESEARCH_TOOL_DIRECTORY) {
       const guard = researchToolExposureGuard(entry.toolId, entry.modelExposure)
+      // Executions of THIS tool id: model_ready pass, pipeline_only denied.
+      const selfExecs = attackExecs.map(exec => ({ ...exec, name: entry.toolId }))
       if (entry.modelExposure === 'model_ready') {
-        for (const exec of attackExecs) expect(guard(exec), entry.toolId).toBeUndefined()
+        for (const exec of selfExecs) expect(guard(exec), entry.toolId).toBeUndefined()
       } else {
-        // Absent / forged / empty / copied agent fields NEVER unlock a
-        // pipeline-only tool — absence is not permission.
-        for (const exec of attackExecs) {
+        for (const exec of selfExecs) {
           expect(guard(exec), entry.toolId).toMatch(/pipeline-only/)
         }
+      }
+      // Guards are name-scoped: they never touch executions of OTHER tools.
+      for (const other of RESEARCH_TOOL_DIRECTORY) {
+        if (other.toolId === entry.toolId) continue
+        expect(guard({ ...selfExecs[0], name: other.toolId }), `${entry.toolId}@${other.toolId}`).toBeUndefined()
       }
     }
   })
