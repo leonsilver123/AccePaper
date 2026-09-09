@@ -63,3 +63,9 @@ export * from './tools/three-line-table/index.ts'
 // then deterministic render (Mermaid source or layered SVG). VSDX export is
 // DEGRADED until a python `vsdx` adapter exists (U6/D17 allows that); pure.
 export * from './tools/roadmap/index.ts'
+
+// ── Research tool directory (Task #13 registration surface) ─────────────────
+// RESEARCH_TOOL_DIRECTORY — the single auditable registry of the seven P2 tools
+// (metadata + consumed-by steps + model-exposure verdicts). Cordis-free; see
+// registry.ts for the full scope decision.
+export * from './registry.ts'
