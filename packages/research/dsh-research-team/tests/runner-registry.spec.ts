@@ -167,10 +167,13 @@ describe('T19-B registry — truthfulness levels (4-level ruling)', () => {
 })
 
 describe('T19-B registry — real tool integration is falsifiable', () => {
+  // T19-S canonical alignment: ablation is C3-boundary's capability (B3-baseline
+  // is "baseline + SOTA comparison", NOT ablation; E1-format is the formatting
+  // step whose three-line-table sub-capability renders the results tables).
   const EXPECTED_REAL_TOOLS: Readonly<Record<string, string>> = {
     'A1-landscape': LITERATURE_SEARCH_TOOL_ID,
     'A2-claim': CLAIM_CONSTRUCT_TOOL_ID,
-    'B3-baseline': ABLATION_TOOL_ID,
+    'C3-boundary': ABLATION_TOOL_ID,
     'D1-figure-map': FIGURE_TOOL_ID,
     'E1-format': THREE_LINE_TABLE_TOOL_ID,
   }
@@ -214,31 +217,49 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(runCtx.predictionText).toBe(CANONICAL.prediction)
   })
 
-  it('D1-figure-map really rendered SVG+PNG bytes (not a fixture stub)', async () => {
+  it('D1-figure-map really rendered all three figure families (figure/table/roadmap)', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('D1-figure-map')
     const out = (await entry?.executor(execCtx('D1-figure-map'))) as Record<string, Record<string, unknown>>
     const plan = out['figure-plan']
-    expect(typeof plan.svgByteLength).toBe('number')
-    expect(plan.svgByteLength as number).toBeGreaterThan(0)
-    expect(plan.pngByteLength as number).toBeGreaterThan(0)
-    expect(String(plan.svgPreview)).toContain('<svg')
+    const figures = plan.figures as ReadonlyArray<Record<string, unknown>>
+    expect(plan.totalFigures).toBe(3)
+    expect(figures.map(f => f.kind)).toEqual(['data-figure', 'three-line-table', 'roadmap'])
+    const dataFigure = figures[0]
+    expect(typeof dataFigure.svgByteLength).toBe('number')
+    expect(dataFigure.svgByteLength as number).toBeGreaterThan(0)
+    expect(dataFigure.pngByteLength as number).toBeGreaterThan(0)
+    expect(String(dataFigure.svgPreview)).toContain('<svg')
+    const table = figures[1]
+    expect(String(table.tableMarkdown)).toContain('Adaptive')
+    const roadmap = figures[2]
+    expect(roadmap.validationOk).toBe(true)
+    expect(String(roadmap.contentPreview)).toContain('flowchart')
   })
 
-  it('E1-format really rendered a three-line table with a binding hash', async () => {
+  it('E1-format really assembled a manuscript WITH a three-line table sub-render', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
     const out = (await entry?.executor(execCtx('E1-format'))) as Record<string, Record<string, unknown>>
     const doc = out['formatted-manuscript']
+    // The E1 artifact is the FORMATTED MANUSCRIPT, not merely the table (T19-S):
+    // the table is a sub-capability embedded inside a longer assembled manuscript.
+    expect(String(doc.manuscript)).toContain('## Results')
+    expect(String(doc.manuscript).length).toBeGreaterThan(String(doc.tableMarkdown).length)
     expect(String(doc.tableMarkdown)).toContain('Delay')
+    expect(String(doc.tableMarkdown)).toContain('Adaptive')
     expect(typeof doc.bindingHash).toBe('string')
     expect(String(doc.bindingHash).length).toBeGreaterThan(0)
+    const pkg = doc.reproduciblePackage as { files?: unknown }
+    expect(Array.isArray(pkg.files)).toBe(true)
+    expect((pkg.files as unknown[]).length).toBeGreaterThanOrEqual(3)
   })
 
-  it('B3-baseline really aggregated repeated ablation runs', async () => {
-    const entry = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
-    const out = (await entry?.executor(execCtx('B3-baseline'))) as Record<string, Record<string, unknown>>
-    const res = out['baseline-results']
+  it('C3-boundary really aggregated repeated ablation runs (ablation lives at C3)', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
+    const out = (await entry?.executor(execCtx('C3-boundary'))) as Record<string, Record<string, unknown>>
+    const res = out['ablation-results']
     expect(res.ranRuns as number).toBeGreaterThan(0)
     expect(res.aggregate).toBeDefined()
+    expect(out['boundary-map']).toBeDefined()
   })
 })
 
@@ -253,9 +274,9 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
       'A4-venue',
       'B1-method',
       'B2-data',
+      'B3-baseline',
       'C1-mvp',
       'C2-trinity-loop',
-      'C3-boundary',
       'D2-framework',
       'D3-writing',
       'D4-rebuttal',
@@ -272,6 +293,43 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
       expect(String(out[slug]?.__producer).startsWith('fixture:')).toBe(true)
       expect(out[slug]?.fixture).toBe(true)
     }
+  })
+})
+
+describe('T19-B registry — T19-S canonical semantics (business artifacts)', () => {
+  it('B3-baseline is a baseline protocol, NOT an ablation (no runAblation fields)', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
+    const out = (await entry?.executor(execCtx('B3-baseline'))) as Record<string, Record<string, unknown>>
+    const res = out['baseline-results']
+    // Canonical B3 = establish baseline + compare against SOTA.
+    expect((res.baseline as { identity?: unknown }).identity).toBe('fixed-time')
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('delay')
+    expect((res.preRegistered as { baselineDelaySeconds?: unknown }).baselineDelaySeconds).toBe(10.0)
+    // Regression guard: ablation must NOT appear inside the baseline step.
+    expect(res.ranRuns).toBeUndefined()
+    expect(res.counts).toBeUndefined()
+    expect(res.aggregate).toBeUndefined()
+    expect(out['sota-comparison']).toBeDefined()
+    expect((out['sota-comparison']?.anchoring as string | undefined) ?? '').not.toContain('real')
+  })
+
+  it('B3-baseline producer is the honest fixture brand (ablation producer moved to C3)', async () => {
+    const b3 = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
+    const c3 = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
+    expect(String(b3?.producer).startsWith('fixture:baseline')).toBe(true)
+    expect(String(c3?.producer).startsWith(`${ABLATION_TOOL_ID}@`)).toBe(true)
+  })
+
+  it('C1-mvp fail-closes when the experiment fixture row is missing (no experiment ⇒ no pass)', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('C1-mvp')
+    expect(entry).toBeDefined()
+    const missing: RunContext = {
+      predictionText: 'no such experiment row',
+      claimId: 'mock-claim-999',
+      claimRef: 'missing row',
+      timestamp: FIXED_TS,
+    }
+    expect(() => entry?.executor(execCtx('C1-mvp', missing))).toThrow(/no experiment fixture row/i)
   })
 })
 
