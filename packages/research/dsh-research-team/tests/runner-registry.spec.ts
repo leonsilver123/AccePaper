@@ -434,3 +434,16 @@ describe('T19-B registry — STEP_CAPABILITIES ⊆ RESEARCH_TOOL_DIRECTORY (Task
     }
   })
 })
+
+describe('F1 audit fix — invoker provenance propagates onto real-tool artifacts', () => {
+  it('A1 landscape-map carries __provenance=direct and __invokerTruthfulness=direct_fixture', async () => {
+    const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: ExecCtx) => unknown }>).get('A1-landscape')
+    expect(entry).toBeDefined()
+    const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as ExecCtx
+    const output = (await entry!.executor(ctx)) as Record<string, Record<string, unknown>>
+    const map = output['landscape-map']
+    expect(map.__kind).toBe('real_tool_fixture_input')
+    expect(map.__provenance).toBe('direct')
+    expect(map.__invokerTruthfulness).toBe('direct_fixture')
+  })
+})
