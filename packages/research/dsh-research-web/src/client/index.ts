@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { en, NS, zh } from './locales.ts'
-import { ResearchView } from './ResearchView.tsx'
+import { ResearchWorkbench } from './workbench/ResearchWorkbench.tsx'
 
 /** Required services: the conversation slot, registries, sessions, and locale. */
 export const inject = ['slots', 'sessions', 'uiSession', 'uiConversation', 'locale']
@@ -37,8 +37,9 @@ export function apply(ctx: Context): void {
     order: 20,
     locale: NS,
     label: () => t('view.research'),
-    // No children/store/inject — T27 sub-panels (pipeline/figure/table/gate/
-    // adversarial) declare their own child slots; this entry only contributes
-    // the tab and a self-contained summary view.
-  }, ResearchView))
+    // The `research` entry mounts the T26–T29 workbench: the Summary tab reuses
+    // the T26 run-summary view, and the remaining tabs host the pipeline / figure
+    // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
+    // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
+  }, ResearchWorkbench))
 }

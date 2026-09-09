@@ -1,0 +1,255 @@
+.workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mockBadge {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff4e5;
+  color: #b25e00;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e6e8ec;
+}
+
+.tab {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: #f2f3f5;
+  color: #5b6470;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: #e9ebef;
+}
+
+.tabActive {
+  background: #1f6feb;
+  color: #fff;
+  border-color: #1f6feb;
+}
+
+.panel {
+  border: 1px solid #e6e8ec;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.panelHeader {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5b6470;
+}
+
+.note {
+  color: #5b6470;
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.empty {
+  color: #8a93a0;
+  font-style: italic;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.phaseBlock {
+  margin-bottom: 10px;
+}
+
+.phaseTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f6feb;
+  margin: 0 0 6px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.index {
+  font-variant-numeric: tabular-nums;
+  color: #5b6470;
+  font-weight: 600;
+}
+
+.name {
+  display: flex;
+  flex-direction: column;
+}
+
+.name small {
+  color: #8a93a0;
+  font-size: 11px;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.s-pending { background: #eef0f3; color: #5b6470; }
+.s-in_progress { background: #e6f0ff; color: #1f6feb; }
+.s-gated { background: #fff4e5; color: #b25e00; }
+.s-passed { background: #e7f7ec; color: #1a7f37; }
+.s-blocked { background: #fdeef0; color: #c2410c; }
+.s-failed { background: #fdeef0; color: #c2410c; }
+
+.gate-passed { background: #e7f7ec; color: #1a7f37; }
+.gate-blocked { background: #fdeef0; color: #c2410c; }
+.gate-failed { background: #fdeef0; color: #c2410c; }
+.gate-abstained { background: #fdeef0; color: #c2410c; }
+
+.humanGate {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.holdReason {
+  font-size: 11px;
+  color: #b25e00;
+}
+
+.kindBadge {
+  background: #eef2ff;
+  color: #344767;
+}
+
+.cell {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.slug {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.summary {
+  color: #5b6470;
+  font-size: 12px;
+}
+
+.invalidated {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.decisionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f8fa;
+  flex-wrap: wrap;
+}
+
+.approveBtn, .rejectBtn {
+  padding: 2px 10px;
+  border-radius: 6px;
+  border: 1px solid #cdd2da;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.approveBtn {
+  background: #e7f7ec;
+  color: #1a7f37;
+  border-color: #b7e4c7;
+}
+
+.rejectBtn {
+  background: #fdeef0;
+  color: #c2410c;
+  border-color: #f5c2c7;
+}
+
+.decidedTag {
+  font-size: 11px;
+  font-weight: 600;
+  color: #344767;
+}
+
+.recoveryGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+
+.recoveryKey {
+  color: #5b6470;
+  font-weight: 600;
+}
+
+.recoveryVal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.reloadBtn {
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid #1f6feb;
+  background: #e6f0ff;
+  color: #1f6feb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mockNote {
+  color: #b25e00;
+  font-size: 11px;
+}
