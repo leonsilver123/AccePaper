@@ -40,14 +40,24 @@ interface AgentLoopHost {
 }
 
 async function loadAgentLoopHost(): Promise<AgentLoopHost> {
-  const llm = await import('@deepseek-ai/' + 'dsh-llm')
-  const session = await import('@deepseek-ai/' + 'dsh-session')
-  const tools = await import('@deepseek-ai/' + 'dsh-tools')
-  return {
-    LlmAdapter: llm.LlmAdapter as new () => unknown,
-    createUserMessage: llm.createUserMessage as (content: unknown) => unknown,
-    ToolCallId: tools.ToolCallId as (id: string) => unknown,
-    SessionId: session.SessionId as (id: string) => unknown,
+  try {
+    const llm = await import('@deepseek-ai/' + 'dsh-llm')
+    const session = await import('@deepseek-ai/' + 'dsh-session')
+    const tools = await import('@deepseek-ai/' + 'dsh-tools')
+    return {
+      LlmAdapter: llm.LlmAdapter as new () => unknown,
+      createUserMessage: llm.createUserMessage as (content: unknown) => unknown,
+      ToolCallId: tools.ToolCallId as (id: string) => unknown,
+      SessionId: session.SessionId as (id: string) => unknown,
+    }
+  } catch {
+    // The cause is intentionally dropped: import failures can embed local
+    // resolved paths which must never surface in diagnostics (same policy as
+    // src/tools.ts HOST_LOAD_FAILED).
+    throw new Error(
+      '[research-cordis] agent-loop host services could not be loaded '
+      + '(RESEARCH_TOOL_HOST_LOAD_FAILED)',
+    )
   }
 }
 
