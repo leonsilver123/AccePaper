@@ -64,6 +64,8 @@
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { AblationDefinition, RoadmapGraph } from '@deepseek-ai/dsh-research-tools'
+import { DirectResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
+import type { ResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
 import {
   ABLATION_TOOL_ID,
   ABLATION_TOOL_VERSION,
@@ -172,6 +174,13 @@ export interface ExecCtx {
   readonly getInput: (slug: string) => unknown
   /** Shared cross-step scratch (claim / prediction wiring). */
   readonly runCtx: RunContext
+  /**
+   * Optional ResearchToolInvoker injected by the runner (T19 calibration R1).
+   * When present, capability steps route tool execution through the invoker;
+   * when absent, executors fall back to a default DirectResearchToolInvoker
+   * (direct_fixture). The pipeline thus depends only on the Invoker interface.
+   */
+  readonly invoker?: ResearchToolInvoker
 }
 
 export type StepExecutorFn = (ctx: ExecCtx) => Promise<Record<string, unknown>> | Record<string, unknown>
@@ -418,12 +427,17 @@ function defaultBodySections(): ReadonlyArray<ManuscriptSection> {
 // ── Real-tool executors (real tool function, synthetic fixture input) ───────────
 
 /** A1-landscape: real `runLiteratureSearch` over the synthetic mock adapter. */
-function a1Executor(): Record<string, unknown> {
-  const artifact = runLiteratureSearch(
+async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('a1-fixture')
+  const invocation = await invoker.invoke(
+    'literature-search',
     { topic: 'adaptive traffic signal control' },
-    mockLiteratureSearchAdapter,
-    FIXED_TS,
+    { timestamp: FIXED_TS, deps: { literatureAdapter: mockLiteratureSearchAdapter } },
   )
+  if (!invocation.ok) {
+    throw new Error(`[A1-landscape] literature-search invocation failed: ${invocation.message}`)
+  }
+  const artifact = invocation.artifact as ReturnType<typeof runLiteratureSearch>
   return {
     'landscape-map': tagArtifact(
       {
