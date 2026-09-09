@@ -20,6 +20,7 @@ import {
   CLAIM_CONSTRUCT_TOOL_ID,
   FIGURE_TOOL_ID,
   LITERATURE_SEARCH_TOOL_ID,
+  RESEARCH_TOOL_DIRECTORY,
   THREE_LINE_TABLE_TOOL_ID,
 } from '@deepseek-ai/dsh-research-tools'
 
@@ -27,6 +28,7 @@ import {
   CANONICAL,
   FIXED_TS,
   PIPELINE_STEPS,
+  STEP_CAPABILITIES,
   STEP_EXECUTOR_REGISTRY,
   STEP_OUTPUT_MAP,
   TRUTHFULNESS_LEVELS,
@@ -374,6 +376,40 @@ describe('T19-B registry — tagArtifact provenance stamping', () => {
     for (const level of TRUTHFULNESS_LEVELS) {
       const out = tagArtifact({}, 'p', level)
       expect(TRUTHFULNESS_LEVELS).toContain(out.__kind as Truthfulness)
+    }
+  })
+})
+
+describe('T19-B registry — STEP_CAPABILITIES ⊆ RESEARCH_TOOL_DIRECTORY (Task #13)', () => {
+  it('every step capability tool id is registered in the research tool directory', () => {
+    const directoryIds = new Set(RESEARCH_TOOL_DIRECTORY.map(entry => entry.toolId))
+    const capabilityToolIds = new Set<string>()
+    for (const capabilities of Object.values(STEP_CAPABILITIES)) {
+      for (const capability of capabilities) capabilityToolIds.add(capability.toolId)
+    }
+    expect(capabilityToolIds.size).toBeGreaterThan(0)
+    for (const toolId of capabilityToolIds) {
+      expect(directoryIds.has(toolId), `STEP_CAPABILITIES references '${toolId}' but it is not in RESEARCH_TOOL_DIRECTORY`)
+        .toBe(true)
+    }
+  })
+
+  it('the directory records every wired consumer step named by STEP_CAPABILITIES', () => {
+    const byTool = new Map<string, Set<string>>()
+    for (const [stepId, capabilities] of Object.entries(STEP_CAPABILITIES)) {
+      for (const capability of capabilities) {
+        if (!byTool.has(capability.toolId)) byTool.set(capability.toolId, new Set())
+        byTool.get(capability.toolId)!.add(stepId)
+      }
+    }
+    for (const entry of RESEARCH_TOOL_DIRECTORY) {
+      const steps = byTool.get(entry.toolId)
+      if (steps === undefined) {
+        // citation-verify is a gate-channel tool, not a step capability row.
+        expect(entry.consumedBySteps).toEqual([])
+        continue
+      }
+      expect(entry.consumedBySteps).toEqual([...steps])
     }
   })
 })
