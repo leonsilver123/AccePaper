@@ -15,12 +15,8 @@
 // Intended deviation: this runtime-integration spec deliberately loads host
 // services through non-literal dynamic imports so their type graphs never
 // enter this package's static compilation (same seam as src/tools.ts). The
-// resulting no-unsafe-* diagnostics are accepted and documented here.
-/* oxlint-disable typescript/no-unsafe-assignment */
-/* oxlint-disable typescript/no-unsafe-member-access */
-/* oxlint-disable typescript/no-unsafe-call */
-/* oxlint-disable typescript/no-unsafe-argument */
-/* oxlint-disable typescript/no-unsafe-return */
+// resulting no-unsafe-* diagnostics only exist under the stricter ad-hoc 90-rule
+// pass; the repo-enforced 49-rule gate does not include those rules.
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
