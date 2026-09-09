@@ -164,3 +164,24 @@ export type {
   RunStepResult,
 } from './engine/pipeline.ts'
 export { getStepDefinitions, getStepDefinitionById } from './engine/steps-accessor.ts'
+
+// ── Session-restart recovery — versioned atomic snapshot persistence ──────────
+// Minimal, database-free persistence for pipeline run state. Atomic write + rename
+// with fail-closed load; never returns a torn/partial snapshot. Used to resume a
+// research run after a process restart, with replay protection on approval event ids.
+export {
+  createFileSnapshotStore,
+  replayProtection,
+  SnapshotStoreError,
+  SnapshotNotFoundError,
+  SnapshotCorruptError,
+  SnapshotVersionError,
+  SNAPSHOT_ERROR_CODES,
+  SNAPSHOT_FILE_NAME,
+} from './snapshot-store.ts'
+export type {
+  SnapshotPayload,
+  SnapshotStep,
+  SnapshotStore,
+  FileSnapshotStoreOptions,
+} from './snapshot-store.ts'
