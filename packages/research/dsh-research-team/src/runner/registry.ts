@@ -1473,7 +1473,7 @@ export function invocationChannelSummary(): ReadonlyArray<ChannelStat> {
   const byChannel: Record<StepChannel, string[]> = { direct: [], fixture: [], human: [], 'agent-loop': [] }
   for (const step of PIPELINE_STEPS) {
     const caps = STEP_CAPABILITIES[step.id] ?? []
-    const hasCapability = caps.some(cap => cap.wired === true)
+    const hasCapability = caps.some(cap => cap.wired)
     if (step.id === 'E2-submit') byChannel.human.push(step.id)
     else if (step.id === 'D1-figure-map') byChannel['agent-loop'].push(step.id)
     else if (hasCapability) byChannel.direct.push(step.id)
