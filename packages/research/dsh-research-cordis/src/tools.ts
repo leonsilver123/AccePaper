@@ -261,9 +261,38 @@ function definitionFor(toolId: string, defineTool: DefineToolLoader): Registered
 }
 
 /**
+ * Revocation wrapper: after the registration disposer runs, a stale handle to a
+ * registered ToolDefinition must no longer be able to execute. The wrapper
+ * checks a per-registration `alive` flag before delegating, so unload is a real
+ * capability revocation, not just registry removal.
+ * @param def - the registered definition.
+ * @param isAlive - per-registration liveness probe.
+ */
+function revocable(def: RegisteredTool, isAlive: () => boolean): RegisteredTool {
+  const execute = def.execute.bind(def)
+  return {
+    ...def,
+    execute(args, exec): Promise<unknown> {
+      if (!isAlive()) {
+        return Promise.reject(new Error(
+          `[research-tools] '${def.name}' has been unregistered (RESEARCH_TOOL_UNLOADED) — `
+          + 'stale handles cannot execute after unload',
+        ))
+      }
+      return execute(args, exec)
+    },
+  }
+}
+
+/**
  * Register all seven research tools on `ctx.tools` plus the pipeline-only
- * exposure guards. Idempotency is NOT baked in — the tools registry itself
- * rejects a duplicate name, so a second registration throws (tested).
+ * exposure guards. TRANSACTIONAL: either all seven register (plus guards) or
+ * every side effect taken so far is rolled back and the error re-thrown — a
+ * partial registration is never observable. Idempotency is NOT baked in: a
+ * second registration of an already-registered name is rejected by the tools
+ * registry (deterministic). Retry after a failure is safe because the rollback
+ * leaves no residue. The returned disposer is idempotent (double-unload safe)
+ * and revokes every returned ToolDefinition.
  * @param ctx - a context whose `tools` service is present.
  * @returns the combined disposer that unregisters every tool and guard.
  */
@@ -271,13 +300,22 @@ export async function registerResearchTools(ctx: Context): Promise<() => void> {
   const tools = ctx as Context & { tools: ToolRegistryFace }
   const defineTool = await loadDefineTool()
   const disposers: Array<() => void> = []
-  for (const entry of RESEARCH_TOOL_DIRECTORY) {
-    disposers.push(tools.tools.register(definitionFor(entry.toolId, defineTool)))
-    if (entry.modelExposure !== 'model_ready') {
-      disposers.push(tools.tools.guard(researchToolExposureGuard(entry.toolId, entry.modelExposure)))
-    }
-  }
   let released = false
+  const isAlive = () => !released
+  try {
+    for (const entry of RESEARCH_TOOL_DIRECTORY) {
+      const definition = revocable(definitionFor(entry.toolId, defineTool), isAlive)
+      disposers.push(tools.tools.register(definition))
+      if (entry.modelExposure !== 'model_ready') {
+        disposers.push(tools.tools.guard(researchToolExposureGuard(entry.toolId, entry.modelExposure)))
+      }
+    }
+  } catch (error) {
+    // Roll back every side effect taken before the failure: partial state must
+    // never survive a failed registration attempt.
+    for (const dispose of disposers.reverse()) dispose()
+    throw error
+  }
   return () => {
     if (released) return
     released = true
