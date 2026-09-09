@@ -380,6 +380,27 @@ describe('T19-B registry — tagArtifact provenance stamping', () => {
   })
 })
 
+describe('T19 calibration R1 — executor depends on ResearchToolInvoker', () => {
+  it('a1 routes literature-search through an INJECTED invoker and fails closed', async () => {
+    const calls: string[] = []
+    const failingInvoker = {
+      truthfulness: 'direct_fixture' as const,
+      provenance: 'direct' as const,
+      invoke: async (toolId: string) => {
+        calls.push(toolId)
+        return { ok: false as const, code: 'X', message: 'boom', truthfulness: 'direct_fixture' as const, provenance: 'direct' as const }
+      },
+    }
+    const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: { invoker: unknown }) => Promise<unknown> | Record<string, unknown> }>).get('A1-landscape')
+    expect(entry).toBeDefined()
+    const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as ExecCtx & { invoker: unknown }
+    // Inject the failing invoker: A1 must propagate the failure (fail-closed),
+    // proving the executor honors the injected invoker instead of its fallback.
+    await expect(entry!.executor({ ...ctx, invoker: failingInvoker })).rejects.toThrow(/invocation failed/)
+    expect(calls).toEqual(['literature-search'])
+  })
+})
+
 describe('T19-B registry — STEP_CAPABILITIES ⊆ RESEARCH_TOOL_DIRECTORY (Task #13)', () => {
   it('every step capability tool id is registered in the research tool directory', () => {
     const directoryIds = new Set(RESEARCH_TOOL_DIRECTORY.map(entry => entry.toolId))
