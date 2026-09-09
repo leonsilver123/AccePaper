@@ -166,21 +166,35 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   const key = experimentFixtureKey(claimId, predictionText)
   const fx = lookupExperimentFixture(key)
-  const report =
-    fx !== undefined
-      ? {
-        source: 'mock-fixture' as const,
-        supportsPrediction: fx.supportsPrediction,
-        detail: fx.detail,
-        fixtureId: 'exp-fixture',
-        fixtureVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
-      }
-      : {
-        source: 'mock-fixture' as const,
-        supportsPrediction: true,
-        detail: 'synthetic keep-path report (no matching fixture row)',
-        fixtureId: 'exp-fixture-synthetic',
-      }
+  if (fx === undefined) {
+    // FAIL-CLOSED (T19-S P2-1): no experiment fixture row means there is NO
+    // experiment report, so the C gate abstains instead of fabricating a
+    // keep-path report. Symmetric with the C1-mvp executor, which throws on the
+    // same missing lookup (registry.ts `c1Executor`) — no default pass anywhere.
+    // (never coerced to `passed`: core holds the step at gate_abstained.)
+    const held = adjudicateClaimSupport({
+      claimRef,
+      prediction: { text: predictionText },
+      timestamp: ctx.runCtx.timestamp,
+    })
+    return {
+      component: 'C',
+      outcome: held.outcome,
+      passed: held.outcome === 'passed',
+      evidence:
+        `team:adjudicateClaimSupport outcome=${held.outcome} ` +
+        `(no experiment fixture row for key '${key}' → hold; fail-closed, symmetric with C1-mvp)`,
+      rationale: held.summary,
+      timestamp: ctx.runCtx.timestamp,
+    }
+  }
+  const report = {
+    source: 'mock-fixture' as const,
+    supportsPrediction: fx.supportsPrediction,
+    detail: fx.detail,
+    fixtureId: 'exp-fixture',
+    fixtureVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
+  }
   const rec = adjudicateClaimSupport({
     claimRef,
     prediction: { text: predictionText },
