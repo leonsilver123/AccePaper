@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "mock",
+  "provenance": "synthetic_deterministic",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "mock": true,
+  "disclaimer": "MOCK deterministic synthetic data. NOT a real empirical result. All figures/tables in this case pack MUST trace to a row/source below. Numbers are fixed for reproducibility only.",
+  "globalSeed": 20260909,
+  "metrics": ["ttcLt1_5_rate_pct", "meanTHW_s", "meanJerk_mps3", "stringStabilityIndex", "stringStable"],
+  "metricSeeds": {
+    "ttcLt1_5_rate_pct": { "seed": 2026090901, "source": "mock-experiment.json#rowId" },
+    "meanTHW_s": { "seed": 2026090902, "source": "mock-experiment.json#rowId" },
+    "meanJerk_mps3": { "seed": 2026090903, "source": "mock-experiment.json#rowId" },
+    "stringStabilityIndex": { "seed": 2026090904, "source": "mock-experiment.json#rowId" }
+  },
+  "rows": [
+    {
+      "rowId": "S1-baseline",
+      "scenario": "scenario-mixed-HV-AV-HV",
+      "variant": "baseline",
+      "seed": 20260909,
+      "ttcLt1_5_rate_pct": 26.0,
+      "meanTHW_s": 1.80,
+      "meanJerk_mps3": 2.20,
+      "stringStabilityIndex": -0.12,
+      "stringStable": false,
+      "source": "mock-experiment.json#S1-baseline"
+    },
+    {
+      "rowId": "S1-adaptive",
+      "scenario": "scenario-mixed-HV-AV-HV",
+      "variant": "adaptive",
+      "seed": 20260909,
+      "ttcLt1_5_rate_pct": 18.0,
+      "meanTHW_s": 1.60,
+      "meanJerk_mps3": 1.50,
+      "stringStabilityIndex": 0.21,
+      "stringStable": true,
+      "source": "mock-experiment.json#S1-adaptive"
+    },
+    {
+      "rowId": "S2-baseline",
+      "scenario": "scenario-homogeneous-HV-HV-HV",
+      "variant": "baseline",
+      "seed": 20260909,
+      "ttcLt1_5_rate_pct": 28.0,
+      "meanTHW_s": 1.85,
+      "meanJerk_mps3": 2.40,
+      "stringStabilityIndex": -0.15,
+      "stringStable": false,
+      "source": "mock-experiment.json#S2-baseline"
+    },
+    {
+      "rowId": "S2-adaptive",
+      "scenario": "scenario-homogeneous-HV-HV-HV",
+      "variant": "adaptive",
+      "seed": 20260909,
+      "ttcLt1_5_rate_pct": 27.8,
+      "meanTHW_s": 1.84,
+      "meanJerk_mps3": 2.38,
+      "stringStabilityIndex": -0.14,
+      "stringStable": false,
+      "source": "mock-experiment.json#S2-adaptive"
+    }
+  ],
+  "claimConsistency": {
+    "claimId": "claim-mixed-platoon-following-risk",
+    "marginPctRequired": 20.0,
+    "check_allHVbaseline_vs_mixedAdaptive": {
+      "baseline": 28.0,
+      "adaptive": 18.0,
+      "relativeReductionPct": 35.7,
+      "passes": true
+    },
+    "check_mixedBaseline_vs_mixedAdaptive": {
+      "baseline": 26.0,
+      "adaptive": 18.0,
+      "relativeReductionPct": 30.8,
+      "passes": true
+    },
+    "note": "MOCK consistency only; does not establish scientific truth."
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "mock",
+  "provenance": "synthetic_deterministic",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "mock": true,
+  "disclaimer": "MOCK ablation. All numbers must trace to mock-experiment.json conventions; not empirical.",
+  "seed": 20260909,
+  "scenario": "scenario-mixed-HV-AV-HV",
+  "referenceRow": "S1-adaptive",
+  "ablations": [
+    {
+      "moduleRemoved": "av-reaction",
+      "description": "AV reaction-delay module disabled → AV reactionDelay_ms forced to 1200 (HV-like). Degrades to baseline.",
+      "rowId": "ABL-remove-av-reaction",
+      "ttcLt1_5_rate_pct": 26.0,
+      "meanTHW_s": 1.80,
+      "meanJerk_mps3": 2.20,
+      "stringStabilityIndex": -0.12,
+      "stringStable": false,
+      "seed": 20260909,
+      "source": "ablation.json#ABL-remove-av-reaction",
+      "deltaVsReference": { "ttcLt1_5_rate_pct": 8.0, "stringStable": "false (regressed)" }
+    },
+    {
+      "moduleRemoved": "predictive",
+      "description": "AV predictive/look-ahead module disabled; fast reaction retained. Partial degradation.",
+      "rowId": "ABL-remove-predictive",
+      "ttcLt1_5_rate_pct": 21.0,
+      "meanTHW_s": 1.68,
+      "meanJerk_mps3": 1.75,
+      "stringStabilityIndex": -0.04,
+      "stringStable": false,
+      "seed": 20260909,
+      "source": "ablation.json#ABL-remove-predictive",
+      "deltaVsReference": { "ttcLt1_5_rate_pct": 3.0, "stringStable": "false (regressed)" }
+    }
+  ],
+  "conclusion": "Removing either module degrades the adaptive result; AV reaction module is the dominant contributor (MOCK)."
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "fixture",
+  "provenance": "direct_fixture",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "id": "claim-mixed-platoon-following-risk",
+  "assertion": {
+    "zh": "在稳态自由流条件下，向 3 车 HV 车队中插入一辆 AV（构成 HV–AV–HV）可使车队聚合跟驰风险(TTC<1.5s 发生率)相对全 HV 车队降低至少 20%。",
+    "en": "Under steady free-flow conditions, inserting a single AV into a 3-vehicle HV platoon (forming HV–AV–HV) reduces the platoon's aggregate car-following risk (TTC<1.5s rate) by at least 20% relative to a homogeneous all-HV platoon."
+  },
+  "prediction": {
+    "zh": "在固定随机种子(20260909)的确定性模拟中，全 HV 基线车队的 TTC<1.5s 发生率应高于 HV–AV–HV 自适应变体的发生率，且降幅 ≥ 20%。",
+    "en": "In the deterministic simulation with fixed seed 20260909, the all-HV baseline platoon's TTC<1.5s rate shall exceed the HV–AV–HV adaptive variant's rate by at least 20% (relative reduction)."
+  },
+  "falsification": {
+    "experiment": "mock-exp-20260909",
+    "condition": "If the adaptive HV–AV–HV TTC<1.5s rate is NOT lower than the all-HV baseline rate by at least 20% (i.e. (baseline-adaptive)/baseline < 0.20), the claim is falsified.",
+    "scope": "Claim is scoped to steady free-flow; stop-and-go boundary (see boundary-counterexample.json) is explicitly excluded and may break it.",
+    "dataSource": "mock-experiment.json"
+  },
+  "mock": true,
+  "disclaimer": "FIXTURE falsifiable claim. Numbers used for falsification are MOCK deterministic values in mock-experiment.json; this is not a real empirical finding."
+}

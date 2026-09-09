@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "fixture",
+  "provenance": "direct_fixture",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "ledger": [
+    { "id": "cite-01", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-01", "title": "Intelligent Driver Model calibration under mixed traffic (fixture)", "year": 2021, "venue": "Fixture Transportation Research Part C", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-02", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-02", "title": "String stability of car-following models: a survey (fixture)", "year": 2019, "venue": "Fixture IEEE Transactions on Intelligent Transportation", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-03", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-03", "title": "AV penetration and platoon risk reduction in congested flow (fixture)", "year": 2022, "venue": "Fixture Accident Analysis & Prevention", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-04", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-04", "title": "Time-to-collision thresholds for safety assessment (fixture)", "year": 2018, "venue": "Fixture Safety Science", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-05", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-05", "title": "Jerk as a ride-comfort and instability proxy (fixture)", "year": 2020, "venue": "Fixture Vehicle System Dynamics", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-06", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-06", "title": "Reaction-time distributions of human drivers (fixture)", "year": 2017, "venue": "Fixture Human Factors", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-07", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-07", "title": "Counter-evidence: AV oscillations amplify stop-and-go (fixture)", "year": 2023, "venue": "Fixture Transportation Research Part B", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-08", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-08", "title": "Microscopic mixed-traffic simulation framework (fixture)", "year": 2021, "venue": "Fixture Simulation Modelling Practice", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-09", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-09", "title": "Time headway distributions in free-flow (fixture)", "year": 2016, "venue": "Fixture Transportmetrica", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-10", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-10", "title": "Predictive car-following controllers for CAVs (fixture)", "year": 2020, "venue": "Fixture Automatica", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-11", "fixture": true, "exists": true, "doi": "10.9999/fixture-cite-11", "title": "Boundary conditions for platoon stability (fixture)", "year": 2019, "venue": "Fixture Nonlinear Dynamics", "note": "fixture metadata — not a real publication" },
+    { "id": "cite-does-not-exist", "fixture": true, "exists": false, "doi": "10.9999/fixture-cite-does-not-exist", "title": "On the inevitability of AV safety gains (fixture — NON-EXISTENT)", "year": 2024, "venue": "Fixture Journal of Unpublished Claims", "note": "fixture metadata — not a real publication; intentionally non-existent to test ledger falsification" }
+  ],
+  "counts": { "total": 12, "existTrue": 11, "existFalse": 1 }
+}

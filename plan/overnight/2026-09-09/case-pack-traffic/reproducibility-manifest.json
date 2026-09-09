@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "fixture",
+  "provenance": "direct_fixture",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "generator": "case-pack-traffic.fixture-writer/v1",
+  "description": "Deterministic offline reproducibility manifest for the 交通 (traffic) Case Pack. All inputs are fixtures; no real DOIs, no empirical truth claimed.",
+  "seedList": [20260909, 2026090901, 2026090902, 2026090903, 2026090904],
+  "fixedTimestamp": "2026-09-09T00:00:00.000Z",
+  "inputFiles": [
+    "case-pack.json",
+    "claim.json",
+    "citation-ledger.json",
+    "mock-experiment.json",
+    "ablation.json",
+    "boundary-counterexample.json"
+  ],
+  "hashAlgorithm": "sha256",
+  "hashOfInputs": "901f09e60b2db66952b8dd1c8179012cd7e2372fe10a00e7f1bc1ddea32b6e4f",
+  "numberSource": "mock-experiment.json (single source of truth for all numeric figures)",
+  "constraints": {
+    "noRealDoi": true,
+    "noRealEmpiricalTruth": true,
+    "allFilesTopLevelInclude": ["schemaVersion", "sourceKind", "generatedAt"]
+  }
+}

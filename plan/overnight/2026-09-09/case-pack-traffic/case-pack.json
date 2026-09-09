@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "fixture",
+  "provenance": "direct_fixture",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "id": "case-pack-traffic-2026-09-09",
+  "researchQuestion": {
+    "zh": "在 HV–AV–HV 混合交通流中插入一辆自动驾驶车(AV)后，车队跟驰风险(以 TTC<1.5s 发生率与字符串稳定性衡量)相对于全人工驾驶(HV–HV–HV)车队如何变化与传播？",
+    "en": "How does inserting a single Autonomous Vehicle (AV) into an HV platoon change car-following risk propagation (measured by TTC<1.5s rate and string stability) relative to a homogeneous all-human (HV–HV–HV) platoon?"
+  },
+  "domainScenarios": [
+    {
+      "id": "scenario-mixed-HV-AV-HV",
+      "label": "HV–AV–HV 混合车队 (mixed platoon)",
+      "platoonComposition": ["HV", "AV", "HV"],
+      "vehicleParams": {
+        "HV": { "reactionDelay_ms": 1200, "followDistance_s": 2.0, "maxDecel_mps2": 7.5 },
+        "AV": { "reactionDelay_ms": 150, "followDistance_s": 1.2, "maxDecel_mps2": 8.0 }
+      },
+      "initialSpeed_mps": 25.0,
+      "roadGrade_pct": 0
+    },
+    {
+      "id": "scenario-homogeneous-HV-HV-HV",
+      "label": "HV–HV–HV 全人工车队 (homogeneous platoon)",
+      "platoonComposition": ["HV", "HV", "HV"],
+      "vehicleParams": {
+        "HV": { "reactionDelay_ms": 1200, "followDistance_s": 2.0, "maxDecel_mps2": 7.5 }
+      },
+      "initialSpeed_mps": 25.0,
+      "roadGrade_pct": 0
+    }
+  ],
+  "literature": [
+    { "id": "cite-01", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-01", "title": "Intelligent Driver Model calibration under mixed traffic (fixture)", "year": 2021, "venue": "Fixture Transportation Research Part C", "authors": ["A. Mock", "B. Fixture"], "note": "(fixture)" },
+    { "id": "cite-02", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-02", "title": "String stability of car-following models: a survey (fixture)", "year": 2019, "venue": "Fixture IEEE Transactions on Intelligent Transportation", "authors": ["C. Sample"], "note": "(fixture)" },
+    { "id": "cite-03", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-03", "title": "AV penetration and platoon risk reduction in congested flow (fixture)", "year": 2022, "venue": "Fixture Accident Analysis & Prevention", "authors": ["D. Test", "E. Demo"], "note": "(fixture)" },
+    { "id": "cite-04", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-04", "title": "Time-to-collision thresholds for safety assessment (fixture)", "year": 2018, "venue": "Fixture Safety Science", "authors": ["F. Example"], "note": "(fixture)" },
+    { "id": "cite-05", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-05", "title": "Jerk as a ride-comfort and instability proxy (fixture)", "year": 2020, "venue": "Fixture Vehicle System Dynamics", "authors": ["G. Mockdata"], "note": "(fixture)" },
+    { "id": "cite-06", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-06", "title": "Reaction-time distributions of human drivers (fixture)", "year": 2017, "venue": "Fixture Human Factors", "authors": ["H. Synthetic"], "note": "(fixture)" },
+    { "id": "cite-07", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-07", "title": "Counter-evidence: AV oscillations amplify stop-and-go (fixture)", "year": 2023, "venue": "Fixture Transportation Research Part B", "authors": ["I. Counterexample"], "note": "(fixture)" },
+    { "id": "cite-08", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-08", "title": "Microscopic mixed-traffic simulation framework (fixture)", "year": 2021, "venue": "Fixture Simulation Modelling Practice", "authors": ["J. Fixture"], "note": "(fixture)" },
+    { "id": "cite-09", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-09", "title": "Time headway distributions in free-flow (fixture)", "year": 2016, "venue": "Fixture Transportmetrica", "authors": ["K. Demo"], "note": "(fixture)" },
+    { "id": "cite-10", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-10", "title": "Predictive car-following controllers for CAVs (fixture)", "year": 2020, "venue": "Fixture Automatica", "authors": ["L. Mock"], "note": "(fixture)" },
+    { "id": "cite-11", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": true, "doi": "10.9999/fixture-cite-11", "title": "Boundary conditions for platoon stability (fixture)", "year": 2019, "venue": "Fixture Nonlinear Dynamics", "authors": ["M. Sample"], "note": "(fixture)" },
+    { "id": "cite-does-not-exist", "sourceKind": "fixture", "truthfulness": "fixture", "provenance": "direct_fixture", "generatedAt": "2026-09-09T00:00:00.000Z", "schemaVersion": "case-pack-traffic.v1", "exists": false, "doi": "10.9999/fixture-cite-does-not-exist", "title": "On the inevitability of AV safety gains (fixture — NON-EXISTENT)", "year": 2024, "venue": "Fixture Journal of Unpublished Claims", "authors": ["N. Nobody"], "note": "(fixture) — intentionally non-existent citation; included to test ledger/verification falsification" }
+  ],
+  "claims": ["claim-mixed-platoon-following-risk"],
+  "baselineConfig": {
+    "id": "baseline-fixed-time",
+    "controller": "fixed-time car-following",
+    "description": "All vehicles use a fixed-time (constant headway) controller; AV adaptive/predictive modules disabled.",
+    "metrics": [
+      { "key": "ttcLt1_5_rate_pct", "label": "TTC < 1.5s 发生率 (%)", "threshold": 1.5 },
+      { "key": "meanTHW_s", "label": "平均车头时距 (s)" },
+      { "key": "meanJerk_mps3", "label": "平均加加速度 (m/s^3)" },
+      { "key": "stringStabilityIndex", "label": "字符串稳定性指数", "okWhen": ">= 0.0 (non-negative = stable)" }
+    ],
+    "simSteps": 3600,
+    "dt_s": 0.1
+  },
+  "mockExperimentConfig": {
+    "id": "mock-exp-20260909",
+    "variants": ["baseline", "adaptive"],
+    "adaptiveController": "AV-policy (reaction + predictive modules active for AV only)",
+    "seed": 20260909,
+    "scenarios": ["scenario-mixed-HV-AV-HV", "scenario-homogeneous-HV-HV-HV"],
+    "note": "Deterministic synthetic run; see mock-experiment.json for per-row numbers."
+  },
+  "ablationConfig": {
+    "id": "ablation-20260909",
+    "seed": 20260909,
+    "removeModules": [
+      { "module": "av-reaction", "description": "Disable AV short reaction-delay module (force AV reactionDelay_ms=1200 like HV)." },
+      { "module": "predictive", "description": "Disable AV predictive (look-ahead) module." }
+    ]
+  },
+  "boundaryCounterexample": {
+    "id": "boundary-stop-and-go",
+    "scenario": "Platoon entering a stop-and-go wave (downstream shockwave)",
+    "description": "Boundary condition where the mixed-platoon claim may break: under strong stop-and-go forcing, AV braking can propagate oscillations upstream.",
+    "expected": "If TTC<1.5 rate under stop-and-go exceeds free-flow adaptive rate by > 2x, claim scope is limited to free-flow only.",
+    "refCitation": "cite-07"
+  },
+  "evidenceTriples": [
+    { "id": "ev-1", "relation": "support", "claimId": "claim-mixed-platoon-following-risk", "citationId": "cite-03", "statement": "Mixed-platoon AV insertion lowers TTC<1.5 rate in congested flow (fixture claim).", "confidence": "mock" },
+    { "id": "ev-2", "relation": "support", "claimId": "claim-mixed-platoon-following-risk", "citationId": "cite-10", "statement": "Predictive CAV controllers improve string stability (fixture claim).", "confidence": "mock" },
+    { "id": "ev-3", "relation": "contradict", "claimId": "claim-mixed-platoon-following-risk", "citationId": "cite-07", "statement": "AV oscillations may amplify stop-and-go under specific boundary forcing (fixture counter-evidence).", "confidence": "mock" },
+    { "id": "ev-4", "relation": "inconclusive", "claimId": "claim-mixed-platoon-following-risk", "citationId": "cite-does-not-exist", "statement": "Referenced citation does not exist; cannot be used as supporting evidence.", "confidence": "mock" },
+    { "id": "ev-5", "relation": "support", "claimId": "claim-mixed-platoon-following-risk", "citationId": "cite-02", "statement": "String-stability theory permits risk reduction with faster followers (fixture).", "confidence": "mock" }
+  ]
+}

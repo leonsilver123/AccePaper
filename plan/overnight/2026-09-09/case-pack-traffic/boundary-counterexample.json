@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "mock",
+  "provenance": "synthetic_deterministic",
+  "generatedAt": "2026-09-09T00:00:00.000Z",
+  "mock": true,
+  "disclaimer": "MOCK boundary / counterexample. Shows scope limit of the claim; not empirical.",
+  "seed": 20260909,
+  "id": "boundary-stop-and-go",
+  "scenario": "Platoon entering a downstream stop-and-go shockwave",
+  "forcing": { "downstreamSpeedDrop_mps": 18.0, "wavePeriod_s": 12.0, "duration_s": 240 },
+  "rows": [
+    {
+      "rowId": "BC-mixed-adaptive-stopngo",
+      "scenario": "scenario-mixed-HV-AV-HV",
+      "variant": "adaptive",
+      "condition": "stop-and-go",
+      "ttcLt1_5_rate_pct": 44.0,
+      "meanTHW_s": 1.35,
+      "meanJerk_mps3": 3.10,
+      "stringStabilityIndex": -0.38,
+      "stringStable": false,
+      "seed": 20260909,
+      "source": "boundary-counterexample.json#BC-mixed-adaptive-stopngo"
+    }
+  ],
+  "claimScopeTest": {
+    "claimId": "claim-mixed-platoon-following-risk",
+    "freeFlowAdaptiveTTC": 18.0,
+    "stopAndGoAdaptiveTTC": 44.0,
+    "ratio": 2.44,
+    "condition": "If stop-and-go TTC > 2x free-flow adaptive TTC, claim scope is limited to steady free-flow.",
+    "result": "ratio 2.44 > 2.0 → claim does NOT generalize to stop-and-go; boundary confirmed (MOCK).",
+    "refCitation": "cite-07"
+  }
+}
