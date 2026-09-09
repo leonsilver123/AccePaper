@@ -76,3 +76,9 @@ export * from './registry.ts'
 // diverge. Business input serializable; adapters injected via deps (fixture
 // defaults where safe).
 export * from './execution.ts'
+
+// ── Strict per-tool input schemas (Phase 1.1-R hardening) ───────────────────
+// RESEARCH_TOOL_INPUT_SCHEMAS — closed per-tool rules (additionalProperties:
+// false, bounds, enums, JSON-safety, depth/size budgets). executeResearchTool
+// validates FIRST, so an invalid input never reaches a business function.
+export * from './input-schema.ts'

@@ -89,7 +89,7 @@ describe('executeResearchTool — single dispatch map', () => {
   })
 
   it('claim-construct matches the direct call', () => {
-    const input = { assertion: 'Adaptive control reduces delay.' }
+    const input = { assertion: 'Adaptive control reduces delay.', now: TS }
     const viaAdapter = executeResearchTool('claim-construct', input, undefined, TS)
     const direct = constructClaim(input)
     expect(viaAdapter).toEqual(direct)
@@ -125,9 +125,10 @@ describe('executeResearchTool — single dispatch map', () => {
   })
 
   it('citation-verify refuses to run without its injected resolver dependency', () => {
-    expect(() => executeResearchTool('citation-verify', {}, undefined, TS))
+    const validInput = { claimId: 'c1', citationId: 'cit1', ref: { title: 'R' }, evidence: { text: 'E' }, options: {} }
+    expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
       .toThrowError(ResearchToolExecutionError)
-    expect(() => executeResearchTool('citation-verify', {}, undefined, TS))
+    expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
       .toThrow(/citationDeps/)
   })
 
@@ -143,8 +144,8 @@ describe('executeResearchTool — single dispatch map', () => {
       .toThrow(/topic/)
     expect(() => executeResearchTool('ablation', {}, undefined, TS))
       .toThrow(/definition/)
-    // Figure propagates its own branded validation error (spec rejected).
+    // Figure: strict schema rejects a non-object spec before any render.
     expect(() => executeResearchTool('figure', null, undefined, TS))
-      .toThrow(/spec/)
+      .toThrow(/figure/)
   })
 })
