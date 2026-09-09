@@ -127,14 +127,14 @@ describe('executeResearchTool — single dispatch map', () => {
   it('citation-verify refuses to run without its injected resolver dependency', () => {
     const validInput = { claimId: 'c1', citationId: 'cit1', ref: { title: 'R' }, evidence: { text: 'E' }, options: {} }
     expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
-      .toThrowError(ResearchToolExecutionError)
+      .toThrow(ResearchToolExecutionError)
     expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
       .toThrow(/citationDeps/)
   })
 
   it('rejects unknown tool ids before touching anything', () => {
     expect(() => executeResearchTool('no-such-tool', {}, undefined, TS))
-      .toThrowError(ResearchToolExecutionError)
+      .toThrow(ResearchToolExecutionError)
     expect(() => executeResearchTool('no-such-tool', {}, undefined, TS))
       .toThrow(/unknown research tool/)
   })
@@ -148,4 +148,31 @@ describe('executeResearchTool — single dispatch map', () => {
     expect(() => executeResearchTool('figure', null, undefined, TS))
       .toThrow(/figure/)
   })
+})
+
+it('is TOCTOU-safe: a hostile mutating input cannot change data between validation and business read', () => {
+  const input: Record<string, unknown> = {}
+  let reads = 0
+  Object.defineProperty(input, 'topic', {
+    get() {
+      reads += 1
+      // First read (single snapshot pass) is the short legal topic; any
+      // subsequent re-read would exceed the schema length and fail — so if the
+      // adapter re-read the live object, validation or execution would break.
+      return reads === 1 ? 'adaptive traffic signals' : 'x'.repeat(600)
+    },
+    enumerable: true,
+    configurable: true,
+  })
+  const artifact = executeResearchTool('literature-search', input, undefined, TS) as {
+    query?: { topic?: string }
+  }
+  // Business saw exactly the snapshotted (first-read) topic.
+  expect(artifact.query?.topic).toBe('adaptive traffic signals')
+  // Mutating the caller's object afterwards must NOT affect the result.
+  Object.defineProperty(input, 'topic', { value: 'corrupted-after-call' })
+  const again = executeResearchTool('literature-search', { topic: 'adaptive traffic signals' }, undefined, TS) as {
+    query?: { topic?: string }
+  }
+  expect(again.query?.topic).toBe('adaptive traffic signals')
 })
