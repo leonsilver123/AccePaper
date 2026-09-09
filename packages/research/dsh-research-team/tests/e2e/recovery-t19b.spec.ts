@@ -94,7 +94,7 @@ describe('T19-B recovery — gate abstention holds the step (no default pass)', 
       abstain: new Set(),
     })
     expect(better.length).toBe(1)
-    expect(() => submitGateVerdict(store, runId, 'A1-landscape', better[0]!)).toThrow(
+    expect(() => submitGateVerdict(store, runId, 'A1-landscape', better[0])).toThrow(
       /DSH_VERDICT_ALREADY_SET|DSH_VERDICT_BAD_STATUS|not 'in_progress'|status/i,
     )
     // Still held — the runner never coerced abstained into passed.
