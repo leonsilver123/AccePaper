@@ -393,7 +393,7 @@ describe('T19 calibration R1 — executor depends on ResearchToolInvoker', () =>
     }
     const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: { invoker: unknown }) => Promise<unknown> | Record<string, unknown> }>).get('A1-landscape')
     expect(entry).toBeDefined()
-    const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as ExecCtx & { invoker: unknown }
+    const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as { invoker: unknown }
     // Inject the failing invoker: A1 must propagate the failure (fail-closed),
     // proving the executor honors the injected invoker instead of its fallback.
     await expect(entry!.executor({ ...ctx, invoker: failingInvoker })).rejects.toThrow(/invocation failed/)
@@ -439,7 +439,7 @@ describe('F1 audit fix — invoker provenance propagates onto real-tool artifact
   it('A1 landscape-map carries __provenance=direct and __invokerTruthfulness=direct_fixture', async () => {
     const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: ExecCtx) => unknown }>).get('A1-landscape')
     expect(entry).toBeDefined()
-    const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as ExecCtx
+    const ctx = execCtx('A1-landscape', freshRunCtx())
     const output = (await entry!.executor(ctx)) as Record<string, Record<string, unknown>>
     const map = output['landscape-map']
     expect(map.__kind).toBe('real_tool_fixture_input')
