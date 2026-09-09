@@ -91,8 +91,14 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Adapter config (currently empty — the pure engine is config-less). */
-export interface Config {}
+/** Adapter config. `requireResearchTools` turns tool registration into a
+ *  STARTUP REQUIREMENT (research-bundle / T30 mode): if the host lacks the
+ *  `tools` service, or fewer than the seven catalog tools can be registered and
+ *  verified, the engine load FAILS loudly instead of silently degrading. When
+ *  unset/false the engine remains a standalone ctx.research state machine. */
+export interface Config {
+  readonly requireResearchTools?: boolean
+}
 
 /**
  * The in-memory run store — MODULE-SCOPED so it is genuinely runtime-private (RC-C). See the
@@ -106,9 +112,11 @@ const runs: ResearchRunStore = new Map()
 export class ResearchEngine extends Service {
   static Config: z<Config> = z.object({})
 
+  private readonly requireResearchTools: boolean
+
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
-    void config
+    this.requireResearchTools = config.requireResearchTools ?? false
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
@@ -121,12 +129,45 @@ export class ResearchEngine extends Service {
     // (defineTool + ctx.tools.register, fixture deps injected, exposure guards
     // wired). The registration rides a nested plugin that DECLARES the `tools`
     // inject (cordis refuses ctx.tools reads without an inject declaration).
-    // DEFENSIVE: standalone contexts without a tools service reject that nested
-    // plugin, which is caught here so the engine still loads as ctx.research.
+    //  - standalone (`requireResearchTools` unset): absence of a tools service
+    //    is tolerated — the engine loads as a pure ctx.research state machine;
+    //  - T30/research-bundle (`requireResearchTools: true`): the nested plugin
+    //    is a STARTUP REQUIREMENT. Cordis silently skips a nested plugin whose
+    //    inject is unmet (it does not reject), so a missing tools service is
+    //    detected through the registration marker — the engine load FAILS
+    //    loudly rather than booting a research bundle without its tools.
+    if (this.requireResearchTools) {
+      await this.mountResearchTools()
+    } else {
+      await this.mountResearchToolsTolerant()
+    }
+  }
+
+  /** Required registration path (research-bundle / T30 mode). */
+  private async mountResearchTools(): Promise<void> {
+    let ready = false
+    await this.ctx.plugin(researchToolsPlugin, { verify: true, onReady: () => { ready = true } })
+    // `ready` is only flipped by the plugin's onReady callback (which runs on a
+    // context that may be an isolate), so control-flow analysis cannot see it.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
+    if (!ready) {
+      throw new Error(
+        '[research-cordis] requireResearchTools: the seven research tools could not be '
+        + 'registered (tools service absent or registration failed) — refusing to boot a '
+        + 'research bundle without its tool surface',
+      )
+    }
+  }
+
+  /**
+   * Tolerant registration path (standalone engines): attempt to register the
+   * research tools; any absence of the tools service is silently tolerated.
+   */
+  private async mountResearchToolsTolerant(): Promise<void> {
     try {
-      await this.ctx.plugin(researchToolsPlugin)
+      await this.ctx.plugin(researchToolsPlugin, { verify: true })
     } catch {
-      // No `tools` service: registration skipped, engine stays fully functional.
+      // No `tools` service: registration skipped, engine stays functional.
     }
   }
 

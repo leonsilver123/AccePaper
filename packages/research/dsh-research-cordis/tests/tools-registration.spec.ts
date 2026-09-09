@@ -120,7 +120,10 @@ describe('research tool runtime registration (T13-R)', () => {
     await ctx.fiber.dispose()
   })
 
-  it('pipeline-only tools are registered and pipeline (agent-less) execution works', async () => {
+  it('pipeline-only tools are registered; internal trusted direct execution works (not the agent runtime)', async () => {
+    // The registry get() + handler-level execute() is the TRUSTED internal seam
+    // (DirectResearchToolInvoker equivalent — only reachable with a ctx handle,
+    // never through the agent-loop runtime, which the exposure guard blocks).
     const ctx = await setupResearch()
     const result = await getTool(ctx, 'claim-construct').execute(
       { assertion: 'Adaptive control reduces delay.' },
@@ -132,16 +135,22 @@ describe('research tool runtime registration (T13-R)', () => {
     await ctx.fiber.dispose()
   })
 
-  it('exposure guard denies pipeline_only tools to agent executions and lets model_ready through', () => {
+  it('exposure guard denies pipeline_only tools ALWAYS (never trusts agent-less) and lets model_ready through', () => {
     const agentExec = { agent: {} } as Readonly<{ agent?: unknown }>
     const noAgentExec = {} as Readonly<{ agent?: unknown }>
+    const emptyAgentExec = { agent: {} } as Readonly<{ agent?: unknown }>
+    const copiedExec = { agent: Object.freeze({}) } as Readonly<{ agent?: unknown }>
+    const attackExecs = [agentExec, noAgentExec, emptyAgentExec, copiedExec]
     for (const entry of RESEARCH_TOOL_DIRECTORY) {
       const guard = researchToolExposureGuard(entry.toolId, entry.modelExposure)
       if (entry.modelExposure === 'model_ready') {
-        expect(guard(agentExec), entry.toolId).toBeUndefined()
+        for (const exec of attackExecs) expect(guard(exec), entry.toolId).toBeUndefined()
       } else {
-        expect(guard(agentExec), entry.toolId).toMatch(/pipeline-only/)
-        expect(guard(noAgentExec), entry.toolId).toBeUndefined()
+        // Absent / forged / empty / copied agent fields NEVER unlock a
+        // pipeline-only tool — absence is not permission.
+        for (const exec of attackExecs) {
+          expect(guard(exec), entry.toolId).toMatch(/pipeline-only/)
+        }
       }
     }
   })

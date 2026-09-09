@@ -6601,6 +6601,12 @@ importers:
       '@deepseek-ai/dsh-research-core':
         specifier: workspace:^
         version: link:../dsh-research-core
+      '@deepseek-ai/dsh-research-tools':
+        specifier: workspace:^
+        version: link:../dsh-research-tools
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:^
+        version: link:../../../core/tools
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
