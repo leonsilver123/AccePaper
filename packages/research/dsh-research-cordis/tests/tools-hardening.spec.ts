@@ -43,15 +43,15 @@ function toolsOf(ctx: Context): ToolRegistryFace {
 
 describe('T13-R Phase 1.1 hardening', () => {
   describe('host module loader is fail-closed', () => {
-    it('rejects a non-object module', () => {
-      expect(() => validateHostToolsModule(null)).toThrow(/fail-closed/)
+    it('rejects a non-object module with a stable code', () => {
+      expect(() => validateHostToolsModule(null)).toThrow(/HOST_SHAPE_INVALID/)
       expect(() => validateHostToolsModule(undefined as never)).toThrow(/not an object/)
     })
 
     it('rejects a module without a function defineTool (API mismatch)', () => {
-      expect(() => validateHostToolsModule({ defineTool: undefined })).toThrow(/does not export/)
-      expect(() => validateHostToolsModule({ defineTool: 'nope' })).toThrow(/does not export/)
-      expect(() => validateHostToolsModule({})).toThrow(/does not export/)
+      expect(() => validateHostToolsModule({ defineTool: undefined })).toThrow(/HOST_API_MISMATCH/)
+      expect(() => validateHostToolsModule({ defineTool: 'nope' })).toThrow(/HOST_API_MISMATCH/)
+      expect(() => validateHostToolsModule({})).toThrow(/HOST_API_MISMATCH/)
     })
 
     it('accepts a function defineTool and returns it as the loader', () => {
@@ -132,22 +132,23 @@ describe('T13-R Phase 1.1 hardening', () => {
   })
 })
 
-describe('registration transactionality and lifecycle (Phase 1.1-R)', () => {
-  function plainDef(name: string) {
-    return {
-      name,
-      description: 'blocker',
-      parameters: {},
-      output: { schema: { type: 'object' }, render: () => [] },
-      execute: async () => ({}),
-    }
+function sharedBlockerDef(name: string) {
+  return {
+    name,
+    description: 'blocker',
+    parameters: {},
+    output: { schema: { type: 'object' }, render: () => [] },
+    execute: async () => ({}),
   }
+}
+
+describe('registration transactionality and lifecycle (Phase 1.1-R)', () => {
 
   it('rolls back ALL side effects when the last registration collides (no partial state)', async () => {
     const ctx = await setupWithTools()
     // Occupy the LAST catalog slot ('roadmap') so the 7-tool loop fails at
     // index 7 after six registrations succeeded.
-    const blocker = toolsOf(ctx).register(plainDef('roadmap'))
+    const blocker = toolsOf(ctx).register(sharedBlockerDef('roadmap'))
     await expect(registerResearchTools(ctx)).rejects.toThrow(/already registered/)
     // Transactional rollback: none of the earlier six may remain observable.
     // The intentionally pre-registered 'roadmap' blocker is the ONLY survivor.
@@ -184,6 +185,99 @@ describe('registration transactionality and lifecycle (Phase 1.1-R)', () => {
     await ctx.plugin(researchToolsPlugin, { verify: true, onReady: () => { applied.value = true } })
     expect(applied.value).toBe(true)
     expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('registration lifecycle reinforcement (Phase 1.1-R track A)', () => {
+  async function blockerOn(ctx: Context, name: string): Promise<() => void> {
+    return toolsOf(ctx).register(sharedBlockerDef(name))
+  }
+
+  it('rolls back fully when the FIRST registration collides (nothing remains ours)', async () => {
+    const ctx = await setupWithTools()
+    const blocker = await blockerOn(ctx, 'literature-search')
+    await expect(registerResearchTools(ctx)).rejects.toThrow(/already registered/)
+    // Only the blocker exists; none of our six others leaked in.
+    expect(toolsOf(ctx).get('literature-search')?.description).toBe('blocker')
+    expect(toolsOf(ctx).get('claim-construct')).toBeUndefined()
+    blocker()
+    await expect(registerResearchTools(ctx)).resolves.toBeDefined()
+    expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+    await ctx.fiber.dispose()
+  })
+
+  it('rolls back fully when a MIDDLE registration collides', async () => {
+    const ctx = await setupWithTools()
+    const blocker = await blockerOn(ctx, 'claim-construct') // catalog index 3
+    await expect(registerResearchTools(ctx)).rejects.toThrow(/already registered/)
+    expect(toolsOf(ctx).get('literature-search')).toBeUndefined()
+    expect(toolsOf(ctx).get('ablation')).toBeUndefined()
+    expect(toolsOf(ctx).get('claim-construct')?.description).toBe('blocker')
+    blocker()
+    await expect(registerResearchTools(ctx)).resolves.toBeDefined()
+    await ctx.fiber.dispose()
+  })
+
+  it('concurrent initialisation yields exactly one winner and a consistent set', async () => {
+    const ctx = await setupWithTools()
+    const [a, b] = await Promise.allSettled([
+      registerResearchTools(ctx),
+      registerResearchTools(ctx),
+    ])
+    expect(a.status === 'fulfilled' ? true : b.status === 'fulfilled').toBe(true)
+    const fulfilled = a.status === 'fulfilled' ? a : b
+    const rejected = a.status === 'fulfilled' ? b : a
+    expect(rejected.status).toBe('rejected')
+    expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+    ;(fulfilled as PromiseFulfilledResult<() => void>).value()
+    for (const entry of RESEARCH_TOOL_DIRECTORY) {
+      expect(toolsOf(ctx).get(entry.toolId)).toBeUndefined()
+    }
+    await ctx.fiber.dispose()
+  })
+
+  it('stale handles from an OLD instance never work against a NEW instance', async () => {
+    const ctxA = await setupWithTools()
+    const disposeA = await registerResearchTools(ctxA)
+    const staleFromA = toolsOf(ctxA).get('figure')
+    expect(staleFromA).toBeDefined()
+    disposeA()
+
+    const ctxB = await setupWithTools()
+    await registerResearchTools(ctxB)
+    const freshOnB = toolsOf(ctxB).get('figure')
+    expect(freshOnB).toBeDefined()
+    expect(freshOnB).not.toBe(staleFromA)
+    await expect(staleFromA!.execute({ spec: {} }, {})).rejects.toThrow(/RESEARCH_TOOL_UNLOADED/)
+    await ctxB.fiber.dispose()
+    await ctxA.fiber.dispose()
+  })
+
+  it('readiness refuses a pre-existing impostor object (not ours, no marker)', () => {
+    const impostor: ToolRegistryFace = {
+      get: name => (name === 'roadmap' ? { name: 'roadmap' } as never : undefined),
+    }
+    const ctxStub = { tools: impostor } as unknown as Context
+    expect(() => { assertResearchToolsReady(ctxStub) }).toThrow(/not ours/)
+  })
+
+  it('requireResearchTools fails startup when a catalog name is already occupied', async () => {
+    const ctx = await setupWithTools()
+    await blockerOn(ctx, 'roadmap')
+    let threw = false
+    try {
+      await ctx.plugin(ResearchEngine, { requireResearchTools: true })
+    } catch {
+      threw = true
+    }
+    expect(threw).toBe(true)
+    // Tolerant standalone engine still loads (skips tool registration).
+    const ctx2 = await setupWithTools()
+    await blockerOn(ctx2, 'roadmap')
+    await ctx2.plugin(ResearchEngine)
+    expect(ctx2.research).toBeInstanceOf(ResearchEngine)
+    await ctx2.fiber.dispose()
     await ctx.fiber.dispose()
   })
 })

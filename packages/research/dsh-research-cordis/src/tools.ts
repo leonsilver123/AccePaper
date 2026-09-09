@@ -55,6 +55,36 @@ export interface ToolRegistryFace {
   get(name: string): RegisteredTool | undefined
 }
 
+/**
+ * Non-enumerable identity marker placed on every ToolDefinition THIS module
+ * registers. Readiness uses it to prove the registered definition is OURS
+ * (same version/exposure/instance), so a pre-existing impostor object under a
+ * catalog name can never satisfy the check. Module-private: never exported,
+ * never surfaced in schemas or on ctx.research.
+ */
+const REGISTRATION_MARKER = Symbol('research.registered.tool')
+
+/** Marker payload captured at registration time (snapshot of the catalog). */
+interface RegistrationMarker {
+  readonly toolId: string
+  readonly version: string
+  readonly modelExposure: ModelExposure
+}
+
+function attachMarker(def: RegisteredTool, meta: RegistrationMarker): void {
+  Object.defineProperty(def, REGISTRATION_MARKER, {
+    value: meta,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+}
+
+function readMarker(def: RegisteredTool | undefined): RegistrationMarker | undefined {
+  if (def === undefined) return undefined
+  return (def as unknown as { [REGISTRATION_MARKER]?: RegistrationMarker })[REGISTRATION_MARKER]
+}
+
 /** Registration metadata mirroring the catalog (assertable by tests). */
 export interface ResearchToolRegistrationMeta {
   readonly toolId: string
@@ -147,29 +177,103 @@ type DefineToolLoader = (options: Record<string, unknown>) => RegisteredTool
  */
 const DSH_TOOLS_MODULE_ID = 'dsh-tools'
 
+/** Stable error codes for the runtime host-module compatibility layer. */
+export const RESEARCH_TOOL_HOST_ERROR_CODES = {
+  HOST_LOAD_FAILED: 'RESEARCH_TOOL_HOST_LOAD_FAILED',
+  HOST_SHAPE_INVALID: 'RESEARCH_TOOL_HOST_SHAPE_INVALID',
+  HOST_API_MISMATCH: 'RESEARCH_TOOL_HOST_API_MISMATCH',
+  HOST_VERSION_UNSUPPORTED: 'RESEARCH_TOOL_HOST_VERSION_UNSUPPORTED',
+} as const
+
+export type ResearchToolHostErrorCode =
+  (typeof RESEARCH_TOOL_HOST_ERROR_CODES)[keyof typeof RESEARCH_TOOL_HOST_ERROR_CODES]
+
+/** Error with a stable machine code. Messages NEVER disclose local paths,
+ *  environment variables or configuration content (the cause is dropped). */
+export class ResearchToolHostError extends Error {
+  readonly code: ResearchToolHostErrorCode
+
+  constructor(code: ResearchToolHostErrorCode, safeMessage: string) {
+    super(safeMessage)
+    this.name = 'ResearchToolHostError'
+    this.code = code
+  }
+}
+
+/** Expected version prefix of the host tool runtime (capability gate). */
+const HOST_TOOLS_EXPECTED_VERSION_PREFIX = '0.1.2-alpha'
+
 /**
  * Validate the loaded host module (a foreign runtime value — never trusted
- * structurally); returns the defineTool factory or throws fail-closed.
+ * structurally); returns the defineTool factory or throws fail-closed with a
+ * stable code and a message free of environment details.
  * @param mod - the raw dynamic-import result of the fixed host module id.
  */
 export function validateHostToolsModule(mod: unknown): DefineToolLoader {
   if (mod === null || typeof mod !== 'object') {
-    throw new Error(`[research-tools] '${DSH_TOOLS_MODULE_ID}' runtime module is not an object (fail-closed)`)
+    throw new ResearchToolHostError(
+      RESEARCH_TOOL_HOST_ERROR_CODES.HOST_SHAPE_INVALID,
+      `[research-tools] host tool runtime module is not an object (${RESEARCH_TOOL_HOST_ERROR_CODES.HOST_SHAPE_INVALID})`,
+    )
   }
   const defineTool = (mod as { defineTool?: unknown }).defineTool
   if (typeof defineTool !== 'function') {
-    throw new Error(
-      `[research-tools] '${DSH_TOOLS_MODULE_ID}' runtime module does not export a function 'defineTool' `
-      + '(host API mismatch, fail-closed) — refusing to register against an unknown tool surface',
+    throw new ResearchToolHostError(
+      RESEARCH_TOOL_HOST_ERROR_CODES.HOST_API_MISMATCH,
+      `[research-tools] host tool runtime does not export a function 'defineTool' (${RESEARCH_TOOL_HOST_ERROR_CODES.HOST_API_MISMATCH}) — refusing to register against an unknown tool surface`,
     )
   }
   return defineTool as DefineToolLoader
 }
 
+/**
+ * Load + validate the host tool module through injectable loaders (default =
+ * the fixed module id; version probe = the package manifest when its export
+ * mapping exposes it). Test seams and the packed-package consumer smoke inject
+ * failing loaders here to exercise every error code deterministically.
+ */
+export async function loadHostToolsModuleWith(options: {
+  load: () => Promise<unknown>
+  loadVersion?: () => Promise<unknown>
+}): Promise<DefineToolLoader> {
+  let mod: unknown
+  try {
+    mod = await options.load()
+  } catch {
+    // The cause is intentionally dropped: import failures can embed local
+    // resolved paths which must never surface in diagnostics.
+    throw new ResearchToolHostError(
+      RESEARCH_TOOL_HOST_ERROR_CODES.HOST_LOAD_FAILED,
+      `[research-tools] host tool runtime could not be loaded (${RESEARCH_TOOL_HOST_ERROR_CODES.HOST_LOAD_FAILED})`,
+    )
+  }
+  const defineTool = validateHostToolsModule(mod)
+  if (options.loadVersion !== undefined) {
+    let pkg: unknown
+    try {
+      pkg = await options.loadVersion()
+    } catch {
+      pkg = undefined // manifest not exported: capability gate (defineTool) only
+    }
+    const version = (pkg as { version?: unknown } | undefined)?.version
+    if (typeof version === 'string' && !version.startsWith(HOST_TOOLS_EXPECTED_VERSION_PREFIX)) {
+      throw new ResearchToolHostError(
+        RESEARCH_TOOL_HOST_ERROR_CODES.HOST_VERSION_UNSUPPORTED,
+        `[research-tools] host tool runtime version ${version} is outside the supported `
+        + `${HOST_TOOLS_EXPECTED_VERSION_PREFIX}* line `
+        + `(${RESEARCH_TOOL_HOST_ERROR_CODES.HOST_VERSION_UNSUPPORTED})`,
+      )
+    }
+  }
+  return defineTool
+}
+
 async function loadDefineTool(): Promise<DefineToolLoader> {
   // Non-literal specifier keeps the host tool package out of this compilation.
-  const mod = await import('@deepseek-ai/' + DSH_TOOLS_MODULE_ID) as { defineTool?: unknown }
-  return validateHostToolsModule(mod)
+  return loadHostToolsModuleWith({
+    load: () => import('@deepseek-ai/' + DSH_TOOLS_MODULE_ID) as Promise<unknown>,
+    loadVersion: () => import('@deepseek-ai/' + DSH_TOOLS_MODULE_ID + '/package.json') as Promise<unknown>,
+  })
 }
 
 function definitionFor(toolId: string, defineTool: DefineToolLoader): RegisteredTool {
@@ -268,9 +372,9 @@ function definitionFor(toolId: string, defineTool: DefineToolLoader): Registered
  * @param def - the registered definition.
  * @param isAlive - per-registration liveness probe.
  */
-function revocable(def: RegisteredTool, isAlive: () => boolean): RegisteredTool {
+function revocable(def: RegisteredTool, isAlive: () => boolean, meta: RegistrationMarker): RegisteredTool {
   const execute = def.execute.bind(def)
-  return {
+  const guarded: RegisteredTool = {
     ...def,
     execute(args, exec): Promise<unknown> {
       if (!isAlive()) {
@@ -282,6 +386,8 @@ function revocable(def: RegisteredTool, isAlive: () => boolean): RegisteredTool 
       return execute(args, exec)
     },
   }
+  attachMarker(guarded, meta)
+  return guarded
 }
 
 /**
@@ -304,16 +410,34 @@ export async function registerResearchTools(ctx: Context): Promise<() => void> {
   const isAlive = () => !released
   try {
     for (const entry of RESEARCH_TOOL_DIRECTORY) {
-      const definition = revocable(definitionFor(entry.toolId, defineTool), isAlive)
+      const definition = revocable(
+        definitionFor(entry.toolId, defineTool),
+        isAlive,
+        { toolId: entry.toolId, version: entry.version, modelExposure: entry.modelExposure },
+      )
       disposers.push(tools.tools.register(definition))
       if (entry.modelExposure !== 'model_ready') {
         disposers.push(tools.tools.guard(researchToolExposureGuard(entry.toolId, entry.modelExposure)))
       }
     }
   } catch (error) {
-    // Roll back every side effect taken before the failure: partial state must
-    // never survive a failed registration attempt.
-    for (const dispose of disposers.reverse()) dispose()
+    // Roll back EVERY side effect taken before the failure. A disposer that
+    // itself throws must not stop the remaining rollbacks: collect extra errors
+    // and surface an aggregate alongside the original registration error.
+    const rollbackErrors: unknown[] = []
+    for (const dispose of disposers.reverse()) {
+      try {
+        dispose()
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new Error(
+        `[research-tools] registration failed AND rollback reported ${rollbackErrors.length} `
+        + `error(s) (RESEARCH_TOOL_ROLLBACK_PARTIAL): ${(error as Error).message}`,
+      )
+    }
     throw error
   }
   return () => {
@@ -333,13 +457,36 @@ export async function registerResearchTools(ctx: Context): Promise<() => void> {
  */
 export function assertResearchToolsReady(ctx: Context): void {
   const tools = ctx as Context & { tools: ToolRegistryFace }
-  const missing = RESEARCH_TOOL_DIRECTORY
-    .map(entry => entry.toolId)
-    .filter(toolId => tools.tools.get(toolId) === undefined)
-  if (missing.length > 0) {
+  const problems: string[] = []
+  for (const entry of RESEARCH_TOOL_DIRECTORY) {
+    const def = tools.tools.get(entry.toolId)
+    if (def === undefined) {
+      problems.push(`'${entry.toolId}' not registered`)
+      continue
+    }
+    if (def.name !== entry.toolId) {
+      problems.push(`'${entry.toolId}' registered under unexpected name '${def.name}'`)
+    }
+    // Identity: the registered definition must be OURS (registration marker
+    // carrying the catalog version/exposure). A pre-existing impostor object
+    // with the same name can never satisfy this check.
+    const marker = readMarker(def)
+    if (marker === undefined) {
+      problems.push(`'${entry.toolId}' definition is not ours (no registration marker)`)
+    } else {
+      if (marker.toolId !== entry.toolId) problems.push(`'${entry.toolId}' marker toolId mismatch`)
+      if (marker.version !== entry.version) {
+        problems.push(`'${entry.toolId}' version ${marker.version} != catalog ${entry.version}`)
+      }
+      if (marker.modelExposure !== entry.modelExposure) {
+        problems.push(`'${entry.toolId}' exposure ${marker.modelExposure} != catalog ${entry.modelExposure}`)
+      }
+    }
+  }
+  if (problems.length > 0) {
     throw new Error(
-      `[research-tools] readiness failed: ${missing.length}/${RESEARCH_TOOL_DIRECTORY.length} `
-      + `catalog tools not registered (${missing.join(', ')}) — refusing to boot without the full research tool surface`,
+      `[research-tools] readiness failed (${problems.length}/${RESEARCH_TOOL_DIRECTORY.length}): `
+      + problems.join('; ') + ' — refusing to boot without the full, OURS-owned research tool surface',
     )
   }
 }
