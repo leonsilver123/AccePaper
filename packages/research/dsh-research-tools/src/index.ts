@@ -82,3 +82,8 @@ export * from './execution.ts'
 // false, bounds, enums, JSON-safety, depth/size budgets). executeResearchTool
 // validates FIRST, so an invalid input never reaches a business function.
 export * from './input-schema.ts'
+
+// ── Unified invocation surface (Phase 2) ────────────────────────────────────
+// ResearchToolInvoker interface + DirectResearchToolInvoker (direct_fixture).
+// T19-B executors depend on the interface only.
+export * from './invoker.ts'
