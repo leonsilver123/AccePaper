@@ -28,6 +28,7 @@ import { renderRoadmap } from './tools/roadmap/index.ts'
 import type { RoadmapGraph, RoadmapRenderOptions } from './tools/roadmap/index.ts'
 import { renderThreeLineTable } from './tools/three-line-table/index.ts'
 import type { ThreeLineTableModel, ThreeLineTableTarget } from './tools/three-line-table/index.ts'
+import { validateResearchToolInput } from './input-schema.ts'
 
 /** Injected dependencies for the tools whose real input is an adapter/executor. */
 export interface ResearchToolDeps {
@@ -45,13 +46,6 @@ export class ResearchToolExecutionError extends Error {
     super(message)
     this.name = 'ResearchToolExecutionError'
   }
-}
-
-function asRecord(input: unknown, toolId: string): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null) {
-    throw new ResearchToolExecutionError(`[${toolId}] input must be an object`)
-  }
-  return input as Record<string, unknown>
 }
 
 function requireDepsField(
@@ -82,14 +76,19 @@ export function executeResearchTool(
   deps?: ResearchToolDeps,
   timestamp: number = Date.now(),
 ): unknown {
+  // Strict per-tool schema runs FIRST: an invalid input must never reach a
+  // business function (zero calls on failure).
+  const violations = validateResearchToolInput(toolId, input)
+  if (violations.length > 0) {
+    throw new ResearchToolExecutionError(
+      `[${toolId}] input rejected by strict schema:\n- ${violations.join('\n- ')}`,
+    )
+  }
   switch (toolId) {
     case 'literature-search': {
-      const record = asRecord(input, toolId)
-      if (typeof record.topic !== 'string' || record.topic.trim().length === 0) {
-        throw new ResearchToolExecutionError(`[${toolId}] 'topic' must be a non-empty string`)
-      }
+      const record = input as Record<string, unknown>
       const adapter = deps?.literatureAdapter ?? mockLiteratureSearchAdapter
-      return runLiteratureSearch({ topic: record.topic }, adapter, timestamp)
+      return runLiteratureSearch({ topic: String(record.topic) }, adapter, timestamp)
     }
     case 'citation-verify': {
       const depsField = requireDepsField(deps, 'citationDeps', toolId) as CitationVerifyToolDeps
@@ -99,19 +98,15 @@ export function executeResearchTool(
       return constructClaim(input as ClaimConstructInput)
     }
     case 'ablation': {
-      const record = asRecord(input, toolId)
-      const definition = record.definition
-      if (typeof definition !== 'object' || definition === null) {
-        throw new ResearchToolExecutionError(`[${toolId}] input.definition must be an AblationDefinition`)
-      }
+      const record = input as Record<string, unknown>
       const executor = deps?.ablationExecutor ?? createMockAblationExecutor()
-      return runAblation(definition as AblationDefinition, executor, timestamp)
+      return runAblation(record.definition as AblationDefinition, executor, timestamp)
     }
     case 'figure': {
       return renderFigure(input as FigureSpec, timestamp)
     }
     case 'three-line-table': {
-      const record = asRecord(input, toolId)
+      const record = input as Record<string, unknown>
       return renderThreeLineTable(
         record.model as ThreeLineTableModel,
         record.target as ThreeLineTableTarget,
@@ -119,7 +114,7 @@ export function executeResearchTool(
       )
     }
     case 'roadmap': {
-      const record = asRecord(input, toolId)
+      const record = input as Record<string, unknown>
       return renderRoadmap(
         record.graph as RoadmapGraph,
         (record.options ?? {}) as RoadmapRenderOptions,
