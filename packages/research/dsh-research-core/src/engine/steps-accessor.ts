@@ -23,7 +23,7 @@
 // accessor's contract testable in isolation ("caller mutation does not affect internal
 // definitions" holds even if a future change thaws the internals).
 
-import { STEP_BY_ID, STEPS } from './steps.ts'
+import { lookupStep, STEPS } from './steps.ts'
 import type { StepDefinition } from './types.ts'
 
 /**
@@ -46,7 +46,7 @@ function deepFreezeClone<T>(value: T): T {
 function cloneFrozen(def: StepDefinition): StepDefinition {
   // structuredClone strips the prototype and copies every own enumerable property,
   // yielding a plain structural twin of the frozen internal definition.
-  return deepFreezeClone(structuredClone(def) as StepDefinition)
+  return deepFreezeClone(structuredClone(def))
 }
 
 /**
@@ -62,6 +62,8 @@ export function getStepDefinitions(): readonly StepDefinition[] {
  * known pipeline step. Never returns the internal object.
  */
 export function getStepDefinitionById(stepId: string): StepDefinition | undefined {
-  const def = STEP_BY_ID.get(stepId)
+  // Same source as `getStepDefinitions()` (the frozen STEPS array) — audit P1-1:
+  // resolving through a mutable Map let the two accessors disagree.
+  const def = lookupStep(stepId)
   return def === undefined ? undefined : cloneFrozen(def)
 }

@@ -35,7 +35,7 @@ import type {
   StepStatus,
   TrinityComponent,
 } from './types.ts'
-import { SEEDABLE_INPUTS, STEP_BY_ID, STEPS } from './steps.ts'
+import { lookupStep, SEEDABLE_INPUTS, STEPS } from './steps.ts'
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ function ensureEntry(run: RunState, stepId: string): StepState {
     history: [],
     startedAt: undefined,
     finishedAt: undefined,
-    outputs: (STEP_BY_ID.get(stepId) as StepDefinition).outputs,
+    outputs: (lookupStep(stepId) as StepDefinition).outputs,
   }
   run.steps.set(stepId, state)
   return state
@@ -225,7 +225,7 @@ function computeTransitiveDependents(stepId: string): string[] {
   const queue: string[] = [stepId]
   while (queue.length > 0) {
     const cur = queue.shift() as string
-    const curDef = STEP_BY_ID.get(cur)
+    const curDef = lookupStep(cur)
     if (!curDef) continue
     for (const s of STEPS) {
       if (visited.has(s.id)) continue
@@ -365,13 +365,36 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
       invalidated: r.invalidated,
     }
   }
-  return {
+  const snapshot: RunSnapshot = {
     runId: run.runId,
     inputs: cloneValue(run.inputs) as Record<string, unknown>,
     steps,
     registry,
     events: run.events.map(e => cloneValue(e) as AuditEvent),
   }
+  // P2-2: the snapshot is the public read-out of a run, so a caller must not be
+  // able to edit it. Unfrozen, `snapshot.events.push({kind:'human-approval'})`
+  // succeeded — core's own state stayed correct, but every downstream consumer of
+  // the snapshot (reports, UI, adjudication logs) would have read a forged
+  // timeline. Freezing the already-cloned snapshot costs nothing and removes that
+  // whole class of confusion.
+  deepFreezeSnapshot(snapshot)
+  return snapshot
+}
+
+/**
+ * Deep-freeze a freshly built snapshot (recursive; arrays included). Snapshots are
+ * ALWAYS freshly cloned, so freezing them can never alias or freeze internal state.
+ */
+function deepFreezeSnapshot(value: unknown): void {
+  if (value === null || typeof value !== 'object') return
+  const obj = value as Record<string, unknown>
+  Object.freeze(obj)
+  if (Array.isArray(value)) {
+    for (const item of value) deepFreezeSnapshot(item)
+    return
+  }
+  for (const key of Object.keys(obj)) deepFreezeSnapshot(obj[key])
 }
 
 /** Deep-cloned value of one artifact (undefined if missing/invalidated). */
@@ -397,7 +420,7 @@ function isInputSatisfied(run: RunState, slug: string): boolean {
 /** True iff the step is pending and every input is satisfied by a passed-producer artifact or a seed. */
 export function canStart(store: ResearchRunStore, runId: string, stepId: string): boolean {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) return false
   const state = run.steps.get(stepId)
   if (state && state.status !== 'pending') return false
@@ -411,7 +434,7 @@ export function canStart(store: ResearchRunStore, runId: string, stepId: string)
  *  Returns a deep-cloned StepSnapshot (never the internal ref — INV-SNAPSHOT). */
 export function startStep(store: ResearchRunStore, runId: string, stepId: string): StepSnapshot {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `startStep: unknown step '${stepId}'`)
   if (!canStart(store, runId, stepId)) {
     throw new ResearchError('DSH_CANNOT_START', `startStep: cannot start '${stepId}' (not pending or inputs missing)`)
@@ -435,7 +458,7 @@ export function startIfCan(store: ResearchRunStore, runId: string, stepId: strin
  *  step must be in_progress. Value deep-cloned; registry entry REPLACED fresh (invalidated=false — DEP-4). */
 export function recordArtifact(store: ResearchRunStore, runId: string, stepId: string, outputSlug: string, value: unknown): void {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `recordArtifact: unknown step '${stepId}'`)
   if (step.outputs.indexOf(outputSlug) === -1) {
     throw new ResearchError('DSH_OUTPUT_NOT_DECLARED', `recordArtifact: slug '${outputSlug}' is not declared in step '${stepId}' outputs — INV-OUTPUT-CONTRACT`)
@@ -466,7 +489,7 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
  */
 export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId: string, verdict: GateVerdict): StepStatus {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `submitGateVerdict: unknown step '${stepId}'`)
   if (step.gate.length === 0) {
     throw new ResearchError('DSH_EMPTY_GATE', `submitGateVerdict: step '${stepId}' has an empty gate — use completeStep() (INV-COMPLETESTEP-EMPTY)`)
@@ -564,7 +587,7 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
  */
 export function completeStep(store: ResearchRunStore, runId: string, stepId: string): StepStatus {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `completeStep: unknown step '${stepId}'`)
   if (step.gate.length !== 0) {
     throw new ResearchError('DSH_NON_EMPTY_GATE', `completeStep: step '${stepId}' has a non-empty gate — use submitGateVerdict (INV-COMPLETESTEP-EMPTY; completeStep is the empty-gate finalize only)`)
@@ -589,7 +612,7 @@ export function completeStep(store: ResearchRunStore, runId: string, stepId: str
  */
 export function rollback(store: ResearchRunStore, runId: string, stepId: string): void {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `rollback: unknown step '${stepId}'`)
   const state = run.steps.get(stepId)
   if (!state || state.status === 'pending') return
@@ -614,7 +637,7 @@ export function isComplete(store: ResearchRunStore, runId: string, stepId: strin
   const run = ensureRun(store, runId)
   const state = run.steps.get(stepId)
   if (!state || state.status !== 'passed') return false
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (step?.humanGate) {
     return state.approval?.decision === 'approved' && state.approval.attempt_id === state.attempt_id
   }
@@ -653,7 +676,9 @@ function snapshotStep(state: StepState): StepSnapshot {
     history: state.history.map(h => cloneValue(h) as AttemptRecord),
     ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
     ...(state.finishedAt !== undefined ? { finishedAt: state.finishedAt } : {}),
-    outputs: state.outputs,
+    // P2-3: CLONE, never hand out the internal (frozen) definition's array — the
+    // snapshot stays correct even if the freeze on `STEPS` were ever relaxed.
+    outputs: [...state.outputs],
   }
 }
 
@@ -679,7 +704,7 @@ export function _applyHumanApproval(
   approvalEventId: string,
 ): StepStatus {
   const run = ensureRun(store, runId)
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `_applyHumanApproval: unknown step '${stepId}'`)
   if (!step.humanGate) throw new ResearchError('DSH_NOT_HUMAN_GATE', `_applyHumanApproval: step '${stepId}' is not a humanGate step`)
   const state = run.steps.get(stepId)

@@ -167,10 +167,29 @@ export const STEPS: readonly StepDefinition[] = [
   },
 ]
 
-/** Lookup by id. */
-export const STEP_BY_ID: ReadonlyMap<string, StepDefinition> = new Map(
-  STEPS.map(step => [step.id, step]),
-)
+/**
+ * Lookup by id — a FUNCTION over the deep-frozen `STEPS` array, deliberately NOT
+ * a mutable `Map`.
+ *
+ * Why (independent core-API audit P1-1, fixed here): every state-machine guard
+ * (canStart / startStep / runStep / submitGateVerdict / completeStep /
+ * _applyHumanApproval / isComplete) reads a step definition LIVE before deciding.
+ * A exported `Map` is a mutable indirection: `Object.freeze` does NOT protect a
+ * Map's internal state, so any code that reached that symbol could
+ * `STEP_BY_ID.set('E2-submit', { ...def, humanGate: false })` and every guard
+ * would then trust the replacement — silently clearing the E2 human gate, the one
+ * red line of this system (it was reproduced end-to-end via a file-path import of
+ * a build chunk, which the package `exports` map cannot block).
+ *
+ * Scanning the frozen `STEPS` array removes the indirection entirely: there is no
+ * mapping to swap and the values are frozen, so the definition set is immutable
+ * by construction. The public accessor `getStepDefinitionById()` reads the SAME
+ * array, so the two accessors can never disagree (they did before: the Map could
+ * be poisoned while `STEPS` stayed clean).
+ */
+export function lookupStep(stepId: string): StepDefinition | undefined {
+  return STEPS.find(step => step.id === stepId)
+}
 
 /** All steps in a phase, in order. */
 export function stepsByPhase(phase: Phase): readonly StepDefinition[] {
@@ -230,12 +249,12 @@ assertDagAndSeedSeparation()
 /**
  * Recursively Object.freeze an object/array and all nested values (RC-A runtime
  * defense-in-depth: TS `readonly`/`ReadonlyMap` are compile-time-only — without
- * `Object.freeze`, `STEP_BY_ID.get('E2-submit').humanGate = false` silently bypasses
+ * `Object.freeze`, a live step object's `humanGate` assignment silently bypasses
  * every guard that reads `step.humanGate` live; frozen, it throws TypeError in strict
  * mode (ESM). Applied AFTER assertDagAndSeedSeparation so the graph is validated before
- * it is frozen. STEP_BY_ID holds the SAME frozen step object refs (built from STEPS at
- * line 171), so its values are immutable too; the Map itself is not separately frozen
- * (Map internal state is unaffected by Object.freeze), and STEP_BY_ID/STEPS are NOT
+ * it is frozen. `lookupStep()` reads THIS frozen array — the mutable STEP_BY_ID Map was
+ * removed (audit P1-1) because `Object.freeze` cannot protect a Map's internal state,
+ * so a swapped entry would have silently redefined E2-submit's human gate. STEPS is NOT
  * re-exported from the public index.ts regardless (RC-A primary fix — removal closes
  * the import path; deepFreeze is the runtime backstop).
  */

@@ -1,4 +1,4 @@
-import { STEP_BY_ID, STEPS } from '../src/engine/steps.ts'
+import { lookupStep, STEPS } from '../src/engine/steps.ts'
 import { completeStep, createRun, recordArtifact, setRunInput, startStep, submitGateVerdict } from '../src/engine/state-machine.ts'
 import type { GateOutcome, GateVerdict, ResearchRunStore, RunState, TrinityComponent } from '../src/engine/types.ts'
 
@@ -32,7 +32,7 @@ export function abstainVerdict(component: TrinityComponent): GateVerdict {
  *  empty gate → completeStep (humanGate→gated, non-humanGate→passed);
  *  non-empty gate → submit each declared component passed (auto-adjudicates to passed for non-humanGate). */
 export function passStep(store: ResearchRunStore, runId: string, stepId: string): void {
-  const step = STEP_BY_ID.get(stepId)
+  const step = lookupStep(stepId)
   if (!step) throw new Error(`passStep: unknown step ${stepId}`)
   startStep(store, runId, stepId)
   for (const out of step.outputs) recordArtifact(store, runId, stepId, out, `val:${out}`)

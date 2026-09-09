@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SEEDABLE_INPUTS, STEP_BY_ID, STEPS } from '../src/engine/steps.ts'
+import { lookupStep, SEEDABLE_INPUTS, STEPS } from '../src/engine/steps.ts'
 import {
   ResearchError,
   ResearchRunError,
@@ -245,12 +245,20 @@ describe('INV-SNAPSHOT — returns are deep clones (mutating a return does not c
     const hist2 = getAuditHistory(store, id, 'A1-landscape')
     expect('injected' in (hist2[0] as { artifacts: Record<string, unknown> }).artifacts).toBe(false)
   })
-  it('mutating a getRunSnapshot return does not change internal', () => {
+  it('mutating a getRunSnapshot return does not change internal — and is now impossible', () => {
     const store = freshStore()
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     const snap = getRunSnapshot(store, id)
-    ;(snap.inputs as Record<string, unknown>)['domain-direction'] = 'forged'
+    // P2-2 (independent core-API audit): the snapshot is deep-frozen, so a caller
+    // cannot even *attempt* to rewrite what it read. Stricter than the original
+    // "mutation is isolated" contract — forged snapshot data can no longer reach
+    // any downstream consumer (reports / UI / adjudication logs).
+    expect(Object.isFrozen(snap)).toBe(true)
+    expect(Object.isFrozen(snap.inputs)).toBe(true)
+    expect(() => {
+      ;(snap.inputs as Record<string, unknown>)['domain-direction'] = 'forged'
+    }).toThrow(TypeError)
     expect((getRunSnapshot(store, id).inputs as Record<string, unknown>)['domain-direction']).toBe('ML')
   })
 })
@@ -410,10 +418,16 @@ describe('INV-AUDIT-APPEND / INV-EVENTS-IMMUTABLE (C-1, HOLE-3, H7)', () => {
     passStep(store, id, 'A1-landscape')
     const snap = getRunSnapshot(store, id)
     const firstKind = snap.events[0]?.kind
-    // Mutate the returned (cloned) events entry; the internal audit log must be unchanged.
-    const mutEvents = snap.events as unknown as { kind: string }[]
-    const e0 = mutEvents[0]
-    if (e0) e0.kind = 'forged'
+    // P2-2 (audit): snapshot events are frozen — forging one now THROWS instead of
+    // silently diverging from core's own log (a forged 'human-approval' entry used
+    // to be injectable into the copy handed to every downstream consumer).
+    const e0 = snap.events[0]
+    expect(e0).toBeDefined()
+    expect(Object.isFrozen(snap.events)).toBe(true)
+    expect(Object.isFrozen(e0)).toBe(true)
+    expect(() => {
+      ;(e0 as unknown as { kind: string }).kind = 'forged'
+    }).toThrow(TypeError)
     expect(getRunSnapshot(store, id).events[0]?.kind).toBe(firstKind)
   })
 })
@@ -439,20 +453,20 @@ describe('DAG assertion (DEP-9)', () => {
   })
   it('the step graph loaded without throwing (acyclic — computeTransitiveDependents terminates)', () => {
     // Importing steps.ts runs assertDagAndSeedSeparation at module load; reaching here means it passed.
-    expect(STEP_BY_ID.size).toBe(16)
+    expect(STEPS.length).toBe(16)
   })
 })
 
 describe('RC-A / RC-D — adversarial-verify fixes (deep-frozen step defs; rollback→reseed blocked)', () => {
   it('RC-A: step definitions are deep-frozen — mutating step.humanGate throws TypeError', () => {
-    const step = STEP_BY_ID.get('E2-submit')
+    const step = lookupStep('E2-submit')
     expect(step).toBeDefined()
     // Frozen in strict mode (ESM): assignment to a read-only property throws TypeError,
-    // so `STEP_BY_ID.get('E2-submit').humanGate = false` cannot silently bypass completeStep/_apply.
+    // so `lookupStep('E2-submit').humanGate = false` cannot silently bypass completeStep/_apply.
     expect(() => { (step as { humanGate: boolean }).humanGate = false }).toThrow(TypeError)
   })
   it('RC-A: mutating step.gate / step.inputs throws (cannot empty a gate or inputs array)', () => {
-    const step = STEP_BY_ID.get('A2-claim')
+    const step = lookupStep('A2-claim')
     expect(step).toBeDefined()
     expect(() => { (step as unknown as { gate: string[] }).gate = [] }).toThrow(TypeError)
     expect(() => { (step as unknown as { gate: string[] }).gate.push('X') }).toThrow(TypeError)
@@ -460,7 +474,10 @@ describe('RC-A / RC-D — adversarial-verify fixes (deep-frozen step defs; rollb
   })
   it('RC-A: the main entry does NOT re-export the mutable step singletons (no import path to mutate them)', () => {
     expect(anyCore.STEPS).toBeUndefined()
+    // P1-1 (audit): there is no longer a mutable STEP_BY_ID Map to reach at all —
+    // the definition set is only reachable through the frozen STEPS / lookupStep().
     expect(anyCore.STEP_BY_ID).toBeUndefined()
+    expect(anyCore.lookupStep).toBeUndefined()
     expect(anyCore.stepsByPhase).toBeUndefined()
     expect(anyCore.TRINITY_LABEL).toBeUndefined()
     expect(anyCore.SEEDABLE_INPUTS).toBeUndefined()

@@ -13,7 +13,7 @@
  */
 
 import type { StepDefinition, StepExecutor } from '../helpers/imports.ts'
-import { renderFigure, STEP_BY_ID } from '../helpers/imports.ts'
+import { renderFigure, STEPS } from '../helpers/imports.ts'
 
 /** Fixed timestamp injected into the real figure tool + fixture verdicts so two E2E
  *  runs are byte-for-byte deterministic (renderFigure(preview-spec, FIXED_TS) is stable). */
@@ -72,7 +72,7 @@ function figureMapExecutor(): StepExecutor {
 
 /** Map of every step id → its default (happy-path) executor. */
 export const FIXTURE_EXECUTORS: ReadonlyMap<string, StepExecutor> = new Map(
-  [...STEP_BY_ID.values()].map(step => [step.id, step.id === 'D1-figure-map' ? figureMapExecutor() : fixtureExecutor(step)]),
+  STEPS.map(step => [step.id, step.id === 'D1-figure-map' ? figureMapExecutor() : fixtureExecutor(step)]),
 )
 
 /** Executor that throws synchronously — simulates a tool crash (no artifact must be written). */

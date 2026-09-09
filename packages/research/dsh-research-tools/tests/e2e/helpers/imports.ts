@@ -50,8 +50,8 @@ export {
 }
 
 // ── Core step graph + host trust channel (read-only) ──
-import { STEP_BY_ID, STEPS } from '../../../../../research/dsh-research-core/src/engine/steps.ts'
-export { STEP_BY_ID, STEPS }
+import { lookupStep, STEPS } from '../../../../../research/dsh-research-core/src/engine/steps.ts'
+export { lookupStep, STEPS }
 import {
   _resetApprovalChannelForTests,
   createHostApprovalChannel,
