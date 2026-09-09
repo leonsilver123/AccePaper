@@ -1,0 +1,56 @@
+{
+  "name": "@deepseek-ai/dsh-research-app",
+  "description": "The dsh Research bundle (T30): the research-surface layer over dsh-web-app (over dsh-base) mounting the five dsh-research-* packages and binding the research web server on port 1120",
+  "version": "0.1.2-alpha.4",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/bundle/research-app"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-research-cordis": "workspace:^",
+    "@deepseek-ai/dsh-research-core": "workspace:^",
+    "@deepseek-ai/dsh-research-team": "workspace:^",
+    "@deepseek-ai/dsh-research-tools": "workspace:^",
+    "@deepseek-ai/dsh-research-web": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/cordis-plugin-include": "workspace:^",
+    "@deepseek-ai/dsh-research-cordis": "workspace:^",
+    "@deepseek-ai/dsh-research-core": "workspace:^",
+    "@deepseek-ai/dsh-research-team": "workspace:^",
+    "@deepseek-ai/dsh-research-tools": "workspace:^",
+    "@deepseek-ai/dsh-research-web": "workspace:^",
+    "js-yaml": "^4.2.0"
+  }
+}
