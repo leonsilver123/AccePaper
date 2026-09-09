@@ -24,7 +24,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-research-core": "workspace:^"
+    "@deepseek-ai/dsh-research-core": "workspace:^",
+    "@deepseek-ai/dsh-research-tools": "workspace:^",
+    "@deepseek-ai/dsh-tools": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
@@ -34,6 +36,8 @@
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",
     "@deepseek-ai/dsh-research-core": "workspace:^",
+    "@deepseek-ai/dsh-research-tools": "workspace:^",
+    "@deepseek-ai/dsh-tools": "workspace:^",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

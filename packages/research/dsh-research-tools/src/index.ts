@@ -69,3 +69,10 @@ export * from './tools/roadmap/index.ts'
 // (metadata + consumed-by steps + model-exposure verdicts). Cordis-free; see
 // registry.ts for the full scope decision.
 export * from './registry.ts'
+
+// ── Unified research-tool execution adapter (T13-R) ─────────────────────────
+// executeResearchTool — the ONE dispatch map every consumer (cordis ctx.tools
+// handlers + step executors) routes through, so registry and pipeline can never
+// diverge. Business input serializable; adapters injected via deps (fixture
+// defaults where safe).
+export * from './execution.ts'
