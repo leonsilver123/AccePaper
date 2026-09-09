@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   PIPELINE_STEPS,
+  invocationChannelSummary,
   SEMANTIC_TASKS,
   STEP_CAPABILITIES,
   assertSemanticTasksHonest,
@@ -49,5 +50,18 @@ describe('T19 semantic calibration (semanticTask ≠ tool)', () => {
     expect(breakdown.map(row => row.stepId).sort()).toEqual(PIPELINE_STEPS.map(s => s.id).sort())
     expect(breakdown.find(row => row.stepId === 'E2-submit')?.channel).toBe('human')
     expect(breakdown.find(row => row.stepId === 'D1-figure-map')?.channel).toContain('model-ready')
+  })
+})
+
+describe('R3 invocation channel summary (real counts)', () => {
+  it('reports the true channel mix: 4 direct + 1 agent-loop-capable D1 + 10 fixture + 1 human', () => {
+    const summary = invocationChannelSummary()
+    const byName = Object.fromEntries(summary.map(stat => [stat.channel, stat]))
+    expect(byName.direct.count).toBe(4) // A1 A2 C3 E1; D1 counted agent-loop
+    expect(byName.fixture.count).toBe(10)
+    expect(byName.human.count).toBe(1)
+    expect(byName['agent-loop'].count).toBe(1)
+    expect(byName['agent-loop'].stepIds).toEqual(['D1-figure-map'])
+    expect([...byName.direct.stepIds, ...byName.fixture.stepIds, ...byName.human.stepIds, ...byName['agent-loop'].stepIds].length).toBe(16)
   })
 })

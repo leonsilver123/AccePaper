@@ -1461,3 +1461,25 @@ export function stepChannelBreakdown(): ReadonlyArray<{ stepId: string; channel:
     channel: step.id === 'E2-submit' ? 'human' : modelReadySteps.has(step.id) ? 'direct(model-ready-capable)' : 'direct|fixture',
   }))
 }
+
+// ── R3: invocation-channel summary (real counts, asserted by spec) ──────────
+export type StepChannel = 'direct' | 'fixture' | 'human' | 'agent-loop'
+export interface ChannelStat {
+  readonly channel: StepChannel
+  readonly count: number
+  readonly stepIds: ReadonlyArray<string>
+}
+export function invocationChannelSummary(): ReadonlyArray<ChannelStat> {
+  const byChannel: Record<StepChannel, string[]> = { direct: [], fixture: [], human: [], 'agent-loop': [] }
+  for (const step of PIPELINE_STEPS) {
+    const caps = STEP_CAPABILITIES[step.id] ?? []
+    const hasCapability = caps.some(cap => cap.wired === true)
+    if (step.id === 'E2-submit') byChannel.human.push(step.id)
+    else if (step.id === 'D1-figure-map') byChannel['agent-loop'].push(step.id)
+    else if (hasCapability) byChannel.direct.push(step.id)
+    else byChannel.fixture.push(step.id)
+  }
+  return (Object.keys(byChannel) as StepChannel[])
+    .map(channel => ({ channel, count: byChannel[channel].length, stepIds: byChannel[channel] }))
+    .filter(stat => stat.count > 0)
+}
