@@ -29,6 +29,8 @@ import type { AuditEvent, ResearchRunStore } from '@deepseek-ai/dsh-research-cor
 
 import { runT19B } from '../../src/runner/drive.ts'
 import {
+  CANONICAL,
+  SCENARIO,
   STEP_EXECUTOR_REGISTRY,
   TRUTHFULNESS_LEVELS,
   VERDICT_CHANNELS,
@@ -37,7 +39,10 @@ import { countKinds, writeComparisonReport, writeRunReport } from '../../src/run
 import type { RunResult, StepOutcome } from '../../src/runner/types.ts'
 
 const CORE_ORDER: ReadonlyArray<string> = getStepDefinitions().map(d => d.id)
-const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'B3-baseline', 'D1-figure-map', 'E1-format']
+// T19-S canonical alignment: ablation (C3) is the real-tool boundary probe;
+// B3-baseline is baseline+SOTA (honest fixture); E1-format assembles the
+// formatted manuscript (three-line-table is its real table sub-capability).
+const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format']
 
 interface Driven {
   readonly store: ResearchRunStore
@@ -144,6 +149,109 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     expect(counts.humanGate).toBe(1)
     const total = TRUTHFULNESS_LEVELS.reduce((n, l) => n + counts[l], 0) + counts.humanGate
     expect(total).toBe(16)
+  })
+})
+
+describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not just state)', () => {
+  function artifactOf(store: ResearchRunStore, runId: string, slug: string): Record<string, unknown> {
+    const value = getArtifact(store, runId, slug)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`happy-path: artifact '${slug}' is missing or primitive`)
+    }
+    return value as Record<string, unknown>
+  }
+
+  it('A2 persists the canonical falsifiable prediction verbatim', async () => {
+    const { store, run } = await happyRun()
+    const p = artifactOf(store, run.runId, 'falsifiable-prediction')
+    expect(p.text).toBe(CANONICAL.prediction)
+    expect(p.ref).toBe(CANONICAL.claimId)
+  })
+
+  it('B3 baseline-results is a baseline protocol against fixed-time (NO ablation fields)', async () => {
+    const { store, run } = await happyRun()
+    const res = artifactOf(store, run.runId, 'baseline-results')
+    expect((res.baseline as { identity?: unknown }).identity).toBe(SCENARIO.baselineIdentity)
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe(SCENARIO.metric)
+    expect((res.preRegistered as { baselineDelaySeconds?: unknown }).baselineDelaySeconds)
+      .toBe(SCENARIO.baselineDelaySeconds)
+    // Regression: ablation measurement belongs to C3, never to B3.
+    expect(res.aggregate).toBeUndefined()
+    expect(res.ranRuns).toBeUndefined()
+    const sota = artifactOf(store, run.runId, 'sota-comparison')
+    expect(sota.anchoring).toBe('none')
+  })
+
+  it('C1 mvp-results supports the prediction with the fixture-consistent 9.1% reduction', async () => {
+    const { store, run } = await happyRun()
+    const mvp = artifactOf(store, run.runId, 'mvp-results')
+    expect(mvp.claimId).toBe(CANONICAL.claimId)
+    expect((mvp.outcome as { supportsPrediction?: unknown }).supportsPrediction).toBe(true)
+    expect(String((mvp.outcome as { detail?: unknown }).detail)).toContain('9.1%')
+    expect((mvp.observed as { reductionRate?: unknown }).reductionRate).toBe(SCENARIO.reductionRate)
+  })
+
+  it('C3 ablation-results + boundary-map prove boundary probing runs at C3', async () => {
+    const { store, run } = await happyRun()
+    const ab = artifactOf(store, run.runId, 'ablation-results')
+    expect(ab.ranRuns as number).toBeGreaterThan(0)
+    expect(ab.aggregate).toBeDefined()
+    const bm = artifactOf(store, run.runId, 'boundary-map')
+    expect((bm.probed as { baseline?: unknown }).baseline).toBe(SCENARIO.baselineIdentity)
+    expect((bm.probed as { variant?: unknown }).variant).toBe(SCENARIO.variantIdentity)
+  })
+
+  it('D1 figure-plan wires all three canonical figure families with real render evidence', async () => {
+    const { store, run } = await happyRun()
+    const plan = artifactOf(store, run.runId, 'figure-plan')
+    const figures = plan.figures as ReadonlyArray<Record<string, unknown>>
+    expect(figures.map(f => f.kind)).toEqual(['data-figure', 'three-line-table', 'roadmap'])
+    expect((figures[0] as { svgByteLength?: unknown }).svgByteLength as number).toBeGreaterThan(0)
+    expect(String((figures[1] as { tableMarkdown?: unknown }).tableMarkdown)).toContain('Adaptive')
+    expect((figures[2] as { validationOk?: unknown }).validationOk).toBe(true)
+  })
+
+  it('D2→D3→D4→E1 carries the SAME manuscript skeleton through outline/draft/revision/format', async () => {
+    const { store, run } = await happyRun()
+    const outline = artifactOf(store, run.runId, 'paper-outline')
+    const draft = artifactOf(store, run.runId, 'draft')
+    const revised = artifactOf(store, run.runId, 'revised-draft')
+    const formatted = artifactOf(store, run.runId, 'formatted-manuscript')
+
+    const outlineIds = (outline.sections as ReadonlyArray<{ id: string }>).map(s => s.id)
+    expect(outlineIds).toContain('results')
+    const draftIds = (draft.sections as ReadonlyArray<{ id: string }>).map(s => s.id)
+    const revisedIds = (revised.sections as ReadonlyArray<{ id: string }>).map(s => s.id)
+    expect(draftIds).toEqual(outlineIds)
+    expect(revisedIds).toEqual(outlineIds)
+
+    const manuscript = String(formatted.manuscript)
+    // The E1 formatted manuscript contains the section headings from the outline…
+    for (const id of ['introduction', 'method', 'experiments', 'results']) {
+      const heading = (outline.sections as ReadonlyArray<{ id: string; heading: string }>)
+        .find(s => s.id === id)?.heading
+      expect(heading, id).toBeDefined()
+      expect(manuscript).toContain(heading as string)
+    }
+    // …the selected venue from A4…
+    expect(manuscript).toContain(SCENARIO.venueName)
+    // …and the results-table rows rendered by the three-line-table sub-capability.
+    expect(manuscript).toContain('Adaptive')
+    expect(manuscript).toContain('Fixed-time')
+    // E1 is the FORMAT STEP, not the table tool: the manuscript is strictly
+    // longer than the bare table render and declares a reproducible package.
+    const tableMarkdown = String(formatted.tableMarkdown)
+    expect(manuscript.length).toBeGreaterThan(tableMarkdown.length)
+    expect((formatted.reproduciblePackage as { files?: unknown[] }).files?.length ?? 0)
+      .toBeGreaterThanOrEqual(3)
+    expect(Array.isArray(formatted.sectionHeadings)).toBe(true)
+  })
+
+  it('E2-submit stays gated — the formatted manuscript is the last artifact', async () => {
+    const { store, run } = await happyRun()
+    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeDefined()
+    expect(getArtifact(store, run.runId, 'submission-record')).toBeUndefined()
+    expect(outcomeOf(run, 'E2-submit').status).toBe('gated')
   })
 })
 
