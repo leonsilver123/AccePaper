@@ -43,6 +43,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { researchToolsPlugin } from './tools.ts'
 import {
   adjudicate,
   canStart,
@@ -112,9 +113,21 @@ export class ResearchEngine extends Service {
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
   async [Service.init](): Promise<void> {
-    this.ctx.effect(() => async () => {
+    this.ctx.effect(() => () => {
       runs.clear()
     }, 'research.runs')
+    // T13-R: when the host provides the `tools` service (full bundle / web
+    // profile), register the seven research tools on ctx.tools at plugin start
+    // (defineTool + ctx.tools.register, fixture deps injected, exposure guards
+    // wired). The registration rides a nested plugin that DECLARES the `tools`
+    // inject (cordis refuses ctx.tools reads without an inject declaration).
+    // DEFENSIVE: standalone contexts without a tools service reject that nested
+    // plugin, which is caught here so the engine still loads as ctx.research.
+    try {
+      await this.ctx.plugin(researchToolsPlugin)
+    } catch {
+      // No `tools` service: registration skipped, engine stays fully functional.
+    }
   }
 
   createRun(runId?: string): string {
