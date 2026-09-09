@@ -1,0 +1,49 @@
+# The dsh-research-app bundle patch (T30): the research-surface layer over
+# dsh-web-app, which itself layers over dsh-base in the `web` profile stack.
+# This layer is applied AFTER the web-app bundle, so its `webserver` row
+# overrides the base/web-app transport to bind the dedicated research port
+# (1120), and its `insert` rows mount the five dsh-research-* packages.
+#
+# Apply order within the `web` profile:
+#   1. dsh-base            (core rows)
+#   2. dsh-web-app         (browser surface, webserver on 3080 by default)
+#   3. dsh-research-app    (THIS layer — research port 1120 + research packages)
+#
+# A patch replaces the targeted row's whole `config`, so the `webserver` row
+# below restates every key it owns (host/port/compression*) and only changes
+# the fallback port from 3080 to 1120. `inject: [webStartup]` and `name` are
+# owned by the web-app row and are NOT restated here.
+
+# ── research transport: bind the dedicated research port ─────────────────────
+- id: webserver
+  config:
+    # Flag still wins: `--port` through the web app's webStartup provider beats
+    # this fallback, so an operator can move the research server off 1120.
+    host: !!js ctx.webStartup.host ?? '127.0.0.1'
+    port: !!js ctx.webStartup.port ?? 1120
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+
+# ── research plugin roster (the five dsh-research-* packages) ────────────────
+# The plugin packages are mounted as ordinary Cordis rows. The two pure
+# libraries in the set (@deepseek-ai/dsh-research-core and
+# @deepseek-ai/dsh-research-tools) are NOT standalone plugin rows — they expose
+# no `apply`/`name` and would crash `ctx.registry.plugin`; they are bundled as
+# dependencies of this package and resolved transitively by the plugin rows
+# below (the same convention dsh-base uses for its pure libraries).
+- insert:
+    # Thin Cordis adapter exposing `ctx.research` — the 16-step research engine
+    # service wrapping the hardened dsh-research-core state machine.
+    - id: research-cordis
+      name: '@deepseek-ai/dsh-research-cordis'
+
+    # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
+    # anchor, experiment adjudication), depending on core + tools.
+    - id: research-team
+      name: '@deepseek-ai/dsh-research-team'
+
+    # Browser-side research workbench host half: inert host registration; the
+    # view mounts into the conversation.view slot via the client (browser) half.
+    - id: research-web
+      name: '@deepseek-ai/dsh-research-web'

@@ -1,0 +1,30 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../research/dsh-research-cordis"
+    },
+    {
+      "path": "../../research/dsh-research-core"
+    },
+    {
+      "path": "../../research/dsh-research-team"
+    },
+    {
+      "path": "../../research/dsh-research-tools"
+    },
+    {
+      "path": "../../research/dsh-research-web"
+    }
+  ]
+}
