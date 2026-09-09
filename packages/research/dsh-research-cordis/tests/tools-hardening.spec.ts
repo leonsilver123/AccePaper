@@ -17,6 +17,8 @@ import { ResearchEngine } from '../src/index.ts'
 import {
   assertResearchToolsReady,
   modelReadyResearchToolIds,
+  registerResearchTools,
+  researchToolsPlugin,
   validateHostToolsModule,
 } from '../src/tools.ts'
 import type { ToolRegistryFace } from '../src/tools.ts'
@@ -127,5 +129,61 @@ describe('T13-R Phase 1.1 hardening', () => {
       // reference can no longer reach a live registry.
       expect((ctx as Context & { tools?: unknown }).tools).toBeUndefined()
     })
+  })
+})
+
+describe('registration transactionality and lifecycle (Phase 1.1-R)', () => {
+  function plainDef(name: string) {
+    return {
+      name,
+      description: 'blocker',
+      parameters: {},
+      output: { schema: { type: 'object' }, render: () => [] },
+      execute: async () => ({}),
+    }
+  }
+
+  it('rolls back ALL side effects when the last registration collides (no partial state)', async () => {
+    const ctx = await setupWithTools()
+    // Occupy the LAST catalog slot ('roadmap') so the 7-tool loop fails at
+    // index 7 after six registrations succeeded.
+    const blocker = toolsOf(ctx).register(plainDef('roadmap'))
+    await expect(registerResearchTools(ctx)).rejects.toThrow(/already registered/)
+    // Transactional rollback: none of the earlier six may remain observable.
+    // The intentionally pre-registered 'roadmap' blocker is the ONLY survivor.
+    for (const entry of RESEARCH_TOOL_DIRECTORY) {
+      if (entry.toolId === 'roadmap') {
+        expect(toolsOf(ctx).get('roadmap')?.name).toBe('roadmap')
+      } else {
+        expect(toolsOf(ctx).get(entry.toolId)).toBeUndefined()
+      }
+    }
+    // Retry is deterministic once the blocker is gone.
+    blocker()
+    await expect(registerResearchTools(ctx)).resolves.toBeDefined()
+    expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+    await ctx.fiber.dispose()
+  })
+
+  it('unload revokes stale ToolDefinition handles (RESEARCH_TOOL_UNLOADED)', async () => {
+    const ctx = await setupWithTools()
+    const dispose = await registerResearchTools(ctx)
+    const stale = toolsOf(ctx).get('figure')
+    expect(stale).toBeDefined()
+    dispose()
+    // Registry removal AND capability revocation: the stale handle cannot run.
+    expect(toolsOf(ctx).get('figure')).toBeUndefined()
+    await expect(stale!.execute({ spec: {} }, {})).rejects.toThrow(/RESEARCH_TOOL_UNLOADED/)
+    // Double unload is a no-op (deterministic).
+    dispose()
+  })
+
+  it('readiness requires the exact seven-tool set, not just an onReady signal', async () => {
+    const ctx = await setupWithTools()
+    const applied = { value: false }
+    await ctx.plugin(researchToolsPlugin, { verify: true, onReady: () => { applied.value = true } })
+    expect(applied.value).toBe(true)
+    expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+    await ctx.fiber.dispose()
   })
 })
