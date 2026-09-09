@@ -376,6 +376,27 @@ function definitionFor(toolId: string, defineTool: DefineToolLoader): Registered
  * @param def - the registered definition.
  * @param isAlive - per-registration liveness probe.
  */
+/**
+ * Module-private internal-execution capability (defense for handle-level
+ * `.execute` of pipeline_only definitions, S1-P2-4). Membership is OBJECT
+ * IDENTITY in a module-private WeakSet — a forged/copied/serialized object can
+ * never pass. The capability is only reachable through
+ * {@link researchToolInternalExecutionCapability}, which is NOT part of the
+ * package's public exports (module-internal seam for trusted pipeline code).
+ */
+const INTERNAL_CAPABILITIES = new WeakSet<object>()
+const INTERNAL_CAPABILITY: object = {}
+INTERNAL_CAPABILITIES.add(INTERNAL_CAPABILITY)
+
+/** @internal trusted seam — returns the module-private capability object. */
+export function researchToolInternalExecutionCapability(): unknown {
+  return INTERNAL_CAPABILITY
+}
+
+function isInternalExecution(exec: unknown): boolean {
+  return typeof exec === 'object' && exec !== null && INTERNAL_CAPABILITIES.has(exec)
+}
+
 function revocable(def: RegisteredTool, isAlive: () => boolean, meta: RegistrationMarker): RegisteredTool {
   const execute = def.execute.bind(def)
   const guarded: RegisteredTool = {
@@ -385,6 +406,17 @@ function revocable(def: RegisteredTool, isAlive: () => boolean, meta: Registrati
         return Promise.reject(new Error(
           `[research-tools] '${def.name}' has been unregistered (RESEARCH_TOOL_UNLOADED) — `
           + 'stale handles cannot execute after unload',
+        ))
+      }
+      // Handle-level exposure gate (S1-P2-4): pipeline_only definitions are not
+      // executable through a bare handle. Trusted internal callers pass the
+      // module-private capability; everything else is denied — a guard for
+      // agent-loop dispatch can never be the ONLY wall.
+      if (meta.modelExposure !== 'model_ready' && !isInternalExecution(exec)) {
+        return Promise.reject(new Error(
+          `[${def.name}] is pipeline-only and not executable through a bare handle `
+          + '(RESEARCH_TOOL_NOT_CAPABILITY) — use a ResearchToolInvoker or pass the '
+          + 'internal execution capability',
         ))
       }
       return execute(args, exec)

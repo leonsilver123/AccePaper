@@ -18,6 +18,7 @@ import {
   assertResearchToolsReady,
   modelReadyResearchToolIds,
   registerResearchTools,
+  researchToolInternalExecutionCapability,
   researchToolsPlugin,
   validateHostToolsModule,
 } from '../src/tools.ts'
@@ -278,6 +279,41 @@ describe('registration lifecycle reinforcement (Phase 1.1-R track A)', () => {
     await ctx2.plugin(ResearchEngine)
     expect(ctx2.research).toBeInstanceOf(ResearchEngine)
     await ctx2.fiber.dispose()
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('handle-level pipeline_only execution requires the internal capability (S1-P2-4)', () => {
+  it('bare / forged exec objects cannot execute a pipeline_only definition', async () => {
+    const ctx = await setupWithTools()
+    const dispose = await registerResearchTools(ctx)
+    const claim = toolsOf(ctx).get('claim-construct')
+    expect(claim).toBeDefined()
+    // No exec at all / empty object / forged copy / serialized round-trip → DENY.
+    for (const exec of [undefined, {}, { capability: {} }, { token: 'x', exec: {} }]) {
+      await expect(claim!.execute({ assertion: 'x' }, exec)).rejects.toThrow(/RESEARCH_TOOL_NOT_CAPABILITY/)
+    }
+    // A model_ready tool is unaffected by the handle gate.
+    const table = toolsOf(ctx).get('three-line-table')
+    const ok = await table!.execute(
+      { model: { columns: [{ header: 'A' }], rows: [[{ kind: 'text', text: 'x' }]] }, target: 'markdown' },
+      {},
+    )
+    expect(ok).toBeDefined()
+    dispose()
+    await ctx.fiber.dispose()
+  })
+
+  it('the real module-private capability unlocks pipeline_only handle execution', async () => {
+    const ctx = await setupWithTools()
+    const dispose = await registerResearchTools(ctx)
+    const claim = toolsOf(ctx).get('claim-construct')
+    const artifact = await claim!.execute(
+      { assertion: 'Adaptive control reduces delay.' },
+      researchToolInternalExecutionCapability(),
+    )
+    expect(artifact).toMatchObject({ claim: { assertion: 'Adaptive control reduces delay.' } })
+    dispose()
     await ctx.fiber.dispose()
   })
 })

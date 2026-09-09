@@ -34,10 +34,16 @@ export const INPUT_LIMITS = {
   maxTopLevelKeys: 32,
 } as const
 
+/** Max structural depth scanned by the JSON-safety walk (bounds recursion so a
+ *  deeply nested open/core-owned payload cannot stack-overflow the validator;
+ *  deeper inputs are rejected as unsafe). */
+const JSON_SAFE_MAX_DEPTH = 64
+
 /** True for values that can never be part of a JSON-safe input payload. */
 export function isJsonSafe(value: unknown, seen?: Set<object>): boolean {
   const ancestors = seen ?? new Set<object>()
-  const visit = (item: unknown, path: Set<object>): boolean => {
+  const visit = (item: unknown, path: Set<object>, depth: number): boolean => {
+    if (depth > JSON_SAFE_MAX_DEPTH) return false
     if (item === null) return true
     switch (typeof item) {
       case 'string':
@@ -56,14 +62,14 @@ export function isJsonSafe(value: unknown, seen?: Set<object>): boolean {
         path.add(item)
         if (Array.isArray(item)) {
           for (const child of item) {
-            if (!visit(child, path)) {
+            if (!visit(child, path, depth + 1)) {
               path.delete(item)
               return false
             }
           }
         } else {
           for (const child of Object.values(item)) {
-            if (!visit(child, path)) {
+            if (!visit(child, path, depth + 1)) {
               path.delete(item)
               return false
             }
@@ -76,7 +82,7 @@ export function isJsonSafe(value: unknown, seen?: Set<object>): boolean {
         return false
     }
   }
-  return visit(value, ancestors)
+  return visit(value, ancestors, 0)
 }
 
 /** Reject windows/posix absolute paths, `..`, NUL, UNC, and drive letters. */
@@ -213,7 +219,7 @@ function safeSerialize(value: unknown): string | undefined {
 
 function topLevelKeyCount(value: unknown): number {
   if (typeof value !== 'object' || value === null) return 0
-  return Object.keys(value as Record<string, unknown>).length
+  return Object.keys(value).length
 }
 
 /** Validate one tool input against its strict schema. Returns violations. */

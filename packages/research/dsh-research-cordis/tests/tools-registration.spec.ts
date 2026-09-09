@@ -14,6 +14,7 @@ import {
   RESEARCH_TOOL_REGISTRATION,
   registerResearchTools,
   researchToolExposureGuard,
+  researchToolInternalExecutionCapability,
 } from '../src/tools.ts'
 import type { RegisteredTool, ToolRegistryFace } from '../src/tools.ts'
 
@@ -127,7 +128,7 @@ describe('research tool runtime registration (T13-R)', () => {
     const ctx = await setupResearch()
     const result = await getTool(ctx, 'claim-construct').execute(
       { assertion: 'Adaptive control reduces delay.' },
-      EXEC,
+      researchToolInternalExecutionCapability(),
     )
     const artifact = result as { meta?: { toolId?: string }; claim?: { assertion?: string } }
     expect(artifact.meta?.toolId).toBe('claim-construct')
