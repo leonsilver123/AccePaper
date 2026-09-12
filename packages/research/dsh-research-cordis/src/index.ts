@@ -31,11 +31,14 @@
  * T07/T08/T09 result surface — classifyL0 / verifyCitation / evaluateGate (= adjudicate) /
  * getGateIntent. These methods mirror the core signatures, return the core's deep-cloned +
  * frozen results, and touch NO run state. Gate-outcome → StepState AUTO-WIRING IS
- * DELIBERATELY NOT IMPLEMENTED HERE: the batch-1 status enum (pending / in_progress /
- * gated / passed / blocked / failed) has no home for the frozen intent 'hold_abstained'
- * (abstained must NEVER become passed), so that contract gap is left to a dedicated design
- * decision instead of an ad-hoc mapping in this file. getGateIntent is the ONLY mapping
- * surface on the service and it delegates verbatim to gateToStateMachineIntent (the frozen
+ * DELIBERATELY NOT IMPLEMENTED HERE, and that is a design boundary rather than a contract
+ * gap: core already carries the abstention (T19 added `HoldReason = 'human_gate' |
+ * 'gate_abstained'`; the state machine parks an abstained step at 'gated' with
+ * holdReason='gate_abstained' and never lets it become 'passed'; the host approval channel
+ * refuses human approval of a held step). What this thin adapter declines is inferring a
+ * step transition from a gate outcome on the caller's behalf — the driver decides when to
+ * call submitGateVerdict / completeStep. getGateIntent is the ONLY mapping surface on the
+ * service and it delegates verbatim to gateToStateMachineIntent (the frozen
  * GATE_OUTCOME_TO_INTENT table) — an outcome is never reinterpreted here.
  *
  * @module @deepseek-ai/dsh-research-cordis
@@ -95,7 +98,15 @@ declare module '@deepseek-ai/cordis' {
  *  STARTUP REQUIREMENT (research-bundle / T30 mode): if the host lacks the
  *  `tools` service, or fewer than the seven catalog tools can be registered and
  *  verified, the engine load FAILS loudly instead of silently degrading. When
- *  unset/false the engine remains a standalone ctx.research state machine. */
+ *  unset/false the engine remains a standalone ctx.research state machine.
+ *
+ *  KNOWN GAP (noted 2026-09-12): the shipped `research-app` bundle row does NOT
+ *  set this flag, so the mounted engine takes the tolerant path and a registration
+ *  failure is swallowed. Closing it means adding `config: { requireResearchTools:
+ *  true }` to that row AND re-verifying the 1120 boot; it is left as remaining
+ *  T30-R work because the flag's effect cannot be verified without a full profile
+ *  boot, and shipping an unverified startup gate would trade a silent failure for
+ *  an unproven one. */
 export interface Config {
   readonly requireResearchTools?: boolean
 }
@@ -231,8 +242,8 @@ export class ResearchEngine extends Service {
   // runId, touch NO run store, and perform NO state transition: the core does
   // the clone + freeze at its own boundary, so each return is a frozen snapshot
   // with no live reference back to caller state. Auto-wiring gate outcomes to
-  // StepState is intentionally absent (see the header note on the
-  // hold_abstained contract gap).
+  // StepState is intentionally absent — core owns that transition, including the
+  // abstention case (see the header note on the abstention boundary).
 
   /** T07 — L0 routing: delegate to the pure router. The adapter is
    *  caller-supplied (core ships mockL0Adapter as a fixture). */
