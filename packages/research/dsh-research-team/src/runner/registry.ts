@@ -162,6 +162,34 @@ export interface RunContext {
   timestamp: number
 }
 
+/** One prose-generation request handed to a {@link ResearchProseWriter}. */
+export interface ResearchProseRequest {
+  readonly stepId: string
+  /** What to produce, phrased for the model (never UI or transport vocabulary). */
+  readonly instruction: string
+  /** Upstream artifact values the produced text must stay consistent with. */
+  readonly context: Readonly<Record<string, unknown>>
+  readonly signal?: AbortSignal
+}
+
+/** A real-model prose result, carrying the route that produced it for provenance. */
+export interface ResearchProseResult {
+  readonly text: string
+  readonly provider: string
+  readonly model: string
+}
+
+/**
+ * Optional real-model prose writer injected by the runner (T34). Steps whose artifact is
+ * narrative prose (D2 outline / D3 writing / D4 rebuttal) generate their text through it
+ * when present, and fall back to the built-in fixture sentences when absent, so the offline
+ * pipeline stays deterministic. The runner depends only on this interface; the Cordis
+ * adapter supplies the implementation that reaches a real provider.
+ */
+export interface ResearchProseWriter {
+  write(request: ResearchProseRequest): Promise<ResearchProseResult>
+}
+
 /** Context handed to every registry executor (drive layer adapts core's StepExecContext). */
 export interface ExecCtx {
   readonly runId: string
@@ -180,6 +208,11 @@ export interface ExecCtx {
    * (direct_fixture). The pipeline thus depends only on the Invoker interface.
    */
   readonly invoker?: ResearchToolInvoker
+  /**
+   * Optional real-model prose writer (T34). When absent, prose steps use the fixture
+   * text. See {@link ResearchProseWriter}.
+   */
+  readonly proseWriter?: ResearchProseWriter
 }
 
 export type StepExecutorFn = (ctx: ExecCtx) => Promise<Record<string, unknown>> | Record<string, unknown>
@@ -963,7 +996,7 @@ function d2Executor(ctx: ExecCtx): Record<string, unknown> {
 
 /** D3-writing: fixture draft whose sections mirror the D2 outline ids, with
  *  deterministic body text + a landscape-derived reference list. */
-function d3Executor(ctx: ExecCtx): Record<string, unknown> {
+async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const outline = readInput(ctx, 'paper-outline')
   const figurePlan = readInput(ctx, 'figure-plan')
@@ -974,27 +1007,60 @@ function d3Executor(ctx: ExecCtx): Record<string, unknown> {
     : DEFAULT_OUTLINE.map(s => s.id)
   const figures = figurePlan?.totalFigures as number | undefined
   const hitCount = landscape?.hitCount as number | undefined
-  const sections: ManuscriptSection[] = ids.map((id, index) => {
+  const headings: ReadonlyArray<{ id: string; heading: string }> = ids.map((id, index) => {
     const heading =
       Array.isArray(rawOutline) && typeof (rawOutline[index] as { heading?: unknown } | undefined)?.heading === 'string'
         ? ((rawOutline[index] as { heading: string }).heading)
         : DEFAULT_OUTLINE.find(d => d.id === id)?.heading ?? id
-    return { id, heading, bodyText: bodyTextFor(id) }
+    return { id, heading }
   })
+
+  // Prose path (T34): when the runner injected a real-model writer, each section body
+  // comes from the model; otherwise the built-in fixture sentences are used so the offline
+  // pipeline stays deterministic. `proseSource` records which path ran. The four-level
+  // truthfulness vocabulary is deliberately left unchanged: assigning a level to a real
+  // model call is a contract decision that stays with the project owner.
+  const writer = ctx.proseWriter
+  let sections: ManuscriptSection[]
+  let proseSource: 'fixture' | 'llm'
+  let producer: string = D3_PRODUCER
+  if (writer === undefined) {
+    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id) }))
+    proseSource = 'fixture'
+  } else {
+    const written = await Promise.all(
+      headings.map(h =>
+        writer.write({
+          stepId: 'D3-writing',
+          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary.`,
+          context: { sectionId: h.id, claimRef, figureCount: figures ?? 0 },
+          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        }),
+      ),
+    )
+    sections = headings.map((h, i) => ({ ...h, bodyText: written[i]?.text ?? '' }))
+    proseSource = 'llm'
+    const first = written[0]
+    if (first !== undefined) producer = `llm:${first.provider}/${first.model}`
+  }
+
   return {
     draft: tagArtifact(
       {
-        fixture: true,
+        fixture: proseSource === 'fixture',
         stepId: 'D3-writing',
         slug: 'draft',
         title: SCENARIO.title,
         claimRef,
         sections,
+        proseSource,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
-        note: 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave',
+        note: proseSource === 'fixture'
+          ? 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave'
+          : 'manuscript draft whose section bodies came from a real model call',
       },
-      D3_PRODUCER,
+      producer,
       'fixture_executor',
     ),
   }

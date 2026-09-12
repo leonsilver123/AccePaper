@@ -13,7 +13,7 @@ import type {
   TrinityComponent,
 } from '@deepseek-ai/dsh-research-core'
 import type { ResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
-import type { RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
+import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -65,6 +65,11 @@ export interface DriveOptions {
    * the Cordis adapter — and each artifact records that channel's provenance.
    */
   readonly invoker?: ResearchToolInvoker
+  /**
+   * Real-model prose writer handed to narrative steps (D2 outline / D3 writing /
+   * D4 rebuttal). When absent those steps emit the built-in fixture text.
+   */
+  readonly proseWriter?: ResearchProseWriter
 }
 
 /** Options for driving exactly one step. */
@@ -76,6 +81,8 @@ export interface DriveStepOptions {
   readonly abstainComponents?: (stepId: string) => ReadonlyArray<TrinityComponent>
   /** Tool invoker for capability executors; see {@link DriveOptions.invoker}. */
   readonly invoker?: ResearchToolInvoker
+  /** Real-model prose writer; see {@link DriveOptions.proseWriter}. */
+  readonly proseWriter?: ResearchProseWriter
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */
