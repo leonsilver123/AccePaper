@@ -227,6 +227,13 @@
       // util/ folders are role-named without the util- prefix their npm names carry,
       // so these aliases stay hand-written like dsh-util-crypto above.
       "@deepseek-ai/dsh-util-time": ["./packages/util/time/src"],
+      // research/ folders carry the dsh- prefix in their directory names, so the generated
+      // aliases cannot map them; these five stay hand-written.
+      "@deepseek-ai/dsh-research-core": ["./packages/research/dsh-research-core/src"],
+      "@deepseek-ai/dsh-research-cordis": ["./packages/research/dsh-research-cordis/src"],
+      "@deepseek-ai/dsh-research-team": ["./packages/research/dsh-research-team/src"],
+      "@deepseek-ai/dsh-research-tools": ["./packages/research/dsh-research-tools/src"],
+      "@deepseek-ai/dsh-research-web": ["./packages/research/dsh-research-web/src"],
       // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
       "@deepseek-ai/dsh-acp": ["./packages/acp/acp/src"],
       "@deepseek-ai/dsh-acp-app": ["./packages/bundle/acp-app/src"],
@@ -312,6 +319,7 @@
       "@deepseek-ai/dsh-plugin-package-inventory-deepseek": ["./packages/llm/plugin-package-inventory-deepseek/src"],
       "@deepseek-ai/dsh-pwsh-sandbox": ["./packages/shell/pwsh-sandbox/src"],
       "@deepseek-ai/dsh-repeat-tool-reminder": ["./packages/guard/repeat-tool-reminder/src"],
+      "@deepseek-ai/dsh-research-app": ["./packages/bundle/research-app/src"],
       "@deepseek-ai/dsh-sandbox": ["./packages/sandbox/sandbox/src"],
       "@deepseek-ai/dsh-sandbox-local": ["./packages/sandbox/sandbox-local/src"],
       "@deepseek-ai/dsh-sandbox-policy": ["./packages/sandbox/sandbox-policy/src"],

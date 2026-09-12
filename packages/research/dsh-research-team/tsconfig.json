@@ -12,6 +12,7 @@
     { "path": "../../../vendor/schemastery" },
     { "path": "../../../vendor/cordis" },
     { "path": "../dsh-research-core" },
+    { "path": "../dsh-research-tools" },
     { "path": "../../util/brand" },
     { "path": "../../llm/llm" },
     { "path": "../../core/session" },

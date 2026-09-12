@@ -1,7 +1,8 @@
 /**
  * T19-A P4/P5 E2E — report writer.
  *
- * Produces the deliverables the task requires under `G:\AccePaper-main\.workbuddy\tmp\e2e-out\`:
+ * Produces the deliverables the task requires under `.workbuddy/tmp/e2e-out/`, resolved from
+ * the working directory so the suite runs from any checkout:
  *   - `run-snapshot-<scenario>.json` : per-step status / attemptId / artifact slugs / gate
  *     history / audit timeline (one per scenario).
  *   - `e2e-report.md`               : 16-step Real-tool vs Fixture partition table + the two
@@ -13,13 +14,14 @@
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { GateOutcome, ResearchRunStore, StepStatus, TrinityComponent } from './imports.ts'
 import { STEPS, getRunSnapshot } from './imports.ts'
 import { REAL_TOOL_STEP } from './runner.ts'
 
-/** Absolute output directory (task-mandated). Forward slashes are fine for Node on Windows. */
-export const E2E_OUT_DIR = 'G:/AccePaper-main/.workbuddy/tmp/e2e-out'
+/** Output directory for the e2e deliverables, resolved from the working directory so the suite
+ *  is portable across checkouts (`.workbuddy/tmp/` is git-ignored). */
+export const E2E_OUT_DIR = resolve(process.cwd(), '.workbuddy/tmp/e2e-out')
 
 /** Known timestamp-ish keys removed for the determinism comparison. */
 const TIMESTAMP_KEYS = new Set(['runId', 'ts', 'recordedAt', 'producedAt', 'startedAt', 'finishedAt', 'timestamp', 'durationMs'])

@@ -119,7 +119,8 @@
     "packages/research/dsh-research-core/tests/**",
     "packages/research/dsh-research-cordis/tests/**",
     "packages/research/dsh-research-tools/tests/**",
-    "packages/research/dsh-research-team/tests/**"
+    "packages/research/dsh-research-team/tests/**",
+    "packages/research/dsh-research-web/tests/**"
   ],
   "references": [
     { "path": "./vendor/cosmokit" },
@@ -272,6 +273,7 @@
     { "path": "./packages/bundle/acp-app" },
     { "path": "./packages/bundle/base" },
     { "path": "./packages/bundle/headless" },
+    { "path": "./packages/bundle/research-app" },
     { "path": "./packages/bundle/sdk-app" },
     { "path": "./packages/bundle/sdk-minimal" },
     { "path": "./packages/bundle/web-app" },

@@ -12,6 +12,7 @@
   ],
   "references": [
     { "path": "../dsh-research-core" },
+    { "path": "../dsh-research-tools" },
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" }
   ]
