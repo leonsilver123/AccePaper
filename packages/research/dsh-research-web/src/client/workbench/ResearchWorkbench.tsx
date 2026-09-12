@@ -22,8 +22,15 @@ import { ApprovalPanel } from './ApprovalPanel.tsx'
 import { RecoveryPanel } from './RecoveryPanel.tsx'
 import css from './ResearchWorkbench.module.css'
 
-/** Props the conversation.view slot contributes to the research entry. */
-export type ResearchViewProps = ConvViewProps & PropsLocale<'research'>
+/**
+ * Props the conversation.view slot contributes to the research entry. `summary`
+ * is the injection seam: a host that has a real run summary passes it, and only a
+ * caller that supplies none falls back to the bundled MOCK fixture.
+ */
+export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
+  /** Run summary to render; the bundled MOCK fixture is used when omitted. */
+  readonly summary?: ReturnType<typeof loadFixtureSummary>
+}
 
 /** Workbench sub-panel tab identifiers. */
 type WorkbenchTab =
@@ -44,12 +51,16 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
 ]
 
 /**
- * Render the research workbench. Loads the MOCK run summary once and switches the
- * active sub-panel on tab click. The view never polls a live run.
- * @param props - slot runtime props plus the `research` namespace translate `t`.
+ * Render the research workbench. Renders the injected run summary when the host
+ * supplies one and the bundled MOCK fixture otherwise, then switches the active
+ * sub-panel on tab click. The view never polls a live run.
+ * @param props - slot runtime props, the `research` namespace translate `t`, and an
+ *   optional `summary` to render in place of the bundled fixture.
  */
-export function ResearchWorkbench({ t }: ResearchViewProps) {
-  const summary = useMemo(() => loadFixtureSummary(), [])
+export function ResearchWorkbench({ t, summary: injected }: ResearchViewProps) {
+  // The hook runs unconditionally so its order is stable; the fixture is only
+  // materialized when no summary was injected.
+  const summary = useMemo(() => injected ?? loadFixtureSummary(), [injected])
   const [active, setActive] = useState<WorkbenchTab>('summary')
 
   return (

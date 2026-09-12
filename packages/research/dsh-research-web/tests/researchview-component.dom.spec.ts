@@ -386,3 +386,28 @@ function buildStatusFixture(): RunSummaryInput {
     ],
   }
 }
+
+// ===========================================================================
+// 10. Host summary injection (T34 / B6) — the workbench data seam.
+// ===========================================================================
+describe('research workbench summary injection', () => {
+  it('renders the host-injected summary instead of the bundled fixture', () => {
+    const fixture = loadFixtureSummary()
+    // Control: the fixture drives the step list, so it must be non-empty.
+    expect(fixture.steps.length).toBeGreaterThan(0)
+
+    // Baseline: no prop → the component materializes the bundled fixture.
+    renderComp(createElement(ResearchWorkbench, { t }))
+    const fixtureRows = screen.queryAllByRole('listitem').length
+    cleanup()
+
+    // Inject the same summary with its step list emptied. A component that honours
+    // the prop drops the step rows; one that ignored it would fall back to the
+    // fixture and render the identical count.
+    renderComp(createElement(ResearchWorkbench, { t, summary: { ...fixture, steps: [] } }))
+    const injectedRows = screen.queryAllByRole('listitem').length
+
+    expect(fixtureRows).toBeGreaterThan(0)
+    expect(injectedRows).toBeLessThan(fixtureRows)
+  })
+})
