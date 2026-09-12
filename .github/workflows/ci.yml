@@ -51,7 +51,7 @@ jobs:
       DSH_GATE_FAIL_FAST: '1'
     steps:
       # Fetch complete history so the archive gate can read the trusted PR base from a reused shallow checkout.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -109,7 +109,7 @@ jobs:
       # multi-minute instrumented run.
       DSH_GATE_FAIL_FAST: '1'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -177,7 +177,7 @@ jobs:
       # Failover halves snapshot concurrency for the shared 64-core VM.
       DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -277,7 +277,7 @@ jobs:
             runner: ubuntu-latest
             gate_concurrency: '1'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
         with:
@@ -307,7 +307,7 @@ jobs:
     runs-on: ubuntu-latest
     name: python 3.10 / keyless SDK
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6.3.0
         with:
@@ -349,7 +349,7 @@ jobs:
     name: windows node 24 / wine blocking
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -442,7 +442,7 @@ jobs:
       # A failing build or site aborts the sibling gate on the same runner.
       DSH_GATE_FAIL_FAST: '1'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Enable Developer Mode (symlink support)
@@ -491,7 +491,7 @@ jobs:
       # multi-minute instrumented run.
       DSH_GATE_FAIL_FAST: '1'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # Checkout removes the gitignored duration history, so restore it from
@@ -559,7 +559,7 @@ jobs:
     name: windows node 24 / native tests
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Enable Developer Mode (symlink support)
@@ -610,7 +610,7 @@ jobs:
     env:
       DSH_PUBLINT_CONCURRENCY: '8'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Enable Developer Mode (symlink support)
