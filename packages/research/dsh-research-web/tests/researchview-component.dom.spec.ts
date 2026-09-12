@@ -411,3 +411,37 @@ describe('research workbench summary injection', () => {
     expect(injectedRows).toBeLessThan(fixtureRows)
   })
 })
+
+// ===========================================================================
+// 11. Every workbench tab renders (T34 / B5).
+//
+// Before this spec only 3 of the 9 tabs were ever clicked, so the other six panel
+// components never executed under test. A panel that dereferences a missing field,
+// or throws while rendering, surfaces as a React console.error — which is what this
+// asserts against, so the check fails when a panel breaks rather than merely
+// confirming the click did not throw.
+// ===========================================================================
+describe('research workbench tab coverage', () => {
+  it('renders all nine tabs without logging a console error', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      renderComp(createElement(ResearchWorkbench, { t }))
+
+      const tabLabels = [
+        'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',
+        'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.recovery',
+      ] as const
+
+      for (const key of tabLabels) {
+        const button = screen.getByRole('button', { name: en[key] })
+        fireEvent.click(button)
+        // The tab strip survives the switch, i.e. the panel did not take the tree down.
+        expect(screen.getByRole('button', { name: en[key] })).toBeTruthy()
+      }
+
+      expect(errorSpy).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+})
