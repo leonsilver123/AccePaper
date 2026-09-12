@@ -1,0 +1,15 @@
+# @deepseek-ai/dsh-research-core
+
+AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级、引文身份链、A/B/C 闸门裁决,以及运行状态快照存储。零运行时依赖、零 Cordis,可在任何宿主中单元测试。
+
+设计前提是 **AI 生成的科学论断不可信**,因此状态机把"不可作弊地记录科研判断"落成约束:唯一前向迁移器、唯一闸门裁决器、`abstained` 优先级最高且永不可升级为 `passed`、人审批一次性防重放、回滚级联传递闭包、快照深克隆后深冻结。
+
+公共入口刻意不导出 `approveHumanGate` / `transition` / `submitHumanApproval` 与可变的步骤单例;人审批只经 `./host` 子路径可达,而该子路径只暴露受限的生产入口。
+
+## Known Limitations and Deferred Work
+
+- `snapshot-store.ts` 目前没有生产消费者:它提供原子写盘与重放防护,但没有任何 runner 或团队代码读取它,因此 Session 进程级重启恢复仍未实现——底层已备,接线未做。
+- 状态机记录判定,但不产出判定:闸门裁决的输入(L0 分级、引文核验、A/B/C 三通道)由调用方构造,本包不接触网络、文件系统或时钟。
+- `ResearchError` 基类同时被闸门等纯逻辑兄弟模块导入。这是有意的近期安排(共享基类、无运行时环),长期应迁到中性模块以进一步解耦。
+
+No invariant companion is published: this package's cross-module invariants are asserted directly by its own specs, and it ships no `./invariant` entry for one to accompany.
