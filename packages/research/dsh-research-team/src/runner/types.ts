@@ -12,6 +12,7 @@ import type {
   StepStatus,
   TrinityComponent,
 } from '@deepseek-ai/dsh-research-core'
+import type { ResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
 import type { RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 
 /** Per-artifact producer evidence for one step. */
@@ -57,6 +58,13 @@ export interface DriveOptions {
   readonly fixedTimestamp?: number
   /** Stop BEFORE driving this step (returns after its predecessors). */
   readonly stopBefore?: string
+  /**
+   * Tool invoker handed to every capability executor. When absent, executors fall
+   * back to `DirectResearchToolInvoker` (truthfulness `direct_fixture`); when present,
+   * the caller chooses the channel — e.g. an agent-loop-backed invoker registered by
+   * the Cordis adapter — and each artifact records that channel's provenance.
+   */
+  readonly invoker?: ResearchToolInvoker
 }
 
 /** Options for driving exactly one step. */
@@ -66,6 +74,8 @@ export interface DriveStepOptions {
   readonly signal?: AbortSignal
   readonly executorOverride?: (stepId: string) => StepExecutorFn | undefined
   readonly abstainComponents?: (stepId: string) => ReadonlyArray<TrinityComponent>
+  /** Tool invoker for capability executors; see {@link DriveOptions.invoker}. */
+  readonly invoker?: ResearchToolInvoker
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */

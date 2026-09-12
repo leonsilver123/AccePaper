@@ -75,6 +75,7 @@ function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions 
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     ...(opts.executorOverride !== undefined ? { executorOverride: opts.executorOverride } : {}),
     ...(opts.abstainComponents !== undefined ? { abstainComponents: opts.abstainComponents } : {}),
+    ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
   }
 }
 
@@ -127,6 +128,7 @@ export async function driveStep(
         ...(coreCtx.signal !== undefined ? { signal: coreCtx.signal } : {}),
         getInput: (slug: string) => getArtifact(store, runId, slug),
         runCtx: opts.runCtx,
+        ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
       }),
     ...(effectiveTimeoutMs > 0 ? { timeoutMs: effectiveTimeoutMs } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
