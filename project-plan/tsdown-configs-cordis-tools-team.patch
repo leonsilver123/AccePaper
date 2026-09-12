@@ -1,0 +1,54 @@
+diff --git a/packages/research/dsh-research-cordis/tsdown.config.ts b/packages/research/dsh-research-cordis/tsdown.config.ts
+new file mode 100644
+index 0000000..1494d6e
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tsdown.config.ts
+@@ -0,0 +1,12 @@
++import { defineConfig } from 'tsdown'
++
++export default defineConfig({
++  entry: { index: 'src/index.ts' },
++  outDir: 'lib',
++  format: ['esm'],
++  platform: 'node',
++  target: 'es2024',
++  fixedExtension: false,
++  dts: false,
++  clean: ['lib/*.js', 'lib/*.js.map'],
++})
+diff --git a/packages/research/dsh-research-tools/tsdown.config.ts b/packages/research/dsh-research-tools/tsdown.config.ts
+new file mode 100644
+index 0000000..1494d6e
+--- /dev/null
++++ b/packages/research/dsh-research-tools/tsdown.config.ts
+@@ -0,0 +1,12 @@
++import { defineConfig } from 'tsdown'
++
++export default defineConfig({
++  entry: { index: 'src/index.ts' },
++  outDir: 'lib',
++  format: ['esm'],
++  platform: 'node',
++  target: 'es2024',
++  fixedExtension: false,
++  dts: false,
++  clean: ['lib/*.js', 'lib/*.js.map'],
++})
+diff --git a/packages/research/dsh-research-team/tsdown.config.ts b/packages/research/dsh-research-team/tsdown.config.ts
+new file mode 100644
+index 0000000..1494d6e
+--- /dev/null
++++ b/packages/research/dsh-research-team/tsdown.config.ts
+@@ -0,0 +1,12 @@
++import { defineConfig } from 'tsdown'
++
++export default defineConfig({
++  entry: { index: 'src/index.ts' },
++  outDir: 'lib',
++  format: ['esm'],
++  platform: 'node',
++  target: 'es2024',
++  fixedExtension: false,
++  dts: false,
++  clean: ['lib/*.js', 'lib/*.js.map'],
++})

@@ -1,0 +1,41 @@
+feat (t19s): canonical 16-step semantic reconciliation
+
+registry executor<->step semantics aligned to final_execution_plan.md
+A1..E2 (canonical = only business definition):
+
+- B3-baseline: NO LONGER runs runAblation. Baseline = establish the
+  fixed-time baseline + compare against SOTA (canonical B3-SOTA retrieval
+  sub-task -> literature-search capability, declared as an honest gap this
+  wave: synthetic corpus off-domain). Emits baseline-measurement-set +
+  sota-comparison-note (zero anchored SOTA rows).
+- C3-boundary: now runs the REAL runAblation (variant-vs-baseline boundary
+  probing) -> ablation-results + boundary-map. Ablation producer brand moved
+  B3 -> C3.
+- D1-figure-map: wires ALL THREE figure families its purpose names
+  (数据图/三线表/路线图) - real renderFigure + renderThreeLineTable +
+  renderRoadmap; figure-plan lists each with real render evidence.
+- E1-format: no longer IS renderThreeLineTable. The executor ASSEMBLES the
+  formatted manuscript + reproducible package from revised-draft + venue;
+  three-line-table is the real table SUB-CAPABILITY inside the assembly.
+- ARTIFACT_TYPE_BY_SLUG['baseline-results']: ablation-measurement-set ->
+  baseline-measurement-set (was a mislabel).
+- A3/A4/B1/B2/C1/C2/D2/D3/D4 fixture executors emit business-shaped
+  artifacts; C1 mvp-results derives from the SAME experiment fixture row the
+  C-gate adjudicates (artifact/gate同源); D2->D3->D4->E1 carry one manuscript
+  skeleton (paper-outline -> draft -> revised-draft -> formatted-manuscript).
+- New SCENARIO constants: single numeric source of truth
+  (fixed-time 10.0 s vs adaptive 9.09 s = 9.1% reduction, matching the
+  experiment fixture detail verbatim). STEP_CAPABILITIES export: auditable
+  tool->step capability map (tools are step capabilities, never substitutes).
+
+Truthfulness recomposition (real=5 unchanged, fixture=10 unchanged):
+A1/A2/C3/D1/E1 real_tool_fixture_input (B3<->C3 swapped); B3 an honest
+fixture; live_external 0; E2 human gate unchanged.
+
+E2E strengthened from state-transition-only to BUSINESS-ARTIFACT assertions:
+B3 baseline protocol w/o ablation fields, C1 supports prediction @9.1%,
+C3 ablation runs, D1 3 figure families, D2->D3->D4->E1 skeleton trace,
+E1 manuscript > table (step > capability), E2 still gated.
+
+Tests: runner-registry 43, happy-path 25, recovery 13, team suite 324/324,
+tsc exit 0, oxlint 0.

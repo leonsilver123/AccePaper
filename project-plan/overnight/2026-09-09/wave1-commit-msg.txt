@@ -1,0 +1,7 @@
+fix (phase0-support): cordis/tools tsconfig explicit core reference + T18 validate JSDoc truth fix
+
+- dsh-research-cordis/tsconfig.json: add dsh-research-core to references (audit1 P2 — core d.ts no longer relies on reference array order)
+- dsh-research-tools/tsconfig.json: add dsh-research-core to references (same audit1 P2 fix)
+- tools/roadmap/validate.ts: JSDoc now states exactly which U4 leg-1 checks are implemented (unreachable-from-root / produce-nothing-not-output NOT yet implemented — tracked as follow-up; previously over-claimed)
+
+Verification: cordis+tools standalone tsc -b exit 0; core/tools/cordis tsc --noEmit exit 0; research full vitest 808/808 (34 files) green incl. T23 anchor + T26 web + T19-A e2e. Working tree T19-B/T23/T26 artifacts untouched.

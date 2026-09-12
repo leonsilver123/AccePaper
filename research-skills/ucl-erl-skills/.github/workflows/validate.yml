@@ -1,0 +1,37 @@
+name: Validate
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  catalog:
+    name: Catalog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate catalog
+        run: python scripts/validate_catalog.py
+
+      - name: Validate forward tests
+        run: python scripts/validate_forward_tests.py
+
+      - name: Validate repository
+        run: python scripts/validate_repository.py

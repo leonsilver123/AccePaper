@@ -1,0 +1,20 @@
+feat (t23): external anchor — L0-tier/SOTA/reproducibility reference signals (pure fixture, fail-closed)
+
+Independent read-only audit ACCEPT (zero P0/P1; P2: bridge deliberately never counts as
+a usable external anchor → Gate B stays abstained (fail-safe); P3×5 test-strengthening
+registered for follow-up).
+
+- team/src/anchor/: AnchorKind l0-tier|sota|reproducibility; frozen ANCHOR_KINDS;
+  AnchorSignal/AnchorVerdict (support|contradict|inconclusive — reference stance only,
+  NEVER a verdict); anchorError with ANCHOR_ERROR_PREFIX; unknown kind/key → AnchorError
+  (fail-closed); fixture signals all source:'fixture' + synthetic:true + ruleVersion
+  stamped; deep-frozen tables; deterministic (no random/clock, injected timestamp).
+- team/src/anchor/index.ts: verdictToConclusion + anchorToVerification bridge (outputs
+  VerificationConclusion/VerificationResult compatible with core contracts); deliberately
+  sets originalTextAccessed:false + method:'none' so core isExternalAnchor=false →
+  component B abstains unless a REAL usable anchor exists. No core Gate B copy, no
+  T22/T24 semantic change.
+- tests/anchor.spec.ts: 24 tests — non-verdict stance, no fixture masquerading, fail-closed
+  on unknown/missing, mock anchor never upgrades claim, frozen snapshots, determinism.
+
+Verification: research full 895/895 (team tsc exit 0). Committed separately from T19-B.

@@ -1,0 +1,703 @@
+{
+  "version": 1,
+  "name": "ERL Research Skills",
+  "description": "An open-source research operating system for Robotics & AI, developed and maintained by ERL Lab.",
+  "homepage": "https://github.com/UCL-ERL/skills",
+  "license": "MIT",
+  "compatibility": [
+    "codex",
+    "claude-code-manual",
+    "agent-skills-style"
+  ],
+  "maintainers": [
+    "ERL Lab"
+  ],
+  "contributors": [
+    "ylhaichen"
+  ],
+  "skills": [
+    {
+      "id": "rai-research-flow",
+      "name": "RAI Research Flow",
+      "description": "Routes Robotics & AI research work across search, reading, evidence mapping, ideation, paper writing, figure planning, and audits. Use when the user asks to enter a field, build a literature base, brainstorm a project, write a survey or paper, or coordinate multiple research skills.",
+      "path": "skills/flows/rai-research-flow",
+      "type": "flow",
+      "domain": "orchestration",
+      "maturity": "draft",
+      "depends_on": [
+        "knowledge-base-onboarding",
+        "paper-search-protocol",
+        "paper-reading-card",
+        "evidence-matrix-builder",
+        "research-plan-grill",
+        "research-idea-rubric",
+        "venue-paper-outline",
+        "citation-integrity-auditor",
+        "manuscript-structure-auditor",
+        "scientific-writing-editor",
+        "related-work-positioning",
+        "abstract-introduction-builder",
+        "paper-draft-builder",
+        "survey-synthesis-builder",
+        "benchmark-audit",
+        "experiment-provenance-auditor",
+        "experiment-dossier-builder",
+        "paper-code-consistency-auditor",
+        "limitations-failure-case-auditor",
+        "scientific-figure-director",
+        "slide-talk-builder",
+        "paper-red-team-review"
+      ],
+      "tags": [
+        "robotics",
+        "ai",
+        "research",
+        "workflow"
+      ],
+      "source_inspiration": [
+        "anthropics/skills",
+        "mattpocock/skills",
+        "obra/superpowers",
+        "addyosmani/agent-skills"
+      ]
+    },
+    {
+      "id": "rai-paper-flow",
+      "name": "RAI Paper Flow",
+      "description": "Routes Robotics & AI conference paper writing for ICRA, RSS, CoRL, ICML, ICLR, and NeurIPS style submissions. Use when the user asks to outline, draft, revise, audit, rebut, package, or prepare a research paper for Robotics or AI venues.",
+      "path": "skills/flows/rai-paper-flow",
+      "type": "flow",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "research-plan-grill",
+        "research-idea-rubric",
+        "venue-paper-outline",
+        "citation-integrity-auditor",
+        "manuscript-structure-auditor",
+        "scientific-writing-editor",
+        "related-work-positioning",
+        "abstract-introduction-builder",
+        "paper-draft-builder",
+        "survey-synthesis-builder",
+        "benchmark-audit",
+        "experiment-provenance-auditor",
+        "experiment-dossier-builder",
+        "paper-code-consistency-auditor",
+        "limitations-failure-case-auditor",
+        "scientific-figure-director",
+        "slide-talk-builder",
+        "paper-red-team-review",
+        "reviewer-response-builder",
+        "latex-submission-checker"
+      ],
+      "tags": [
+        "paper-writing",
+        "robotics",
+        "machine-learning",
+        "conference"
+      ],
+      "source_inspiration": [
+        "mattpocock/skills",
+        "obra/superpowers"
+      ]
+    },
+    {
+      "id": "rai-coding-flow",
+      "name": "RAI Coding Flow",
+      "description": "Routes Robotics & AI coding work through design, prototyping, debugging, testing, review, and reproducibility checks. Use when the user asks to build, debug, test, review, or restructure Python, C++, ROS, simulation, ML, or experiment code.",
+      "path": "skills/flows/rai-coding-flow",
+      "type": "flow",
+      "domain": "engineering",
+      "maturity": "draft",
+      "depends_on": [
+        "research-plan-grill",
+        "robotics-ai-coding-flow",
+        "experiment-provenance-auditor",
+        "experiment-dossier-builder",
+        "paper-code-consistency-auditor"
+      ],
+      "tags": [
+        "robotics",
+        "ai",
+        "coding",
+        "testing"
+      ],
+      "source_inspiration": [
+        "mattpocock/skills",
+        "addyosmani/agent-skills",
+        "obra/superpowers"
+      ]
+    },
+    {
+      "id": "knowledge-base-onboarding",
+      "name": "Knowledge Base Onboarding",
+      "description": "Onboards a new Robotics or AI research area, project folder, or lab knowledge base into a structured source inventory, concept map, artifact map, and next-action plan. Use when the user starts a new area, inherits notes/code/papers, or needs a reusable research memory structure.",
+      "path": "skills/research/knowledge-base-onboarding",
+      "type": "atomic",
+      "domain": "research",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "knowledge-base",
+        "onboarding",
+        "research",
+        "provenance"
+      ],
+      "source_inspiration": [
+        "FAIR principles",
+        "The Turing Way",
+        "ACM Artifact Review and Badging"
+      ]
+    },
+    {
+      "id": "paper-search-protocol",
+      "name": "Paper Search Protocol",
+      "description": "Builds reproducible Robotics & AI search logs across papers, projects, datasets, benchmarks, and code. Use when the user asks for literature search, project search, survey source collection, related work discovery, or field onboarding.",
+      "path": "skills/research/paper-search-protocol",
+      "type": "atomic",
+      "domain": "research",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "literature-search",
+        "survey",
+        "robotics",
+        "ai"
+      ],
+      "source_inspiration": [
+        "nature-academic-search",
+        "mattpocock/skills"
+      ]
+    },
+    {
+      "id": "paper-reading-card",
+      "name": "Paper Reading Card",
+      "description": "Turns one Robotics & AI paper into a structured, source-grounded reading card. Use when the user asks to read, summarize, compare, or extract claims, methods, experiments, limitations, and reusable ideas from a paper.",
+      "path": "skills/research/paper-reading-card",
+      "type": "atomic",
+      "domain": "research",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "paper-reading",
+        "summary",
+        "robotics",
+        "ai"
+      ],
+      "source_inspiration": [
+        "nature-reader",
+        "mattpocock/skills"
+      ]
+    },
+    {
+      "id": "evidence-matrix-builder",
+      "name": "Evidence Matrix Builder",
+      "description": "Builds comparison matrices, taxonomies, and gap maps from paper cards, projects, datasets, or benchmark notes. Use when the user asks to synthesize a literature base, write a survey, compare methods, or find research gaps.",
+      "path": "skills/research/evidence-matrix-builder",
+      "type": "atomic",
+      "domain": "research",
+      "maturity": "draft",
+      "depends_on": [
+        "paper-reading-card"
+      ],
+      "tags": [
+        "evidence",
+        "survey",
+        "taxonomy",
+        "gap-analysis"
+      ],
+      "source_inspiration": [
+        "mattpocock/skills",
+        "ml-paper-writing"
+      ]
+    },
+    {
+      "id": "research-idea-rubric",
+      "name": "Research Idea Rubric",
+      "description": "Scores and refines Robotics & AI project ideas for novelty, feasibility, baselines, evaluation, risk, and publishability. Use when brainstorming, ranking, stress-testing, or improving research ideas with or without the user.",
+      "path": "skills/ideation/research-idea-rubric",
+      "type": "reference",
+      "domain": "ideation",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "brainstorming",
+        "research-ideas",
+        "robotics",
+        "ai"
+      ],
+      "source_inspiration": [
+        "brainstorming-research-ideas",
+        "creative-thinking-for-research",
+        "mattpocock/skills"
+      ]
+    },
+    {
+      "id": "research-plan-grill",
+      "name": "Research Plan Grill",
+      "description": "Interrogates a Robotics or AI research, paper, experiment, survey, or engineering plan one decision at a time until its objective, evidence, scope, evaluation, risks, and next artifact are explicit. Use when the user asks to be grilled, wants a plan stress-tested through questions, or has an ambiguous design that should be resolved before implementation or writing.",
+      "path": "skills/ideation/research-plan-grill",
+      "type": "atomic",
+      "domain": "ideation",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "interview",
+        "planning",
+        "decision-making",
+        "research"
+      ],
+      "source_inspiration": [
+        "grill-me",
+        "mattpocock/skills"
+      ]
+    },
+    {
+      "id": "venue-paper-outline",
+      "name": "Venue Paper Outline",
+      "description": "Plans Robotics & AI conference paper structure for ICRA, RSS, CoRL, ICML, ICLR, and NeurIPS style submissions. Use when the user asks for an outline, paper skeleton, section plan, contribution framing, or venue-aware writing strategy.",
+      "path": "skills/writing/venue-paper-outline",
+      "type": "reference",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "paper-writing",
+        "conference",
+        "icra",
+        "neurips"
+      ],
+      "source_inspiration": [
+        "ml-paper-writing",
+        "systems-paper-writing",
+        "nature-writing"
+      ]
+    },
+    {
+      "id": "related-work-positioning",
+      "name": "Related Work Positioning",
+      "description": "Positions a paper against prior work by building source-grounded clusters, contribution boundaries, novelty claims, and comparison language. Use when writing related work, introduction positioning, survey paragraphs, or responses about novelty and differentiation.",
+      "path": "skills/writing/related-work-positioning",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "paper-search-protocol",
+        "paper-reading-card",
+        "evidence-matrix-builder",
+        "citation-integrity-auditor"
+      ],
+      "tags": [
+        "related-work",
+        "novelty",
+        "paper-writing",
+        "positioning"
+      ],
+      "source_inspiration": [
+        "UNC Writing Center literature reviews",
+        "NeurIPS Paper Checklist",
+        "citation-integrity-auditor"
+      ]
+    },
+    {
+      "id": "abstract-introduction-builder",
+      "name": "Abstract Introduction Builder",
+      "description": "Builds or revises paper abstracts and introductions from verified problem, gap, method, evidence, contribution, and limitation material. Use when the user needs a conference-paper abstract, introduction, contribution paragraph, or opening narrative without overstating evidence.",
+      "path": "skills/writing/abstract-introduction-builder",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "related-work-positioning",
+        "benchmark-audit",
+        "limitations-failure-case-auditor"
+      ],
+      "tags": [
+        "abstract",
+        "introduction",
+        "paper-writing",
+        "claims"
+      ],
+      "source_inspiration": [
+        "UNC Writing Center introductions",
+        "UNC Writing Center literature reviews",
+        "NeurIPS Paper Checklist"
+      ]
+    },
+    {
+      "id": "citation-integrity-auditor",
+      "name": "Citation Integrity Auditor",
+      "description": "Audits whether citations are real, traceable, and actually support manuscript claims. Use when the user asks to verify references, check citation truthfulness, map claims to papers, detect hallucinated citations, or audit related work.",
+      "path": "skills/writing/citation-integrity-auditor",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "citations",
+        "fact-checking",
+        "paper-writing",
+        "audit"
+      ],
+      "source_inspiration": [
+        "nature-citation",
+        "nature-academic-search"
+      ]
+    },
+    {
+      "id": "paper-draft-builder",
+      "name": "Paper Draft Builder",
+      "description": "Turns an experiment dossier, verified literature, and venue constraints into a coherent source-grounded conference paper story and Markdown or LaTeX draft. Use when a local writing environment has research results but needs a defensible narrative, contribution structure, section drafting, or a first full paper draft without inventing evidence or citations.",
+      "path": "skills/writing/paper-draft-builder",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "venue-paper-outline",
+        "related-work-positioning",
+        "citation-integrity-auditor",
+        "benchmark-audit",
+        "limitations-failure-case-auditor"
+      ],
+      "tags": [
+        "paper-writing",
+        "drafting",
+        "storyline",
+        "evidence"
+      ],
+      "source_inspiration": [
+        "ml-paper-writing",
+        "systems-paper-writing",
+        "NeurIPS Paper Checklist"
+      ]
+    },
+    {
+      "id": "survey-synthesis-builder",
+      "name": "Survey Synthesis Builder",
+      "description": "Builds a source-grounded Robotics or AI survey from verified reading cards, search logs, evidence matrices, and bibliography records. Use when defining a survey thesis or taxonomy, synthesizing literature across method families, designing section logic and comparison artifacts, revising an existing survey, or drafting survey prose without forcing an empirical-paper structure.",
+      "path": "skills/writing/survey-synthesis-builder",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "paper-search-protocol",
+        "paper-reading-card",
+        "evidence-matrix-builder",
+        "related-work-positioning",
+        "citation-integrity-auditor",
+        "manuscript-structure-auditor"
+      ],
+      "tags": [
+        "survey",
+        "synthesis",
+        "taxonomy",
+        "literature-review"
+      ],
+      "source_inspiration": [
+        "evidence-matrix-builder",
+        "UNC Writing Center literature reviews",
+        "PRISMA 2020"
+      ]
+    },
+    {
+      "id": "manuscript-structure-auditor",
+      "name": "Manuscript Structure Auditor",
+      "description": "Audits manuscript coherence, section flow, paragraph logic, repetition, contradictions, and claim threading. Use when the user asks whether a paper draft, section, abstract, introduction, related work, or conclusion is logically connected, non-redundant, and easy for reviewers to follow.",
+      "path": "skills/writing/manuscript-structure-auditor",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "paper-writing",
+        "coherence",
+        "structure",
+        "review"
+      ],
+      "source_inspiration": [
+        "nature-polishing",
+        "nature-writing",
+        "paper-red-team-review"
+      ]
+    },
+    {
+      "id": "scientific-writing-editor",
+      "name": "Scientific Writing Editor",
+      "description": "Edits academic paper prose for grammar, clarity, concision, scientific tone, reviewer readability, and removal of generic AI-style writing patterns while preserving technical claims. Use after claims, citations, and structure are checked, or when the user asks for grammar editing, human-sounding scientific prose, concise rewriting, or rigorous paper polishing.",
+      "path": "skills/writing/scientific-writing-editor",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "paper-writing",
+        "grammar",
+        "style",
+        "editing"
+      ],
+      "source_inspiration": [
+        "humanizer",
+        "nature-polishing",
+        "nature-writing"
+      ]
+    },
+    {
+      "id": "benchmark-audit",
+      "name": "Benchmark Audit",
+      "description": "Audits benchmark design, baselines, metrics, ablations, statistical reporting, leakage risk, and claim-result alignment for Robotics and AI papers. Use when the user asks whether experiments are convincing, fair, reproducible, or sufficient for paper claims.",
+      "path": "skills/evaluation/benchmark-audit",
+      "type": "atomic",
+      "domain": "evaluation",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "benchmarks",
+        "experiments",
+        "evaluation",
+        "reproducibility"
+      ],
+      "source_inspiration": [
+        "NeurIPS Paper Checklist",
+        "NeurIPS Code and Data Submission Policy",
+        "Papers with Code ML Code Completeness Checklist",
+        "ACM Artifact Review and Badging"
+      ]
+    },
+    {
+      "id": "experiment-provenance-auditor",
+      "name": "Experiment Provenance Auditor",
+      "description": "Audits whether research results are traceable from paper claims back to configs, code versions, data versions, seeds, logs, hardware, and generated artifacts. Use when checking reproducibility, result provenance, experiment tracking, or paper appendix readiness.",
+      "path": "skills/evaluation/experiment-provenance-auditor",
+      "type": "atomic",
+      "domain": "evaluation",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "provenance",
+        "reproducibility",
+        "experiment-tracking",
+        "paper-writing"
+      ],
+      "source_inspiration": [
+        "ACM Artifact Review and Badging",
+        "NeurIPS Code and Data Submission Policy",
+        "Papers with Code ML Code Completeness Checklist",
+        "FAIR principles"
+      ]
+    },
+    {
+      "id": "experiment-dossier-builder",
+      "name": "Experiment Dossier Builder",
+      "description": "Builds a portable, source-grounded Markdown dossier from a remote research project, including method state, experiment design, result ledgers, figures, failures, provenance, and paper-ready claim candidates. Use on the machine that contains the code and experiment outputs when preparing a handoff for local paper writing, collaborator review, or project archiving.",
+      "path": "skills/evaluation/experiment-dossier-builder",
+      "type": "atomic",
+      "domain": "evaluation",
+      "maturity": "draft",
+      "depends_on": [
+        "experiment-provenance-auditor"
+      ],
+      "tags": [
+        "remote-experiments",
+        "paper-handoff",
+        "provenance",
+        "results"
+      ],
+      "source_inspiration": [
+        "FAIR principles",
+        "ACM Artifact Review and Badging",
+        "NeurIPS Paper Checklist"
+      ]
+    },
+    {
+      "id": "paper-code-consistency-auditor",
+      "name": "Paper Code Consistency Auditor",
+      "description": "Audits whether a Robotics or AI manuscript accurately describes its implementation, configs, data pipeline, training and inference behavior, evaluation code, defaults, and generated tables or figures. Use when reconciling a paper with a codebase, preparing an artifact release, checking implementation drift, or verifying that equations, algorithms, hyperparameters, and system claims match the released code.",
+      "path": "skills/evaluation/paper-code-consistency-auditor",
+      "type": "atomic",
+      "domain": "evaluation",
+      "maturity": "draft",
+      "depends_on": [
+        "benchmark-audit",
+        "experiment-provenance-auditor"
+      ],
+      "tags": [
+        "paper-code",
+        "consistency",
+        "artifact-review",
+        "implementation"
+      ],
+      "source_inspiration": [
+        "ACM Artifact Review and Badging",
+        "NeurIPS Paper Checklist",
+        "Papers with Code ML Code Completeness Checklist"
+      ]
+    },
+    {
+      "id": "limitations-failure-case-auditor",
+      "name": "Limitations Failure Case Auditor",
+      "description": "Audits limitations, assumptions, failure cases, negative results, boundary conditions, and ethical or deployment risks in Robotics and AI papers. Use when the user needs a limitations section, failure analysis, responsible research check, or pre-review overclaim audit.",
+      "path": "skills/writing/limitations-failure-case-auditor",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "benchmark-audit"
+      ],
+      "tags": [
+        "limitations",
+        "failure-cases",
+        "responsible-research",
+        "paper-writing"
+      ],
+      "source_inspiration": [
+        "NeurIPS Paper Checklist",
+        "ACL Rolling Review Responsible NLP",
+        "Model Cards",
+        "Datasheets for Datasets"
+      ]
+    },
+    {
+      "id": "scientific-figure-director",
+      "name": "Scientific Figure Director",
+      "description": "Plans, prompts, and audits scientific figures, diagrams, and GPT Image outputs for Robotics & AI papers. Use when the user asks where figures are needed, what figure to draw, how to prompt image generation, or whether a returned figure is scientifically valid.",
+      "path": "skills/figures/scientific-figure-director",
+      "type": "tool",
+      "domain": "figures",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "figures",
+        "diagrams",
+        "image-generation",
+        "paper-writing"
+      ],
+      "source_inspiration": [
+        "nature-figure",
+        "academic-plotting",
+        "DayuanJiang/next-ai-draw-io"
+      ]
+    },
+    {
+      "id": "slide-talk-builder",
+      "name": "Slide Talk Builder",
+      "description": "Builds timed, source-grounded research talks and validated slide decks from papers, surveys, experiment dossiers, or project artifacts. Use when preparing a lab meeting, journal club, conference spotlight or oral, invited talk, project update, thesis presentation, or paper-to-slides conversion with speaker notes, visual assets, and delivery timing.",
+      "path": "skills/presentation/slide-talk-builder",
+      "type": "tool",
+      "domain": "presentation",
+      "maturity": "draft",
+      "depends_on": [
+        "citation-integrity-auditor",
+        "scientific-figure-director"
+      ],
+      "tags": [
+        "slides",
+        "presentation",
+        "conference-talk",
+        "speaker-notes"
+      ],
+      "source_inspiration": [
+        "presenting-conference-talks",
+        "nature-paper2ppt",
+        "Mike Dahlin Giving a Conference Talk"
+      ]
+    },
+    {
+      "id": "paper-red-team-review",
+      "name": "Paper Red-Team Review",
+      "description": "Performs harsh but evidence-grounded review of Robotics & AI papers across factual accuracy, logic, novelty, experiments, citations, figures, writing, and reviewer risk. Use when the user asks for ruthless proofreading, red-team review, paper critique, or pre-submission audit.",
+      "path": "skills/review/paper-red-team-review",
+      "type": "atomic",
+      "domain": "review",
+      "maturity": "draft",
+      "depends_on": [
+        "citation-integrity-auditor",
+        "benchmark-audit",
+        "experiment-provenance-auditor",
+        "limitations-failure-case-auditor",
+        "scientific-figure-director"
+      ],
+      "tags": [
+        "review",
+        "proofreading",
+        "paper-writing",
+        "red-team"
+      ],
+      "source_inspiration": [
+        "code-review",
+        "nature-polishing",
+        "nature-writing"
+      ]
+    },
+    {
+      "id": "reviewer-response-builder",
+      "name": "Reviewer Response Builder",
+      "description": "Builds evidence-grounded, point-by-point reviewer responses and rebuttal plans for Robotics and AI papers. Use when the user has reviews, meta-review, AC comments, or rebuttal constraints and needs a concise, non-defensive response strategy.",
+      "path": "skills/writing/reviewer-response-builder",
+      "type": "atomic",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [
+        "citation-integrity-auditor",
+        "benchmark-audit",
+        "limitations-failure-case-auditor"
+      ],
+      "tags": [
+        "rebuttal",
+        "reviewer-response",
+        "paper-writing",
+        "revision"
+      ],
+      "source_inspiration": [
+        "ACL Rolling Review author guidance",
+        "OpenReview rebuttal workflows",
+        "paper-red-team-review"
+      ]
+    },
+    {
+      "id": "latex-submission-checker",
+      "name": "LaTeX Submission Checker",
+      "description": "Checks LaTeX paper source packages for venue formatting, anonymity, buildability, references, figures, arXiv readiness, and submission hygiene. Use before conference submission, arXiv upload, camera-ready, or when LaTeX build/source problems may block a paper.",
+      "path": "skills/writing/latex-submission-checker",
+      "type": "tool",
+      "domain": "writing",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "latex",
+        "submission",
+        "arxiv",
+        "paper-writing"
+      ],
+      "source_inspiration": [
+        "arXiv TeX submission help",
+        "NeurIPS author guidance",
+        "conference style files"
+      ]
+    },
+    {
+      "id": "robotics-ai-coding-flow",
+      "name": "Robotics AI Coding Flow",
+      "description": "Applies Robotics & AI code quality checks for Python, C++, ROS, simulation, ML experiments, and reproducibility. Use when implementing, debugging, testing, or reviewing Robotics and AI research code.",
+      "path": "skills/engineering/robotics-ai-coding-flow",
+      "type": "atomic",
+      "domain": "engineering",
+      "maturity": "draft",
+      "depends_on": [],
+      "tags": [
+        "coding",
+        "robotics",
+        "ros",
+        "reproducibility"
+      ],
+      "source_inspiration": [
+        "diagnosing-bugs",
+        "tdd",
+        "code-review",
+        "codebase-design",
+        "domain-modeling",
+        "git-guardrails-claude-code"
+      ]
+    }
+  ]
+}

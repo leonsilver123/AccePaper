@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-03",
+  "phase": "overnight-program",
+  "mode": "unattended (user-authorized full unlock incl. P3/P4)",
+  "wave": "wave-1-design-validated",
+  "started_at": "2026-09-03T19:45:00+08:00",
+  "git": {
+    "repo": "D:/1/deepseek-harness-master1/deepseek-harness-master",
+    "head": "96c7f1c",
+    "parent": "c6731f7",
+    "note": "batch2 recovery commit; worktree clean; fsck clean"
+  },
+  "status": {
+    "batch1": "PASS",
+    "batch2_wave0_q1_i1_c1": "PASS (content in recovery commit)",
+    "batch2_p2_g1_t12_t14": "PASS (content in recovery commit)",
+    "batch2_p2_g2_t15_t17_qd": "PASS (content in recovery commit; audit PASS)",
+    "t02": "DEFERRED (needs DEEPSEEK_API_KEY)",
+    "t18_t19_wiring": "DEFERRED per prior ruling",
+    "bpick": "OPEN",
+    "p3_p4": "UNLOCKED by user; wave-0 recon tracks starting"
+  },
+  "tracks": {
+    "t25_p4_1_slot": {
+      "status": "passed",
+      "outcome": "DEC-001 plan A; U3 pending"
+    },
+    "t20_p3_1_subagents": {
+      "status": "passed",
+      "outcome": "DEC-003 global-guard design; repro PoC P-a/P-b remain; design spec DONE (DEC-004 defaults applied)"
+    },
+    "t26_p4_2_exports": {
+      "status": "passed",
+      "outcome": "DEC-002 J2 cleared; exports template = ui-skill"
+    }
+  },
+  "next_wave": "wave-3: T20 scaffold (main-owned pkg files) -> implement pure-logic layer (revision/projection/decide) -> guard + host adapter"
+}

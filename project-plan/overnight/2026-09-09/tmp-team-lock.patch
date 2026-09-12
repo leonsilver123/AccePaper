@@ -1,0 +1,14 @@
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index dc2094f..670b126 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -6635,6 +6635,9 @@ importers:
+       '@deepseek-ai/dsh-research-core':
+         specifier: workspace:^
+         version: link:../dsh-research-core
++      '@deepseek-ai/dsh-research-tools':
++        specifier: workspace:^
++        version: link:../dsh-research-tools
+       zod:
+         specifier: ^4.4.3
+         version: 4.4.3

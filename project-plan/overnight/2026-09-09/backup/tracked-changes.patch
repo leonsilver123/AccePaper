@@ -1,0 +1,134 @@
+diff --git a/packages/research/dsh-research-cordis/tsconfig.json b/packages/research/dsh-research-cordis/tsconfig.json
+index ce74139..1995655 100644
+--- a/packages/research/dsh-research-cordis/tsconfig.json
++++ b/packages/research/dsh-research-cordis/tsconfig.json
+@@ -11,6 +11,7 @@
+     "src"
+   ],
+   "references": [
++    { "path": "../dsh-research-core" },
+     { "path": "../../../vendor/cordis" },
+     { "path": "../../../vendor/schemastery" }
+   ]
+diff --git a/packages/research/dsh-research-team/package.json b/packages/research/dsh-research-team/package.json
+index ba4c60f..a16efcc 100644
+--- a/packages/research/dsh-research-team/package.json
++++ b/packages/research/dsh-research-team/package.json
+@@ -25,7 +25,8 @@
+   },
+   "dependencies": {
+     "zod": "^4.4.3",
+-    "@deepseek-ai/dsh-research-core": "workspace:^"
++    "@deepseek-ai/dsh-research-core": "workspace:^",
++    "@deepseek-ai/dsh-research-tools": "workspace:^"
+   },
+   "peerDependencies": {
+     "@deepseek-ai/cordis": "workspace:^",
+diff --git a/packages/research/dsh-research-tools/src/tools/roadmap/validate.ts b/packages/research/dsh-research-tools/src/tools/roadmap/validate.ts
+index f039308..6df7d4d 100644
+--- a/packages/research/dsh-research-tools/src/tools/roadmap/validate.ts
++++ b/packages/research/dsh-research-tools/src/tools/roadmap/validate.ts
+@@ -3,10 +3,11 @@
+ import type { RoadmapGraph, RoadmapValidation } from './model.ts'
+ 
+ /**
+- * Automatic structural check (U4 leg 1): duplicate ids, dangling edge refs,
+- * self-loops, directed cycles, unreachable-from-root nodes, and nodes that
+- * produce nothing but are not outputs. Returns errors (never throws on
+- * structure — malformed input reports ok:false).
++ * Automatic structural check (U4 leg 1): duplicate ids, empty labels, dangling
++ * edge refs, self-loops, and directed cycles. (unreachable-from-root and
++ * produce-nothing-not-output checks are NOT yet implemented — they require a
++ * root/output declaration; tracked as follow-up). Returns errors (never throws
++ * on structure — malformed input reports ok:false).
+  */
+ export function validateRoadmap(graph: RoadmapGraph): Readonly<RoadmapValidation> {
+   const errors: string[] = []
+diff --git a/packages/research/dsh-research-tools/tsconfig.json b/packages/research/dsh-research-tools/tsconfig.json
+index 0dd5516..9db674c 100644
+--- a/packages/research/dsh-research-tools/tsconfig.json
++++ b/packages/research/dsh-research-tools/tsconfig.json
+@@ -6,5 +6,8 @@
+     "emitDeclarationOnly": true,
+     "declarationMap": false
+   },
+-  "include": ["src"]
++  "include": ["src"],
++  "references": [
++    { "path": "../dsh-research-core" }
++  ]
+ }
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index dc2094f..670b126 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -6635,6 +6635,9 @@ importers:
+       '@deepseek-ai/dsh-research-core':
+         specifier: workspace:^
+         version: link:../dsh-research-core
++      '@deepseek-ai/dsh-research-tools':
++        specifier: workspace:^
++        version: link:../dsh-research-tools
+       zod:
+         specifier: ^4.4.3
+         version: 4.4.3
+@@ -6698,6 +6701,39 @@ importers:
+         specifier: ^4.1.8
+         version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.8)(happy-dom@20.11.6)(jsdom@29.1.1(@noble/hashes@2.3.0))(vite@8.0.16(@types/node@22.20.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+ 
++  packages/research/dsh-research-web:
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:^
++        version: link:../../../vendor/cordis
++      '@deepseek-ai/dsh-client-locale':
++        specifier: workspace:^
++        version: link:../../client/locale
++      '@deepseek-ai/dsh-client-ui-conversation':
++        specifier: workspace:^
++        version: link:../../client/ui-conversation
++      '@deepseek-ai/dsh-client-ui-renderer':
++        specifier: workspace:^
++        version: link:../../client/ui-renderer
++      '@deepseek-ai/dsh-client-ui-session':
++        specifier: workspace:^
++        version: link:../../client/ui-session
++      '@deepseek-ai/dsh-client-ui-slots':
++        specifier: workspace:^
++        version: link:../../client/ui-slots
++      '@types/react':
++        specifier: ~18.3.1
++        version: 18.3.31
++      '@types/react-dom':
++        specifier: ~18.3.0
++        version: 18.3.7(@types/react@18.3.31)
++      react:
++        specifier: ^18.2.0
++        version: 18.3.1
++      react-dom:
++        specifier: ^18.2.0
++        version: 18.3.1(react@18.3.1)
++
+   packages/runtime-diagnostics/invariants:
+     dependencies:
+       '@deepseek-ai/schemastery':
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index 2634de2..5fb4ec4 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -17,6 +17,7 @@
+     // Source-subpath test imports can arrive through workspace links whose
+     // realpath semantics vary by host. Load package CSS declarations directly.
+     "packages/client/*/src/css-modules.d.ts",
++    "packages/research/dsh-research-web/src/client/css-modules.d.ts",
+     "packages/client/*/tests/**/*.ts",
+     "packages/client/*/tests/**/*.tsx",
+     "packages/*/*/tests/**/*.client.spec.ts",
+@@ -102,6 +103,7 @@
+     { "path": "./packages/client/ui-session" },
+     { "path": "./packages/client/web" },
+     { "path": "./packages/context/file-reference" },
++    { "path": "./packages/research/dsh-research-web" },
+     { "path": "./apps/web" }
+   ]
+ }

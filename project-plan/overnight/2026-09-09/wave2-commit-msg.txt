@@ -1,0 +1,23 @@
+feat (core): T19-B orchestration surface — public runStep + read-only frozen step accessors
+
+Additive, audited narrow surface for the team runner (spec §5 Wave 2). The internal
+mutable singletons (STEPS/STEP_BY_ID/…) and any generic appendAuditEvent stay closed.
+
+- src/engine/steps-accessor.ts (new): getStepDefinitions() → frozen outer array of 16
+  deep-frozen CLONES (canonical order); getStepDefinitionById(id) → deep-frozen clone or
+  undefined. Never hands out the internal STEPS array / STEP_BY_ID Map / live objects.
+- src/index.ts: exports runStep (execute-phase pipeline; result-once, timeout/abort-safe,
+  all-or-nothing artifact writes, own 'step-executed' audit; never adjudicates gates,
+  never reaches a terminal state) + StepExecContext/StepExecutor/RunStepOptions/
+  RunStepStatus/RunStepResult types + the two step accessors. Header documents why no
+  generic appendAuditEvent is exported.
+- tests/orchestration.spec.ts (new, 16 tests): order/frozen/isolation; caller mutation
+  cannot affect later reads; no internal aliasing; run/step/attempt validation
+  (unknown/not-in-progress/result-once); per-attempt rollback freshness; all-or-nothing
+  output contract; error/timeout no-artifact; forbidden-surface absence
+  (appendAuditEvent/STEPS/STEP_BY_ID/_applyHumanApproval/approveHumanGate/transition/…);
+  built exports map = ., ./host, ./package.json only; runtime deep-import blocking; plain
+  built-package smoke.
+
+Verification: core rebuild (tsc + tsdown) clean; orchestration 16/16; research full
+824/824 (35 files). Core-only commit — T19-B runner integration lands separately.

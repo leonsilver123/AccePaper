@@ -1,0 +1,39 @@
+feat (t19b): team runner — 16-step executor registry over core runStep + two E2E (real-tool/fixture mixed)
+
+T19-B completion on top of the Wave 2 core orchestration API. Implementer channel hit 429
+mid-run; main Agent verified/salvaged: team tsc 0, targeted 71/71, research full 895/895.
+
+- src/runner/registry.ts: 16-step executor registry. Truthfulness uses the mandated 4 levels
+  (real_tool_fixture_input / fixture_executor / mock_external / live_external=0 asserted).
+  5 steps execute REAL tool functions over synthetic inputs (A1 literature-search,
+  A2 claim-construct, B3 ablation, D1 figure SVG+PNG, E1 three-line-table) — artifacts
+  stamped __producer/__kind; the other 10 steps are explicit fixture executors; E2-submit
+  is a human-gate stop (human_approval_only). Every entry declares producer, input/output
+  schema (projected from core defs), artifact type, timeout, gate requirement, recovery
+  policy + classification basis. PIPELINE_STEPS/STEP_OUTPUT_MAP projected from core's
+  getStepDefinitions() (no internal STEPS/Map access).
+- src/runner/drive.ts: drives through public core entry only — runStep +
+  getStepDefinitions()/getStepDefinitionById(). Cross-package core/src relative import
+  removed; manual appendAuditEvent('gate-verdict') removed (core submitGateVerdict emits
+  gate-verdict/gate-abstention/step-completed itself — no runner duplicates).
+- src/runner/verdict.ts: genuine gate verdicts per channel — A from team judgeRound,
+  B from core verifyCitation (MockCitationResolverAdapter) + T23 anchor fixture stance,
+  C from adjudicateClaimSupport over the mock experiment report; adjudication flows solely
+  through core submitGateVerdict (no gate copy, no outcome reinterpretation, abstained
+  stays gated, blocked/failed do not start downstream).
+- src/runner/report.ts + tests/e2e/*: happy-path (16 steps, E2 gated, per-step kind +
+  artifact evidence + gate history + audit timeline + truthfulness stats) and recovery
+  (abstained hold→rollback→re-adjudicate, executor throw zero-artifact, deterministic
+  timeout, undeclared slug all-or-nothing, stale attempt, duplicate completion rejection,
+  downstream invalidation on upstream rollback, ends at E2 gated). Reports written to
+  .workbuddy/tmp/e2e-out-t19b (e2e-report-{happy,recovery}.md, run-snapshot-*.json,
+  t19a-vs-t19b.md).
+- tests/runner-registry.spec.ts (40): registry completeness/fields/4-level classification/
+  channel truthfulness/human-gate stop.
+- team/package.json + pnpm-lock team importer: add @deepseek-ai/dsh-research-tools
+  workspace dep (registry consumes the tools entry).
+- tests/e2e/helpers/drive.ts (superseded duplicate) removed — specs drive src/runner/drive.
+
+Discipline: only team package + lock(team hunk); web importer lock hunk stays for the T26
+commit; no commit mixing; no live_external; real-tool-over-fixture never presented as real
+scientific verification (report asserts NOT).

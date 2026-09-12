@@ -1,0 +1,6 @@
+?? .workbuddy-install3.log
+?? packages/research/dsh-research-team/src/anchor/
+?? packages/research/dsh-research-team/src/runner/
+?? packages/research/dsh-research-team/tests/anchor.spec.ts
+?? packages/research/dsh-research-team/tests/e2e/
+?? packages/research/dsh-research-web/

@@ -1,0 +1,1735 @@
+diff --git a/packages/host/directory-picker-native/src/win32-dialog-bindings.ts b/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
+index ef7795c..0cd66f5 100644
+--- a/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
++++ b/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
+@@ -28,6 +28,48 @@ interface Koffi {
+   view(ref: unknown, len: number): ArrayBuffer
+ }
+ 
++/**
++ * Stable typed error for native binding load failures: distinguishes a missing
++ * `@koromix/koffi-win32-*` binary (`DSH_NATIVE_BINARY_MISSING`) from a koffi
++ * import failure (`DSH_NATIVE_KOFFI_IMPORT_FAILED`). Surfaces as-is — there is
++ * no runtime fallback here (per the 2026-08-04 note; the startup browse降级
++ * in `resolve.ts:50` stays unchanged). Upper layers still rethrow as-is; they
++ * now propagate a stable typed error instead of an opaque one.
++ *
++ * NOTE: this is error-handling hardening, NOT proof of a real crash root cause.
++ * B-PICK remains open until a real Windows repro confirms the guarded path is
++ * the failure surface and the fix removes the original error.
++ */
++export class Win32BindingsLoadError extends Error {
++  readonly code: 'DSH_NATIVE_KOFFI_IMPORT_FAILED' | 'DSH_NATIVE_BINARY_MISSING'
++  constructor(code: Win32BindingsLoadError['code'], message: string, cause?: unknown) {
++    super(message)
++    this.name = 'Win32BindingsLoadError'
++    this.code = code
++    // Inherited from ES2022 Error.cause (mutable, typed `unknown`): set only when
++    // provided so an absent cause stays absent (exactOptionalPropertyTypes-safe).
++    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
++  }
++}
++
++function errMessage(e: unknown): string {
++  if (e instanceof Error) return e.message
++  return String(e)
++}
++
++/** Load a native DLL via koffi, rethrowing load failures as Win32BindingsLoadError. */
++function loadDll(koffi: Koffi, dll: string): KoffiLibrary {
++  try {
++    return koffi.load(dll)
++  } catch (e) {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_BINARY_MISSING',
++      `koffi.load('${dll}') failed: ${errMessage(e)}`,
++      e,
++    )
++  }
++}
++
+ /**
+  * Read a NUL-terminated UTF-16 string at a native address. koffi's
+  * `_Out_ void **` out-params surface a raw address, and
+@@ -88,10 +130,19 @@ const IID_IFILE_OPEN_DIALOG = guidBytes('d57c7288-d4ad-4768-be02-9d969532d960')
+  * @returns the bindings {@link runFolderDialog} sequences against.
+  */
+ export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
+-  const koffi = (await import('koffi')).default as unknown as Koffi
+-  const ole32 = koffi.load('ole32.dll')
+-  const user32 = koffi.load('user32.dll')
+-  const kernel32 = koffi.load('kernel32.dll')
++  let koffi: Koffi
++  try {
++    koffi = (await import('koffi')).default as unknown as Koffi
++  } catch (e) {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
++      `import('koffi') failed: ${errMessage(e)}`,
++      e,
++    )
++  }
++  const ole32 = loadDll(koffi, 'ole32.dll')
++  const user32 = loadDll(koffi, 'user32.dll')
++  const kernel32 = loadDll(koffi, 'kernel32.dll')
+ 
+   // Vtable slots and out-pointers are pointer-width offsets: 8 on x64/arm64,
+   // 4 on ia32 — koffi reports the running process's width.
+@@ -180,8 +231,17 @@ export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
+  * @param threadId - the dialog thread's native id (from the `showing` notice).
+  */
+ export async function closeThreadWindows(threadId: number): Promise<void> {
+-  const koffi = (await import('koffi')).default as unknown as Koffi
+-  const user32 = koffi.load('user32.dll')
++  let koffi: Koffi
++  try {
++    koffi = (await import('koffi')).default as unknown as Koffi
++  } catch (e) {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
++      `import('koffi') failed: ${errMessage(e)}`,
++      e,
++    )
++  }
++  const user32 = loadDll(koffi, 'user32.dll')
+   const enumThreadWindows = user32.func('__stdcall', 'EnumThreadWindows', 'int', ['uint32', 'void *', 'intptr'])
+   const postMessageW = user32.func('__stdcall', 'PostMessageW', 'int', ['void *', 'uint32', 'uintptr', 'intptr'])
+   const protoEnumProc = koffi.proto('int __stdcall DshEnumThreadWndProc(void *hwnd, intptr lparam)')
+diff --git a/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts b/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
+index 85d4aed..f915606 100644
+--- a/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
++++ b/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
+@@ -10,6 +10,7 @@
+ 
+ import { afterEach, describe, expect, it, vi } from 'vitest'
+ import { HRESULT_CANCELLED, runFolderDialog } from '../src/win32-dialog-logic.ts'
++import type { Win32BindingsLoadError as LoadError } from '../src/win32-dialog-bindings.ts'
+ 
+ const E_FAIL = 0x80004005 | 0
+ const WM_CLOSE = 0x10
+@@ -30,6 +31,8 @@ interface ComWorld {
+   /** Contexts `SetThreadDpiAwarenessContext` accepts; others return NULL. */
+   supportedDpiContexts: number[]
+   enumThrows: boolean
++  /** 若设置，fake 的 koffi.load 命中即抛此错误（模拟原生二进制缺失/加载失败）。 */
++  loadThrows?: Error
+   path: string
+   titles: string[]
+   options: number[]
+@@ -90,40 +93,43 @@ function installFakeKoffi(world: ComWorld): void {
+ 
+   vi.doMock('koffi', () => ({
+     default: {
+-      load: (dll: string) => ({
+-        func: (_convention: string, name: string, _result: string, _args: string[]) => {
+-          switch (name) {
+-            case 'CoInitializeEx': return () => world.coInitHr
+-            case 'CoUninitialize': return () => { world.uninitialized += 1 }
+-            case 'CoCreateInstance': return (...args: unknown[]) => {
+-              if (world.coCreateHr < 0) return world.coCreateHr
+-              // The out-pointer must be allocated at the fake's pointer width.
+-              if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
+-                throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
++      load: (dll: string) => {
++        if (world.loadThrows) throw world.loadThrows
++        return {
++          func: (_convention: string, name: string, _result: string, _args: string[]) => {
++            switch (name) {
++              case 'CoInitializeEx': return () => world.coInitHr
++              case 'CoUninitialize': return () => { world.uninitialized += 1 }
++              case 'CoCreateInstance': return (...args: unknown[]) => {
++                if (world.coCreateHr < 0) return world.coCreateHr
++                // The out-pointer must be allocated at the fake's pointer width.
++                if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
++                  throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
++                }
++                outBuffers.set(args[4], dialogPtr)
++                return 0
+               }
+-              outBuffers.set(args[4], dialogPtr)
+-              return 0
+-            }
+-            case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
+-            case 'GetCurrentThreadId': return () => 31337
+-            case 'SetThreadDpiAwarenessContext': {
+-              if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
+-              return (context: unknown) => {
+-                world.dpiContexts.push(context)
+-                return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
++              case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
++              case 'GetCurrentThreadId': return () => 31337
++              case 'SetThreadDpiAwarenessContext': {
++                if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
++                return (context: unknown) => {
++                  world.dpiContexts.push(context)
++                  return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
++                }
+               }
++              case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
++                if (world.enumThrows) throw new Error('EnumThreadWindows refused')
++                callback.fn({ kind: 'hwnd', n: 1 }, lparam)
++                callback.fn({ kind: 'hwnd', n: 2 }, lparam)
++                return 1
++              }
++              case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
++              default: throw new Error(`unexpected native import ${dll}/${name}`)
+             }
+-            case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
+-              if (world.enumThrows) throw new Error('EnumThreadWindows refused')
+-              callback.fn({ kind: 'hwnd', n: 1 }, lparam)
+-              callback.fn({ kind: 'hwnd', n: 2 }, lparam)
+-              return 1
+-            }
+-            case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
+-            default: throw new Error(`unexpected native import ${dll}/${name}`)
+-          }
+-        },
+-      }),
++          },
++        }
++      },
+       proto: (declaration: string) => ({ declaration }),
+       pointer: (type: unknown) => type,
+       sizeof: (type: string) => { void type; return FAKE_POINTER_SIZE },
+@@ -361,3 +367,66 @@ describe('the worker entry over a mocked process boundary', () => {
+     await expect(import('../src/win32-dialog-worker.ts')).rejects.toThrow('must run as a child process')
+   })
+ })
++
++// B-PICK 保持开放: 下列注入式测试证明守卫将 koffi 加载异常转为稳定 Win32BindingsLoadError
++// 且不破坏成功路径——即"错误处理加固覆盖"。它不证明真实 Windows 崩溃根因;后者须真 Windows
++// 复现 + 加守卫后原错误转为 Win32BindingsLoadError 且上层正常 surface 方可关闭 B-PICK。
++describe('native load failure hardening (B-PICK stays OPEN: error-handling coverage, NOT real-crash root-cause)', () => {
++  // Win32BindingsLoadError is a runtime-destructured value (the class); LoadError (a static
++  // type import) is its instance type, so `as` casts typecheck. The outer cast narrows the
++  // .catch union (Win32DialogBindings | thrown error) to the error type, making .code / .cause
++  // / .message reachable without per-access casts.
++  it('L1: rethrows a koffi.load failure as Win32BindingsLoadError DSH_NATIVE_BINARY_MISSING', async () => {
++    const original = new Error('Could not load native module')
++    const world = comWorld({ loadThrows: original })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_BINARY_MISSING')
++  })
++
++  it('L2: preserves the original load failure as .cause', async () => {
++    const original = new Error('Could not load native module')
++    const world = comWorld({ loadThrows: original })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.cause).toBe(original)
++  })
++
++  it('L3: names the first failing DLL (ole32.dll) in the message', async () => {
++    const world = comWorld({ loadThrows: new Error('Could not load native module') })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as Error
++    expect(String(err.message)).toContain('ole32.dll')
++  })
++
++  it('L4: rethrows an import(koffi) failure as Win32BindingsLoadError DSH_NATIVE_KOFFI_IMPORT_FAILED', async () => {
++    vi.doMock('koffi', () => { throw new Error('koffi module missing') })
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_KOFFI_IMPORT_FAILED')
++  })
++
++  it('L5: success path is transparent — returns usable bindings (no regression)', async () => {
++    const world = comWorld()
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings } = await loadBindingsModule()
++    const bindings = await loadWin32DialogBindings()
++    expect(runFolderDialog(bindings, 'Pick', vi.fn())).toBe('C:\\选中\\directory')
++    expect(world.released).toEqual(['item', 'dialog'])
++  })
++
++  it('L6: closeThreadWindows rethrows a koffi.load failure as Win32BindingsLoadError', async () => {
++    const world = comWorld({ loadThrows: new Error('Could not load native module') })
++    installFakeKoffi(world)
++    const { closeThreadWindows, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await closeThreadWindows(777).catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_BINARY_MISSING')
++  })
++})
+diff --git a/packages/research/dsh-research-cordis/package.json b/packages/research/dsh-research-cordis/package.json
+new file mode 100644
+index 0000000..b156c3a
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/package.json
+@@ -0,0 +1,41 @@
++{
++  "name": "@deepseek-ai/dsh-research-cordis",
++  "description": "Thin Cordis adapter wrapping the pure dsh-research-core 16-step research engine (ctx.research service)",
++  "version": "0.1.2-alpha.4",
++  "private": true,
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "license": "MIT",
++  "scripts": {
++    "typecheck": "tsc --noEmit",
++    "test": "vitest run"
++  },
++  "dependencies": {
++    "@deepseek-ai/dsh-research-core": "workspace:^"
++  },
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:^",
++    "@deepseek-ai/schemastery": "workspace:^"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:^",
++    "@deepseek-ai/schemastery": "workspace:^",
++    "@deepseek-ai/dsh-research-core": "workspace:^",
++    "@types/node": "^22.20.0",
++    "typescript": "^6.0.3",
++    "vitest": "^4.1.8"
++  }
++}
+diff --git a/packages/research/dsh-research-cordis/src/index.ts b/packages/research/dsh-research-cordis/src/index.ts
+new file mode 100644
+index 0000000..60343bb
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/src/index.ts
+@@ -0,0 +1,117 @@
++/**
++ * Thin Cordis adapter wrapping the pure dsh-research-core 16-step research
++ * engine.
++ *
++ * Registers `ctx.research` — a {@link ResearchEngine} service that holds one
++ * in-memory {@link StepStore} and delegates every operation to the pure core
++ * (no state-machine logic is duplicated here). The Service base registers the
++ * instance on `ctx` (auto-unregister on owning-fiber unload); `[Service.init]`
++ * adds an unload effect clearing the store.
++ *
++ * The "name / inject / Config / apply" three-piece is satisfied by the cordis
++ * class-plugin convention: `name` via `super(ctx, 'research')`, `Config` as a
++ * static schema, and `apply` via `ctx.plugin(ResearchEngine, config)` →
++ * constructor + `[Service.init]` (the loader's apply step). No state-machine
++ * logic is reimplemented; the pure core functions are called as-is.
++ *
++ * @module @deepseek-ai/dsh-research-cordis
++ */
++
++import { Context, Service } from '@deepseek-ai/cordis'
++import z from '@deepseek-ai/schemastery'
++import {
++  approveHumanGate,
++  canStart,
++  getAuditHistory,
++  isComplete,
++  recordArtifact,
++  rollback,
++  startStep,
++  submitGateVerdict,
++  transition,
++} from '@deepseek-ai/dsh-research-core'
++import type {
++  ApprovalRecord,
++  AttemptRecord,
++  CurrentAttemptSnapshot,
++  GateVerdict,
++  StepState,
++  StepStatus,
++  StepStore,
++} from '@deepseek-ai/dsh-research-core'
++
++declare module '@deepseek-ai/cordis' {
++  interface Context {
++    research: ResearchEngine
++  }
++}
++
++/** Adapter config (currently empty — the pure engine is config-less). */
++export interface Config {}
++
++/**
++ * Cordis service (`ctx.research`) wrapping the pure dsh-research-core state
++ * machine. Holds one in-memory {@link StepStore}; every method delegates to
++ * the pure core functions, so no transition, gate-adjudication, or rollback
++ * logic is duplicated.
++ *
++ * State is held in a TS-private (not ECMAScript `#private`) field: cordis
++ * proxies service method calls, and `#private` brand checks fail against the
++ * proxy receiver. A regular private field forwards through the proxy.
++ */
++export class ResearchEngine extends Service {
++  static Config: z<Config> = z.object({})
++
++  private readonly store: StepStore
++
++  constructor(ctx: Context, config: Config = {}) {
++    super(ctx, 'research')
++    void config
++    this.store = new Map<string, StepState>()
++  }
++
++  /** Load: register an unload effect clearing the in-memory store. */
++  async [Service.init](): Promise<void> {
++    this.ctx.effect(() => async () => {
++      this.store.clear()
++    }, 'research.store')
++  }
++
++  canStart(stepId: string): boolean {
++    return canStart(stepId, this.store)
++  }
++
++  startStep(stepId: string) {
++    return startStep(stepId, this.store)
++  }
++
++  recordArtifact(stepId: string, outputSlug: string, value: unknown): void {
++    recordArtifact(stepId, outputSlug, value, this.store)
++  }
++
++  submitGateVerdict(stepId: string, verdict: GateVerdict): StepStatus {
++    return submitGateVerdict(stepId, verdict, this.store)
++  }
++
++  transition(stepId: string, to: StepStatus): void {
++    transition(stepId, to, this.store)
++  }
++
++  rollback(stepId: string): void {
++    rollback(stepId, this.store)
++  }
++
++  isComplete(stepId: string): boolean {
++    return isComplete(stepId, this.store)
++  }
++
++  approveHumanGate(stepId: string, approval: ApprovalRecord): StepStatus {
++    return approveHumanGate(stepId, approval, this.store)
++  }
++
++  getAuditHistory(stepId: string): (AttemptRecord | CurrentAttemptSnapshot)[] {
++    return getAuditHistory(stepId, this.store)
++  }
++}
++
++export default ResearchEngine
+diff --git a/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts b/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts
+new file mode 100644
+index 0000000..4780b38
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts
+@@ -0,0 +1,56 @@
++import { describe, expect, it } from 'vitest'
++import { Context } from '@deepseek-ai/cordis'
++import { ResearchEngine } from '../src/index.ts'
++import type { ApprovalRecord } from '@deepseek-ai/dsh-research-core'
++
++// P1.6 thin Cordis adapter over the pure dsh-research-core. These cover the
++// three lifecycle seams the scope requires — load (ctx.plugin registers the
++// service + runs [Service.init]), unload (fiber.dispose runs the ctx.effect
++// cleanup + unregisters), and error propagation (core invariants throw
++// through the service, never swallowed). They exercise the adapter wiring only;
++// the state-machine behavior itself is pinned by dsh-research-core's own suite.
++
++describe('ResearchEngine Cordis adapter (P1.6)', () => {
++  it('loads: ctx.plugin registers ctx.research and runs [Service.init]', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    expect(ctx.research).toBeInstanceOf(ResearchEngine)
++    // Delegates to the pure core: an unknown step has no produced inputs, so
++    // canStart returns false (the core's own contract), proving the service
++    // forwards to the core rather than reimplementing the check.
++    expect(ctx.research.canStart('nonexistent-step')).toBe(false)
++  })
++
++  it('unloads: disposing the fiber unregisters ctx.research (cleanup effect runs)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    expect(ctx.research).toBeInstanceOf(ResearchEngine)
++    await ctx.fiber.dispose()
++    expect(ctx.research as ResearchEngine | undefined).toBeUndefined()
++  })
++
++  it('propagates core errors: startStep on a step that cannot start throws (not swallowed)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    // startStep guards on canStart; an unknown step cannot start, so the pure
++    // core throws — and the service surfaces it unchanged.
++    expect(() => ctx.research.startStep('nonexistent-step')).toThrow(/cannot start/)
++  })
++
++  it('propagates the INV-HUMAN-1 invariant: approveHumanGate surfaces the core rejection', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    // E2-submit is a humanGate step but has no state here, so the pure core
++    // rejects the approval (no state / not gated); the service propagates the
++    // error instead of masking it.
++    const bad: ApprovalRecord = {
++      run_id: 'r1',
++      step_id: 'E2-submit',
++      attempt_id: 1,
++      actor: 'agent',
++      decision: 'approved',
++      timestamp: 0,
++    }
++    expect(() => ctx.research.approveHumanGate('E2-submit', bad)).toThrow()
++  })
++})
+diff --git a/packages/research/dsh-research-cordis/tsconfig.json b/packages/research/dsh-research-cordis/tsconfig.json
+new file mode 100644
+index 0000000..ce74139
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tsconfig.json
+@@ -0,0 +1,17 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "types": [
++      "node"
++    ]
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    { "path": "../../../vendor/cordis" },
++    { "path": "../../../vendor/schemastery" }
++  ]
++}
+diff --git a/packages/research/research-core/package.json b/packages/research/dsh-research-core/package.json
+similarity index 56%
+rename from packages/research/research-core/package.json
+rename to packages/research/dsh-research-core/package.json
+index 15c5fc0..5884a7d 100644
+--- a/packages/research/research-core/package.json
++++ b/packages/research/dsh-research-core/package.json
+@@ -3,6 +3,16 @@
+   "version": "0.1.2-alpha.4",
+   "type": "module",
+   "private": true,
++  "main": "./src/index.ts",
++  "types": "./src/index.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./src/index.ts"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
+   "scripts": {
+     "typecheck": "tsc --noEmit",
+     "test": "vitest run"
+diff --git a/packages/research/dsh-research-core/src/engine/state-machine.ts b/packages/research/dsh-research-core/src/engine/state-machine.ts
+new file mode 100644
+index 0000000..396a47e
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/engine/state-machine.ts
+@@ -0,0 +1,291 @@
++import type { ApprovalRecord, AttemptRecord, CurrentAttemptSnapshot, GateVerdict, StepState, StepStatus } from './types.ts'
++import { STEP_BY_ID } from './steps.ts'
++
++/**
++ * State machine for the 16-step research engine (F-W1 gap — newly created).
++ *
++ * Enforces:
++ *  - input dependency: a step may not start until every slug in its `inputs`
++ *    has been produced as an artifact somewhere in the store;
++ *  - gate adjudication: a step may not exit until every component in its
++ *    `gate` has a verdict; all-passed → 'passed' (or 'gated' for humanGate steps,
++ *    which then require approveHumanGate to reach 'passed' — INV-HUMAN-1),
++ *    falsifiable C-fail → 'failed', other fail → 'blocked';
++ *  - legal StepStatus transitions: pending → in_progress → gated →
++ *    passed/blocked/failed, with rollback reverting to 'pending'.
++ *
++ * Rollback semantics (D4 回退): snapshot the current attempt into `history`
++ * (never physically cleared — INV-ROLLBACK-2) and reset live fields to a fresh
++ * initial state, enabling a re-run via startStep. `attempt_id` is not advanced
++ * here; startStep advances it on the next run. The cascade is emergent —
++ * downstream consumers of this step's outputs lose those inputs (current
++ * artifacts reset to {}), so their canStart returns false until re-produced
++ * (INV-ROLLBACK-1: projection reads only the current attempt). `attempts` is
++ * retained across rollback for diagnostics.
++ */
++
++/** Mutable map of step runtime states, keyed by step id. */
++export type StepStore = Map<string, StepState>
++
++/** Legal forward edges; terminal states allow none. Rollback (any → pending) is performed via rollback(), not transition(). */
++const LEGAL_TRANSITIONS: Readonly<Record<StepStatus, ReadonlySet<StepStatus>>> = {
++  pending: new Set<StepStatus>(['in_progress']),
++  in_progress: new Set<StepStatus>(['gated']),
++  gated: new Set<StepStatus>(['passed', 'blocked', 'failed']),
++  passed: new Set<StepStatus>(),
++  blocked: new Set<StepStatus>(),
++  failed: new Set<StepStatus>(),
++}
++
++function ensureEntry(stepId: string, store: StepStore): StepState {
++  const existing = store.get(stepId)
++  if (existing) return existing
++  const state: StepState = {
++    stepId,
++    status: 'pending',
++    attempts: 0,
++    attempt_id: 0,
++    artifacts: {},
++    gateResults: {},
++    approval: undefined,
++    history: [],
++    startedAt: undefined,
++    finishedAt: undefined,
++  }
++  store.set(stepId, state)
++  return state
++}
++
++/**
++ * True iff the step is pending (or has no state yet, which is implicitly pending)
++ * and every input slug has been produced as an artifact somewhere in the store.
++ */
++export function canStart(stepId: string, store: Readonly<StepStore>): boolean {
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) return false
++  const state = store.get(stepId)
++  const status: StepStatus = state?.status ?? 'pending'
++  if (status !== 'pending') return false
++  for (const slug of step.inputs) {
++    let produced = false
++    for (const other of store.values()) {
++      if (slug in other.artifacts) {
++        produced = true
++        break
++      }
++    }
++    if (!produced) return false
++  }
++  return true
++}
++
++/** Move a pending step whose inputs are ready to in_progress. Throws if it cannot start. */
++export function startStep(stepId: string, store: StepStore): StepState {
++  if (!canStart(stepId, store)) {
++    throw new Error(`state-machine.startStep: cannot start '${stepId}' (not pending or inputs missing)`)
++  }
++  const state = ensureEntry(stepId, store)
++  state.status = 'in_progress'
++  state.startedAt = Date.now()
++  state.attempts += 1
++  state.attempt_id = state.attempts
++  return state
++}
++
++/** Record a produced output artifact. The step must be in_progress. */
++export function recordArtifact(stepId: string, outputSlug: string, value: unknown, store: StepStore): void {
++  const state = store.get(stepId)
++  if (!state || state.status !== 'in_progress') {
++    throw new Error(`state-machine.recordArtifact: step '${stepId}' is not in_progress`)
++  }
++  state.artifacts[outputSlug] = value
++}
++
++/**
++ * Submit one trinity-component gate verdict. Adjudicates once every component
++ * in the step's `gate` has a verdict: all-passed → 'passed' (or 'gated' for a
++ * humanGate step, which then awaits approveHumanGate — INV-HUMAN-1); any fail on
++ * a falsifiable step's component C → 'failed'; any other fail → 'blocked'.
++ * An empty gate adjudicates immediately on submit (humanGate → 'gated',
++ * non-humanGate → 'passed'). Returns the resulting status.
++ */
++export function submitGateVerdict(stepId: string, verdict: GateVerdict, store: StepStore): StepStatus {
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new Error(`state-machine.submitGateVerdict: unknown step '${stepId}'`)
++  const state = store.get(stepId)
++  if (!state) throw new Error(`state-machine.submitGateVerdict: no state for '${stepId}'`)
++  if (state.status !== 'in_progress' && state.status !== 'gated') {
++    throw new Error(`state-machine.submitGateVerdict: step '${stepId}' status '${state.status}' cannot accept verdicts`)
++  }
++  state.gateResults[verdict.component] = verdict
++
++  if (step.gate.length === 0) {
++    // INV-HUMAN-1: a humanGate step with an empty gate must not auto-pass; it parks
++    // in 'gated' awaiting explicit human approval via approveHumanGate. A non-humanGate
++    // step with an empty gate passes immediately.
++    if (step.humanGate) {
++      state.status = 'gated'
++      // finishedAt intentionally left unset until approveHumanGate.
++    } else {
++      state.status = 'passed'
++      state.finishedAt = Date.now()
++    }
++    return state.status
++  }
++
++  // Not all gate components in yet — stay in_progress/gated.
++  for (const comp of step.gate) {
++    if (!(comp in state.gateResults)) return state.status
++  }
++
++  // All in: adjudicate.
++  let anyFail = false
++  let cFailOnFalsifiable = false
++  for (const comp of step.gate) {
++    const v = state.gateResults[comp]
++    if (v && !v.passed) {
++      anyFail = true
++      if (step.falsifiable !== null && comp === 'C') cFailOnFalsifiable = true
++    }
++  }
++  if (!anyFail) {
++    if (step.humanGate) {
++      // INV-HUMAN-1: automated gates all passed, but a humanGate step still requires
++      // explicit human approval before 'passed'; park in 'gated' (finishedAt unset).
++      state.status = 'gated'
++    } else {
++      state.status = 'passed'
++      state.finishedAt = Date.now()
++    }
++  } else if (cFailOnFalsifiable) {
++    state.status = 'failed'
++    state.finishedAt = Date.now()
++  } else {
++    state.status = 'blocked'
++    state.finishedAt = Date.now()
++  }
++  return state.status
++}
++
++/** Guarded legal-edge transition. Throws on illegal edges. */
++export function transition(stepId: string, to: StepStatus, store: StepStore): void {
++  const state = store.get(stepId)
++  if (!state) throw new Error(`state-machine.transition: no state for '${stepId}'`)
++  const allowed = LEGAL_TRANSITIONS[state.status]
++  if (!allowed || !allowed.has(to)) {
++    throw new Error(`state-machine.transition: illegal '${state.status}' -> '${to}' for '${stepId}'`)
++  }
++  // INV-HUMAN-1: a humanGate step may not enter 'passed' via transition without an
++  // explicit approved human approval record (prevents bypassing approveHumanGate).
++  if (to === 'passed') {
++    const step = STEP_BY_ID.get(stepId)
++    if (step?.humanGate && state.approval?.decision !== 'approved') {
++      throw new Error(`state-machine.transition: humanGate step '${stepId}' cannot move to 'passed' without an approved human approval`)
++    }
++  }
++  state.status = to
++  if (to === 'passed' || to === 'blocked' || to === 'failed') {
++    state.finishedAt = Date.now()
++  }
++}
++
++/**
++ * D4 回退: snapshot the current attempt into history (never physically cleared) and
++ * reset the live fields to a fresh initial state, enabling a re-run via startStep.
++ * `attempt_id` is NOT advanced here — startStep advances it on the next run (so
++ * `attempts`/`attempt_id` count real runs only). The `clearArtifacts` option is
++ * deprecated and ignored: INV-ROLLBACK-2 forbids physically clearing gateResults or
++ * artifacts; both are preserved in the superseded snapshot appended to `history`.
++ * Cascade is emergent: downstream consumers lose this step's current outputs
++ * (artifacts reset to {}), so their canStart returns false until re-produced.
++ */
++export function rollback(stepId: string, store: StepStore, opts?: { clearArtifacts?: boolean }): void {
++  void opts // 'clearArtifacts' deprecated; physical clearing forbidden (INV-ROLLBACK-2).
++  const state = store.get(stepId)
++  if (!state) throw new Error(`state-machine.rollback: no state for '${stepId}'`)
++  // Append a superseded snapshot of the current attempt (preserve evidence; do not clear).
++  const snapshot: AttemptRecord = {
++    attempt_id: state.attempt_id,
++    status: state.status,
++    artifacts: state.artifacts,
++    gateResults: state.gateResults,
++    approval: state.approval,
++    superseded: true,
++  }
++  state.history.push(snapshot)
++  // Reset live fields to a fresh new-attempt initial state. Reassigning to new objects
++  // leaves the snapshot's references untouched (append-only history; INV-ROLLBACK-2).
++  state.status = 'pending'
++  state.artifacts = {}
++  state.gateResults = {}
++  state.approval = undefined
++  state.startedAt = undefined
++  state.finishedAt = undefined
++}
++
++/** True iff the step has reached 'passed' (and, for humanGate steps, holds an approved
++ *  human approval record for the current attempt). */
++export function isComplete(stepId: string, store: Readonly<StepStore>): boolean {
++  const state = store.get(stepId)
++  if (!state || state.status !== 'passed') return false
++  const step = STEP_BY_ID.get(stepId)
++  if (step?.humanGate) {
++    return state.approval?.decision === 'approved'
++  }
++  return true
++}
++
++/**
++ * Apply a human approval to a humanGate step currently in 'gated' (INV-HUMAN-1).
++ * Validates that the approval is bound to this step + the current attempt_id and that
++ * the actor is not 'agent'. 'approved' → 'passed' (sets finishedAt); 'rejected' → 'blocked'
++ * (approval retained as evidence). Returns the resulting status.
++ */
++export function approveHumanGate(stepId: string, approval: ApprovalRecord, store: StepStore): StepStatus {
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new Error(`state-machine.approveHumanGate: unknown step '${stepId}'`)
++  if (!step.humanGate) {
++    throw new Error(`state-machine.approveHumanGate: step '${stepId}' is not a humanGate step`)
++  }
++  const state = store.get(stepId)
++  if (!state) throw new Error(`state-machine.approveHumanGate: no state for '${stepId}'`)
++  if (state.status !== 'gated') {
++    throw new Error(`state-machine.approveHumanGate: step '${stepId}' status '${state.status}' is not 'gated'`)
++  }
++  if (approval.step_id !== stepId) {
++    throw new Error(`state-machine.approveHumanGate: approval.step_id '${approval.step_id}' does not match '${stepId}'`)
++  }
++  if (approval.attempt_id !== state.attempt_id) {
++    throw new Error(`state-machine.approveHumanGate: approval.attempt_id ${approval.attempt_id} does not match current attempt_id ${state.attempt_id} (stale approvals cannot be reused)`)
++  }
++  if (!approval.actor || approval.actor === 'agent') {
++    throw new Error(`state-machine.approveHumanGate: actor 'agent' (or empty) is not allowed for human approval`)
++  }
++  state.approval = approval
++  if (approval.decision === 'approved') {
++    state.status = 'passed'
++    state.finishedAt = Date.now()
++  } else {
++    state.status = 'blocked'
++    state.finishedAt = Date.now()
++  }
++  return state.status
++}
++
++/**
++ * Audit view: the full attempt history (superseded snapshots) followed by the current
++ * attempt snapshot (INV-ROLLBACK-2). Append-only; rollback never physically clears.
++ */
++export function getAuditHistory(stepId: string, store: Readonly<StepStore>): (AttemptRecord | CurrentAttemptSnapshot)[] {
++  const state = store.get(stepId)
++  if (!state) return []
++  const current: CurrentAttemptSnapshot = {
++    attempt_id: state.attempt_id,
++    status: state.status,
++    artifacts: state.artifacts,
++    gateResults: state.gateResults,
++    approval: state.approval,
++    current: true,
++  }
++  return [...state.history, current]
++}
+diff --git a/packages/research/research-core/src/engine/steps.ts b/packages/research/dsh-research-core/src/engine/steps.ts
+similarity index 100%
+rename from packages/research/research-core/src/engine/steps.ts
+rename to packages/research/dsh-research-core/src/engine/steps.ts
+diff --git a/packages/research/research-core/src/engine/types.ts b/packages/research/dsh-research-core/src/engine/types.ts
+similarity index 56%
+rename from packages/research/research-core/src/engine/types.ts
+rename to packages/research/dsh-research-core/src/engine/types.ts
+index 482161f..ea0033c 100644
+--- a/packages/research/research-core/src/engine/types.ts
++++ b/packages/research/dsh-research-core/src/engine/types.ts
+@@ -60,15 +60,58 @@ export interface GateVerdict {
+   readonly timestamp: number
+ }
+ 
++/** Human approval record. Bound to run_id + step_id + attempt_id + actor + timestamp.
++ *  Not agent-generated (actor must not be 'agent'); an approval whose attempt_id does not
++ *  match the step's current attempt_id is rejected (no reuse of stale approvals). */
++export interface ApprovalRecord {
++  run_id: string
++  step_id: string
++  /** Must equal the step's current attempt_id, else the approval is rejected. */
++  attempt_id: number
++  /** Human principal identifier; 'agent' (or empty) is rejected. */
++  actor: string
++  decision: 'approved' | 'rejected'
++  rationale?: string
++  timestamp: number
++}
++
++/** Snapshot of a superseded historical attempt (appended on rollback; never physically cleared). */
++export interface AttemptRecord {
++  attempt_id: number
++  status: StepStatus
++  artifacts: Record<string, unknown>
++  gateResults: Partial<Record<TrinityComponent, GateVerdict>>
++  approval?: ApprovalRecord | undefined
++  superseded: true
++}
++
++/** Snapshot of the current (non-superseded) attempt, returned by getAuditHistory. */
++export interface CurrentAttemptSnapshot {
++  attempt_id: number
++  status: StepStatus
++  artifacts: Record<string, unknown>
++  gateResults: Partial<Record<TrinityComponent, GateVerdict>>
++  approval?: ApprovalRecord | undefined
++  current: true
++}
++
+ /** Mutable runtime state of one step instance. */
+ export interface StepState {
+   readonly stepId: string
+   status: StepStatus
++  /** Total number of start attempts (retained across rollback for diagnostics). */
+   attempts: number
+-  /** Produced artifact refs keyed by output slug. */
++  /** Current attempt id; synced with attempts on startStep (attempts += 1 then attempt_id = attempts).
++   *  Bound by ApprovalRecord; rollback does not advance it (startStep does on re-run). */
++  attempt_id: number
++  /** Produced artifact refs keyed by output slug (current attempt only; projection reads this). */
+   artifacts: Record<string, unknown>
+-  /** Gate verdicts keyed by trinity component. */
++  /** Gate verdicts keyed by trinity component (current attempt only). */
+   gateResults: Partial<Record<TrinityComponent, GateVerdict>>
++  /** Human approval for the current attempt (humanGate steps; set by approveHumanGate). */
++  approval?: ApprovalRecord | undefined
++  /** Superseded historical attempt snapshots (appended on rollback; never physically cleared). */
++  history: AttemptRecord[]
+   startedAt: number | undefined
+   finishedAt: number | undefined
+ }
+diff --git a/packages/research/research-core/src/index.ts b/packages/research/dsh-research-core/src/index.ts
+similarity index 70%
+rename from packages/research/research-core/src/index.ts
+rename to packages/research/dsh-research-core/src/index.ts
+index 1f64ac0..1af3c67 100644
+--- a/packages/research/research-core/src/index.ts
++++ b/packages/research/dsh-research-core/src/index.ts
+@@ -1,5 +1,5 @@
+ export { STEPS, STEP_BY_ID, stepsByPhase, TRINITY_LABEL } from './engine/steps.ts'
+-export type { Phase, TrinityComponent, StepDefinition, StepStatus, GateVerdict, StepState } from './engine/types.ts'
++export type { Phase, TrinityComponent, StepDefinition, StepStatus, GateVerdict, StepState, ApprovalRecord, AttemptRecord, CurrentAttemptSnapshot } from './engine/types.ts'
+ export {
+   canStart,
+   startStep,
+@@ -8,5 +8,7 @@ export {
+   transition,
+   rollback,
+   isComplete,
++  approveHumanGate,
++  getAuditHistory,
+ } from './engine/state-machine.ts'
+ export type { StepStore } from './engine/state-machine.ts'
+diff --git a/packages/research/dsh-research-core/tests/state-machine.spec.ts b/packages/research/dsh-research-core/tests/state-machine.spec.ts
+new file mode 100644
+index 0000000..511fbed
+--- /dev/null
++++ b/packages/research/dsh-research-core/tests/state-machine.spec.ts
+@@ -0,0 +1,371 @@
++import { describe, it, expect } from 'vitest'
++import { STEP_BY_ID } from '../src/engine/steps.ts'
++import type { ApprovalRecord, AttemptRecord, GateVerdict, StepState, TrinityComponent } from '../src/engine/types.ts'
++import {
++  canStart,
++  startStep,
++  recordArtifact,
++  submitGateVerdict,
++  transition,
++  rollback,
++  isComplete,
++  approveHumanGate,
++  getAuditHistory,
++} from '../src/engine/state-machine.ts'
++import type { StepStore } from '../src/engine/state-machine.ts'
++
++function freshStore(): StepStore {
++  return new Map<string, StepState>()
++}
++
++/** A pseudo prior step that has "produced" the given artifact slugs. */
++function producer(stepId: string, artifacts: Record<string, unknown>): StepState {
++  return {
++    stepId,
++    status: 'passed',
++    attempts: 1,
++    attempt_id: 1,
++    artifacts,
++    gateResults: {},
++    approval: undefined,
++    history: [],
++    startedAt: 0,
++    finishedAt: 0,
++  }
++}
++
++function verdict(component: TrinityComponent, passed: boolean): GateVerdict {
++  return { component, passed, evidence: 'e', rationale: 'r', timestamp: 0 }
++}
++
++/** Build an ApprovalRecord for a given step + attempt. actor 'agent' is invalid by contract. */
++function approval(
++  stepId: string,
++  attemptId: number,
++  actor: string,
++  decision: 'approved' | 'rejected' = 'approved',
++): ApprovalRecord {
++  return { run_id: 'r0', step_id: stepId, attempt_id: attemptId, actor, decision, rationale: 'ok', timestamp: 0 }
++}
++
++/**
++ * Bring E2-submit (the only humanGate step; gate: []) to 'gated' awaiting human
++ * approval. startStep -> in_progress -> recordArtifact -> submitGateVerdict parks at
++ * 'gated' (empty gate + humanGate no longer auto-passes — INV-HUMAN-1 fix).
++ */
++function e2ToGated(store: StepStore): void {
++  store.set('E1-format', producer('E1-format', { 'formatted-manuscript': 'fm' }))
++  startStep('E2-submit', store) // attempt_id: 0 -> 1
++  recordArtifact('E2-submit', 'submission-record', 'sr', store)
++  submitGateVerdict('E2-submit', verdict('A', true), store) // empty gate + humanGate -> 'gated'
++}
++
++describe('state-machine', () => {
++  it('(a) canStart is false without inputs and startStep throws', () => {
++    const store = freshStore()
++    // A1-landscape consumes 'domain-direction', which nothing has produced.
++    expect(canStart('A1-landscape', store)).toBe(false)
++    expect(() => startStep('A1-landscape', store)).toThrow()
++  })
++
++  it('(b) recordArtifact fills inputs and startStep moves pending -> in_progress', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'dir' }))
++    expect(canStart('A1-landscape', store)).toBe(true)
++    const st = startStep('A1-landscape', store)
++    expect(st.status).toBe('in_progress')
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    // A2-claim consumes landscape-map + gap-list (now produced by A1).
++    expect(canStart('A2-claim', store)).toBe(true)
++  })
++
++  it('(c) all gate verdicts passed -> passed', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    // A1 gate = ['B']; A1.humanGate === false -> passed on all-pass.
++    expect(submitGateVerdict('A1-landscape', verdict('B', true), store)).toBe('passed')
++    expect(isComplete('A1-landscape', store)).toBe(true)
++  })
++
++  it('(d) gate fail on a falsifiable C-step -> failed', () => {
++    const store = freshStore()
++    // A2-claim: gate ['A','C'], falsifiable non-null. inputs: landscape-map, gap-list.
++    store.set('T0', producer('T0', { 'landscape-map': 'm', 'gap-list': 'g' }))
++    startStep('A2-claim', store)
++    recordArtifact('A2-claim', 'claim', 'c', store)
++    recordArtifact('A2-claim', 'falsifiable-prediction', 'fp', store)
++    transition('A2-claim', 'gated', store)
++    submitGateVerdict('A2-claim', verdict('A', true), store)
++    // C fails on a falsifiable step -> 'failed' (not 'blocked').
++    expect(submitGateVerdict('A2-claim', verdict('C', false), store)).toBe('failed')
++  })
++
++  it('(e) gate fail on a non-falsifiable step -> blocked', () => {
++    const store = freshStore()
++    // A1-landscape: gate ['B'], falsifiable null.
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    expect(submitGateVerdict('A1-landscape', verdict('B', false), store)).toBe('blocked')
++  })
++
++  it('(f) rollback reverts to pending, clears current gate/artifacts, downstream canStart false, re-runnable', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
++    // A2 consumes A1's outputs.
++    expect(canStart('A2-claim', store)).toBe(true)
++
++    rollback('A1-landscape', store)
++    const a1 = store.get('A1-landscape')
++    expect(a1?.status).toBe('pending')
++    expect(Object.keys(a1?.artifacts ?? {}).length).toBe(0)
++    expect(Object.keys(a1?.gateResults ?? {}).length).toBe(0)
++    // current attempt cleared; old snapshot preserved in history (INV-ROLLBACK-2).
++    expect(a1?.history.length).toBe(1)
++    // A1's current outputs gone -> A2 can no longer start.
++    expect(canStart('A2-claim', store)).toBe(false)
++    // A1 itself is re-runnable (its input 'domain-direction' is still produced by T0).
++    expect(canStart('A1-landscape', store)).toBe(true)
++    startStep('A1-landscape', store)
++  })
++
++  it('(g) illegal transition throws', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
++    // passed -> in_progress is illegal.
++    expect(() => transition('A1-landscape', 'in_progress', store)).toThrow()
++  })
++})
++
++describe('INV-HUMAN-1 — humanGate step must not reach passed without an explicit approved approval', () => {
++  it('H1+ E2 empty-gate submitGateVerdict parks at gated (not passed)', () => {
++    const store = freshStore()
++    e2ToGated(store)
++    expect(store.get('E2-submit')?.status).toBe('gated')
++    expect(isComplete('E2-submit', store)).toBe(false)
++    expect(store.get('E2-submit')?.finishedAt).toBeUndefined()
++  })
++
++  it('H2+ approveHumanGate(approved) -> passed, approval recorded', () => {
++    const store = freshStore()
++    e2ToGated(store)
++    const a = approval('E2-submit', 1, 'human-1', 'approved')
++    expect(approveHumanGate('E2-submit', a, store)).toBe('passed')
++    expect(store.get('E2-submit')?.approval).toEqual(a)
++    expect(isComplete('E2-submit', store)).toBe(true)
++    expect(store.get('E2-submit')?.finishedAt).not.toBeUndefined()
++  })
++
++  it('H3- transition(E2, passed) without approval throws', () => {
++    const store = freshStore()
++    e2ToGated(store) // status 'gated', no approval
++    expect(() => transition('E2-submit', 'passed', store)).toThrow()
++    expect(store.get('E2-submit')?.status).toBe('gated')
++  })
++
++  it('H4- approveHumanGate with actor=agent throws', () => {
++    const store = freshStore()
++    e2ToGated(store)
++    const a = approval('E2-submit', 1, 'agent', 'approved')
++    expect(() => approveHumanGate('E2-submit', a, store)).toThrow()
++    expect(store.get('E2-submit')?.approval).toBeUndefined()
++  })
++
++  it('H5- approval with mismatched attempt_id throws (no reuse of stale approval)', () => {
++    const store = freshStore()
++    e2ToGated(store) // current attempt_id = 1
++    const a = approval('E2-submit', 999, 'human-1', 'approved') // wrong attempt_id
++    expect(() => approveHumanGate('E2-submit', a, store)).toThrow()
++  })
++
++  it('H6- after rollback + rerun (attempt_id advanced), reusing old approval throws', () => {
++    const store = freshStore()
++    e2ToGated(store) // attempt_id = 1, gated
++    const oldApproval = approval('E2-submit', 1, 'human-1', 'approved')
++    approveHumanGate('E2-submit', oldApproval, store) // -> passed (attempt_id 1)
++    rollback('E2-submit', store) // snapshot attempt_id=1; status -> pending; attempt_id stays 1
++    // re-run advances attempt_id 1 -> 2
++    startStep('E2-submit', store)
++    recordArtifact('E2-submit', 'submission-record', 'sr2', store)
++    submitGateVerdict('E2-submit', verdict('A', true), store) // -> gated, attempt_id=2
++    // old approval still bound to attempt_id=1 -> rejected
++    expect(() => approveHumanGate('E2-submit', oldApproval, store)).toThrow()
++  })
++
++  it('H7- approveHumanGate on a non-humanGate step throws', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store) // humanGate === false
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
++    const a = approval('A1-landscape', 1, 'human-1', 'approved')
++    expect(() => approveHumanGate('A1-landscape', a, store)).toThrow()
++  })
++
++  it('H8- approveHumanGate(rejected) -> blocked, approval retained as evidence', () => {
++    const store = freshStore()
++    e2ToGated(store)
++    const a = approval('E2-submit', 1, 'human-1', 'rejected')
++    expect(approveHumanGate('E2-submit', a, store)).toBe('blocked')
++    expect(store.get('E2-submit')?.approval).toEqual(a)
++    expect(isComplete('E2-submit', store)).toBe(false)
++  })
++})
++
++describe('INV-ROLLBACK-1 — projection (canStart/isComplete) reads only the current attempt', () => {
++  it('R1+ downstream canStart false after upstream rollback (current artifacts empty)', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store) // passed
++    // A2 consumes landscape-map + gap-list -> can start.
++    expect(canStart('A2-claim', store)).toBe(true)
++    rollback('A1-landscape', store)
++    // A1 current artifacts={} -> A2 loses inputs (history is not read).
++    expect(canStart('A2-claim', store)).toBe(false)
++  })
++
++  it('R2+ rollback resets current artifacts and gateResults to empty', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    const a1 = store.get('A1-landscape')
++    expect(a1?.status).toBe('pending')
++    expect(Object.keys(a1?.artifacts ?? {}).length).toBe(0)
++    expect(Object.keys(a1?.gateResults ?? {}).length).toBe(0)
++    expect(a1?.approval).toBeUndefined()
++  })
++
++  it('R3+ A1 re-runnable after rollback (own input intact); startStep advances attempt', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store) // attempts 0->1
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    expect(canStart('A1-landscape', store)).toBe(true)
++    startStep('A1-landscape', store) // attempts 1->2
++    const a1 = store.get('A1-landscape')!
++    expect(a1.attempts).toBe(2)
++    expect(a1.attempt_id).toBe(2)
++  })
++
++  it('R4- projection does not read history[].artifacts (isolation)', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    const a1 = store.get('A1-landscape')!
++    // history snapshot still holds the old outputs...
++    expect((a1.history[0] as AttemptRecord).artifacts).toEqual({ 'landscape-map': 'm', 'gap-list': 'g' })
++    // ...but projection ignores history; A2 (needs landscape-map+gap-list) cannot start.
++    expect(canStart('A2-claim', store)).toBe(false)
++  })
++})
++
++describe('INV-ROLLBACK-2 — rollback never physically clears; history is append-only & auditable', () => {
++  it('H1+ rollback preserves old artifacts in the history snapshot (not physically cleared)', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    recordArtifact('A1-landscape', 'gap-list', 'g', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    const hist = getAuditHistory('A1-landscape', store)
++    // [superseded attempt, current attempt]
++    expect(hist.length).toBe(2)
++    const first = hist[0] as AttemptRecord
++    expect(first.superseded).toBe(true)
++    expect(first.artifacts).toEqual({ 'landscape-map': 'm', 'gap-list': 'g' })
++  })
++
++  it('H2+ multiple rollbacks append exactly one history entry each', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    // run #1 + rollback
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm1', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    expect(store.get('A1-landscape')!.history.length).toBe(1)
++    // run #2 + rollback
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm2', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    expect(store.get('A1-landscape')!.history.length).toBe(2)
++  })
++
++  it('H3+ rollback preserves old gateResults in the history snapshot', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
++    transition('A1-landscape', 'gated', store)
++    const bv = verdict('B', true)
++    submitGateVerdict('A1-landscape', bv, store)
++    rollback('A1-landscape', store)
++    const hist = getAuditHistory('A1-landscape', store)
++    expect((hist[0] as AttemptRecord).gateResults.B).toEqual(bv)
++  })
++
++  it('H4- a second rollback does not mutate the prior history snapshot (append-only)', () => {
++    const store = freshStore()
++    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
++    // run #1 + rollback -> history[0] artifacts = {landscape-map: 'm1'}
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm1', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    const firstSnapshot = store.get('A1-landscape')!.history[0]
++    // run #2 + rollback -> appends history[1]; history[0] must be untouched.
++    startStep('A1-landscape', store)
++    recordArtifact('A1-landscape', 'landscape-map', 'm2', store)
++    transition('A1-landscape', 'gated', store)
++    submitGateVerdict('A1-landscape', verdict('B', true), store)
++    rollback('A1-landscape', store)
++    expect(store.get('A1-landscape')!.history.length).toBe(2)
++    expect(store.get('A1-landscape')!.history[0]).toEqual(firstSnapshot)
++    expect(store.get('A1-landscape')!.history[0].artifacts).toEqual({ 'landscape-map': 'm1' })
++  })
++})
++
++// sanity: the step lookups used above are real steps in STEPS.
++void STEP_BY_ID
+diff --git a/packages/research/research-core/tsconfig.json b/packages/research/dsh-research-core/tsconfig.json
+similarity index 100%
+rename from packages/research/research-core/tsconfig.json
+rename to packages/research/dsh-research-core/tsconfig.json
+diff --git a/packages/research/research-core/src/engine/state-machine.ts b/packages/research/research-core/src/engine/state-machine.ts
+deleted file mode 100644
+index f30b99e..0000000
+--- a/packages/research/research-core/src/engine/state-machine.ts
++++ /dev/null
+@@ -1,179 +0,0 @@
+-import type { GateVerdict, StepState, StepStatus } from './types.ts'
+-import { STEP_BY_ID } from './steps.ts'
+-
+-/**
+- * State machine for the 16-step research engine (F-W1 gap — newly created).
+- *
+- * Enforces:
+- *  - input dependency: a step may not start until every slug in its `inputs`
+- *    has been produced as an artifact somewhere in the store;
+- *  - gate adjudication: a step may not exit until every component in its
+- *    `gate` has a verdict; all-passed → 'passed', falsifiable C-fail → 'failed',
+- *    other fail → 'blocked';
+- *  - legal StepStatus transitions: pending → in_progress → gated →
+- *    passed/blocked/failed, with rollback reverting to 'pending'.
+- *
+- * Rollback semantics (D4 回退): revert the target step to 'pending' and clear
+- * its gateResults (and artifacts by default), enabling a fresh re-run via
+- * startStep. The cascade is emergent — downstream consumers of this step's
+- * outputs lose those inputs, so their canStart returns false until the outputs
+- * are re-produced. `attempts` is retained across rollback for diagnostics.
+- */
+-
+-/** Mutable map of step runtime states, keyed by step id. */
+-export type StepStore = Map<string, StepState>
+-
+-/** Legal forward edges; terminal states allow none. Rollback (any → pending) is performed via rollback(), not transition(). */
+-const LEGAL_TRANSITIONS: Readonly<Record<StepStatus, ReadonlySet<StepStatus>>> = {
+-  pending: new Set<StepStatus>(['in_progress']),
+-  in_progress: new Set<StepStatus>(['gated']),
+-  gated: new Set<StepStatus>(['passed', 'blocked', 'failed']),
+-  passed: new Set<StepStatus>(),
+-  blocked: new Set<StepStatus>(),
+-  failed: new Set<StepStatus>(),
+-}
+-
+-function ensureEntry(stepId: string, store: StepStore): StepState {
+-  let state = store.get(stepId)
+-  if (!state) {
+-    state = {
+-      stepId,
+-      status: 'pending',
+-      attempts: 0,
+-      artifacts: {},
+-      gateResults: {},
+-      startedAt: undefined,
+-      finishedAt: undefined,
+-    }
+-    store.set(stepId, state)
+-  }
+-  return state
+-}
+-
+-/**
+- * True iff the step is pending (or has no state yet, which is implicitly pending)
+- * and every input slug has been produced as an artifact somewhere in the store.
+- */
+-export function canStart(stepId: string, store: Readonly<StepStore>): boolean {
+-  const step = STEP_BY_ID.get(stepId)
+-  if (!step) return false
+-  const state = store.get(stepId)
+-  const status: StepStatus = state?.status ?? 'pending'
+-  if (status !== 'pending') return false
+-  for (const slug of step.inputs) {
+-    let produced = false
+-    for (const other of store.values()) {
+-      if (slug in other.artifacts) {
+-        produced = true
+-        break
+-      }
+-    }
+-    if (!produced) return false
+-  }
+-  return true
+-}
+-
+-/** Move a pending step whose inputs are ready to in_progress. Throws if it cannot start. */
+-export function startStep(stepId: string, store: StepStore): StepState {
+-  if (!canStart(stepId, store)) {
+-    throw new Error(`state-machine.startStep: cannot start '${stepId}' (not pending or inputs missing)`)
+-  }
+-  const state = ensureEntry(stepId, store)
+-  state.status = 'in_progress'
+-  state.startedAt = Date.now()
+-  state.attempts += 1
+-  return state
+-}
+-
+-/** Record a produced output artifact. The step must be in_progress. */
+-export function recordArtifact(stepId: string, outputSlug: string, value: unknown, store: StepStore): void {
+-  const state = store.get(stepId)
+-  if (!state || state.status !== 'in_progress') {
+-    throw new Error(`state-machine.recordArtifact: step '${stepId}' is not in_progress`)
+-  }
+-  state.artifacts[outputSlug] = value
+-}
+-
+-/**
+- * Submit one trinity-component gate verdict. Adjudicates once every component
+- * in the step's `gate` has a verdict: all-passed → 'passed'; any fail on a
+- * falsifiable step's component C → 'failed'; any other fail → 'blocked'.
+- * An empty gate passes immediately on submit. Returns the resulting status.
+- */
+-export function submitGateVerdict(stepId: string, verdict: GateVerdict, store: StepStore): StepStatus {
+-  const step = STEP_BY_ID.get(stepId)
+-  if (!step) throw new Error(`state-machine.submitGateVerdict: unknown step '${stepId}'`)
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.submitGateVerdict: no state for '${stepId}'`)
+-  if (state.status !== 'in_progress' && state.status !== 'gated') {
+-    throw new Error(`state-machine.submitGateVerdict: step '${stepId}' status '${state.status}' cannot accept verdicts`)
+-  }
+-  state.gateResults[verdict.component] = verdict
+-
+-  if (step.gate.length === 0) {
+-    state.status = 'passed'
+-    state.finishedAt = Date.now()
+-    return state.status
+-  }
+-
+-  // Not all gate components in yet — stay in_progress/gated.
+-  for (const comp of step.gate) {
+-    if (!(comp in state.gateResults)) return state.status
+-  }
+-
+-  // All in: adjudicate.
+-  let anyFail = false
+-  let cFailOnFalsifiable = false
+-  for (const comp of step.gate) {
+-    const v = state.gateResults[comp]
+-    if (v && !v.passed) {
+-      anyFail = true
+-      if (step.falsifiable !== null && comp === 'C') cFailOnFalsifiable = true
+-    }
+-  }
+-  if (!anyFail) {
+-    state.status = 'passed'
+-  } else if (cFailOnFalsifiable) {
+-    state.status = 'failed'
+-  } else {
+-    state.status = 'blocked'
+-  }
+-  state.finishedAt = Date.now()
+-  return state.status
+-}
+-
+-/** Guarded legal-edge transition. Throws on illegal edges. */
+-export function transition(stepId: string, to: StepStatus, store: StepStore): void {
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.transition: no state for '${stepId}'`)
+-  const allowed = LEGAL_TRANSITIONS[state.status]
+-  if (!allowed || !allowed.has(to)) {
+-    throw new Error(`state-machine.transition: illegal '${state.status}' -> '${to}' for '${stepId}'`)
+-  }
+-  state.status = to
+-  if (to === 'passed' || to === 'blocked' || to === 'failed') {
+-    state.finishedAt = Date.now()
+-  }
+-}
+-
+-/**
+- * D4 回退: revert the step to 'pending' and clear gateResults (and artifacts by
+- * default), enabling a fresh re-run via startStep. `attempts` is retained.
+- * Cascade is emergent: downstream consumers lose this step's outputs.
+- */
+-export function rollback(stepId: string, store: StepStore, opts?: { clearArtifacts?: boolean }): void {
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.rollback: no state for '${stepId}'`)
+-  const clearArtifacts = opts?.clearArtifacts !== false
+-  state.status = 'pending'
+-  state.gateResults = {}
+-  if (clearArtifacts) state.artifacts = {}
+-  state.startedAt = undefined
+-  state.finishedAt = undefined
+-}
+-
+-/** True iff the step has reached 'passed'. */
+-export function isComplete(stepId: string, store: Readonly<StepStore>): boolean {
+-  const state = store.get(stepId)
+-  return state?.status === 'passed'
+-}
+diff --git a/packages/research/research-core/tests/state-machine.spec.ts b/packages/research/research-core/tests/state-machine.spec.ts
+deleted file mode 100644
+index f3eb193..0000000
+--- a/packages/research/research-core/tests/state-machine.spec.ts
++++ /dev/null
+@@ -1,121 +0,0 @@
+-import { describe, it, expect } from 'vitest'
+-import { STEP_BY_ID } from '../src/engine/steps.ts'
+-import type { GateVerdict, StepState, TrinityComponent } from '../src/engine/types.ts'
+-import {
+-  canStart,
+-  startStep,
+-  recordArtifact,
+-  submitGateVerdict,
+-  transition,
+-  rollback,
+-  isComplete,
+-} from '../src/engine/state-machine.ts'
+-import type { StepStore } from '../src/engine/state-machine.ts'
+-
+-function freshStore(): StepStore {
+-  return new Map<string, StepState>()
+-}
+-
+-/** A pseudo prior step that has "produced" the given artifact slugs. */
+-function producer(stepId: string, artifacts: Record<string, unknown>): StepState {
+-  return { stepId, status: 'passed', attempts: 1, artifacts, gateResults: {}, startedAt: 0, finishedAt: 0 }
+-}
+-
+-function verdict(component: TrinityComponent, passed: boolean): GateVerdict {
+-  return { component, passed, evidence: 'e', rationale: 'r', timestamp: 0 }
+-}
+-
+-describe('state-machine', () => {
+-  it('(a) canStart is false without inputs and startStep throws', () => {
+-    const store = freshStore()
+-    // A1-landscape consumes 'domain-direction', which nothing has produced.
+-    expect(canStart('A1-landscape', store)).toBe(false)
+-    expect(() => startStep('A1-landscape', store)).toThrow()
+-  })
+-
+-  it('(b) recordArtifact fills inputs and startStep moves pending -> in_progress', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'dir' }))
+-    expect(canStart('A1-landscape', store)).toBe(true)
+-    const st = startStep('A1-landscape', store)
+-    expect(st.status).toBe('in_progress')
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    // A2-claim consumes landscape-map + gap-list (now produced by A1).
+-    expect(canStart('A2-claim', store)).toBe(true)
+-  })
+-
+-  it('(c) all gate verdicts passed -> passed', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    // A1 gate = ['B']
+-    expect(submitGateVerdict('A1-landscape', verdict('B', true), store)).toBe('passed')
+-    expect(isComplete('A1-landscape', store)).toBe(true)
+-  })
+-
+-  it('(d) gate fail on a falsifiable C-step -> failed', () => {
+-    const store = freshStore()
+-    // A2-claim: gate ['A','C'], falsifiable non-null. inputs: landscape-map, gap-list.
+-    store.set('T0', producer('T0', { 'landscape-map': 'm', 'gap-list': 'g' }))
+-    startStep('A2-claim', store)
+-    recordArtifact('A2-claim', 'claim', 'c', store)
+-    recordArtifact('A2-claim', 'falsifiable-prediction', 'fp', store)
+-    transition('A2-claim', 'gated', store)
+-    submitGateVerdict('A2-claim', verdict('A', true), store)
+-    // C fails on a falsifiable step -> 'failed' (not 'blocked').
+-    expect(submitGateVerdict('A2-claim', verdict('C', false), store)).toBe('failed')
+-  })
+-
+-  it('(e) gate fail on a non-falsifiable step -> blocked', () => {
+-    const store = freshStore()
+-    // A1-landscape: gate ['B'], falsifiable null.
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    expect(submitGateVerdict('A1-landscape', verdict('B', false), store)).toBe('blocked')
+-  })
+-
+-  it('(f) rollback reverts to pending, clears gate/artifacts, downstream canStart false, re-runnable', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
+-    // A2 consumes A1's outputs.
+-    expect(canStart('A2-claim', store)).toBe(true)
+-
+-    rollback('A1-landscape', store)
+-    const a1 = store.get('A1-landscape')
+-    expect(a1?.status).toBe('pending')
+-    expect(Object.keys(a1?.artifacts ?? {}).length).toBe(0)
+-    expect(Object.keys(a1?.gateResults ?? {}).length).toBe(0)
+-    // A1's outputs gone -> A2 can no longer start.
+-    expect(canStart('A2-claim', store)).toBe(false)
+-    // A1 itself is re-runnable (its input 'domain-direction' is still produced by T0).
+-    expect(canStart('A1-landscape', store)).toBe(true)
+-    startStep('A1-landscape', store)
+-  })
+-
+-  it('(g) illegal transition throws', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
+-    // passed -> in_progress is illegal.
+-    expect(() => transition('A1-landscape', 'in_progress', store)).toThrow()
+-  })
+-})
+-
+-// sanity: the step lookups used above are real steps in STEPS.
+-void STEP_BY_ID
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index b57aa73..f641198 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -6596,7 +6596,29 @@ importers:
+         specifier: workspace:^
+         version: link:../../core/system-prompt
+ 
+-  packages/research/research-core:
++  packages/research/dsh-research-cordis:
++    dependencies:
++      '@deepseek-ai/dsh-research-core':
++        specifier: workspace:^
++        version: link:../dsh-research-core
++      '@deepseek-ai/schemastery':
++        specifier: link:../../../vendor/schemastery
++        version: link:../../../vendor/schemastery
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:^
++        version: link:../../../vendor/cordis
++      '@types/node':
++        specifier: ^22.20.0
++        version: 22.20.0
++      typescript:
++        specifier: ^6.0.3
++        version: 6.0.3
++      vitest:
++        specifier: ^4.1.8
++        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.8)(happy-dom@20.11.6)(jsdom@29.1.1(@noble/hashes@2.3.0))(vite@8.0.16(@types/node@22.20.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
++
++  packages/research/dsh-research-core:
+     devDependencies:
+       '@types/node':
+         specifier: ^22.20.0
+@@ -13281,10 +13303,6 @@ packages:
+     resolution: {integrity: sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==}
+     engines: {node: '>= 0.6'}
+ 
+-  content-type@2.0.0:
+-    resolution: {integrity: sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ==}
+-    engines: {node: '>=18'}
+-
+   content-type@2.1.0:
+     resolution: {integrity: sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag==}
+     engines: {node: '>=18'}
+@@ -18585,7 +18603,7 @@ snapshots:
+   body-parser@2.3.0:
+     dependencies:
+       bytes: 3.1.2
+-      content-type: 2.0.0
++      content-type: 2.1.0
+       debug: 4.4.3
+       http-errors: 2.0.1
+       iconv-lite: 0.7.3
+@@ -18712,8 +18730,6 @@ snapshots:
+ 
+   content-type@1.0.5: {}
+ 
+-  content-type@2.0.0: {}
+-
+   content-type@2.1.0: {}
+ 
+   convert-source-map@2.0.0: {}
+@@ -21276,7 +21292,7 @@ snapshots:
+ 
+   type-is@2.1.0:
+     dependencies:
+-      content-type: 2.0.0
++      content-type: 2.1.0
+       media-typer: 1.1.1
+       mime-types: 3.0.2
+ 
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index 6dfe0a9..e50af25 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -115,7 +115,8 @@
+     "scripts/*.client.spec.ts",
+     "scripts/client-bundle-css.spec.ts",
+     "packages/typert/generator/tests/fixtures/**",
+-    "scripts/client-bundle-purity.spec.ts"
++    "scripts/client-bundle-purity.spec.ts",
++    "packages/research/dsh-research-core/tests/**"
+   ],
+   "references": [
+     { "path": "./vendor/cosmokit" },
+@@ -328,6 +329,7 @@
+     { "path": "./packages/lsp/lsp" },
+     { "path": "./packages/lsp/lsp-stdio" },
+     { "path": "./packages/lsp/tool-lsp" },
++    { "path": "./packages/research/dsh-research-cordis" },
+     { "path": "./apps/cli" }
+   ]
+ }
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+index 5a0fcc8..ac0f339 100644
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -16,7 +16,11 @@ function isBuildFaceClient(value: unknown): boolean {
+ export default defineConfig(({ env }) => {
+   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
+   return {
+-    workspace: ['vendor/*', 'packages/*/*', 'apps/cli'],
++    // dsh-research-core is a standalone pure-TS domain core (no Cordis; not a host
++    // project reference, so tsc -b emits no lib/ for it, and its recon-engine src
++    // layout does not match the standard dsh entry). Exclude from the tsdown
++    // workspace bundle; P1.6 will add the Cordis adapter as a host package.
++    workspace: { include: ['vendor/*', 'packages/*/*', 'apps/cli'], exclude: ['packages/research/dsh-research-core'] },
+     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
+     outDir: 'lib',
+     format: ['esm'],

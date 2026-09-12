@@ -1,0 +1,67 @@
+feat (research-web): T26 — conversation.view slot + Mock run summary view
+
+Add the browser half of the research plugin: a fixture-driven conversation
+view tab rendering a typed run summary. The view loads an immutable fixture
+and renders it through a React component, with a MOCK badge, 16-step
+progress, artifact list, gate history, abstention freeze, and degradation
+notes. The Host half is intentionally inert (the view is browser-only); its
+exports are type-only re-exports of the RunSummary model so a future
+T19-B adapter can hand a real snapshot to the same view.
+
+Coverage
+
+- 12 vitest tests in tests/summary.client.spec.ts cover the model
+  (toRunSummary, buildSummary, fixture load), gate history & abstention
+  shape, degradation notes, the 16 step statuses, humanPending derivation,
+  and the adapter entry point.
+- web lib (lib/index.js + lib/client.js) builds via tsdown; main entry
+  smoke: 4 exports; client face is the browser bundle (window-bound).
+- dsx-research-web surface stays consistent with other research packages
+  (dual-face plugin: src/index.ts host inert; src/client/* browser half).
+
+Toolchain integration
+
+- tsconfig.client.json: declare packages/research/dsh-research-web/src
+  /client/css-modules.d.ts and reference the web package in the client
+  project graph (this is the same pattern other dsh-client-* packages use
+  for their CSS modules).
+- pnpm-lock.yaml: add the web importer and its 5 client-side workspace
+  devDependencies (cordis + dsh-client-{locale,ui-conversation,ui-renderer,
+  ui-session,ui-slots}) + react/react-dom types; pure web-package hunk,
+  no other lock changes.
+
+Runtime verification (recorded; full DOM-level verification depends on
+T30 bundle registration which is out of T26 scope):
+
+- Real DSH Web Boot on 127.0.0.1:1122: ready log + 401/303/200 chain OK.
+- Browser (Chrome 152) opened the served URL, completed 内测声明 and API
+  Key dialogs, rendered the conversation shell.
+- __DSH_BOOT__ roster contains
+    "id":"@deepseek-ai/dsh-research-web",
+    "url":"/plugins/??@deepseek-ai/dsh-research-web/client.js&rev=…",
+    "inject":["@deepseek-ai/dsh-api-session-controller",
+              "@deepseek-ai/dsh-client-locale",
+              "@deepseek-ai/dsh-client-ui-conversation",
+              "@deepseek-ai/dsh-client-ui-renderer",
+              "@deepseek-ai/dsh-client-ui-session"]
+  the entry rides dsh-client-modules's modules-row scan and is bundled
+  into the merged /plugins/??… client.js URL.
+- Per-tab DOM rendering of the research view (slot order 20, Mock badge,
+  16-step list, gated/abstained/degradation sections) requires a
+  workspace + active session, which is the T30 bundle-registration
+  surface; flagged as the next integration milestone.
+
+Truthfulness
+
+- All run data is fixture (RESEARCH_FIXTURE), source='fixture' is implicit
+  in buildSummary() returning the same RunSummary from a fixed input.
+- The view is labelled MOCK in the rendered header; no live poll.
+- No fixture is ever labelled as real research verification.
+
+Test status
+
+- packages/research/dsh-research-web tests: 12/12 green
+- research suite total: 895/895 (T19-B + 12 web tests) green
+- core / tools / team / cordis typecheck: green
+- client tsc -b tsconfig.client.json: green (after fixing one
+  summary.client.spec.ts noUncheckedIndexedAccess assertion)

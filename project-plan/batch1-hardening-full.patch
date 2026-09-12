@@ -1,0 +1,3233 @@
+diff --git a/packages/host/directory-picker-native/src/win32-dialog-bindings.ts b/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
+index ef7795c..bde5575 100644
+--- a/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
++++ b/packages/host/directory-picker-native/src/win32-dialog-bindings.ts
+@@ -28,6 +28,92 @@ interface Koffi {
+   view(ref: unknown, len: number): ArrayBuffer
+ }
+ 
++/**
++ * Stable typed error for native binding load failures: distinguishes a koffi
++ * import / module-shape failure (`DSH_NATIVE_KOFFI_IMPORT_FAILED`) from a DLL
++ * load failure (`DSH_NATIVE_DLL_LOAD_FAILED`). The latter carries `dllName`
++ * so callers can see WHICH native library failed to load. A DLL load failure
++ * is not assumed to mean a missing `@koromix/koffi-win32-*` binary — it may
++ * equally be an architecture mismatch, permission, ABI, or loader error, so
++ * the code names the failure mode (load failed) rather than one hypothesis
++ * (binary missing). Surfaces as-is — there is no runtime fallback here (per
++ * the 2026-08-04 note; the startup browse降级 in `resolve.ts:50` stays
++ * unchanged). Upper layers still rethrow as-is; they now propagate a stable
++ * typed error instead of an opaque one.
++ *
++ * NOTE: this is error-handling hardening, NOT proof of a real crash root cause.
++ * B-PICK remains open until a real Windows repro confirms the guarded path is
++ * the failure surface and the fix removes the original error.
++ */
++export class Win32BindingsLoadError extends Error {
++  readonly code: 'DSH_NATIVE_KOFFI_IMPORT_FAILED' | 'DSH_NATIVE_DLL_LOAD_FAILED'
++  readonly dllName?: string
++  constructor(
++    code: Win32BindingsLoadError['code'],
++    message: string,
++    cause?: unknown,
++    dllName?: string,
++  ) {
++    super(message)
++    this.name = 'Win32BindingsLoadError'
++    this.code = code
++    // Inherited from ES2022 Error.cause (mutable, typed `unknown`): set only when
++    // provided so an absent cause stays absent (exactOptionalPropertyTypes-safe).
++    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
++    // dllName only meaningful for DSH_NATIVE_DLL_LOAD_FAILED; left absent
++    // otherwise (and when not provided).
++    if (dllName !== undefined) this.dllName = dllName
++  }
++}
++
++function errMessage(e: unknown): string {
++  if (e instanceof Error) return e.message
++  return String(e)
++}
++
++/**
++ * Import koffi and validate the module shape: a successful `import('koffi')`
++ * whose default lacks a callable `load` (a corrupted/odd module shape) is
++ * reported as `DSH_NATIVE_KOFFI_IMPORT_FAILED`, never misreported as a DLL
++ * load failure. Factoring this here keeps both call sites consistent and
++ * guarantees a malformed module never reaches `loadDll` (which would misfile
++ * it as `DSH_NATIVE_DLL_LOAD_FAILED`).
++ */
++async function loadKoffi(): Promise<Koffi> {
++  let imported: { default?: unknown }
++  try {
++    imported = await import('koffi')
++  } catch (e) {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
++      `import('koffi') failed: ${errMessage(e)}`,
++      e,
++    )
++  }
++  const koffi = imported.default as unknown as Koffi
++  if (!koffi || typeof koffi.load !== 'function') {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_KOFFI_IMPORT_FAILED',
++      "import('koffi') resolved but the module default has no callable load() — module-shape error, not a DLL load failure",
++    )
++  }
++  return koffi
++}
++
++/** Load a native DLL via koffi, rethrowing load failures as Win32BindingsLoadError. */
++function loadDll(koffi: Koffi, dll: string): KoffiLibrary {
++  try {
++    return koffi.load(dll)
++  } catch (e) {
++    throw new Win32BindingsLoadError(
++      'DSH_NATIVE_DLL_LOAD_FAILED',
++      `koffi.load('${dll}') failed: ${errMessage(e)}`,
++      e,
++      dll,
++    )
++  }
++}
++
+ /**
+  * Read a NUL-terminated UTF-16 string at a native address. koffi's
+  * `_Out_ void **` out-params surface a raw address, and
+@@ -88,10 +174,10 @@ const IID_IFILE_OPEN_DIALOG = guidBytes('d57c7288-d4ad-4768-be02-9d969532d960')
+  * @returns the bindings {@link runFolderDialog} sequences against.
+  */
+ export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
+-  const koffi = (await import('koffi')).default as unknown as Koffi
+-  const ole32 = koffi.load('ole32.dll')
+-  const user32 = koffi.load('user32.dll')
+-  const kernel32 = koffi.load('kernel32.dll')
++  const koffi = await loadKoffi()
++  const ole32 = loadDll(koffi, 'ole32.dll')
++  const user32 = loadDll(koffi, 'user32.dll')
++  const kernel32 = loadDll(koffi, 'kernel32.dll')
+ 
+   // Vtable slots and out-pointers are pointer-width offsets: 8 on x64/arm64,
+   // 4 on ia32 — koffi reports the running process's width.
+@@ -180,8 +266,8 @@ export async function loadWin32DialogBindings(): Promise<Win32DialogBindings> {
+  * @param threadId - the dialog thread's native id (from the `showing` notice).
+  */
+ export async function closeThreadWindows(threadId: number): Promise<void> {
+-  const koffi = (await import('koffi')).default as unknown as Koffi
+-  const user32 = koffi.load('user32.dll')
++  const koffi = await loadKoffi()
++  const user32 = loadDll(koffi, 'user32.dll')
+   const enumThreadWindows = user32.func('__stdcall', 'EnumThreadWindows', 'int', ['uint32', 'void *', 'intptr'])
+   const postMessageW = user32.func('__stdcall', 'PostMessageW', 'int', ['void *', 'uint32', 'uintptr', 'intptr'])
+   const protoEnumProc = koffi.proto('int __stdcall DshEnumThreadWndProc(void *hwnd, intptr lparam)')
+diff --git a/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts b/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
+index 85d4aed..fc78761 100644
+--- a/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
++++ b/packages/host/directory-picker-native/tests/win32-dialog-bindings.spec.ts
+@@ -10,6 +10,7 @@
+ 
+ import { afterEach, describe, expect, it, vi } from 'vitest'
+ import { HRESULT_CANCELLED, runFolderDialog } from '../src/win32-dialog-logic.ts'
++import type { Win32BindingsLoadError as LoadError } from '../src/win32-dialog-bindings.ts'
+ 
+ const E_FAIL = 0x80004005 | 0
+ const WM_CLOSE = 0x10
+@@ -30,6 +31,8 @@ interface ComWorld {
+   /** Contexts `SetThreadDpiAwarenessContext` accepts; others return NULL. */
+   supportedDpiContexts: number[]
+   enumThrows: boolean
++  /** 若设置，fake 的 koffi.load 命中即抛此错误（模拟原生二进制缺失/加载失败）。 */
++  loadThrows?: Error
+   path: string
+   titles: string[]
+   options: number[]
+@@ -90,40 +93,43 @@ function installFakeKoffi(world: ComWorld): void {
+ 
+   vi.doMock('koffi', () => ({
+     default: {
+-      load: (dll: string) => ({
+-        func: (_convention: string, name: string, _result: string, _args: string[]) => {
+-          switch (name) {
+-            case 'CoInitializeEx': return () => world.coInitHr
+-            case 'CoUninitialize': return () => { world.uninitialized += 1 }
+-            case 'CoCreateInstance': return (...args: unknown[]) => {
+-              if (world.coCreateHr < 0) return world.coCreateHr
+-              // The out-pointer must be allocated at the fake's pointer width.
+-              if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
+-                throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
++      load: (dll: string) => {
++        if (world.loadThrows) throw world.loadThrows
++        return {
++          func: (_convention: string, name: string, _result: string, _args: string[]) => {
++            switch (name) {
++              case 'CoInitializeEx': return () => world.coInitHr
++              case 'CoUninitialize': return () => { world.uninitialized += 1 }
++              case 'CoCreateInstance': return (...args: unknown[]) => {
++                if (world.coCreateHr < 0) return world.coCreateHr
++                // The out-pointer must be allocated at the fake's pointer width.
++                if ((args[4] as Buffer).length !== FAKE_POINTER_SIZE) {
++                  throw new Error(`CoCreateInstance out buffer must be ${FAKE_POINTER_SIZE} bytes`)
++                }
++                outBuffers.set(args[4], dialogPtr)
++                return 0
+               }
+-              outBuffers.set(args[4], dialogPtr)
+-              return 0
+-            }
+-            case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
+-            case 'GetCurrentThreadId': return () => 31337
+-            case 'SetThreadDpiAwarenessContext': {
+-              if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
+-              return (context: unknown) => {
+-                world.dpiContexts.push(context)
+-                return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
++              case 'CoTaskMemFree': return (ptr: unknown) => { world.freed.push(ptr) }
++              case 'GetCurrentThreadId': return () => 31337
++              case 'SetThreadDpiAwarenessContext': {
++                if (!world.hasThreadDpi) throw new Error(`${dll}: SetThreadDpiAwarenessContext not found`)
++                return (context: unknown) => {
++                  world.dpiContexts.push(context)
++                  return world.supportedDpiContexts.includes(context as number) ? { kind: 'previous-context' } : null
++                }
+               }
++              case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
++                if (world.enumThrows) throw new Error('EnumThreadWindows refused')
++                callback.fn({ kind: 'hwnd', n: 1 }, lparam)
++                callback.fn({ kind: 'hwnd', n: 2 }, lparam)
++                return 1
++              }
++              case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
++              default: throw new Error(`unexpected native import ${dll}/${name}`)
+             }
+-            case 'EnumThreadWindows': return (_tid: unknown, callback: { fn: (hwnd: unknown, lparam: unknown) => number }, lparam: unknown) => {
+-              if (world.enumThrows) throw new Error('EnumThreadWindows refused')
+-              callback.fn({ kind: 'hwnd', n: 1 }, lparam)
+-              callback.fn({ kind: 'hwnd', n: 2 }, lparam)
+-              return 1
+-            }
+-            case 'PostMessageW': return (hwnd: unknown, message: number) => { world.posted.push({ hwnd, message }); return 1 }
+-            default: throw new Error(`unexpected native import ${dll}/${name}`)
+-          }
+-        },
+-      }),
++          },
++        }
++      },
+       proto: (declaration: string) => ({ declaration }),
+       pointer: (type: unknown) => type,
+       sizeof: (type: string) => { void type; return FAKE_POINTER_SIZE },
+@@ -361,3 +367,79 @@ describe('the worker entry over a mocked process boundary', () => {
+     await expect(import('../src/win32-dialog-worker.ts')).rejects.toThrow('must run as a child process')
+   })
+ })
++
++// B-PICK 保持开放: 下列注入式测试证明守卫将 koffi 加载异常转为稳定 Win32BindingsLoadError
++// 且不破坏成功路径——即"错误处理加固覆盖"。它不证明真实 Windows 崩溃根因;后者须真 Windows
++// 复现 + 加守卫后原错误转为 Win32BindingsLoadError 且上层正常 surface 方可关闭 B-PICK。
++describe('native load failure hardening (B-PICK stays OPEN: error-handling coverage, NOT real-crash root-cause)', () => {
++  // Win32BindingsLoadError is a runtime-destructured value (the class); LoadError (a static
++  // type import) is its instance type, so `as` casts typecheck. The outer cast narrows the
++  // .catch union (Win32DialogBindings | thrown error) to the error type, making .code / .cause
++  // / .message reachable without per-access casts.
++  it('L1: rethrows a koffi.load failure as Win32BindingsLoadError DSH_NATIVE_DLL_LOAD_FAILED carrying dllName', async () => {
++    const original = new Error('Could not load native module')
++    const world = comWorld({ loadThrows: original })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_DLL_LOAD_FAILED')
++    expect(err.dllName).toBe('ole32.dll')
++  })
++
++  it('L2: preserves the original load failure as .cause', async () => {
++    const original = new Error('Could not load native module')
++    const world = comWorld({ loadThrows: original })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.cause).toBe(original)
++  })
++
++  it('L3: names the first failing DLL (ole32.dll) in the message', async () => {
++    const world = comWorld({ loadThrows: new Error('Could not load native module') })
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as Error
++    expect(String(err.message)).toContain('ole32.dll')
++  })
++
++  it('L4: rethrows an import(koffi) failure as Win32BindingsLoadError DSH_NATIVE_KOFFI_IMPORT_FAILED', async () => {
++    vi.doMock('koffi', () => { throw new Error('koffi module missing') })
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_KOFFI_IMPORT_FAILED')
++  })
++
++  it('L5: success path is transparent — returns usable bindings (no regression)', async () => {
++    const world = comWorld()
++    installFakeKoffi(world)
++    const { loadWin32DialogBindings } = await loadBindingsModule()
++    const bindings = await loadWin32DialogBindings()
++    expect(runFolderDialog(bindings, 'Pick', vi.fn())).toBe('C:\\选中\\directory')
++    expect(world.released).toEqual(['item', 'dialog'])
++  })
++
++  it('L6: closeThreadWindows rethrows a koffi.load failure as DSH_NATIVE_DLL_LOAD_FAILED (user32.dll)', async () => {
++    const world = comWorld({ loadThrows: new Error('Could not load native module') })
++    installFakeKoffi(world)
++    const { closeThreadWindows, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await closeThreadWindows(777).catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_DLL_LOAD_FAILED')
++    expect(err.dllName).toBe('user32.dll')
++  })
++
++  it('L7: a koffi module whose default lacks a callable load() is KOFFI_IMPORT_FAILED (not misreported as DLL_LOAD_FAILED)', async () => {
++    // §三.3: verify the dynamic import actually has a callable load() — a
++    // module-shape error must NOT be misclassified as a DLL load failure.
++    vi.doMock('koffi', () => ({ default: { sizeof: () => 8 } }))
++    const { loadWin32DialogBindings, Win32BindingsLoadError } = await loadBindingsModule()
++    const err = (await loadWin32DialogBindings().catch((e: unknown) => e)) as LoadError
++    expect(err).toBeInstanceOf(Win32BindingsLoadError)
++    expect(err.code).toBe('DSH_NATIVE_KOFFI_IMPORT_FAILED')
++    expect(err.dllName).toBeUndefined()
++  })
++})
+diff --git a/packages/research/dsh-research-cordis/package.json b/packages/research/dsh-research-cordis/package.json
+new file mode 100644
+index 0000000..b156c3a
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/package.json
+@@ -0,0 +1,41 @@
++{
++  "name": "@deepseek-ai/dsh-research-cordis",
++  "description": "Thin Cordis adapter wrapping the pure dsh-research-core 16-step research engine (ctx.research service)",
++  "version": "0.1.2-alpha.4",
++  "private": true,
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "license": "MIT",
++  "scripts": {
++    "typecheck": "tsc --noEmit",
++    "test": "vitest run"
++  },
++  "dependencies": {
++    "@deepseek-ai/dsh-research-core": "workspace:^"
++  },
++  "peerDependencies": {
++    "@deepseek-ai/cordis": "workspace:^",
++    "@deepseek-ai/schemastery": "workspace:^"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "workspace:^",
++    "@deepseek-ai/schemastery": "workspace:^",
++    "@deepseek-ai/dsh-research-core": "workspace:^",
++    "@types/node": "^22.20.0",
++    "typescript": "^6.0.3",
++    "vitest": "^4.1.8"
++  }
++}
+diff --git a/packages/research/dsh-research-cordis/src/index.ts b/packages/research/dsh-research-cordis/src/index.ts
+new file mode 100644
+index 0000000..d9b519f
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/src/index.ts
+@@ -0,0 +1,145 @@
++/**
++ * Thin Cordis adapter wrapping the pure dsh-research-core v2 hardened state machine.
++ *
++ * Registers `ctx.research` — a {@link ResearchEngine} service delegating every operation to
++ * the pure core (no state-machine logic is duplicated here). The Service base registers the
++ * instance on `ctx` (auto-unregister on owning-fiber unload); `[Service.init]` adds an unload
++ * effect clearing the run store.
++ *
++ * The in-memory run store is MODULE-SCOPED (RC-C), not an instance field: TS `private` is
++ * compile-time-only (runtime-erased to a plain property — `ctx.research.runs` returned the live
++ * Map, letting an Agent tool mutate RunState/StepState directly), and an ES `#runs` private
++ * field is incompatible with Cordis's service Proxy (the method's `this` is the Proxy, which
++ * did not declare `#runs` — "Cannot read private member from an object whose class did not
++ * declare it"). A module-scoped const is lexical — no property/symbol on the instance is
++ * enumerable, so `ctx.research.runs` is undefined and no live internal reference escapes the
++ * API boundary. ResearchEngine is a singleton service (one store per app/realm), so module
++ * scope is equivalent to instance scope; cleared on owning-fiber unload by [Service.init].
++ *
++ * v2 changes: every method carries `runId` (INV-RUN-ISOLATION); returns are the core's
++ * deep-cloned snapshots (INV-SNAPSHOT). NO human-approval capability is exposed on this
++ * service surface — `submitHumanApproval`/`TrustedHumanPrincipal` live in the host trust
++ * channel (`@deepseek-ai/dsh-research-core/host`), NOT on `ctx.research`, so an Agent tool
++ * calling `ctx.research` cannot pass a humanGate step to 'passed'. `transition` and
++ * `approveHumanGate` are DROPPED (INV-NO-RAW-TRANSITION, INV-NO-LEGACY-APPROVE).
++ *
++ * The "name / inject / Config / apply" three-piece is satisfied by the cordis class-plugin
++ * convention: `name` via `super(ctx, 'research')`, `Config` as a static schema, and `apply`
++ * via `ctx.plugin(ResearchEngine, config)` → constructor + `[Service.init]`.
++ *
++ * @module @deepseek-ai/dsh-research-cordis
++ */
++
++import { Context, Service } from '@deepseek-ai/cordis'
++import z from '@deepseek-ai/schemastery'
++import {
++  canStart,
++  completeStep,
++  createRun,
++  getArtifact,
++  getAuditHistory,
++  getRunSnapshot,
++  isComplete,
++  recordArtifact,
++  rollback,
++  setRunInput,
++  startIfCan,
++  startStep,
++  submitGateVerdict,
++} from '@deepseek-ai/dsh-research-core'
++import type {
++  AuditEntry,
++  GateVerdict,
++  ResearchRunStore,
++  RunSnapshot,
++  StepSnapshot,
++  StepStatus,
++} from '@deepseek-ai/dsh-research-core'
++
++declare module '@deepseek-ai/cordis' {
++  interface Context {
++    research: ResearchEngine
++  }
++}
++
++/** Adapter config (currently empty — the pure engine is config-less). */
++export interface Config {}
++
++/**
++ * The in-memory run store — MODULE-SCOPED so it is genuinely runtime-private (RC-C). See the
++ * file header for the rationale (TS `private` is runtime-erased; `#runs` is incompatible with
++ * Cordis's service Proxy). Lexical access (no `this`) sidesteps the Proxy; no property/symbol
++ * on the instance is enumerable, so `ctx.research.runs` is undefined. Cleared on owning-fiber
++ * unload by [Service.init] (singleton service — module scope ≡ instance scope).
++ */
++const runs: ResearchRunStore = new Map()
++
++export class ResearchEngine extends Service {
++  static Config: z<Config> = z.object({})
++
++  constructor(ctx: Context, config: Config = {}) {
++    super(ctx, 'research')
++    void config
++  }
++
++  /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
++  async [Service.init](): Promise<void> {
++    this.ctx.effect(() => async () => {
++      runs.clear()
++    }, 'research.runs')
++  }
++
++  createRun(runId?: string): string {
++    return createRun(runs, runId)
++  }
++
++  setRunInput(runId: string, slug: string, value: unknown): void {
++    setRunInput(runs, runId, slug, value)
++  }
++
++  getRunSnapshot(runId: string): RunSnapshot {
++    return getRunSnapshot(runs, runId)
++  }
++
++  getArtifact(runId: string, slug: string): unknown {
++    return getArtifact(runs, runId, slug)
++  }
++
++  canStart(runId: string, stepId: string): boolean {
++    return canStart(runs, runId, stepId)
++  }
++
++  startStep(runId: string, stepId: string): StepSnapshot {
++    return startStep(runs, runId, stepId)
++  }
++
++  startIfCan(runId: string, stepId: string): StepSnapshot | null {
++    return startIfCan(runs, runId, stepId)
++  }
++
++  recordArtifact(runId: string, stepId: string, outputSlug: string, value: unknown): void {
++    recordArtifact(runs, runId, stepId, outputSlug, value)
++  }
++
++  submitGateVerdict(runId: string, stepId: string, verdict: GateVerdict): StepStatus {
++    return submitGateVerdict(runs, runId, stepId, verdict)
++  }
++
++  completeStep(runId: string, stepId: string): StepStatus {
++    return completeStep(runs, runId, stepId)
++  }
++
++  rollback(runId: string, stepId: string): void {
++    rollback(runs, runId, stepId)
++  }
++
++  isComplete(runId: string, stepId: string): boolean {
++    return isComplete(runs, runId, stepId)
++  }
++
++  getAuditHistory(runId: string, stepId: string): AuditEntry[] {
++    return getAuditHistory(runs, runId, stepId)
++  }
++}
++
++export default ResearchEngine
+diff --git a/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts b/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts
+new file mode 100644
+index 0000000..93deb42
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tests/lifecycle.spec.ts
+@@ -0,0 +1,69 @@
++import { describe, expect, it } from 'vitest'
++import { Context } from '@deepseek-ai/cordis'
++import { ResearchEngine } from '../src/index.ts'
++
++// P1.6 v2 thin Cordis adapter over the hardened dsh-research-core. Covers the lifecycle seams
++// (load / unload / error / idempotency) + the trust-boundary guarantee that the Agent-callable
++// service surface exposes NO human-approval capability. State-machine behavior itself is pinned
++// by dsh-research-core's own suite; these exercise the adapter wiring only.
++
++describe('ResearchEngine Cordis adapter (P1.6 v2)', () => {
++  it('loads: ctx.plugin registers ctx.research + delegates to the pure core (runId-keyed)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    expect(ctx.research).toBeInstanceOf(ResearchEngine)
++    const runId = ctx.research.createRun()
++    ctx.research.setRunInput(runId, 'domain-direction', 'ML')
++    expect(ctx.research.canStart(runId, 'A1-landscape')).toBe(true)
++  })
++
++  it('unloads: disposing the fiber unregisters ctx.research (cleanup effect runs)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    expect(ctx.research).toBeInstanceOf(ResearchEngine)
++    await ctx.fiber.dispose()
++    expect(ctx.research as ResearchEngine | undefined).toBeUndefined()
++  })
++
++  it('propagates core errors: startStep on a missing run throws RUN_NOT_FOUND (never auto-creates)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    expect(() => ctx.research.startStep('ghost', 'A1-landscape')).toThrow(/RUN_NOT_FOUND/)
++  })
++
++  it('idempotent load→unload across fresh contexts (no throw, fresh state each cycle)', async () => {
++    for (let i = 0; i < 2; i++) {
++      const ctx = new Context()
++      await ctx.plugin(ResearchEngine)
++      expect(ctx.research).toBeInstanceOf(ResearchEngine)
++      const runId = ctx.research.createRun()
++      // fresh run, no seed → A1 cannot start (proves the new ctx's store is empty, not leaked)
++      expect(ctx.research.canStart(runId, 'A1-landscape')).toBe(false)
++      await ctx.fiber.dispose()
++      expect(ctx.research as ResearchEngine | undefined).toBeUndefined()
++    }
++  })
++
++  it('exposes NO trust capability on the service surface (transition / approveHumanGate / submitHumanApproval absent)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    const r = ctx.research as unknown as Record<string, unknown>
++    expect(r.transition).toBeUndefined()
++    expect(r.approveHumanGate).toBeUndefined()
++    expect(r.submitHumanApproval).toBeUndefined()
++    expect(r.createHostApprovalChannel).toBeUndefined()
++  })
++
++  it('RC-C: the run store is runtime-private — ctx.research.runs is undefined (TS private ≠ runtime-private)', async () => {
++    const ctx = new Context()
++    await ctx.plugin(ResearchEngine)
++    const r = ctx.research as unknown as Record<string, unknown>
++    // TS `private` is compile-time-only (runtime-erased to a plain property); the ES private
++    // field `#runs` is genuinely runtime-inaccessible, so `ctx.research.runs` is undefined.
++    expect(r.runs).toBeUndefined()
++    // sanity: the service still delegates correctly to the (now-inaccessible) store
++    const runId = ctx.research.createRun()
++    ctx.research.setRunInput(runId, 'domain-direction', 'ML')
++    expect(ctx.research.canStart(runId, 'A1-landscape')).toBe(true)
++  })
++})
+diff --git a/packages/research/dsh-research-cordis/tests/prod-import-smoke.mjs b/packages/research/dsh-research-cordis/tests/prod-import-smoke.mjs
+new file mode 100644
+index 0000000..a64b174
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tests/prod-import-smoke.mjs
+@@ -0,0 +1,70 @@
++// prod-import-smoke.mjs — plain-Node import/export smoke test against the BUILT production
++// package (NOT vitest, which resolves the package name to SOURCE via tsconfig paths and so
++// cannot observe the production tree-shaking). Verifies the production export surface (RC-E E2):
++//   - the MAIN entry (@deepseek-ai/dsh-research-core) exposes the 13 non-trust API funcs and
++//     leaks NO trust capability (adversarial test #5);
++//   - the ./host subpath (@deepseek-ai/dsh-research-core/host) exports ONLY
++//     createHostApprovalChannel at runtime — no TrustedHumanPrincipal class (prototype), no
++//     .create(), no _resetApprovalChannelForTests, no mintPrincipal, no channel instance
++//     (adversarial tests #5 / #7 / #10);
++//   - the singleton: a second createHostApprovalChannel throws APPROVAL_CHANNEL_EXISTS (#4).
++//
++// Run:  node packages/research/dsh-research-cordis/tests/prod-import-smoke.mjs
++// (the adapter's node_modules symlinks @deepseek-ai/dsh-research-core → the built lib; this
++// script imports via the package name + package.json exports, exercising the real production
++// resolution path an Agent importer would use.)
++
++import * as Core from '@deepseek-ai/dsh-research-core'
++import * as Host from '@deepseek-ai/dsh-research-core/host'
++
++let failures = 0
++function check(name, cond) {
++  if (cond) console.log('ok  :', name)
++  else { console.error('FAIL:', name); failures++ }
++}
++
++// ── #10 + MAIN: the main entry exposes the 13 non-trust API funcs and NO trust capability ──
++const MAIN_FUNCS = [
++  'createRun', 'setRunInput', 'getRunSnapshot', 'getArtifact', 'canStart', 'startStep',
++  'startIfCan', 'recordArtifact', 'submitGateVerdict', 'completeStep', 'rollback',
++  'isComplete', 'getAuditHistory',
++]
++for (const fn of MAIN_FUNCS) check(`MAIN exports ${fn} (function)`, typeof Core[fn] === 'function')
++check('MAIN leaks NO createHostApprovalChannel', Core.createHostApprovalChannel === undefined)
++check('MAIN leaks NO TrustedHumanPrincipal', Core.TrustedHumanPrincipal === undefined)
++check('MAIN leaks NO _applyHumanApproval', Core._applyHumanApproval === undefined)
++check('MAIN leaks NO _resetApprovalChannelForTests', Core._resetApprovalChannelForTests === undefined)
++// The MAIN entry also exports the 3 error classes (callers catch them); nothing else.
++const MAIN_ERROR_CLASSES = ['ResearchError', 'ResearchRunError', 'ResearchValueError']
++for (const cls of MAIN_ERROR_CLASSES) check(`MAIN exports ${cls} (error class — callers catch)`, typeof Core[cls] === 'function')
++check('MAIN runtime exports are only the 13 API funcs + 3 error classes (no trust leak)', Object.keys(Core).length === MAIN_FUNCS.length + MAIN_ERROR_CLASSES.length)
++
++// ── #5 / #7 / #10 + HOST: the ./host subpath exports ONLY createHostApprovalChannel at runtime ──
++check('HOST exports createHostApprovalChannel (function)', typeof Host.createHostApprovalChannel === 'function')
++check('HOST does NOT export TrustedHumanPrincipal at runtime (type-only — no prototype to Object.create)', Host.TrustedHumanPrincipal === undefined)
++check('HOST does NOT export TrustedHumanPrincipal.create (removed — RC-E E2)', Host.TrustedHumanPrincipal?.create === undefined)
++check('HOST does NOT export _resetApprovalChannelForTests (tree-shaken — RC-E E2; prod cannot reset the singleton)', Host._resetApprovalChannelForTests === undefined)
++check('HOST does NOT export HostApprovalChannel (type-only)', Host.HostApprovalChannel === undefined)
++check('HOST does NOT export mintPrincipal (method on the channel INSTANCE, not a free export)', Host.mintPrincipal === undefined)
++check('HOST does NOT export submit (method on the channel INSTANCE)', Host.submit === undefined)
++check('HOST runtime exports are only createHostApprovalChannel', Object.keys(Host).length === 1)
++
++// ── #4 + singleton: production creates exactly one channel; a second mint throws ──
++const channel = Host.createHostApprovalChannel('smoke-secret')
++check('createHostApprovalChannel returns a channel instance', typeof channel === 'object' && channel !== null)
++check('channel instance has registerPrincipal method', typeof channel.registerPrincipal === 'function')
++check('channel instance has mintPrincipal method (the sole principal factory)', typeof channel.mintPrincipal === 'function')
++check('channel instance has submit method', typeof channel.submit === 'function')
++let secondThrew = false
++try {
++  Host.createHostApprovalChannel('second-secret')
++} catch (e) {
++  secondThrew = /APPROVAL_CHANNEL_EXISTS/.test(String(e?.message ?? e))
++}
++check('a second createHostApprovalChannel throws APPROVAL_CHANNEL_EXISTS (singleton)', secondThrew)
++
++if (failures > 0) {
++  console.error(`\n${failures} PROD-IMPORT-SMOKE CHECK(S) FAILED`)
++  process.exit(1)
++}
++console.log('\nprod-import-smoke: ALL PASS')
+diff --git a/packages/research/dsh-research-cordis/tsconfig.json b/packages/research/dsh-research-cordis/tsconfig.json
+new file mode 100644
+index 0000000..ce74139
+--- /dev/null
++++ b/packages/research/dsh-research-cordis/tsconfig.json
+@@ -0,0 +1,17 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "types": [
++      "node"
++    ]
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    { "path": "../../../vendor/cordis" },
++    { "path": "../../../vendor/schemastery" }
++  ]
++}
+diff --git a/packages/research/dsh-research-core/package.json b/packages/research/dsh-research-core/package.json
+new file mode 100644
+index 0000000..f1df084
+--- /dev/null
++++ b/packages/research/dsh-research-core/package.json
+@@ -0,0 +1,36 @@
++{
++  "name": "@deepseek-ai/dsh-research-core",
++  "version": "0.1.2-alpha.4",
++  "type": "module",
++  "private": true,
++  "main": "./lib/index.js",
++  "types": "./lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./host": {
++      "types": "./lib/types/host-prod.d.ts",
++      "default": "./lib/host.js"
++    },
++    "./package.json": "./package.json"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/host.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "engines": {
++    "node": ">=18"
++  },
++  "scripts": {
++    "typecheck": "tsc --noEmit",
++    "test": "vitest run"
++  },
++  "devDependencies": {
++    "@types/node": "^22.20.0",
++    "typescript": "^6.0.3",
++    "vitest": "^4.1.8"
++  }
++}
+diff --git a/packages/research/dsh-research-core/src/engine/state-machine.ts b/packages/research/dsh-research-core/src/engine/state-machine.ts
+new file mode 100644
+index 0000000..daa836e
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/engine/state-machine.ts
+@@ -0,0 +1,604 @@
++/**
++ * v2 hardened state machine for the 16-step research engine.
++ *
++ * Run-keyed (ResearchRunStore) — every public method carries runId (P1-5). No public
++ * `transition()` / `approveHumanGate()` (P1-3, P0-1-H2 — INV-NO-RAW-TRANSITION,
++ * INV-NO-LEGACY-APPROVE); the human-approval path is `_applyHumanApproval` (package-
++ * private, called only by the host trust channel in `../host.ts`, NOT re-exported from
++ * the public `index.ts`). Caller-supplied values are deep-cloned at write time
++ * (INV-WRITE-ISOLATION) and non-cloneable values rejected (DSH_VALUE_NOT_CLONEABLE).
++ * Returns are deep-cloned read-only snapshots, never live internal refs (INV-SNAPSHOT,
++ * INV-HISTORY-IMMUTABLE). Cascade rollback transitive-closes dependents with a visited
++ * Set (INV-CASCADE, diamond-safe). Every mutator appends an AuditEvent (INV-AUDIT-APPEND).
++ *
++ * Legal forward edges: pending → in_progress; in_progress → gated/passed/blocked/failed;
++ * gated → passed/blocked. Terminal states only exited by rollback. `_apply` is the sole
++ * forward-edge mutator; `_adjudicate` is the sole gate-adjudicator (INV-SOLE-ADJUDICATOR).
++ */
++
++import type {
++  ApprovalRecord,
++  AttemptRecord,
++  AuditEntry,
++  AuditEvent,
++  AuditEventKind,
++  CurrentAttemptSnapshot,
++  GateVerdict,
++  ResearchRunStore,
++  RunSnapshot,
++  RunState,
++  StepDefinition,
++  StepSnapshot,
++  StepState,
++  StepStatus,
++  TrinityComponent,
++} from './types.ts'
++import { SEEDABLE_INPUTS, STEP_BY_ID, STEPS } from './steps.ts'
++
++// ── Errors ────────────────────────────────────────────────────────────────────
++
++/** Base error for the research state machine (carries a stable `code`, also prefixed into the
++ *  message so `toThrow(/CODE/)` assertions can match the code, not just the prose). */
++export class ResearchError extends Error {
++  readonly code: string
++  constructor(code: string, message: string, cause?: unknown) {
++    super(`[${code}] ${message}`)
++    this.name = 'ResearchError'
++    this.code = code
++    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
++  }
++}
++
++/** A caller-supplied value could not be deep-cloned (function/symbol/WeakMap etc.). */
++export class ResearchValueError extends ResearchError {
++  constructor(code: 'DSH_VALUE_NOT_CLONEABLE', message: string, cause?: unknown) {
++    super(code, message, cause)
++    this.name = 'ResearchValueError'
++  }
++}
++
++/** Run lifecycle error (RUN_EXISTS / RUN_NOT_FOUND). */
++export class ResearchRunError extends ResearchError {
++  constructor(code: 'RUN_EXISTS' | 'RUN_NOT_FOUND', message: string) {
++    super(code, message)
++    this.name = 'ResearchRunError'
++  }
++}
++
++// ── Clone ──────────────────────────────────────────────────────────────────────
++
++/** Deep-clone a caller-supplied value; reject non-cloneable values at the write boundary
++ *  (HOLE-2/H6) so the read/rollback paths can never throw DataCloneError. */
++function cloneValue(x: unknown): unknown {
++  try {
++    return structuredClone(x)
++  } catch (e) {
++    throw new ResearchValueError(
++      'DSH_VALUE_NOT_CLONEABLE',
++      'value is not structured-cloneable (functions/symbols/WeakMap etc. are rejected at the write boundary — INV-WRITE-ISOLATION)',
++      e,
++    )
++  }
++}
++
++// ── Run id ─────────────────────────────────────────────────────────────────────
++
++let runIdCounter = 0
++function generateRunId(): string {
++  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
++  if (c && typeof c.randomUUID === 'function') return c.randomUUID()
++  return 'r_' + Date.now().toString(36) + '_' + (runIdCounter++).toString(36)
++}
++
++// ── Transitions ───────────────────────────────────────────────────────────────
++
++const LEGAL_TRANSITIONS: Readonly<Record<StepStatus, ReadonlySet<StepStatus>>> = {
++  pending: new Set<StepStatus>(['in_progress']),
++  in_progress: new Set<StepStatus>(['gated', 'passed', 'blocked', 'failed']),
++  gated: new Set<StepStatus>(['passed', 'blocked']),
++  passed: new Set<StepStatus>(),
++  blocked: new Set<StepStatus>(),
++  failed: new Set<StepStatus>(),
++}
++
++// ── Internal helpers ──────────────────────────────────────────────────────────
++
++function ensureRun(store: ResearchRunStore, runId: string): RunState {
++  const run = store.get(runId)
++  if (!run) throw new ResearchRunError('RUN_NOT_FOUND', `run '${runId}' not found (never auto-created — call createRun first)`)
++  return run
++}
++
++function ensureEntry(run: RunState, stepId: string): StepState {
++  const existing = run.steps.get(stepId)
++  if (existing) return existing
++  const state: StepState = {
++    stepId,
++    status: 'pending',
++    attempts: 0,
++    attempt_id: 0,
++    artifacts: {},
++    gateResults: {},
++    history: [],
++    startedAt: undefined,
++    finishedAt: undefined,
++  }
++  run.steps.set(stepId, state)
++  return state
++}
++
++function pushEvent(
++  run: RunState,
++  kind: AuditEventKind,
++  stepId: string | undefined,
++  attemptId: number | undefined,
++  detail?: unknown,
++): void {
++  const event: AuditEvent = {
++    kind,
++    runId: run.runId,
++    ts: Date.now(),
++    ...(stepId !== undefined ? { stepId } : {}),
++    ...(attemptId !== undefined ? { attemptId } : {}),
++    ...(detail !== undefined ? { detail: cloneValue(detail) } : {}),
++  }
++  run.events.push(event)
++}
++
++/** Deep-cloned superseded snapshot of a step's current attempt (INV-HISTORY-IMMUTABLE). */
++function snapshotOf(state: StepState): AttemptRecord {
++  return {
++    attempt_id: state.attempt_id,
++    status: state.status,
++    artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
++    gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
++    ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
++    superseded: true,
++  }
++}
++
++/** Reset a step's live fields to a fresh pending attempt (attempt_id NOT advanced — startStep advances it). */
++function resetStep(state: StepState): void {
++  state.status = 'pending'
++  state.artifacts = {}
++  state.gateResults = {}
++  state.approval = undefined
++  state.startedAt = undefined
++  state.finishedAt = undefined
++}
++
++/** Mark all current-attempt artifacts produced by (producerStepId, producerAttemptId) invalidated
++ * (REPLACE with a fresh full record — DEP-4, never mutate in place). */
++function invalidateArtifactsFor(run: RunState, producerStepId: string, producerAttemptId: number): void {
++  for (const slug in run.registry) {
++    const rec = run.registry[slug]
++    if (!rec) continue
++    if (rec.producerStepId === producerStepId && rec.producerAttemptId === producerAttemptId && !rec.invalidated) {
++      run.registry[slug] = {
++        slug: rec.slug,
++        producerStepId: rec.producerStepId,
++        producerAttemptId: rec.producerAttemptId,
++        value: rec.value,
++        producedAt: rec.producedAt,
++        invalidated: true,
++      }
++    }
++  }
++}
++
++/**
++ * BFS over the producer/consumer graph: every step whose inputs include an output of
++ * `stepId` or of any transitive dependent. Visited Set guarantees each dependent is
++ * returned exactly once (diamond-safe — DEP-3) and the closure is complete (DEP-2);
++ * termination is guaranteed by assertDagAndSeedSeparation at module load (DEP-9).
++ */
++function computeTransitiveDependents(stepId: string): string[] {
++  const result: string[] = []
++  const visited = new Set<string>()
++  const queue: string[] = [stepId]
++  while (queue.length > 0) {
++    const cur = queue.shift() as string
++    const curDef = STEP_BY_ID.get(cur)
++    if (!curDef) continue
++    for (const s of STEPS) {
++      if (visited.has(s.id)) continue
++      if (s.inputs.some(input => curDef.outputs.indexOf(input) !== -1)) {
++        visited.add(s.id)
++        result.push(s.id)
++        queue.push(s.id)
++      }
++    }
++  }
++  return result
++}
++
++/**
++ * Sole forward-edge mutator (module-private — INV-APPLY-GUARDS). Throws on illegal edges
++ * and forbids a humanGate step reaching 'passed' without an approved approval on record.
++ * NOT exported from the public entry.
++ */
++function _apply(state: StepState, step: StepDefinition, to: StepStatus): void {
++  const allowed = LEGAL_TRANSITIONS[state.status]
++  if (!allowed || !allowed.has(to)) {
++    throw new ResearchError('DSH_ILLEGAL_TRANSITION', `state-machine: illegal '${state.status}' -> '${to}' for '${step.id}'`)
++  }
++  if (to === 'passed' && step.humanGate && state.approval?.decision !== 'approved') {
++    throw new ResearchError('DSH_HUMAN_GATE_NOT_APPROVED', `state-machine: humanGate step '${step.id}' cannot move to 'passed' without an approved human approval`)
++  }
++  state.status = to
++  if (to === 'passed' || to === 'blocked' || to === 'failed') {
++    state.finishedAt = Date.now()
++  }
++}
++
++/**
++ * Sole gate adjudicator (INV-SOLE-ADJUDICATOR, INV-ADJUDICATE-SHARED). Requires every
++ * declared gate component to have a verdict. anyFail + falsifiable C-fail → 'failed';
++ * any other fail → 'blocked'; else humanGate → 'gated' (await human approval),
++ * non-humanGate → 'passed'.
++ */
++function _adjudicate(state: StepState, step: StepDefinition): StepStatus {
++  let anyFail = false
++  let cFailOnFalsifiable = false
++  for (const comp of step.gate) {
++    const v = state.gateResults[comp]
++    if (v && !v.passed) {
++      anyFail = true
++      if (step.falsifiable !== null && comp === 'C') cFailOnFalsifiable = true
++    }
++  }
++  let to: StepStatus
++  if (!anyFail) {
++    to = step.humanGate ? 'gated' : 'passed'
++  } else if (cFailOnFalsifiable) {
++    to = 'failed'
++  } else {
++    to = 'blocked'
++  }
++  _apply(state, step, to)
++  return state.status
++}
++
++// ── Public API ────────────────────────────────────────────────────────────────
++
++/** Create a new run. Throws RUN_EXISTS on explicit-runId collision (never clobbers). */
++export function createRun(store: ResearchRunStore, runId?: string): string {
++  const id = runId ?? generateRunId()
++  if (store.has(id)) throw new ResearchRunError('RUN_EXISTS', `createRun: run '${id}' already exists (refusing to clobber existing run state + audit log)`)
++  const run: RunState = { runId: id, inputs: {}, steps: new Map(), registry: {}, events: [], consumedApprovals: new Set<string>() }
++  store.set(id, run)
++  pushEvent(run, 'run-created', undefined, undefined, { runId: id })
++  return id
++}
++
++/** Seed a run-level input (T0 human authorization). Slug must be in SEEDABLE_INPUTS;
++ *  value must be present; run must not have any started step — neither a non-pending status
++ *  nor a prior attempt (rollback resets status to 'pending' but preserves attempts/history,
++ *  so the guard checks both — INV-INPUT-FROZEN, RC-D). Value deep-cloned. */
++export function setRunInput(store: ResearchRunStore, runId: string, slug: string, value: unknown): void {
++  const run = ensureRun(store, runId)
++  if (SEEDABLE_INPUTS.indexOf(slug) === -1) {
++    throw new ResearchError('DSH_INPUT_NOT_SEEDABLE', `setRunInput: slug '${slug}' is not a seedable input (allowed: ${SEEDABLE_INPUTS.join(', ')}) — INV-SEED-INPUT`)
++  }
++  if (value === undefined || value === null) {
++    throw new ResearchError('DSH_INPUT_EMPTY', `setRunInput: value for '${slug}' must not be undefined/null (H9)`)
++  }
++  for (const s of run.steps.values()) {
++    if (s.status !== 'pending' || s.attempts > 0) {
++      throw new ResearchError(
++        'DSH_INPUT_FROZEN',
++        `setRunInput: run '${runId}' has started (step '${s.stepId}'` +
++          ` status='${s.status}' attempts=${s.attempts}); inputs frozen — INV-INPUT-FROZEN (RC-D)`,
++      )
++    }
++  }
++  run.inputs[slug] = cloneValue(value)
++  pushEvent(run, 'input-seeded', undefined, undefined, { slug })
++}
++
++/** Read-only run snapshot (deep-cloned; artifact values excluded — fetch via getArtifact — HOLE-4). */
++export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnapshot {
++  const run = ensureRun(store, runId)
++  const steps: Record<string, StepSnapshot> = {}
++  for (const [id, s] of run.steps) steps[id] = snapshotStep(s)
++  const registry: Record<string, {
++    slug: string
++    producerStepId: string
++    producerAttemptId: number
++    producedAt: number
++    invalidated: boolean
++  }> = {}
++  for (const slug in run.registry) {
++    const r = run.registry[slug]
++    if (!r) continue
++    registry[slug] = {
++      slug: r.slug,
++      producerStepId: r.producerStepId,
++      producerAttemptId: r.producerAttemptId,
++      producedAt: r.producedAt,
++      invalidated: r.invalidated,
++    }
++  }
++  return {
++    runId: run.runId,
++    inputs: cloneValue(run.inputs) as Record<string, unknown>,
++    steps,
++    registry,
++    events: run.events.map(e => cloneValue(e) as AuditEvent),
++  }
++}
++
++/** Deep-cloned value of one artifact (undefined if missing/invalidated). */
++export function getArtifact(store: ResearchRunStore, runId: string, slug: string): unknown {
++  const run = ensureRun(store, runId)
++  const rec = run.registry[slug]
++  if (!rec || rec.invalidated) return undefined
++  return cloneValue(rec.value)
++}
++
++function isInputSatisfied(run: RunState, slug: string): boolean {
++  const rec = run.registry[slug]
++  if (rec) {
++    if (rec.invalidated) return false // DEP-8: registry invalidation wins over seed
++    const producer = run.steps.get(rec.producerStepId)
++    if (!producer || producer.status !== 'passed') return false // P1-1: upstream must be passed
++    if (producer.attempt_id !== rec.producerAttemptId) return false // stale attempt
++    return true
++  }
++  return slug in run.inputs // DEP-7: seedable run input (permanent across rollback)
++}
++
++/** True iff the step is pending and every input is satisfied by a passed-producer artifact or a seed. */
++export function canStart(store: ResearchRunStore, runId: string, stepId: string): boolean {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) return false
++  const state = run.steps.get(stepId)
++  if (state && state.status !== 'pending') return false
++  for (const input of step.inputs) {
++    if (!isInputSatisfied(run, input)) return false
++  }
++  return true
++}
++
++/** Move a pending step whose inputs are ready to in_progress. Throws if it cannot start.
++ *  Returns a deep-cloned StepSnapshot (never the internal ref — INV-SNAPSHOT). */
++export function startStep(store: ResearchRunStore, runId: string, stepId: string): StepSnapshot {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `startStep: unknown step '${stepId}'`)
++  if (!canStart(store, runId, stepId)) {
++    throw new ResearchError('DSH_CANNOT_START', `startStep: cannot start '${stepId}' (not pending or inputs missing)`)
++  }
++  const state = ensureEntry(run, stepId)
++  state.status = 'in_progress'
++  state.startedAt = Date.now()
++  state.attempts += 1
++  state.attempt_id = state.attempts
++  pushEvent(run, 'step-started', stepId, state.attempt_id)
++  return snapshotStep(state)
++}
++
++/** Atomic check+transition (C-9 TOCTOU-safe): returns the snapshot, or null if it cannot start. */
++export function startIfCan(store: ResearchRunStore, runId: string, stepId: string): StepSnapshot | null {
++  if (!canStart(store, runId, stepId)) return null
++  return startStep(store, runId, stepId)
++}
++
++/** Record a produced output artifact. Slug must be declared in step.outputs (INV-OUTPUT-CONTRACT);
++ *  step must be in_progress. Value deep-cloned; registry entry REPLACED fresh (invalidated=false — DEP-4). */
++export function recordArtifact(store: ResearchRunStore, runId: string, stepId: string, outputSlug: string, value: unknown): void {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `recordArtifact: unknown step '${stepId}'`)
++  if (step.outputs.indexOf(outputSlug) === -1) {
++    throw new ResearchError('DSH_OUTPUT_NOT_DECLARED', `recordArtifact: slug '${outputSlug}' is not declared in step '${stepId}' outputs — INV-OUTPUT-CONTRACT`)
++  }
++  const state = run.steps.get(stepId)
++  if (!state || state.status !== 'in_progress') {
++    throw new ResearchError('DSH_NOT_IN_PROGRESS', `recordArtifact: step '${stepId}' is not in_progress`)
++  }
++  const cloned = cloneValue(value)
++  state.artifacts[outputSlug] = cloned
++  run.registry[outputSlug] = {
++    slug: outputSlug,
++    producerStepId: stepId,
++    producerAttemptId: state.attempt_id,
++    value: cloned,
++    producedAt: Date.now(),
++    invalidated: false,
++  }
++  pushEvent(run, 'artifact-recorded', stepId, state.attempt_id, { slug: outputSlug })
++}
++
++/**
++ * Submit one trinity-component gate verdict. Component must be declared in step.gate
++ * (INV-GATE-COMPONENT); throws on empty-gate steps (use completeStep — INV-COMPLETESTEP-EMPTY);
++ * step must be in_progress (INV-VERDICT-STATUS); one verdict per component per attempt
++ * (INV-VERDICT-IMMUTABLE). Auto-adjudicates via the shared `_adjudicate` on the last verdict
++ * (INV-SOLE-ADJUDICATOR). Verdict deep-cloned before storage (INV-WRITE-ISOLATION).
++ */
++export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId: string, verdict: GateVerdict): StepStatus {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `submitGateVerdict: unknown step '${stepId}'`)
++  if (step.gate.length === 0) {
++    throw new ResearchError('DSH_EMPTY_GATE', `submitGateVerdict: step '${stepId}' has an empty gate — use completeStep() (INV-COMPLETESTEP-EMPTY)`)
++  }
++  // RC-F: read verdict.component ONCE into a local. The original code read `verdict.component`
++  // four times via live property access (gate indexOf / immutability `in`-check / storage key /
++  // audit event). A getter-bearing verdict returning a DIFFERENT component on each read made the
++  // immutability guard see a fresh component (not in gateResults → no DSH_VERDICT_ALREADY_SET
++  // throw) while the storage key read the already-set component → OVERWROTE an existing verdict,
++  // flipping adjudication (blocked→passed). cloneValue/structuredClone invokes an enumerable
++  // getter once and stores the return as a data property, so the deep-clone did not save it.
++  // Reading once + using the local for the membership test AND the storage key makes the guard
++  // consistent — the polymorphic-getter TOCTOU is defeated (INV-VERDICT-IMMUTABLE).
++  const component = verdict.component
++  if (step.gate.indexOf(component) === -1) {
++    throw new ResearchError('DSH_GATE_COMPONENT_NOT_DECLARED', `submitGateVerdict: component '${component}' is not in step '${stepId}' gate — INV-GATE-COMPONENT`)
++  }
++  const state = run.steps.get(stepId)
++  if (!state) throw new ResearchError('DSH_NO_STATE', `submitGateVerdict: no state for '${stepId}'`)
++  if (state.status !== 'in_progress') {
++    throw new ResearchError('DSH_VERDICT_BAD_STATUS', `submitGateVerdict: step '${stepId}' status '${state.status}' !== 'in_progress' — INV-VERDICT-STATUS`)
++  }
++  if (component in state.gateResults) {
++    throw new ResearchError('DSH_VERDICT_ALREADY_SET', `submitGateVerdict: component '${component}' already has a verdict for '${stepId}' — INV-VERDICT-IMMUTABLE (re-adjudication requires rollback+restart)`)
++  }
++  state.gateResults[component] = cloneValue(verdict) as GateVerdict
++  pushEvent(run, 'gate-verdict', stepId, state.attempt_id, { component, passed: verdict.passed })
++  for (const comp of step.gate) {
++    if (!(comp in state.gateResults)) return state.status
++  }
++  const result = _adjudicate(state, step)
++  pushEvent(run, 'step-completed', stepId, state.attempt_id, { status: result })
++  return result
++}
++
++/**
++ * Finalize an empty-gate step (INV-COMPLETESTEP-EMPTY — throws on non-empty gates, which are
++ * adjudicated solely by submitGateVerdict; INV-SOLE-ADJUDICATOR). Step must be in_progress.
++ * Non-humanGate empty gate → 'passed'; humanGate empty gate → 'gated' (await human approval).
++ */
++export function completeStep(store: ResearchRunStore, runId: string, stepId: string): StepStatus {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `completeStep: unknown step '${stepId}'`)
++  if (step.gate.length !== 0) {
++    throw new ResearchError('DSH_NON_EMPTY_GATE', `completeStep: step '${stepId}' has a non-empty gate — use submitGateVerdict (INV-COMPLETESTEP-EMPTY; completeStep is the empty-gate finalize only)`)
++  }
++  const state = run.steps.get(stepId)
++  if (!state) throw new ResearchError('DSH_NO_STATE', `completeStep: no state for '${stepId}'`)
++  if (state.status !== 'in_progress') {
++    throw new ResearchError('DSH_COMPLETE_BAD_STATUS', `completeStep: step '${stepId}' status '${state.status}' !== 'in_progress'`)
++  }
++  const to: StepStatus = step.humanGate ? 'gated' : 'passed'
++  _apply(state, step, to)
++  pushEvent(run, 'step-completed', stepId, state.attempt_id, { status: to })
++  return state.status
++}
++
++/**
++ * Rollback a step: no-op if never started / already pending (DEP-6); legal from terminal
++ * states too (C-3, INV-FAILED-RERUN). Snapshots the current attempt into history (deep-cloned),
++ * invalidates its artifacts, then transitively cascade-resets every dependent downstream step
++ * (visited, once — DEP-3; including blocked/failed — C-5), snapshotting + invalidating each.
++ * History is preserved (append-only — INV-HISTORY-IMMUTABLE).
++ */
++export function rollback(store: ResearchRunStore, runId: string, stepId: string): void {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `rollback: unknown step '${stepId}'`)
++  const state = run.steps.get(stepId)
++  if (!state || state.status === 'pending') return
++  state.history.push(snapshotOf(state))
++  invalidateArtifactsFor(run, stepId, state.attempt_id)
++  for (const depId of computeTransitiveDependents(stepId)) {
++    const dep = run.steps.get(depId)
++    if (!dep) continue
++    if (dep.status === 'pending') continue
++    dep.history.push(snapshotOf(dep))
++    invalidateArtifactsFor(run, depId, dep.attempt_id)
++    resetStep(dep)
++    pushEvent(run, 'rollback', depId, dep.attempt_id, { cascaded: true })
++  }
++  resetStep(state)
++  pushEvent(run, 'rollback', stepId, state.attempt_id, { cascaded: false })
++}
++
++/** True iff the step has reached 'passed' (and, for humanGate steps, holds an approved
++ *  human approval for the CURRENT attempt — INV-COMPLETE-ATTEMPT). */
++export function isComplete(store: ResearchRunStore, runId: string, stepId: string): boolean {
++  const run = ensureRun(store, runId)
++  const state = run.steps.get(stepId)
++  if (!state || state.status !== 'passed') return false
++  const step = STEP_BY_ID.get(stepId)
++  if (step?.humanGate) {
++    return state.approval?.decision === 'approved' && state.approval.attempt_id === state.attempt_id
++  }
++  return true
++}
++
++/** Audit view: superseded snapshots followed by the current attempt snapshot, all deep-cloned. */
++export function getAuditHistory(store: ResearchRunStore, runId: string, stepId: string): AuditEntry[] {
++  const run = ensureRun(store, runId)
++  const state = run.steps.get(stepId)
++  if (!state) return []
++  const history = state.history.map(h => cloneValue(h) as AttemptRecord)
++  const current: CurrentAttemptSnapshot = {
++    attempt_id: state.attempt_id,
++    status: state.status,
++    artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
++    gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
++    ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
++    current: true,
++  }
++  return [...history, current]
++}
++
++/** Deep-cloned step snapshot (read-only view; never the internal ref — INV-SNAPSHOT). */
++function snapshotStep(state: StepState): StepSnapshot {
++  return {
++    stepId: state.stepId,
++    status: state.status,
++    attempts: state.attempts,
++    attemptId: state.attempt_id,
++    artifacts: cloneValue(state.artifacts) as Record<string, unknown>,
++    gateResults: cloneValue(state.gateResults) as Partial<Record<TrinityComponent, GateVerdict>>,
++    ...(state.approval ? { approval: cloneValue(state.approval) as ApprovalRecord } : {}),
++    history: state.history.map(h => cloneValue(h) as AttemptRecord),
++    ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
++    ...(state.finishedAt !== undefined ? { finishedAt: state.finishedAt } : {}),
++  }
++}
++
++/**
++ * Package-private: apply a validated human approval (gated → passed/blocked) for a humanGate
++ * step. NOT re-exported from the public `index.ts` — the host trust channel (`../host.ts`)
++ * imports it relatively; external importers cannot reach it via the built main entry.
++ *
++ * Pre-conditions (validated by `HostApprovalChannel.submit` BEFORE calling this):
++ *  - principal instanceof TrustedHumanPrincipal (host-minted via the singleton channel)
++ *  - principal.principalId ∈ the channel's host-populated principal registry
++ *  - state.status === 'gated' (INV-APPROVAL-STATE)
++ *  - step.humanGate === true
++ *  - principal.approvalEventId ∉ run.consumedApprovals (INV-REPLAY)
++ * This function re-checks the status/humanGate/replay guards as defense-in-depth.
++ */
++export function _applyHumanApproval(
++  store: ResearchRunStore,
++  runId: string,
++  stepId: string,
++  decision: 'approved' | 'rejected',
++  principalId: string,
++  approvalEventId: string,
++): StepStatus {
++  const run = ensureRun(store, runId)
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new ResearchError('DSH_UNKNOWN_STEP', `_applyHumanApproval: unknown step '${stepId}'`)
++  if (!step.humanGate) throw new ResearchError('DSH_NOT_HUMAN_GATE', `_applyHumanApproval: step '${stepId}' is not a humanGate step`)
++  const state = run.steps.get(stepId)
++  if (!state) throw new ResearchError('DSH_NO_STATE', `_applyHumanApproval: no state for '${stepId}'`)
++  if (state.status !== 'gated') {
++    throw new ResearchError('DSH_APPROVAL_BAD_STATUS', `_applyHumanApproval: step '${stepId}' status '${state.status}' !== 'gated' — INV-APPROVAL-STATE`)
++  }
++  if (run.consumedApprovals.has(approvalEventId)) {
++    throw new ResearchError('DSH_APPROVAL_REPLAY', `_applyHumanApproval: approvalEventId '${approvalEventId}' already consumed — INV-REPLAY (single-use per run)`)
++  }
++  const approval: ApprovalRecord = {
++    run_id: runId,
++    step_id: stepId,
++    attempt_id: state.attempt_id,
++    principalId,
++    approval_event_id: approvalEventId,
++    decision,
++    timestamp: Date.now(),
++  }
++  state.approval = approval
++  run.consumedApprovals.add(approvalEventId)
++  const to: StepStatus = decision === 'approved' ? 'passed' : 'blocked'
++  _apply(state, step, to)
++  pushEvent(run, 'human-approval', stepId, state.attempt_id, { principalId, approvalEventId, decision })
++  return state.status
++}
+diff --git a/packages/research/research-core/src/engine/steps.ts b/packages/research/dsh-research-core/src/engine/steps.ts
+similarity index 68%
+rename from packages/research/research-core/src/engine/steps.ts
+rename to packages/research/dsh-research-core/src/engine/steps.ts
+index 62adbfe..4e0c3b8 100644
+--- a/packages/research/research-core/src/engine/steps.ts
++++ b/packages/research/dsh-research-core/src/engine/steps.ts
+@@ -183,3 +183,74 @@ export const TRINITY_LABEL: Readonly<Record<TrinityComponent, string>> = {
+   B: '外部锚定(对照真实文献/SOTA/录用模式)',
+   C: '可证伪→实验裁决',
+ }
++
++/**
++ * Inputs that may be seeded directly via `setRunInput` (T0 human authorization —
++ * `domain-direction`). Permanent across rollback (DEP-7): seedables are never
++ * invalidated by cascade, because they are human authorizations set once before the
++ * run starts, not step-produced artifacts. Invariant (DEP-8): no slug in
++ * SEEDABLE_INPUTS may appear in any step's `outputs` (a seed slug cannot also be a
++ * produced artifact) — asserted by assertDagAndSeedSeparation at module load.
++ */
++export const SEEDABLE_INPUTS: readonly string[] = ['domain-direction']
++
++/**
++ * Assert the step graph is a DAG (no input references a later-indexed step's output)
++ * AND that no seedable slug appears in any step's outputs. Guarantees
++ * `computeTransitiveDependents` terminates and that seed-vs-registry precedence is
++ * unambiguous (DEP-9, DEP-8). Called once at module load; throws on a cycle or
++ * seed/production overlap.
++ */
++export function assertDagAndSeedSeparation(): void {
++  const outputOwner = new Map<string, number>()
++  for (const s of STEPS) {
++    for (const o of s.outputs) {
++      if (SEEDABLE_INPUTS.includes(o)) {
++        throw new Error(`assertDagAndSeedSeparation: step '${s.id}' outputs '${o}' which is a seedable input (DEP-8 violation: seed slug cannot be a produced artifact)`)
++      }
++      outputOwner.set(o, s.index)
++    }
++  }
++  for (const s of STEPS) {
++    for (const input of s.inputs) {
++      if (SEEDABLE_INPUTS.includes(input)) continue
++      const owner = outputOwner.get(input)
++      if (owner === undefined) {
++        throw new Error(`assertDagAndSeedSeparation: step '${s.id}' input '${input}' has no producer and is not seedable`)
++      }
++      if (owner >= s.index) {
++        throw new Error(`assertDagAndSeedSeparation: step '${s.id}' (index ${s.index}) consumes '${input}' produced by a later/equal-index step (index ${owner}) — cycle or forward-edge (DEP-9)`)
++      }
++    }
++  }
++}
++
++assertDagAndSeedSeparation()
++
++/**
++ * Recursively Object.freeze an object/array and all nested values (RC-A runtime
++ * defense-in-depth: TS `readonly`/`ReadonlyMap` are compile-time-only — without
++ * `Object.freeze`, `STEP_BY_ID.get('E2-submit').humanGate = false` silently bypasses
++ * every guard that reads `step.humanGate` live; frozen, it throws TypeError in strict
++ * mode (ESM). Applied AFTER assertDagAndSeedSeparation so the graph is validated before
++ * it is frozen. STEP_BY_ID holds the SAME frozen step object refs (built from STEPS at
++ * line 171), so its values are immutable too; the Map itself is not separately frozen
++ * (Map internal state is unaffected by Object.freeze), and STEP_BY_ID/STEPS are NOT
++ * re-exported from the public index.ts regardless (RC-A primary fix — removal closes
++ * the import path; deepFreeze is the runtime backstop).
++ */
++function deepFreeze(value: unknown): void {
++  if (value !== null && typeof value === 'object') {
++    const obj = value as Record<string, unknown>
++    Object.freeze(obj)
++    if (Array.isArray(obj)) {
++      for (const v of obj) deepFreeze(v)
++    } else {
++      for (const key of Object.keys(obj)) deepFreeze(obj[key])
++    }
++  }
++}
++
++deepFreeze(STEPS)
++deepFreeze(TRINITY_LABEL)
++deepFreeze(SEEDABLE_INPUTS)
+diff --git a/packages/research/dsh-research-core/src/engine/types.ts b/packages/research/dsh-research-core/src/engine/types.ts
+new file mode 100644
+index 0000000..a1ae34c
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/engine/types.ts
+@@ -0,0 +1,202 @@
++/**
++ * Pure-logic type model for the 16-step research engine (v2 hardened contract).
++ *
++ * v2 changes vs the T05/T06 baseline (driven by the 6-critic design review):
++ *  - run-keyed isolation: state lives in a {@link ResearchRunStore} keyed by runId,
++ *    not a single shared StepStore (P1-5);
++ *  - artifact registry: a run-level slug→{@link ArtifactRecord} map recording the
++ *    producer step + attempt, so canStart can require an upstream `passed` (P1-1)
++ *    and rollback can cascade-invalidate dependents (P1-7);
++ *  - audit event log: every mutator appends an {@link AuditEvent} (C-1);
++ *  - no `actor` string: human identity is a {@link TrustedHumanPrincipal} minted by
++ *    the host trust channel (`./host` subpath), never caller-supplied (P0-1);
++ *  - readonly snapshots: public returns are deep-cloned read-only views, never live
++ *    internal refs (P0-2 / P1-8); caller-supplied values are deep-cloned at write
++ *    time too (INV-WRITE-ISOLATION).
++ *
++ * No Cordis imports here — the engine is portable and unit-testable in isolation.
++ * The Cordis adapter wraps it at P1.6; the host trust channel wraps approval at the
++ * `./host` subpath.
++ */
++
++/** Methodology phase (v1.0 design doc). */
++export type Phase = 'A' | 'B' | 'C' | 'D' | 'E'
++
++/**
++ * Judgment trinity component.
++ *  A = adversarial convergence  (red-team refute + judge vote ≥ 2)
++ *  B = external anchoring       (vs real literature / SOTA / venue acceptance)
++ *  C = falsifiable → experiment verdict (soft judgment → falsifiable prediction → experiment adjudicates)
++ */
++export type TrinityComponent = 'A' | 'B' | 'C'
++
++/** Static definition of one of the 16 steps. */
++export interface StepDefinition {
++  readonly id: string
++  readonly index: number
++  readonly phase: Phase
++  readonly name: string
++  readonly purpose: string
++  readonly inputs: readonly string[]
++  readonly outputs: readonly string[]
++  readonly gate: readonly TrinityComponent[]
++  readonly falsifiable: string | null
++  readonly humanGate: boolean
++}
++
++/** Runtime status of one step instance. */
++export type StepStatus = 'pending' | 'in_progress' | 'gated' | 'passed' | 'blocked' | 'failed'
++
++/** Verdict of one trinity-component gate for one step. */
++export interface GateVerdict {
++  readonly component: TrinityComponent
++  readonly passed: boolean
++  readonly evidence: string
++  readonly rationale: string
++  readonly timestamp: number
++}
++
++/**
++ * Human-approval record. Constructed ONLY inside the host trust channel
++ * (`HostApprovalChannel.submit`, `./host` subpath) from a {@link TrustedHumanPrincipal}
++ * — never accepted from a caller, so no public function takes an ApprovalRecord
++ * argument (INV-NO-LEGACY-APPROVE). `actor: string` is gone; identity is the
++ * host-attested `principalId` + `approval_event_id`.
++ */
++export interface ApprovalRecord {
++  readonly run_id: string
++  readonly step_id: string
++  readonly attempt_id: number
++  readonly principalId: string
++  readonly approval_event_id: string
++  readonly decision: 'approved' | 'rejected'
++  readonly rationale?: string
++  readonly timestamp: number
++}
++
++/**
++ * Registry entry for one produced artifact (current valid record per slug).
++ * `invalidated` is set true by rollback/cascade; recordArtifact REPLACES the entry
++ * with a fresh `invalidated: false` record on re-run (DEP-4 — never mutated in place).
++ */
++export interface ArtifactRecord {
++  readonly slug: string
++  readonly producerStepId: string
++  readonly producerAttemptId: number
++  readonly value: unknown
++  readonly producedAt: number
++  readonly invalidated: boolean
++}
++
++export type AuditEventKind =
++  | 'run-created'
++  | 'input-seeded'
++  | 'step-started'
++  | 'artifact-recorded'
++  | 'gate-verdict'
++  | 'step-completed'
++  | 'human-approval'
++  | 'rollback'
++
++/**
++ * Append-only run audit event. `detail` is a JSON-serializable snapshot deep-cloned
++ * at append time (INV-EVENTS-IMMUTABLE); it MUST NOT hold live StepState/registry refs.
++ */
++export interface AuditEvent {
++  readonly kind: AuditEventKind
++  readonly runId: string
++  readonly stepId?: string
++  readonly attemptId?: number
++  readonly ts: number
++  readonly detail?: unknown
++}
++
++/** Superseded historical attempt snapshot (appended on rollback/cascade; never physically cleared).
++ *  All fields readonly; values deep-cloned at snapshot time (INV-HISTORY-IMMUTABLE). */
++export interface AttemptRecord {
++  readonly attempt_id: number
++  readonly status: StepStatus
++  readonly artifacts: Readonly<Record<string, unknown>>
++  readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
++  readonly approval?: Readonly<ApprovalRecord>
++  readonly superseded: true
++}
++
++/** Snapshot of the current (non-superseded) attempt, returned by getAuditHistory. */
++export interface CurrentAttemptSnapshot {
++  readonly attempt_id: number
++  readonly status: StepStatus
++  readonly artifacts: Readonly<Record<string, unknown>>
++  readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
++  readonly approval?: Readonly<ApprovalRecord>
++  readonly current: true
++}
++
++/** Mutable runtime state of one step instance (internal; never returned by reference). */
++export interface StepState {
++  readonly stepId: string
++  status: StepStatus
++  attempts: number
++  attempt_id: number
++  artifacts: Record<string, unknown>
++  gateResults: Partial<Record<TrinityComponent, GateVerdict>>
++  approval?: ApprovalRecord | undefined
++  history: AttemptRecord[]
++  startedAt: number | undefined
++  finishedAt: number | undefined
++}
++
++/** Mutable map of step runtime states, keyed by step id (within one run). */
++export type StepStore = Map<string, StepState>
++
++/**
++ * One research run's state. All public API carries `runId`; runs share nothing
++ * (INV-RUN-ISOLATION). `consumedApprovals` enforces approval-event single-use per
++ * run (INV-REPLAY).
++ */
++export interface RunState {
++  readonly runId: string
++  inputs: Record<string, unknown>
++  steps: StepStore
++  registry: Record<string, ArtifactRecord>
++  events: AuditEvent[]
++  consumedApprovals: Set<string>
++}
++
++/** Top-level run store keyed by runId. */
++export type ResearchRunStore = Map<string, RunState>
++
++/** Read-only step snapshot (deep-cloned on return; runtime-mutable but isolated from internal state). */
++export interface StepSnapshot {
++  readonly stepId: string
++  readonly status: StepStatus
++  readonly attempts: number
++  readonly attemptId: number
++  readonly artifacts: Readonly<Record<string, unknown>>
++  readonly gateResults: Readonly<Partial<Record<TrinityComponent, GateVerdict>>>
++  readonly approval?: Readonly<ApprovalRecord>
++  readonly history: ReadonlyArray<Readonly<AttemptRecord>>
++  readonly startedAt?: number
++  readonly finishedAt?: number
++}
++
++/** Artifact metadata (no value) for {@link RunSnapshot}; use `getArtifact` for the value (HOLE-4). */
++export interface ArtifactRecordMeta {
++  readonly slug: string
++  readonly producerStepId: string
++  readonly producerAttemptId: number
++  readonly producedAt: number
++  readonly invalidated: boolean
++}
++
++/** Read-only run snapshot (deep-cloned on return; artifact values excluded — fetch via getArtifact). */
++export interface RunSnapshot {
++  readonly runId: string
++  readonly inputs: Readonly<Record<string, unknown>>
++  readonly steps: Readonly<Record<string, StepSnapshot>>
++  readonly registry: Readonly<Record<string, ArtifactRecordMeta>>
++  readonly events: ReadonlyArray<Readonly<AuditEvent>>
++}
++
++/** One audit-history entry (superseded or current), deep-cloned on return. */
++export type AuditEntry = AttemptRecord | CurrentAttemptSnapshot
+diff --git a/packages/research/dsh-research-core/src/host-prod.ts b/packages/research/dsh-research-core/src/host-prod.ts
+new file mode 100644
+index 0000000..adcfd07
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/host-prod.ts
+@@ -0,0 +1,20 @@
++/**
++ * Production entry for the `./host` subpath of @deepseek-ai/dsh-research-core.
++ *
++ * Re-exports ONLY the public trust-channel surface from host.ts:
++ *  - `createHostApprovalChannel` (runtime — the singleton channel minter; the only approval
++ *    path. A late `createHostApprovalChannel` throws DSH_APPROVAL_CHANNEL_EXISTS, so given
++ *    host-startup-precedes-tool-execution an Agent importer cannot obtain a channel.)
++ *  - `HostApprovalChannel` / `TrustedHumanPrincipal` (TYPES only — the runtime class is NOT
++ *    re-exported, so an importer cannot obtain the prototype for `Object.create`. The per-
++ *    channel WeakSet is the sole identity guard regardless; withholding the prototype is
++ *    defense-in-depth — RC-E E1/E2.)
++ *
++ * `_resetApprovalChannelForTests` is NOT re-exported here → it is tree-shaken out of
++ * `lib/host.js` (a production importer cannot obtain it, so cannot reset the singleton —
++ * RC-E E2). Tests import the host.ts SOURCE directly (relative `../src/host.ts`) where the
++ * reset helper and the runtime class are available; the production `./host` subpath carries
++ * neither.
++ */
++export { createHostApprovalChannel } from './host.ts'
++export type { HostApprovalChannel, TrustedHumanPrincipal } from './host.ts'
+diff --git a/packages/research/dsh-research-core/src/host.ts b/packages/research/dsh-research-core/src/host.ts
+new file mode 100644
+index 0000000..5ae2596
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/host.ts
+@@ -0,0 +1,178 @@
++/**
++ * Host trust channel for human approval — the `./host` subpath of dsh-research-core.
++ *
++ * The MAIN entry (`@deepseek-ai/dsh-research-core`) exports NO human-approval capability:
++ * a humanGate step can reach 'gated' (via completeStep/submitGateVerdict) but NEVER 'passed'
++ * through it. This module is the ONLY path to approve a humanGate step, and it is gated by a
++ * singleton HostApprovalChannel minted once at host startup with a host secret the Agent tool
++ * layer cannot observe.
++ *
++ * Production surface (the prod `./host` subpath is built from `host-prod.ts`, which re-exports
++ * ONLY `createHostApprovalChannel` + the `HostApprovalChannel`/`TrustedHumanPrincipal` TYPES;
++ * `_resetApprovalChannelForTests` is tree-shaken out of `lib/host.js`, and the runtime
++ * `TrustedHumanPrincipal` class is not exported at runtime — an importer cannot obtain the
++ * prototype, the `create()` factory, the `mintPrincipal` function, or a channel instance):
++ *  - `createHostApprovalChannel(hostSecret)` is a SINGLETON — throws DSH_APPROVAL_CHANNEL_EXISTS
++ *    if a channel already exists. The host calls it ONCE at startup; a late call is rejected.
++ *    If an Agent pre-empted the host, the host's own call throws and startup aborts (host
++ *    detects + stops — no runs exist, the Agent's channel is inert).
++ *  - `HostApprovalChannel` instances are held by the host (module-private `activeChannel`);
++ *    a late importer cannot obtain one. `submit`/`mintPrincipal` are METHODS on the instance.
++ *  - `TrustedHumanPrincipal` is minted ONLY by `channel.mintPrincipal(runId, stepId,
++ *    principalId, approvalEventId)`, which stamps the instance into THAT channel's
++ *    module-private WeakSet. There is NO `TrustedHumanPrincipal.create()` (RC-E E2).
++ *
++ * Principal identity guard (RC-E E1 — replaces the prior `instanceof` check):
++ *  - A module-private per-channel `WeakSet<TrustedHumanPrincipal>` records every principal
++ *    minted by THIS channel. `submit` admits a principal iff `principals.has(principal)` —
++ *    object identity + owning channel. WeakSet membership is UNFORGEABLE: it is not an own
++ *    property of the principal (invisible to getOwnPropertyNames/getOwnPropertySymbols), and
++ *    membership cannot be copied from a legitimate principal to a forged object (WeakSet.has
++ *    is by object identity, never by copied properties/symbols). `Object.create(
++ *    TrustedHumanPrincipal.prototype)` sets [[Prototype]] without invoking the ctor, so the
++ *    prior `instanceof` returned true — but the forged object is never added to any channel's
++ *    WeakSet, so it is rejected. The constructor is token-gated (a module-private Symbol),
++ *    so `new TrustedHumanPrincipal(...)` from outside this module throws.
++ *  - `submit` additionally verifies `principal.runId === runId && principal.stepId === stepId`
++ *    (cross-run/cross-step use rejected) and `principal.principalId ∈ channel.registry`
++ *    (host-populated), then delegates to the package-private core `_applyHumanApproval` which
++ *    re-checks status==='gated' (the current pending-approval step) + humanGate +
++ *    approvalEventId single-use (INV-REPLAY).
++ *
++ * Residual (honest, §6 — NOT system-level isolation): the `./host` subpath is ESM-importable
++ * and `createHostApprovalChannel` is a public export, so this is CONTRACT-LEVEL hardening:
++ * given host-startup-precedes-tool-execution (the host mints the singleton first, blocking a
++ * late `createHostApprovalChannel`), an Agent that can import `./host` cannot obtain a
++ * channel, mint a principal, or forge one — the public-contract self-approval path is gone.
++ * TRUE enforcement against same-process, same-privilege malicious code requires process-level
++ * isolation / IPC identity auth / host-side unforgeable authorization (the Interaction phase,
++ * future) — TypeScript/JavaScript API cannot provide it. This must not be described as
++ * completing system-level security isolation.
++ */
++
++import type { ResearchRunStore, StepStatus } from './engine/types.ts'
++import { ResearchError, _applyHumanApproval } from './engine/state-machine.ts'
++
++/**
++ * Module-private mint token. The sole value the TrustedHumanPrincipal constructor accepts; it
++ * is a constructor PARAMETER, never stored on the instance, so it is invisible to
++ * getOwnPropertySymbols on a real or forged principal. Not exported. This makes
++ * `new TrustedHumanPrincipal(...)` from outside host.ts throw (RC-E E2: principals are minted
++ * ONLY via HostApprovalChannel.mintPrincipal, the only other holder of this token).
++ */
++const MINT_TOKEN: unique symbol = Symbol('dsh-host-mint')
++
++/**
++ * Human principal record. Minted ONLY by `HostApprovalChannel.mintPrincipal` (no static
++ * `create()` — RC-E E2). The canonical runtime guard is per-channel WeakSet membership
++ * (object identity + owning channel — RC-E E1), NOT `instanceof`: `Object.create(
++ * TrustedHumanPrincipal.prototype)` sets [[Prototype]] without invoking the ctor, so
++ * `instanceof` would return true, but the forged object is never added to any channel's
++ * WeakSet → rejected. `principalId` is host-attested (not an arbitrary caller string);
++ * `approvalEventId` is the host-channel event id recorded as provenance (single-use per run,
++ * INV-REPLAY). `runId`/`stepId` bind the principal to the specific run+step it was minted for
++ * (cross-run/cross-step use rejected).
++ */
++export class TrustedHumanPrincipal {
++  readonly principalId: string
++  readonly approvalEventId: string
++  readonly runId: string
++  readonly stepId: string
++  constructor(token: symbol, principalId: string, approvalEventId: string, runId: string, stepId: string) {
++    if (token !== MINT_TOKEN) {
++      throw new ResearchError('DSH_PRINCIPAL_NOT_TRUSTED', 'TrustedHumanPrincipal: direct construction is not allowed — principals are minted only via HostApprovalChannel.mintPrincipal (RC-E E2)')
++    }
++    this.principalId = principalId
++    this.approvalEventId = approvalEventId
++    this.runId = runId
++    this.stepId = stepId
++  }
++}
++
++/** Host approval channel: mints + submits human approvals for gated humanGate steps. */
++export interface HostApprovalChannel {
++  /** Register an authenticated human principal id (host-populated; Tools-read-only by boundary). */
++  registerPrincipal(principalId: string): void
++  /** Mint a TrustedHumanPrincipal bound to (this channel, runId, stepId). The sole principal
++   *  factory (RC-E E2) — stamps the instance into this channel's WeakSet so submit admits it. */
++  mintPrincipal(runId: string, stepId: string, principalId: string, approvalEventId: string): TrustedHumanPrincipal
++  /** Submit a human approval for a gated humanGate step. Requires a principal minted by THIS
++   *  channel (object identity — RC-E E1) bound to (runId, stepId) whose principalId is in this
++   *  channel's registry. Verifies identity + channel + runId + stepId + decision + the current
++   *  pending-approval step (status gated), not just type/string fields. Returns the status. */
++  submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected', principal: TrustedHumanPrincipal): StepStatus
++}
++
++let activeChannel: HostApprovalChannel | undefined
++
++/**
++ * Mint the singleton host approval channel. The host calls this ONCE at startup with a secret
++ * from `process.env.DSH_APPROVAL_SECRET` (env the Agent tool layer cannot observe). Throws
++ * DSH_APPROVAL_CHANNEL_EXISTS if a channel already exists (singleton — P0-1-H1 defense-in-depth).
++ */
++export function createHostApprovalChannel(hostSecret: string): HostApprovalChannel {
++  if (activeChannel !== undefined) {
++    throw new ResearchError('DSH_APPROVAL_CHANNEL_EXISTS', 'createHostApprovalChannel: an approval channel already exists (singleton — the host creates it once at startup; late creation rejected)')
++  }
++  if (!hostSecret) {
++    throw new ResearchError('DSH_APPROVAL_SECRET_REQUIRED', 'createHostApprovalChannel: hostSecret is required (mint from process.env.DSH_APPROVAL_SECRET)')
++  }
++  const registry = new Set<string>()
++  // Per-channel module-private principal registry (RC-E E1): the SOLE identity guard. Membership
++  // is by object identity, unforgeable (not an own property; cannot be copied). A forged object
++  // (Object.create(prototype) / plain object / copied-properties) is never a member → rejected.
++  const principals = new WeakSet<TrustedHumanPrincipal>()
++  const channel: HostApprovalChannel = {
++    registerPrincipal(principalId: string): void {
++      if (!principalId || principalId === 'agent') {
++        throw new ResearchError('DSH_PRINCIPAL_INVALID', 'registerPrincipal: principalId cannot be empty or \'agent\'')
++      }
++      registry.add(principalId)
++    },
++    mintPrincipal(runId: string, stepId: string, principalId: string, approvalEventId: string): TrustedHumanPrincipal {
++      if (!principalId || principalId === 'agent') {
++        throw new ResearchError('DSH_PRINCIPAL_INVALID', 'mintPrincipal: principalId cannot be empty or \'agent\'')
++      }
++      if (!approvalEventId) {
++        throw new ResearchError('DSH_PRINCIPAL_INVALID', 'mintPrincipal: approvalEventId is required')
++      }
++      const principal = new TrustedHumanPrincipal(MINT_TOKEN, principalId, approvalEventId, runId, stepId)
++      principals.add(principal)
++      return principal
++    },
++    submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected', principal: TrustedHumanPrincipal): StepStatus {
++      // RC-E E1: object identity + owning channel. Membership is unforgeable (WeakSet.has by
++      // identity, not by copied properties/symbols) — defeats Object.create(prototype), forged
++      // plain objects, and copied-property principals alike.
++      if (!principals.has(principal)) {
++        throw new ResearchError('DSH_PRINCIPAL_NOT_TRUSTED', 'submit: principal was not minted by this channel (object-identity WeakSet check — RC-E E1; forged prototypes / plain objects / copied properties rejected)')
++      }
++      // RC-E E2: the principal is bound to the specific (runId, stepId) it was minted for.
++      // Cross-run / cross-step use is rejected (the principal must be re-minted per approval).
++      if (principal.runId !== runId) {
++        throw new ResearchError('DSH_PRINCIPAL_RUN_MISMATCH', `submit: principal was minted for run '${principal.runId}' but submitted for run '${runId}' — re-mint a principal per (run, step) (RC-E E2)`)
++      }
++      if (principal.stepId !== stepId) {
++        throw new ResearchError('DSH_PRINCIPAL_STEP_MISMATCH', `submit: principal was minted for step '${principal.stepId}' but submitted for step '${stepId}' — re-mint a principal per (run, step) (RC-E E2)`)
++      }
++      if (!registry.has(principal.principalId)) {
++        throw new ResearchError('DSH_PRINCIPAL_NOT_REGISTERED', `submit: principalId '${principal.principalId}' is not in this channel's authenticated principal registry (P0-1-H5)`)
++      }
++      // _applyHumanApproval re-checks status==='gated' (the current pending-approval step —
++      // INV-APPROVAL-STATE) + step.humanGate + approvalEventId single-use (INV-REPLAY).
++      return _applyHumanApproval(runs, runId, stepId, decision, principal.principalId, principal.approvalEventId)
++    },
++  }
++  activeChannel = channel
++  return channel
++}
++
++/**
++ * Test helper: reset the singleton between tests. ONLY reachable from the host.ts SOURCE
++ * (tests import this module relatively); the production `./host` subpath is built from
++ * `host-prod.ts`, which does NOT re-export this function, so it is tree-shaken out of
++ * `lib/host.js` — a production importer cannot obtain it (RC-E E2). NOT for production use.
++ */
++export function _resetApprovalChannelForTests(): void {
++  activeChannel = undefined
++}
+diff --git a/packages/research/dsh-research-core/src/index.ts b/packages/research/dsh-research-core/src/index.ts
+new file mode 100644
+index 0000000..020f0a4
+--- /dev/null
++++ b/packages/research/dsh-research-core/src/index.ts
+@@ -0,0 +1,54 @@
++/**
++ * Public entry of @deepseek-ai/dsh-research-core (v2 hardened contract).
++ *
++ * Exports the run-keyed state-machine API + types + errors. It does NOT export any
++ * human-approval capability: `approveHumanGate` and `transition` are DROPPED
++ * (INV-NO-LEGACY-APPROVE, INV-NO-RAW-TRANSITION), and `submitHumanApproval` /
++ * `TrustedHumanPrincipal` / `createHostApprovalChannel` live in the `./host` subpath
++ * (src/host.ts) — so a humanGate step can reach 'gated' but NEVER 'passed' via this
++ * main entry. The package-private `_applyHumanApproval` is likewise NOT re-exported
++ * here (host.ts imports it relatively). The mutable step-definition singletons
++ * (STEPS/STEP_BY_ID/stepsByPhase/TRINITY_LABEL/SEEDABLE_INPUTS/assertDagAndSeedSeparation)
++ * are likewise NOT re-exported — they are deep-frozen in steps.ts (RC-A) and consumed
++ * internally only, so an importer cannot mutate `step.humanGate`/`step.gate`/`step.inputs`
++ * to bypass the guards that read them live (and the `./src/*` subpath hatch is removed,
++ * so steps.ts is not directly importable either).
++ */
++
++export type {
++  Phase,
++  TrinityComponent,
++  StepDefinition,
++  StepStatus,
++  GateVerdict,
++  ApprovalRecord,
++  ArtifactRecord,
++  AuditEventKind,
++  AuditEvent,
++  AttemptRecord,
++  CurrentAttemptSnapshot,
++  StepState,
++  StepStore,
++  RunState,
++  ResearchRunStore,
++  StepSnapshot,
++  ArtifactRecordMeta,
++  RunSnapshot,
++  AuditEntry,
++} from './engine/types.ts'
++export {
++  createRun,
++  setRunInput,
++  getRunSnapshot,
++  getArtifact,
++  canStart,
++  startStep,
++  startIfCan,
++  recordArtifact,
++  submitGateVerdict,
++  completeStep,
++  rollback,
++  isComplete,
++  getAuditHistory,
++} from './engine/state-machine.ts'
++export { ResearchError, ResearchValueError, ResearchRunError } from './engine/state-machine.ts'
+diff --git a/packages/research/dsh-research-core/tests/helpers.ts b/packages/research/dsh-research-core/tests/helpers.ts
+new file mode 100644
+index 0000000..e598fa5
+--- /dev/null
++++ b/packages/research/dsh-research-core/tests/helpers.ts
+@@ -0,0 +1,40 @@
++import { STEP_BY_ID, STEPS } from '../src/engine/steps.ts'
++import { completeStep, createRun, recordArtifact, setRunInput, startStep, submitGateVerdict } from '../src/engine/state-machine.ts'
++import type { GateVerdict, ResearchRunStore, RunState, TrinityComponent } from '../src/engine/types.ts'
++
++export function freshStore(): ResearchRunStore {
++  return new Map<string, RunState>()
++}
++
++/** createRun + seed domain-direction. */
++export function seedRun(store: ResearchRunStore, runId?: string): string {
++  const id = createRun(store, runId)
++  setRunInput(store, id, 'domain-direction', 'ML')
++  return id
++}
++
++export function verdict(component: TrinityComponent, passed: boolean): GateVerdict {
++  return { component, passed, evidence: 'evidence', rationale: 'rationale', timestamp: 1 }
++}
++
++/** Start a step, record all its declared outputs (dummy values), then adjudicate:
++ *  empty gate → completeStep (humanGate→gated, non-humanGate→passed);
++ *  non-empty gate → submit each declared component passed (auto-adjudicates to passed for non-humanGate). */
++export function passStep(store: ResearchRunStore, runId: string, stepId: string): void {
++  const step = STEP_BY_ID.get(stepId)
++  if (!step) throw new Error(`passStep: unknown step ${stepId}`)
++  startStep(store, runId, stepId)
++  for (const out of step.outputs) recordArtifact(store, runId, stepId, out, `val:${out}`)
++  if (step.gate.length === 0) {
++    completeStep(store, runId, stepId)
++  } else {
++    for (const comp of step.gate) submitGateVerdict(store, runId, stepId, verdict(comp, true))
++  }
++}
++
++/** Run all 16 steps in dependency order. E2-submit (humanGate, empty gate) ends at 'gated'. */
++export function runFullPipeline(store: ResearchRunStore, runId?: string): string {
++  const id = seedRun(store, runId)
++  for (const s of STEPS) passStep(store, id, s.id)
++  return id
++}
+diff --git a/packages/research/dsh-research-core/tests/host.spec.ts b/packages/research/dsh-research-core/tests/host.spec.ts
+new file mode 100644
+index 0000000..cb6e7c5
+--- /dev/null
++++ b/packages/research/dsh-research-core/tests/host.spec.ts
+@@ -0,0 +1,211 @@
++import { afterEach, describe, expect, it } from 'vitest'
++import { ResearchError, completeStep, getRunSnapshot, isComplete, recordArtifact, rollback, startStep } from '../src/engine/state-machine.ts'
++import { _resetApprovalChannelForTests, createHostApprovalChannel, TrustedHumanPrincipal } from '../src/host.ts'
++import type { HostApprovalChannel } from '../src/host.ts'
++import { freshStore, runFullPipeline } from './helpers.ts'
++
++afterEach(() => _resetApprovalChannelForTests())
++
++describe('host trust channel — P0-1 (RC-E hardened: WeakSet identity + channel.mintPrincipal)', () => {
++  describe('createHostApprovalChannel (singleton — P0-1-H1)', () => {
++    it('#4 throws DSH_APPROVAL_CHANNEL_EXISTS on a second create (one channel in production)', () => {
++      createHostApprovalChannel('secret-1')
++      expect(() => createHostApprovalChannel('secret-2')).toThrow(ResearchError)
++      expect(() => createHostApprovalChannel('secret-2')).toThrow(/APPROVAL_CHANNEL_EXISTS/)
++    })
++    it('throws on an empty hostSecret', () => {
++      expect(() => createHostApprovalChannel('')).toThrow(ResearchError)
++    })
++  })
++
++  describe('TrustedHumanPrincipal — minted ONLY via channel.mintPrincipal (RC-E E2; no static create)', () => {
++    it('TrustedHumanPrincipal.create is NOT exported (removed — RC-E E2)', () => {
++      expect((TrustedHumanPrincipal as unknown as { create?: unknown }).create).toBeUndefined()
++    })
++    it('mintPrincipal rejects principalId agent/empty + missing approvalEventId', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const channel = createHostApprovalChannel('s')
++      channel.registerPrincipal('human-1')
++      expect(() => channel.mintPrincipal(id, 'E2-submit', 'agent', 'evt-1')).toThrow(ResearchError)
++      expect(() => channel.mintPrincipal(id, 'E2-submit', '', 'evt-1')).toThrow(ResearchError)
++      expect(() => channel.mintPrincipal(id, 'E2-submit', 'human-1', '')).toThrow(ResearchError)
++    })
++    it('direct `new TrustedHumanPrincipal(...)` is rejected (token-gated ctor — RC-E E2)', () => {
++      // The ctor accepts only the module-private MINT_TOKEN; any other symbol throws. So
++      // principals are un-constructable outside channel.mintPrincipal (sole MINT_TOKEN holder).
++      const Ctor = TrustedHumanPrincipal as unknown as {
++        new (t: symbol, principalId: string, approvalEventId: string, runId: string, stepId: string): TrustedHumanPrincipal
++      }
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      expect(() => new Ctor(Symbol('forged'), 'human-1', 'evt-1', id, 'E2-submit')).toThrow(ResearchError)
++      expect(() => new Ctor(Symbol('forged'), 'human-1', 'evt-1', id, 'E2-submit')).toThrow(/PRINCIPAL_NOT_TRUSTED/)
++    })
++  })
++
++  describe('principal identity guard — per-channel WeakSet (RC-E E1; adversarial #1/#2/#3)', () => {
++    it('#1 Object.create(TrustedHumanPrincipal.prototype) is rejected (instanceof-defeat closed by WeakSet)', () => {
++      // The prior instanceof guard returned true for this shape (Object.create sets [[Prototype]]
++      // without invoking the ctor). The WeakSet rejects it: the forged object was never minted.
++      const store = freshStore()
++      const id = runFullPipeline(store) // E2 gated
++      const channel = createHostApprovalChannel('s')
++      channel.registerPrincipal('human-1')
++      const forged = Object.create(TrustedHumanPrincipal.prototype) as TrustedHumanPrincipal
++      ;(forged as { principalId: string }).principalId = 'human-1'
++      ;(forged as { approvalEventId: string }).approvalEventId = 'evt-1'
++      ;(forged as { runId: string }).runId = id
++      ;(forged as { stepId: string }).stepId = 'E2-submit'
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(/PRINCIPAL_NOT_TRUSTED/)
++    })
++    it('#2 a forged same-field plain object is rejected (WeakSet is by identity, not fields)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const channel = createHostApprovalChannel('s')
++      channel.registerPrincipal('human-1')
++      const forged = { principalId: 'human-1', approvalEventId: 'evt-1', runId: id, stepId: 'E2-submit' } as unknown as TrustedHumanPrincipal
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(/PRINCIPAL_NOT_TRUSTED/)
++    })
++    it('#3 a principal whose properties/symbols are copied to a new object is rejected (membership is unforgeable)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const channel = createHostApprovalChannel('s')
++      channel.registerPrincipal('human-1')
++      const real = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      // Copy ALL own keys + own symbols (property-by-property) onto a fresh object sharing the
++      // prototype. WeakSet.has is by object identity — the clone is a different object → rejected.
++      const forged = Object.create(Object.getPrototypeOf(real)) as TrustedHumanPrincipal
++      for (const key of Reflect.ownKeys(real)) {
++        Object.defineProperty(forged, key, Reflect.getOwnPropertyDescriptor(real, key) as PropertyDescriptor)
++      }
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', forged)).toThrow(/PRINCIPAL_NOT_TRUSTED/)
++      // sanity: the real principal still works (it is a member)
++      expect(channel.submit(store, id, 'E2-submit', 'approved', real)).toBe('passed')
++    })
++  })
++
++  describe('submit — INV-PRINCIPAL / INV-APPROVAL-STATE / INV-REPLAY / INV-COMPLETE-ATTEMPT + cross-binding (#6)', () => {
++    function channelWithPrincipal(): { channel: HostApprovalChannel } {
++      const channel = createHostApprovalChannel('test-secret')
++      channel.registerPrincipal('human-1')
++      return { channel }
++    }
++
++    it('approved → passed; isComplete true (functional baseline)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      expect(getRunSnapshot(store, id).steps['E2-submit']?.status).toBe('gated')
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(channel.submit(store, id, 'E2-submit', 'approved', p)).toBe('passed')
++      expect(isComplete(store, id, 'E2-submit')).toBe(true)
++    })
++
++    it('rejected → blocked; isComplete false; approval retained as evidence', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-2')
++      expect(channel.submit(store, id, 'E2-submit', 'rejected', p)).toBe('blocked')
++      expect(isComplete(store, id, 'E2-submit')).toBe(false)
++    })
++
++    it('rejects an unregistered principalId even when minted (P0-1-H5)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const channel = createHostApprovalChannel('s') // no registerPrincipal
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', p)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', p)).toThrow(/PRINCIPAL_NOT_REGISTERED/)
++    })
++
++    it('throws unless state.status === gated (INV-APPROVAL-STATE — in_progress rejected)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store) // E2 gated
++      rollback(store, id, 'E2-submit') // → pending (E2 has no downstream)
++      startStep(store, id, 'E2-submit') // → in_progress (attempt 2)
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', p)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', p)).toThrow(/APPROVAL_BAD_STATUS/)
++    })
++
++    it('rejects replay of the same approvalEventId after rollback+rerun (INV-REPLAY — P0-1-H4)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(channel.submit(store, id, 'E2-submit', 'approved', p)).toBe('passed')
++      rollback(store, id, 'E2-submit') // → pending
++      startStep(store, id, 'E2-submit') // attempt 2
++      recordArtifact(store, id, 'E2-submit', 'submission-record', 'sr2')
++      completeStep(store, id, 'E2-submit') // → gated (attempt 2)
++      // re-mint for the SAME approvalEventId (evt-1) — already consumed → replay
++      const pReplay = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', pReplay)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E2-submit', 'approved', pReplay)).toThrow(/APPROVAL_REPLAY/)
++    })
++
++    it('a fresh approvalEventId on the re-run attempt is accepted (re-approval after rollback)', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const { channel } = channelWithPrincipal()
++      const p1 = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      expect(channel.submit(store, id, 'E2-submit', 'approved', p1)).toBe('passed')
++      rollback(store, id, 'E2-submit')
++      startStep(store, id, 'E2-submit')
++      recordArtifact(store, id, 'E2-submit', 'submission-record', 'sr2')
++      completeStep(store, id, 'E2-submit')
++      const p2 = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-2') // fresh event
++      expect(channel.submit(store, id, 'E2-submit', 'approved', p2)).toBe('passed')
++      expect(isComplete(store, id, 'E2-submit')).toBe(true)
++    })
++
++    it('#6a cross-channel: a principal minted by channelA is rejected on channelB', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store)
++      const channelA = createHostApprovalChannel('s')
++      channelA.registerPrincipal('human-1')
++      const pA = channelA.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      _resetApprovalChannelForTests() // channelA (the object) still lives; its WeakSet is intact
++      const channelB = createHostApprovalChannel('s')
++      channelB.registerPrincipal('human-1')
++      // pA is a member of channelA's WeakSet, NOT channelB's → identity check fails first.
++      expect(() => channelB.submit(store, id, 'E2-submit', 'approved', pA)).toThrow(ResearchError)
++      expect(() => channelB.submit(store, id, 'E2-submit', 'approved', pA)).toThrow(/PRINCIPAL_NOT_TRUSTED/)
++    })
++
++    it('#6b cross-run: a principal minted for run1 is rejected on run2', () => {
++      const store = freshStore()
++      const id1 = runFullPipeline(store, 'R1') // E2 gated on R1
++      runFullPipeline(store, 'R2') // E2 gated on R2
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id1, 'E2-submit', 'human-1', 'evt-1')
++      expect(() => channel.submit(store, 'R2', 'E2-submit', 'approved', p)).toThrow(ResearchError)
++      expect(() => channel.submit(store, 'R2', 'E2-submit', 'approved', p)).toThrow(/PRINCIPAL_RUN_MISMATCH/)
++    })
++
++    it('#6c cross-step: a principal minted for E2-submit is rejected on E1-format', () => {
++      const store = freshStore()
++      const id = runFullPipeline(store) // E1-format passed, E2 gated
++      const { channel } = channelWithPrincipal()
++      const p = channel.mintPrincipal(id, 'E2-submit', 'human-1', 'evt-1')
++      // stepId mismatch fires before the status/humanGate checks.
++      expect(() => channel.submit(store, id, 'E1-format', 'approved', p)).toThrow(ResearchError)
++      expect(() => channel.submit(store, id, 'E1-format', 'approved', p)).toThrow(/PRINCIPAL_STEP_MISMATCH/)
++    })
++  })
++
++  describe('the host subpath is NOT reachable from the main entry', () => {
++    it('the main entry does not export createHostApprovalChannel / TrustedHumanPrincipal / _applyHumanApproval', async () => {
++      const core = await import('../src/index.ts') as Record<string, unknown>
++      expect(core.createHostApprovalChannel).toBeUndefined()
++      expect(core.TrustedHumanPrincipal).toBeUndefined()
++      expect(core._applyHumanApproval).toBeUndefined()
++    })
++  })
++})
+diff --git a/packages/research/dsh-research-core/tests/state-machine.spec.ts b/packages/research/dsh-research-core/tests/state-machine.spec.ts
+new file mode 100644
+index 0000000..580ed63
+--- /dev/null
++++ b/packages/research/dsh-research-core/tests/state-machine.spec.ts
+@@ -0,0 +1,525 @@
++import { describe, expect, it } from 'vitest'
++import { SEEDABLE_INPUTS, STEP_BY_ID, STEPS } from '../src/engine/steps.ts'
++import {
++  ResearchError,
++  ResearchRunError,
++  ResearchValueError,
++  canStart,
++  completeStep,
++  createRun,
++  getArtifact,
++  getAuditHistory,
++  getRunSnapshot,
++  isComplete,
++  recordArtifact,
++  rollback,
++  setRunInput,
++  startIfCan,
++  startStep,
++  submitGateVerdict,
++} from '../src/engine/state-machine.ts'
++import * as Core from '../src/index.ts'
++import { freshStore, passStep, runFullPipeline, seedRun, verdict } from './helpers.ts'
++
++const anyCore = Core as Record<string, unknown>
++
++describe('export surface — the main entry has NO trust capability (P0-1-H1/H2)', () => {
++  it('does NOT export transition / approveHumanGate / submitHumanApproval / TrustedHumanPrincipal / _applyHumanApproval', () => {
++    expect(anyCore.transition).toBeUndefined()
++    expect(anyCore.approveHumanGate).toBeUndefined()
++    expect(anyCore.submitHumanApproval).toBeUndefined()
++    expect(anyCore.TrustedHumanPrincipal).toBeUndefined()
++    expect(anyCore._applyHumanApproval).toBeUndefined()
++    expect(anyCore.createHostApprovalChannel).toBeUndefined()
++  })
++  it('exports the hardened public API', () => {
++    for (const fn of ['createRun', 'setRunInput', 'getRunSnapshot', 'getArtifact', 'canStart', 'startStep', 'startIfCan', 'recordArtifact', 'submitGateVerdict', 'completeStep', 'rollback', 'isComplete', 'getAuditHistory']) {
++      expect(typeof anyCore[fn]).toBe('function')
++    }
++  })
++})
++
++describe('run lifecycle (INV-RUN-ISOLATION / INV-SEED-INPUT / INV-INPUT-FROZEN)', () => {
++  it('createRun throws RUN_EXISTS on explicit runId collision (never clobbers state+audit)', () => {
++    const store = freshStore()
++    createRun(store, 'R1')
++    expect(() => createRun(store, 'R1')).toThrow(ResearchRunError)
++    expect(() => createRun(store, 'R1')).toThrow(/RUN_EXISTS/)
++  })
++  it('runId methods throw RUN_NOT_FOUND on missing run (never auto-create a RunState)', () => {
++    const store = freshStore()
++    expect(() => startStep(store, 'ghost', 'A1-landscape')).toThrow(ResearchRunError)
++    expect(() => startStep(store, 'ghost', 'A1-landscape')).toThrow(/RUN_NOT_FOUND/)
++    expect(() => canStart(store, 'ghost', 'A1-landscape')).toThrow(ResearchRunError)
++  })
++  it('setRunInput rejects non-seedable slugs (INV-SEED-INPUT)', () => {
++    const store = freshStore()
++    const id = createRun(store)
++    expect(() => setRunInput(store, id, 'not-seedable', 'x')).toThrow(ResearchError)
++  })
++  it('setRunInput rejects undefined/null values (H9)', () => {
++    const store = freshStore()
++    const id = createRun(store)
++    expect(() => setRunInput(store, id, 'domain-direction', undefined)).toThrow(ResearchError)
++    expect(() => setRunInput(store, id, 'domain-direction', null)).toThrow(ResearchError)
++  })
++  it('setRunInput throws once the run has started (INV-INPUT-FROZEN)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    expect(() => setRunInput(store, id, 'domain-direction', 'changed')).toThrow(ResearchError)
++    expect(() => setRunInput(store, id, 'domain-direction', 'changed')).toThrow(/INPUT_FROZEN/)
++  })
++  it('createRun + setRunInput lets A1 canStart from empty state (no fake T0 step — P1-6)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    expect(canStart(store, id, 'A1-landscape')).toBe(true)
++  })
++})
++
++describe('INV-DEP-PASSED — downstream canStart requires an upstream `passed` (P1-1)', () => {
++  it('an in_progress upstream that recorded artifacts does NOT unlock downstream', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')
++    recordArtifact(store, id, 'A1-landscape', 'gap-list', 'g')
++    expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('in_progress')
++    expect(canStart(store, id, 'A2-claim')).toBe(false)
++  })
++  it('a passed upstream unlocks downstream', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    expect(canStart(store, id, 'A2-claim')).toBe(true)
++  })
++  it('startIfCan is atomic: null when not startable, snapshot when startable (C-9)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    expect(startIfCan(store, id, 'A2-claim')).toBeNull()
++    const snap = startIfCan(store, id, 'A1-landscape')
++    expect(snap).not.toBeNull()
++    expect(snap?.status).toBe('in_progress')
++  })
++})
++
++describe('INV-OUTPUT-CONTRACT — recordArtifact validates slug ∈ step.outputs (P1-2)', () => {
++  it('rejects an unknown slug', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    expect(() => recordArtifact(store, id, 'A1-landscape', 'bogus', 'x')).toThrow(ResearchError)
++    expect(() => recordArtifact(store, id, 'A1-landscape', 'bogus', 'x')).toThrow(/OUTPUT_NOT_DECLARED/)
++  })
++  it('rejects another step output slug', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    expect(() => recordArtifact(store, id, 'A1-landscape', 'claim', 'x')).toThrow(ResearchError)
++  })
++  it('accepts a duplicate override (registry replaces fresh, invalidated=false)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'v1')
++    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'v2')
++    expect(getArtifact(store, id, 'landscape-map')).toBe('v2')
++  })
++  it('throws if the step is not in_progress', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    expect(() => recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')).toThrow(ResearchError)
++  })
++})
++
++describe('gate adjudication (INV-GATE-COMPONENT / INV-VERDICT-STATUS / INV-VERDICT-IMMUTABLE / INV-COMPLETESTEP-EMPTY)', () => {
++  it('submitGateVerdict rejects a component not in step.gate (INV-GATE-COMPONENT)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    startStep(store, id, 'A2-claim') // gate ['A','C']
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('B', true))).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('B', true))).toThrow(/GATE_COMPONENT_NOT_DECLARED/)
++  })
++  it('submitGateVerdict throws on an empty-gate step (use completeStep)', () => {
++    const store = freshStore()
++    const id = runFullPipeline(store) // E2 gated
++    rollback(store, id, 'E2-submit') // → pending
++    startStep(store, id, 'E2-submit')
++    recordArtifact(store, id, 'E2-submit', 'submission-record', 'sr')
++    expect(() => submitGateVerdict(store, id, 'E2-submit', verdict('A', true))).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'E2-submit', verdict('A', true))).toThrow(/EMPTY_GATE/)
++  })
++  it('submitGateVerdict throws unless status===in_progress (INV-VERDICT-STATUS)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape') // passed
++    expect(() => submitGateVerdict(store, id, 'A1-landscape', verdict('B', true))).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'A1-landscape', verdict('B', true))).toThrow(/VERDICT_BAD_STATUS/)
++  })
++  it('submitGateVerdict rejects a second verdict for the same component (INV-VERDICT-IMMUTABLE)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    startStep(store, id, 'A2-claim') // gate ['A','C']
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
++    submitGateVerdict(store, id, 'A2-claim', verdict('A', true)) // A in, C missing → in_progress
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toThrow(/VERDICT_ALREADY_SET/)
++  })
++  it('all-pass on a falsifiable C-step → passed; C-fail → failed; other fail → blocked (INV-ADJUDICATE-SHARED)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    // A2: gate ['A','C'], falsifiable non-null
++    startStep(store, id, 'A2-claim')
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
++    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('passed') // all-pass, non-humanGate
++    // fresh A2 with a C-fail → failed (refutation)
++    rollback(store, id, 'A2-claim')
++    startStep(store, id, 'A2-claim')
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c2')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp2')
++    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
++    // fresh A2 with an A-fail (non-C component) → blocked (adjudication fires only when ALL gate components are in)
++    rollback(store, id, 'A2-claim')
++    startStep(store, id, 'A2-claim')
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c3')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp3')
++    submitGateVerdict(store, id, 'A2-claim', verdict('A', false)) // A-fail, C missing → in_progress (no adjudication yet)
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // all in, A-fail non-C → blocked
++  })
++  it('completeStep throws on a non-empty-gate step (INV-COMPLETESTEP-EMPTY)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape') // gate ['B']
++    expect(() => completeStep(store, id, 'A1-landscape')).toThrow(ResearchError)
++    expect(() => completeStep(store, id, 'A1-landscape')).toThrow(/NON_EMPTY_GATE/)
++  })
++  it('completeStep throws unless status===in_progress (C-7 idempotency)', () => {
++    const store = freshStore()
++    const id = runFullPipeline(store) // E2 gated via completeStep
++    expect(() => completeStep(store, id, 'E2-submit')).toThrow(ResearchError) // gated not in_progress
++    expect(() => completeStep(store, id, 'E2-submit')).toThrow(/COMPLETE_BAD_STATUS/)
++  })
++})
++
++describe('INV-SNAPSHOT — returns are deep clones (mutating a return does not change internal)', () => {
++  it('mutating a startStep snapshot does not change internal state', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    const snap = startStep(store, id, 'A1-landscape')
++    ;(snap as { status: string }).status = 'passed'
++    ;(snap.artifacts as Record<string, unknown>).injected = true
++    expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('in_progress')
++    expect('injected' in (getRunSnapshot(store, id).steps['A1-landscape']?.artifacts as Record<string, unknown>)).toBe(false)
++  })
++  it('mutating a getAuditHistory return does not change internal history', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    rollback(store, id, 'A1-landscape')
++    const hist = getAuditHistory(store, id, 'A1-landscape')
++    ;(hist[0] as { artifacts: Record<string, unknown> }).artifacts['injected'] = true
++    const hist2 = getAuditHistory(store, id, 'A1-landscape')
++    expect('injected' in (hist2[0] as { artifacts: Record<string, unknown> }).artifacts).toBe(false)
++  })
++  it('mutating a getRunSnapshot return does not change internal', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    const snap = getRunSnapshot(store, id)
++    ;(snap.inputs as Record<string, unknown>)['domain-direction'] = 'forged'
++    expect((getRunSnapshot(store, id).inputs as Record<string, unknown>)['domain-direction']).toBe('ML')
++  })
++})
++
++describe('INV-WRITE-ISOLATION — caller values are deep-cloned at write time (HOLE-1/H1)', () => {
++  it('mutating an object passed to recordArtifact after the call does not change internal', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    const obj = { k: 'v' }
++    recordArtifact(store, id, 'A1-landscape', 'landscape-map', obj)
++    obj.k = 'forged'
++    expect(getArtifact(store, id, 'landscape-map')).toEqual({ k: 'v' })
++  })
++  it('mutating an object passed to setRunInput after the call does not change internal', () => {
++    const store = freshStore()
++    const id = createRun(store)
++    const obj = { d: 'ML' }
++    setRunInput(store, id, 'domain-direction', obj)
++    obj.d = 'forged'
++    expect((getRunSnapshot(store, id).inputs as Record<string, unknown>)['domain-direction']).toEqual({ d: 'ML' })
++  })
++  it('mutating a verdict object after submitGateVerdict does not change internal', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')
++    const v = verdict('B', true)
++    submitGateVerdict(store, id, 'A1-landscape', v)
++    ;(v as unknown as { passed: boolean }).passed = false
++    const current = getAuditHistory(store, id, 'A1-landscape').at(-1) as { gateResults: Record<string, { passed: boolean }> }
++    expect(current.gateResults['B']?.passed).toBe(true)
++  })
++})
++
++describe('INV-VALUE-CLONEABLE — non-cloneable values rejected at the write boundary (HOLE-2/H6)', () => {
++  it('recordArtifact with a function value throws DSH_VALUE_NOT_CLONEABLE', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    startStep(store, id, 'A1-landscape')
++    expect(() => recordArtifact(store, id, 'A1-landscape', 'landscape-map', () => 1)).toThrow(ResearchValueError)
++  })
++  it('setRunInput with a function value throws', () => {
++    const store = freshStore()
++    const id = createRun(store)
++    expect(() => setRunInput(store, id, 'domain-direction', () => 1)).toThrow(ResearchValueError)
++  })
++})
++
++describe('INV-CASCADE — rollback transitively invalidates downstream (P1-7)', () => {
++  it('rollback of a passed upstream resets direct downstream to pending + invalidates artifacts', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    passStep(store, id, 'A2-claim')
++    rollback(store, id, 'A1-landscape')
++    expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('pending')
++    expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('pending')
++    expect(getArtifact(store, id, 'landscape-map')).toBeUndefined()
++    expect(getArtifact(store, id, 'claim')).toBeUndefined()
++  })
++  it('multi-hop: rollback(A1) resets every transitive dependent to pending (full closure — DEP-2)', () => {
++    const store = freshStore()
++    const id = runFullPipeline(store)
++    rollback(store, id, 'A1-landscape')
++    const snap = getRunSnapshot(store, id)
++    for (const s of STEPS) {
++      if (s.id === 'A1-landscape') continue
++      expect(snap.steps[s.id]?.status ?? 'pending').toBe('pending')
++    }
++  })
++  it('diamond: rollback(A2) snapshots each dependent exactly once (A4 reached via 2 paths — DEP-3)', () => {
++    const store = freshStore()
++    const id = runFullPipeline(store)
++    const before = getAuditHistory(store, id, 'A4-venue').length
++    rollback(store, id, 'A2-claim') // A2→A4 (claim) AND A2→A3→A4 (agenda)
++    const after = getAuditHistory(store, id, 'A4-venue').length
++    expect(after - before).toBe(1) // exactly one snapshot, not two
++  })
++  it('rollback preserves each downstream prior-attempt history snapshot (C-4/DEP-5)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    passStep(store, id, 'A2-claim')
++    rollback(store, id, 'A1-landscape')
++    const hist = getAuditHistory(store, id, 'A2-claim')
++    expect(hist.length).toBe(2) // [superseded A2, current pending A2]
++    expect((hist[0] as { superseded: boolean }).superseded).toBe(true)
++    expect((hist.at(-1) as { status: string }).status).toBe('pending')
++  })
++  it('re-run after cascade clears the invalidated flag (DEP-4 — recordArtifact replaces fresh)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    rollback(store, id, 'A1-landscape')
++    expect(getArtifact(store, id, 'landscape-map')).toBeUndefined()
++    passStep(store, id, 'A1-landscape')
++    expect(getArtifact(store, id, 'landscape-map')).toBe('val:landscape-map')
++    expect(canStart(store, id, 'A2-claim')).toBe(true)
++  })
++  it('rollback is a no-op on a never-started / pending step (no bogus history — DEP-6)', () => {
++    const store = freshStore()
++    const id = seedRun(store) // A1 pending (never started)
++    expect(() => rollback(store, id, 'A1-landscape')).not.toThrow()
++    expect(getAuditHistory(store, id, 'A1-landscape')).toEqual([])
++  })
++  it('rollback applies to terminal states (failed → pending → re-runnable — INV-FAILED-RERUN)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    startStep(store, id, 'A2-claim') // gate ['A','C'], falsifiable non-null
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
++    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
++    rollback(store, id, 'A2-claim')
++    expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('pending')
++    expect(canStart(store, id, 'A2-claim')).toBe(true)
++  })
++})
++
++describe('INV-RUN-ISOLATION — runs share nothing (P1-5)', () => {
++  it('an artifact recorded in R1 is invisible to R2 canStart', () => {
++    const store = freshStore()
++    const r1 = seedRun(store, 'R1')
++    const r2 = seedRun(store, 'R2')
++    passStep(store, r1, 'A1-landscape')
++    expect(canStart(store, r2, 'A2-claim')).toBe(false)
++    passStep(store, r2, 'A1-landscape')
++    expect(canStart(store, r2, 'A2-claim')).toBe(true)
++  })
++})
++
++describe('INV-AUDIT-APPEND / INV-EVENTS-IMMUTABLE (C-1, HOLE-3, H7)', () => {
++  it('a full lifecycle + rollback emits every expected event kind', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    rollback(store, id, 'A1-landscape')
++    const kinds = getRunSnapshot(store, id).events.map(e => e.kind)
++    for (const k of ['run-created', 'input-seeded', 'step-started', 'artifact-recorded', 'gate-verdict', 'step-completed', 'rollback']) {
++      expect(kinds).toContain(k)
++    }
++  })
++  it('the events array is append-only (never shrinks across actions)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    const before = getRunSnapshot(store, id).events.length
++    passStep(store, id, 'A2-claim')
++    const after = getRunSnapshot(store, id).events.length
++    expect(after).toBeGreaterThan(before)
++  })
++  it('mutating a returned event does not change internal events (INV-EVENTS-IMMUTABLE)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    const snap = getRunSnapshot(store, id)
++    const firstKind = snap.events[0]?.kind
++    // Mutate the returned (cloned) events entry; the internal audit log must be unchanged.
++    const mutEvents = snap.events as unknown as { kind: string }[]
++    const e0 = mutEvents[0]
++    if (e0) e0.kind = 'forged'
++    expect(getRunSnapshot(store, id).events[0]?.kind).toBe(firstKind)
++  })
++})
++
++describe('INV-COMPLETE-ATTEMPT — isComplete requires a current-attempt approved approval for humanGate (H8)', () => {
++  it('after rollback+rerun, isComplete is false until re-approved (approval cleared on rollback)', () => {
++    const store = freshStore()
++    const id = runFullPipeline(store) // E2 gated, not complete
++    expect(isComplete(store, id, 'E2-submit')).toBe(false) // gated, no approval
++    // (approved/rejected + re-run path covered in host.spec.ts via HostApprovalChannel)
++  })
++  it('a non-humanGate passed step is complete', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape')
++    expect(isComplete(store, id, 'A1-landscape')).toBe(true)
++  })
++})
++
++describe('DAG assertion (DEP-9)', () => {
++  it('SEEDABLE_INPUTS contains domain-direction', () => {
++    expect(SEEDABLE_INPUTS).toContain('domain-direction')
++  })
++  it('the step graph loaded without throwing (acyclic — computeTransitiveDependents terminates)', () => {
++    // Importing steps.ts runs assertDagAndSeedSeparation at module load; reaching here means it passed.
++    expect(STEP_BY_ID.size).toBe(16)
++  })
++})
++
++describe('RC-A / RC-D — adversarial-verify fixes (deep-frozen step defs; rollback→reseed blocked)', () => {
++  it('RC-A: step definitions are deep-frozen — mutating step.humanGate throws TypeError', () => {
++    const step = STEP_BY_ID.get('E2-submit')
++    expect(step).toBeDefined()
++    // Frozen in strict mode (ESM): assignment to a read-only property throws TypeError,
++    // so `STEP_BY_ID.get('E2-submit').humanGate = false` cannot silently bypass completeStep/_apply.
++    expect(() => { (step as { humanGate: boolean }).humanGate = false }).toThrow(TypeError)
++  })
++  it('RC-A: mutating step.gate / step.inputs throws (cannot empty a gate or inputs array)', () => {
++    const step = STEP_BY_ID.get('A2-claim')
++    expect(step).toBeDefined()
++    expect(() => { (step as unknown as { gate: string[] }).gate = [] }).toThrow(TypeError)
++    expect(() => { (step as unknown as { gate: string[] }).gate.push('X') }).toThrow(TypeError)
++    expect(() => { (step as unknown as { inputs: string[] }).inputs = [] }).toThrow(TypeError)
++  })
++  it('RC-A: the main entry does NOT re-export the mutable step singletons (no import path to mutate them)', () => {
++    expect(anyCore.STEPS).toBeUndefined()
++    expect(anyCore.STEP_BY_ID).toBeUndefined()
++    expect(anyCore.stepsByPhase).toBeUndefined()
++    expect(anyCore.TRINITY_LABEL).toBeUndefined()
++    expect(anyCore.SEEDABLE_INPUTS).toBeUndefined()
++    expect(anyCore.assertDagAndSeedSeparation).toBeUndefined()
++  })
++  it('RC-D: startStep→rollback→setRunInput throws INPUT_FROZEN (rollback does not re-open seeding)', () => {
++    const store = freshStore()
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape') // A1 passed (attempts=1)
++    rollback(store, id, 'A1-landscape') // A1 status→pending, but attempts still 1
++    expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('pending')
++    // The frozen-input guard now checks attempts (not just status) — re-seeding is blocked.
++    expect(() => setRunInput(store, id, 'domain-direction', 'changed')).toThrow(ResearchError)
++    expect(() => setRunInput(store, id, 'domain-direction', 'changed')).toThrow(/INPUT_FROZEN/)
++  })
++})
++
++describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdict immutability; WeakSet principal identity)', () => {
++  // Target step A2-claim: gate ['A','C'], falsifiable non-null, non-humanGate. A=false → anyFail,
++  // comp A (not C) → not cFailOnFalsifiable → 'blocked'; A=true,C=true → noFail → 'passed'.
++  // So overwriting an A=false verdict to A=true flips adjudication blocked→passed (the RC-F bypass).
++  function setupA2(store: ReturnType<typeof freshStore>): string {
++    const id = seedRun(store)
++    passStep(store, id, 'A1-landscape') // A1 passed (gate B) → unlocks A2 inputs
++    startStep(store, id, 'A2-claim')
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c1')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp1')
++    return id
++  }
++
++  it('RC-F (#8): a getter-bearing verdict returning a different component per read CANNOT overwrite an existing verdict', () => {
++    const store = freshStore()
++    const id = setupA2(store)
++    // Honest A=false verdict (adjudication waits for C). gateResults = { A: { passed: false } }.
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
++    // TRICK: a verdict whose `component` getter returns 'A' on read#1 (gate indexOf), 'C' on
++    // read#2 (immutability `in`-check — 'C' not in {A} → no DSH_VERDICT_ALREADY_SET throw), then
++    // 'A' on read#3 (storage key → OVERWRITES gateResults['A'] to passed=true). Pre-RC-F the
++    // function read `verdict.component` four times via live property access, so this flipped
++    // adjudication blocked→passed. Post-RC-F `component` is read ONCE into a local; the
++    // immutability check sees the SAME 'A' that is already in gateResults → throws
++    // DSH_VERDICT_ALREADY_SET — the overwrite is blocked (INV-VERDICT-IMMUTABLE).
++    const makeTrick = () => {
++      let n = 0
++      return { get component() { n++; return n === 2 ? 'C' : 'A' }, passed: true, evidence: 'e', rationale: 'r', timestamp: 1 } as unknown as ReturnType<typeof verdict>
++    }
++    expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(/VERDICT_ALREADY_SET/)
++    // The trick did NOT overwrite A (A2 still in_progress, not adjudicated to 'passed').
++    expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('in_progress')
++    // Honest C=true → adjudicate: A=false (anyFail; A is not C → not cFailOnFalsifiable) → 'blocked'.
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked')
++    expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('blocked')
++  })
++
++  it('RC-F (#9): a submitted verdict is immutable per attempt; rollback+restart re-opens adjudication', () => {
++    const store = freshStore()
++    const id = setupA2(store)
++    // Submit A=true (in_progress; C still missing).
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toBe('in_progress')
++    // Re-submitting the SAME component in the SAME attempt is rejected (immutable — cannot
++    // mutate A=true to A=false to flip adjudication).
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toThrow(ResearchError)
++    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toThrow(/VERDICT_ALREADY_SET/)
++    // Submit C → adjudicate (A=true, C=true → noFail → 'passed', non-humanGate).
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('passed')
++    expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('passed')
++    // A NEW attempt re-opens adjudication: rollback resets gateResults (resetStep), restart advances the attempt.
++    rollback(store, id, 'A2-claim') // → pending (attempts preserved; gateResults reset)
++    startStep(store, id, 'A2-claim') // attempt 2 → in_progress
++    recordArtifact(store, id, 'A2-claim', 'claim', 'c2')
++    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp2')
++    // Re-submitting A is now allowed (fresh attempt — gateResults is empty).
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
++    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // A=false → blocked
++  })
++})
+diff --git a/packages/research/research-core/tsconfig.json b/packages/research/dsh-research-core/tsconfig.json
+similarity index 100%
+rename from packages/research/research-core/tsconfig.json
+rename to packages/research/dsh-research-core/tsconfig.json
+diff --git a/packages/research/dsh-research-core/tsconfig.test.json b/packages/research/dsh-research-core/tsconfig.test.json
+new file mode 100644
+index 0000000..1aead15
+--- /dev/null
++++ b/packages/research/dsh-research-core/tsconfig.test.json
+@@ -0,0 +1,5 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": { "noEmit": true },
++  "include": ["src", "tests"]
++}
+diff --git a/packages/research/dsh-research-core/tsdown.config.ts b/packages/research/dsh-research-core/tsdown.config.ts
+new file mode 100644
+index 0000000..a13fd97
+--- /dev/null
++++ b/packages/research/dsh-research-core/tsdown.config.ts
+@@ -0,0 +1,28 @@
++import { defineConfig } from 'tsdown'
++
++/**
++ * Build dsh-research-core's two entries:
++ *  - src/index.ts → lib/index.js  (the public main entry — NO trust capability; a humanGate
++ *    step can reach 'gated' but never 'passed' via it)
++ *  - src/host-prod.ts → lib/host.js  (the `./host` subpath — re-exports ONLY
++ *    createHostApprovalChannel + the HostApprovalChannel/TrustedHumanPrincipal TYPES from
++ *    host.ts; `_resetApprovalChannelForTests` is NOT re-exported so it is tree-shaken out of
++ *    lib/host.js, and the runtime TrustedHumanPrincipal class is not exported at runtime
++ *    (RC-E E1/E2 — an importer cannot obtain the prototype / create / mint / reset / channel).
++ *    host.ts SOURCE is imported by tests directly (relative) where the reset + runtime class
++ *    are available.)
++ *
++ * Type declarations are emitted by `tsc -p tsconfig.json` into lib/types (tsdown dts:false).
++ * Core is a pure-TS package (no Cordis, no runtime deps) built standalone (not bundled into
++ * the host); the adapter composes it via `@deepseek-ai/dsh-research-core`.
++ */
++export default defineConfig({
++  entry: { index: 'src/index.ts', host: 'src/host-prod.ts' },
++  outDir: 'lib',
++  format: ['esm'],
++  platform: 'node',
++  target: 'es2024',
++  fixedExtension: false,
++  dts: false,
++  clean: false,
++})
+diff --git a/packages/research/research-core/package.json b/packages/research/research-core/package.json
+deleted file mode 100644
+index 15c5fc0..0000000
+--- a/packages/research/research-core/package.json
++++ /dev/null
+@@ -1,15 +0,0 @@
+-{
+-  "name": "@deepseek-ai/dsh-research-core",
+-  "version": "0.1.2-alpha.4",
+-  "type": "module",
+-  "private": true,
+-  "scripts": {
+-    "typecheck": "tsc --noEmit",
+-    "test": "vitest run"
+-  },
+-  "devDependencies": {
+-    "@types/node": "^22.20.0",
+-    "typescript": "^6.0.3",
+-    "vitest": "^4.1.8"
+-  }
+-}
+diff --git a/packages/research/research-core/src/engine/state-machine.ts b/packages/research/research-core/src/engine/state-machine.ts
+deleted file mode 100644
+index f30b99e..0000000
+--- a/packages/research/research-core/src/engine/state-machine.ts
++++ /dev/null
+@@ -1,179 +0,0 @@
+-import type { GateVerdict, StepState, StepStatus } from './types.ts'
+-import { STEP_BY_ID } from './steps.ts'
+-
+-/**
+- * State machine for the 16-step research engine (F-W1 gap — newly created).
+- *
+- * Enforces:
+- *  - input dependency: a step may not start until every slug in its `inputs`
+- *    has been produced as an artifact somewhere in the store;
+- *  - gate adjudication: a step may not exit until every component in its
+- *    `gate` has a verdict; all-passed → 'passed', falsifiable C-fail → 'failed',
+- *    other fail → 'blocked';
+- *  - legal StepStatus transitions: pending → in_progress → gated →
+- *    passed/blocked/failed, with rollback reverting to 'pending'.
+- *
+- * Rollback semantics (D4 回退): revert the target step to 'pending' and clear
+- * its gateResults (and artifacts by default), enabling a fresh re-run via
+- * startStep. The cascade is emergent — downstream consumers of this step's
+- * outputs lose those inputs, so their canStart returns false until the outputs
+- * are re-produced. `attempts` is retained across rollback for diagnostics.
+- */
+-
+-/** Mutable map of step runtime states, keyed by step id. */
+-export type StepStore = Map<string, StepState>
+-
+-/** Legal forward edges; terminal states allow none. Rollback (any → pending) is performed via rollback(), not transition(). */
+-const LEGAL_TRANSITIONS: Readonly<Record<StepStatus, ReadonlySet<StepStatus>>> = {
+-  pending: new Set<StepStatus>(['in_progress']),
+-  in_progress: new Set<StepStatus>(['gated']),
+-  gated: new Set<StepStatus>(['passed', 'blocked', 'failed']),
+-  passed: new Set<StepStatus>(),
+-  blocked: new Set<StepStatus>(),
+-  failed: new Set<StepStatus>(),
+-}
+-
+-function ensureEntry(stepId: string, store: StepStore): StepState {
+-  let state = store.get(stepId)
+-  if (!state) {
+-    state = {
+-      stepId,
+-      status: 'pending',
+-      attempts: 0,
+-      artifacts: {},
+-      gateResults: {},
+-      startedAt: undefined,
+-      finishedAt: undefined,
+-    }
+-    store.set(stepId, state)
+-  }
+-  return state
+-}
+-
+-/**
+- * True iff the step is pending (or has no state yet, which is implicitly pending)
+- * and every input slug has been produced as an artifact somewhere in the store.
+- */
+-export function canStart(stepId: string, store: Readonly<StepStore>): boolean {
+-  const step = STEP_BY_ID.get(stepId)
+-  if (!step) return false
+-  const state = store.get(stepId)
+-  const status: StepStatus = state?.status ?? 'pending'
+-  if (status !== 'pending') return false
+-  for (const slug of step.inputs) {
+-    let produced = false
+-    for (const other of store.values()) {
+-      if (slug in other.artifacts) {
+-        produced = true
+-        break
+-      }
+-    }
+-    if (!produced) return false
+-  }
+-  return true
+-}
+-
+-/** Move a pending step whose inputs are ready to in_progress. Throws if it cannot start. */
+-export function startStep(stepId: string, store: StepStore): StepState {
+-  if (!canStart(stepId, store)) {
+-    throw new Error(`state-machine.startStep: cannot start '${stepId}' (not pending or inputs missing)`)
+-  }
+-  const state = ensureEntry(stepId, store)
+-  state.status = 'in_progress'
+-  state.startedAt = Date.now()
+-  state.attempts += 1
+-  return state
+-}
+-
+-/** Record a produced output artifact. The step must be in_progress. */
+-export function recordArtifact(stepId: string, outputSlug: string, value: unknown, store: StepStore): void {
+-  const state = store.get(stepId)
+-  if (!state || state.status !== 'in_progress') {
+-    throw new Error(`state-machine.recordArtifact: step '${stepId}' is not in_progress`)
+-  }
+-  state.artifacts[outputSlug] = value
+-}
+-
+-/**
+- * Submit one trinity-component gate verdict. Adjudicates once every component
+- * in the step's `gate` has a verdict: all-passed → 'passed'; any fail on a
+- * falsifiable step's component C → 'failed'; any other fail → 'blocked'.
+- * An empty gate passes immediately on submit. Returns the resulting status.
+- */
+-export function submitGateVerdict(stepId: string, verdict: GateVerdict, store: StepStore): StepStatus {
+-  const step = STEP_BY_ID.get(stepId)
+-  if (!step) throw new Error(`state-machine.submitGateVerdict: unknown step '${stepId}'`)
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.submitGateVerdict: no state for '${stepId}'`)
+-  if (state.status !== 'in_progress' && state.status !== 'gated') {
+-    throw new Error(`state-machine.submitGateVerdict: step '${stepId}' status '${state.status}' cannot accept verdicts`)
+-  }
+-  state.gateResults[verdict.component] = verdict
+-
+-  if (step.gate.length === 0) {
+-    state.status = 'passed'
+-    state.finishedAt = Date.now()
+-    return state.status
+-  }
+-
+-  // Not all gate components in yet — stay in_progress/gated.
+-  for (const comp of step.gate) {
+-    if (!(comp in state.gateResults)) return state.status
+-  }
+-
+-  // All in: adjudicate.
+-  let anyFail = false
+-  let cFailOnFalsifiable = false
+-  for (const comp of step.gate) {
+-    const v = state.gateResults[comp]
+-    if (v && !v.passed) {
+-      anyFail = true
+-      if (step.falsifiable !== null && comp === 'C') cFailOnFalsifiable = true
+-    }
+-  }
+-  if (!anyFail) {
+-    state.status = 'passed'
+-  } else if (cFailOnFalsifiable) {
+-    state.status = 'failed'
+-  } else {
+-    state.status = 'blocked'
+-  }
+-  state.finishedAt = Date.now()
+-  return state.status
+-}
+-
+-/** Guarded legal-edge transition. Throws on illegal edges. */
+-export function transition(stepId: string, to: StepStatus, store: StepStore): void {
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.transition: no state for '${stepId}'`)
+-  const allowed = LEGAL_TRANSITIONS[state.status]
+-  if (!allowed || !allowed.has(to)) {
+-    throw new Error(`state-machine.transition: illegal '${state.status}' -> '${to}' for '${stepId}'`)
+-  }
+-  state.status = to
+-  if (to === 'passed' || to === 'blocked' || to === 'failed') {
+-    state.finishedAt = Date.now()
+-  }
+-}
+-
+-/**
+- * D4 回退: revert the step to 'pending' and clear gateResults (and artifacts by
+- * default), enabling a fresh re-run via startStep. `attempts` is retained.
+- * Cascade is emergent: downstream consumers lose this step's outputs.
+- */
+-export function rollback(stepId: string, store: StepStore, opts?: { clearArtifacts?: boolean }): void {
+-  const state = store.get(stepId)
+-  if (!state) throw new Error(`state-machine.rollback: no state for '${stepId}'`)
+-  const clearArtifacts = opts?.clearArtifacts !== false
+-  state.status = 'pending'
+-  state.gateResults = {}
+-  if (clearArtifacts) state.artifacts = {}
+-  state.startedAt = undefined
+-  state.finishedAt = undefined
+-}
+-
+-/** True iff the step has reached 'passed'. */
+-export function isComplete(stepId: string, store: Readonly<StepStore>): boolean {
+-  const state = store.get(stepId)
+-  return state?.status === 'passed'
+-}
+diff --git a/packages/research/research-core/src/engine/types.ts b/packages/research/research-core/src/engine/types.ts
+deleted file mode 100644
+index 482161f..0000000
+--- a/packages/research/research-core/src/engine/types.ts
++++ /dev/null
+@@ -1,74 +0,0 @@
+-/**
+- * Pure-logic type model for the 16-step research engine.
+- *
+- * No Cordis imports here — the engine is portable and unit-testable in isolation.
+- * Ported into @deepseek-ai/dsh-research-core (wrapped with the Cordis plugin
+- * three-piece: name / inject / Config / apply + service declaration) at P1.6.
+- */
+-
+-/** Methodology phase (v1.0 design doc). */
+-export type Phase = 'A' | 'B' | 'C' | 'D' | 'E'
+-
+-/**
+- * Judgment trinity component.
+- *
+- * - A = adversarial convergence: red-team refute + judge vote ≥ 2 to keep a claim.
+- * - B = external anchoring: cross-check against real literature / SOTA / venue acceptance patterns.
+- * - C = falsifiable → experiment verdict: turn a soft judgment into a falsifiable prediction, let experiment results adjudicate.
+- *
+- * A step's `gate` lists which components must pass before the step may exit.
+- */
+-export type TrinityComponent = 'A' | 'B' | 'C'
+-
+-/** Static definition of one of the 16 steps. */
+-export interface StepDefinition {
+-  /** Stable slug, e.g. 'A1-landscape'. */
+-  readonly id: string
+-  /** 1-based ordinal. */
+-  readonly index: number
+-  /** Methodology phase. */
+-  readonly phase: Phase
+-  /** Human label (zh). */
+-  readonly name: string
+-  /** What this step produces. */
+-  readonly purpose: string
+-  /** Artifact slugs consumed (dependencies on prior step outputs). */
+-  readonly inputs: readonly string[]
+-  /** Artifact slugs produced. */
+-  readonly outputs: readonly string[]
+-  /** Trinity components that must pass before the step may exit. */
+-  readonly gate: readonly TrinityComponent[]
+-  /**
+-   * The falsifiable prediction this step must yield (drives trinity C), or null
+-   * when the step is not itself a prediction-producing step.
+-   */
+-  readonly falsifiable: string | null
+-  /** Whether exiting this step requires human approval (only E2-submit). */
+-  readonly humanGate: boolean
+-}
+-
+-/** Runtime status of one step instance. */
+-export type StepStatus = 'pending' | 'in_progress' | 'gated' | 'passed' | 'blocked' | 'failed'
+-
+-/** Verdict of one trinity component gate for one step. */
+-export interface GateVerdict {
+-  readonly component: TrinityComponent
+-  readonly passed: boolean
+-  /** Evidence: citations / experiment results / red-team vote tally. */
+-  readonly evidence: string
+-  readonly rationale: string
+-  readonly timestamp: number
+-}
+-
+-/** Mutable runtime state of one step instance. */
+-export interface StepState {
+-  readonly stepId: string
+-  status: StepStatus
+-  attempts: number
+-  /** Produced artifact refs keyed by output slug. */
+-  artifacts: Record<string, unknown>
+-  /** Gate verdicts keyed by trinity component. */
+-  gateResults: Partial<Record<TrinityComponent, GateVerdict>>
+-  startedAt: number | undefined
+-  finishedAt: number | undefined
+-}
+diff --git a/packages/research/research-core/src/index.ts b/packages/research/research-core/src/index.ts
+deleted file mode 100644
+index 1f64ac0..0000000
+--- a/packages/research/research-core/src/index.ts
++++ /dev/null
+@@ -1,12 +0,0 @@
+-export { STEPS, STEP_BY_ID, stepsByPhase, TRINITY_LABEL } from './engine/steps.ts'
+-export type { Phase, TrinityComponent, StepDefinition, StepStatus, GateVerdict, StepState } from './engine/types.ts'
+-export {
+-  canStart,
+-  startStep,
+-  recordArtifact,
+-  submitGateVerdict,
+-  transition,
+-  rollback,
+-  isComplete,
+-} from './engine/state-machine.ts'
+-export type { StepStore } from './engine/state-machine.ts'
+diff --git a/packages/research/research-core/tests/state-machine.spec.ts b/packages/research/research-core/tests/state-machine.spec.ts
+deleted file mode 100644
+index f3eb193..0000000
+--- a/packages/research/research-core/tests/state-machine.spec.ts
++++ /dev/null
+@@ -1,121 +0,0 @@
+-import { describe, it, expect } from 'vitest'
+-import { STEP_BY_ID } from '../src/engine/steps.ts'
+-import type { GateVerdict, StepState, TrinityComponent } from '../src/engine/types.ts'
+-import {
+-  canStart,
+-  startStep,
+-  recordArtifact,
+-  submitGateVerdict,
+-  transition,
+-  rollback,
+-  isComplete,
+-} from '../src/engine/state-machine.ts'
+-import type { StepStore } from '../src/engine/state-machine.ts'
+-
+-function freshStore(): StepStore {
+-  return new Map<string, StepState>()
+-}
+-
+-/** A pseudo prior step that has "produced" the given artifact slugs. */
+-function producer(stepId: string, artifacts: Record<string, unknown>): StepState {
+-  return { stepId, status: 'passed', attempts: 1, artifacts, gateResults: {}, startedAt: 0, finishedAt: 0 }
+-}
+-
+-function verdict(component: TrinityComponent, passed: boolean): GateVerdict {
+-  return { component, passed, evidence: 'e', rationale: 'r', timestamp: 0 }
+-}
+-
+-describe('state-machine', () => {
+-  it('(a) canStart is false without inputs and startStep throws', () => {
+-    const store = freshStore()
+-    // A1-landscape consumes 'domain-direction', which nothing has produced.
+-    expect(canStart('A1-landscape', store)).toBe(false)
+-    expect(() => startStep('A1-landscape', store)).toThrow()
+-  })
+-
+-  it('(b) recordArtifact fills inputs and startStep moves pending -> in_progress', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'dir' }))
+-    expect(canStart('A1-landscape', store)).toBe(true)
+-    const st = startStep('A1-landscape', store)
+-    expect(st.status).toBe('in_progress')
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    // A2-claim consumes landscape-map + gap-list (now produced by A1).
+-    expect(canStart('A2-claim', store)).toBe(true)
+-  })
+-
+-  it('(c) all gate verdicts passed -> passed', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    // A1 gate = ['B']
+-    expect(submitGateVerdict('A1-landscape', verdict('B', true), store)).toBe('passed')
+-    expect(isComplete('A1-landscape', store)).toBe(true)
+-  })
+-
+-  it('(d) gate fail on a falsifiable C-step -> failed', () => {
+-    const store = freshStore()
+-    // A2-claim: gate ['A','C'], falsifiable non-null. inputs: landscape-map, gap-list.
+-    store.set('T0', producer('T0', { 'landscape-map': 'm', 'gap-list': 'g' }))
+-    startStep('A2-claim', store)
+-    recordArtifact('A2-claim', 'claim', 'c', store)
+-    recordArtifact('A2-claim', 'falsifiable-prediction', 'fp', store)
+-    transition('A2-claim', 'gated', store)
+-    submitGateVerdict('A2-claim', verdict('A', true), store)
+-    // C fails on a falsifiable step -> 'failed' (not 'blocked').
+-    expect(submitGateVerdict('A2-claim', verdict('C', false), store)).toBe('failed')
+-  })
+-
+-  it('(e) gate fail on a non-falsifiable step -> blocked', () => {
+-    const store = freshStore()
+-    // A1-landscape: gate ['B'], falsifiable null.
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    expect(submitGateVerdict('A1-landscape', verdict('B', false), store)).toBe('blocked')
+-  })
+-
+-  it('(f) rollback reverts to pending, clears gate/artifacts, downstream canStart false, re-runnable', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
+-    // A2 consumes A1's outputs.
+-    expect(canStart('A2-claim', store)).toBe(true)
+-
+-    rollback('A1-landscape', store)
+-    const a1 = store.get('A1-landscape')
+-    expect(a1?.status).toBe('pending')
+-    expect(Object.keys(a1?.artifacts ?? {}).length).toBe(0)
+-    expect(Object.keys(a1?.gateResults ?? {}).length).toBe(0)
+-    // A1's outputs gone -> A2 can no longer start.
+-    expect(canStart('A2-claim', store)).toBe(false)
+-    // A1 itself is re-runnable (its input 'domain-direction' is still produced by T0).
+-    expect(canStart('A1-landscape', store)).toBe(true)
+-    startStep('A1-landscape', store)
+-  })
+-
+-  it('(g) illegal transition throws', () => {
+-    const store = freshStore()
+-    store.set('T0', producer('T0', { 'domain-direction': 'd' }))
+-    startStep('A1-landscape', store)
+-    recordArtifact('A1-landscape', 'landscape-map', 'm', store)
+-    recordArtifact('A1-landscape', 'gap-list', 'g', store)
+-    transition('A1-landscape', 'gated', store)
+-    submitGateVerdict('A1-landscape', verdict('B', true), store) // -> passed
+-    // passed -> in_progress is illegal.
+-    expect(() => transition('A1-landscape', 'in_progress', store)).toThrow()
+-  })
+-})
+-
+-// sanity: the step lookups used above are real steps in STEPS.
+-void STEP_BY_ID
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index b57aa73..f562b52 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -6596,7 +6596,29 @@ importers:
+         specifier: workspace:^
+         version: link:../../core/system-prompt
+ 
+-  packages/research/research-core:
++  packages/research/dsh-research-cordis:
++    dependencies:
++      '@deepseek-ai/dsh-research-core':
++        specifier: workspace:^
++        version: link:../dsh-research-core
++      '@deepseek-ai/schemastery':
++        specifier: link:../../../vendor/schemastery
++        version: link:../../../vendor/schemastery
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: workspace:^
++        version: link:../../../vendor/cordis
++      '@types/node':
++        specifier: ^22.20.0
++        version: 22.20.0
++      typescript:
++        specifier: ^6.0.3
++        version: 6.0.3
++      vitest:
++        specifier: ^4.1.8
++        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.8)(happy-dom@20.11.6)(jsdom@29.1.1(@noble/hashes@2.3.0))(vite@8.0.16(@types/node@22.20.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
++
++  packages/research/dsh-research-core:
+     devDependencies:
+       '@types/node':
+         specifier: ^22.20.0
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index 6dfe0a9..59d5782 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -115,7 +115,8 @@
+     "scripts/*.client.spec.ts",
+     "scripts/client-bundle-css.spec.ts",
+     "packages/typert/generator/tests/fixtures/**",
+-    "scripts/client-bundle-purity.spec.ts"
++    "scripts/client-bundle-purity.spec.ts",
++    "packages/research/dsh-research-core/tests/**"
+   ],
+   "references": [
+     { "path": "./vendor/cosmokit" },
+@@ -328,6 +329,8 @@
+     { "path": "./packages/lsp/lsp" },
+     { "path": "./packages/lsp/lsp-stdio" },
+     { "path": "./packages/lsp/tool-lsp" },
++    { "path": "./packages/research/dsh-research-core" },
++    { "path": "./packages/research/dsh-research-cordis" },
+     { "path": "./apps/cli" }
+   ]
+ }
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+index 5a0fcc8..8c69393 100644
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -16,7 +16,12 @@ function isBuildFaceClient(value: unknown): boolean {
+ export default defineConfig(({ env }) => {
+   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
+   return {
+-    workspace: ['vendor/*', 'packages/*/*', 'apps/cli'],
++    // dsh-research-core is a standalone pure-TS domain core (no Cordis). It builds itself via
++    // a package-local tsdown.config (src/index.ts → lib/index.js, src/host.ts → lib/host.js)
++    // + tsc -p tsconfig.json emits lib/types. It is INCLUDED in the workspace build (no longer
++    // excluded) so its lib/index.js is produced for the adapter's production import. The main
++    // entry exports NO trust capability; the `./host` subpath is the only approval path.
++    workspace: { include: ['vendor/*', 'packages/*/*', 'apps/cli'] },
+     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
+     outDir: 'lib',
+     format: ['esm'],
