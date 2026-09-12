@@ -149,7 +149,7 @@ export interface ResearchTeamServiceConfig {
 
 /** Research-team service: members, CAS tasks, and the write-scope guard. */
 export class ResearchTeamService extends Service {
-  static inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'subagents']
+  static inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'subagents', 'tools']
 
   /** The tools the global guard treats as one-path scope-checkable writes. */
   private readonly scopeCheckedTools: ReadonlySet<string>
