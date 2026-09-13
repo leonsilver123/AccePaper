@@ -91,6 +91,10 @@ import {
 
 import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
 import { assembleManuscript } from './manuscript.ts'
+import { evaluateConvergence, summarizeConvergence } from './convergence.ts'
+import type { ChannelVerdict } from './convergence.ts'
+import { buildRevisionRecord } from './rebuttal.ts'
+import type { RebuttalPoint } from './rebuttal.ts'
 import {
   ABLATION_VARIANT_KINDS,
   ablationRunKey,
@@ -1134,21 +1138,39 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   const baseline = readInput(ctx, 'baseline-results')
   const mvpOutcome = mvp?.outcome as { supportsPrediction?: unknown } | undefined
   const baselineRec = baseline?.baseline as { identity?: unknown } | undefined
+  const baselineMeasured = baseline?.measured as { baselineDelaySeconds?: unknown } | undefined
+
+  // Report the channels THIS step's declared inputs let it see, and let the
+  // convergence rule speak for the rest. The executor receives mvp-results and
+  // baseline-results, so it can read C (the experiment) and part of B (the
+  // baseline); it never sees the adversarial round, so A is reported absent
+  // rather than assumed. Assuming it would be the optimistic default that
+  // `?? true` used to encode.
+  const observed: ChannelVerdict[] = []
+  if (mvpOutcome?.supportsPrediction === true) observed.push({ component: 'C', outcome: 'passed' })
+  else if (mvpOutcome?.supportsPrediction === false) observed.push({ component: 'C', outcome: 'failed' })
+  if (typeof baselineMeasured?.baselineDelaySeconds === 'number') observed.push({ component: 'B', outcome: 'passed' })
+  const convergence = evaluateConvergence(observed)
+
   return {
     'converged-verdict': tagArtifact(
       {
-        fixture: true,
+        fixture: false,
         stepId: 'C2-trinity-loop',
         slug: 'converged-verdict',
         claimRef,
         predictionText,
-        baselineRef: baselineRec?.identity ?? SCENARIO.baselineIdentity,
-        experimentRef: mvpOutcome?.supportsPrediction ?? true,
-        verdict: 'converged (mock dossier)',
-        note: 'convergence dossier only — the A/B/C gate verdicts are produced by the REAL trinity channels in verdict.ts, never by this fixture',
+        baselineRef: baselineRec?.identity ?? null,
+        experimentRef: mvpOutcome?.supportsPrediction ?? null,
+        convergence: convergence.kind,
+        convergenceBasis: summarizeConvergence(convergence),
+        channelsObserved: observed,
+        // A is structurally unavailable here; saying so is the point, because the
+        // step's own A+B+C gate is what actually adjudicates convergence.
+        note: 'dossier of the channels this step can observe from its declared inputs; the A+B+C gate verdicts are produced by the real trinity channels in verdict.ts, and the adversarial channel is not among this step\'s inputs',
       },
       C2_PRODUCER,
-      'fixture_executor',
+      'real_tool_fixture_input',
     ),
   }
 }
@@ -1526,36 +1548,107 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
 /** D4-rebuttal: fixture that reads the D3 draft, produces an adversarial rebuttal
  *  record and a revised draft (same sections, revision markers). */
-function d4Executor(ctx: ExecCtx): Record<string, unknown> {
+/**
+ * Pair up CONCERN/RESPONSE lines from a model's rebuttal response.
+ *
+ * A CONCERN opens an exchange and the next RESPONSE closes it; a response with no
+ * open concern is dropped rather than attached to the previous one, so a malformed
+ * reply yields fewer exchanges instead of a mispaired one.
+ *
+ * @param text - the model's response.
+ * @returns one point per complete pair, in the order they appeared.
+ */
+function parseExchanges(text: string): ReadonlyArray<RebuttalPoint> {
+  const points: RebuttalPoint[] = []
+  let concern: string | undefined
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
+    const concernMatch = /^CONCERN\s*[:=]\s*(.+)$/i.exec(line)
+    if (concernMatch !== null) {
+      concern = concernMatch[1]?.trim()
+      continue
+    }
+    const responseMatch = /^RESPONSE\s*[:=]\s*(.+)$/i.exec(line)
+    if (responseMatch !== null && concern !== undefined && concern.length > 0) {
+      points.push({ concern, response: responseMatch[1]?.trim() ?? '', requiresRevision: true })
+      concern = undefined
+    }
+  }
+  return points
+}
+
+async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const draft = readInput(ctx, 'draft')
   const sections = sectionsOf(draft)
+  const measured = measureOutcome()
+
+  // The exchanges are organised by the real module, which computes the revision
+  // tally from the points and refuses an empty or shell response. With a writer the
+  // concerns come from the model; without one they are the questions this study's own
+  // design raises, stated with the MEASURED numbers rather than a remembered constant.
+  const writer = ctx.proseWriter
+  let points: ReadonlyArray<RebuttalPoint>
+  let rebuttalSource: 'model' | 'fixture' = 'fixture'
+  if (writer === undefined) {
+    points = [
+      {
+        concern: `Is the ${measured.reductionPct.toFixed(2)}% delay reduction robust at the boundary?`,
+        response: 'Boundary probing at C3 runs the same simulation with the adaptive response narrowed, which delimits the applicability domain.',
+        requiresRevision: false,
+      },
+      {
+        concern: 'Are the SOTA anchors real?',
+        response: 'No published-SOTA row is recorded: a delay figure must be read out of a paper, so the comparison is against this study\'s own measured baseline and says so.',
+        requiresRevision: true,
+      },
+    ]
+  } else {
+    const analysis = await writer.write({
+      stepId: 'D4-rebuttal',
+      instruction: [
+        'Write the review exchanges this paper must answer.',
+        'Reply with one exchange per pair of lines, at least two exchanges:',
+        'CONCERN: <reviewer concern>',
+        'RESPONSE: <the author response, using only the measurements given in the context>',
+      ].join('\n'),
+      context: { claimRef, measured },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    const parsed = parseExchanges(analysis.text)
+    if (parsed.length === 0) {
+      throw new Error(
+        '[D4-rebuttal] the model response carried no CONCERN/RESPONSE pair '
+        + '(a rebuttal with no exchange answers nothing — NO DEFAULT PASS)',
+      )
+    }
+    points = parsed
+    rebuttalSource = 'model'
+  }
+
+  const record = buildRevisionRecord(points)
   const revised: ManuscriptSection[] = sections.map(s => ({
     ...s,
-    bodyText: `${s.bodyText} [revised: rebuttal addressed]`,
+    bodyText: record.hasRevisions ? `${s.bodyText} [revised: rebuttal addressed]` : s.bodyText,
   }))
   return {
     rebuttal: tagArtifact(
       {
-        fixture: true,
+        fixture: rebuttalSource === 'fixture',
         stepId: 'D4-rebuttal',
         slug: 'rebuttal',
         roundId: 't19s-rebuttal-1',
         claimRef,
-        exchanges: [
-          {
-            challenge: 'Is the 9.1% delay reduction robust to the boundary conditions?',
-            defense: 'Boundary probing at C3 (real ablation runs over mock measurements) delimits the applicability domain.',
-          },
-          {
-            challenge: 'Are the SOTA anchors real?',
-            defense: 'No — anchoring is exercised by the B-gate (T23) and stays synthetic this wave; the manuscript marks it accordingly.',
-          },
-        ],
-        note: 'synthetic rebuttal fixture — no rebuttal-revision model tool exists',
+        rebuttalSource,
+        exchanges: record.points,
+        revisionCount: record.revisionCount,
+        hasRevisions: record.hasRevisions,
+        note: rebuttalSource === 'fixture'
+          ? 'exchanges written from this study\'s own design questions, with measured numbers'
+          : 'exchanges written by the model from the measured outcome',
       },
       D4_PRODUCER,
-      'fixture_executor',
+      rebuttalSource === 'fixture' ? 'fixture_executor' : 'real_tool_fixture_input',
     ),
     'revised-draft': tagArtifact(
       {
@@ -1767,8 +1860,8 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'C2-trinity-loop',
-    kind: 'fixture_executor',
-    basis: 'no convergence-loop driver exists; the executor emits a deterministic convergence dossier while the step\'s A+B+C GATE is adjudicated by the genuine trinity channels (see VERDICT_CHANNELS)',
+    kind: 'real_tool_fixture_input',
+    basis: 'the convergence dossier is COMPUTED from the channels this step\'s declared inputs let it see (C from mvp-results, part of B from baseline-results) by the same rule the gate uses; the adversarial channel is not among its inputs, so it is reported absent rather than assumed — the step\'s A+B+C GATE is what actually adjudicates convergence (see VERDICT_CHANNELS). Inputs remain fixture-supplied.',
     producer: C2_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',

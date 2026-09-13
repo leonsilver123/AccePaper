@@ -185,7 +185,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
    * C1-mvp executes the traffic-sim experiment engine, so it is a real-tool step
    * (its artifact carries measured numbers) without appearing in the tool-id map.
    */
-  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp', 'B3-baseline'] as const
+  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp', 'B3-baseline', 'C2-trinity-loop'] as const
 
   it('marks exactly the real-tool steps as real_tool_fixture_input', () => {
     const real = [...STEP_EXECUTOR_REGISTRY.values()]
@@ -197,6 +197,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
       'A2-claim',
       'B3-baseline',
       'C1-mvp',
+      'C2-trinity-loop',
       'C3-boundary',
       'D1-figure-map',
       'E1-format',
@@ -291,7 +292,7 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
     // B2-data's level depends on whether its dataset is present on this host, so it
     // is asserted separately (below) rather than counted as a fixed fixture.
     .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true
-      && e.stepId !== 'B2-data' && e.stepId !== 'B3-baseline')
+      && e.stepId !== 'B2-data' && e.stepId !== 'B3-baseline' && e.stepId !== 'C2-trinity-loop')
     .map(e => e.stepId)
 
   it('leaves 8 steps as unconditional fixture executors', () => {
@@ -301,7 +302,6 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
       'A3-agenda',
       'A4-venue',
       'B1-method',
-      'C2-trinity-loop',
       'D2-framework',
       'D3-writing',
       'D4-rebuttal',

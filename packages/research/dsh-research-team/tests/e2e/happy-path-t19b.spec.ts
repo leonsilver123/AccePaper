@@ -118,12 +118,12 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     const { store, run } = await happyRun()
     const fixtureSteps = run.steps.filter(
       s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit'
-        && s.stepId !== 'B2-data' && s.stepId !== 'B3-baseline',
+        && s.stepId !== 'B2-data' && s.stepId !== 'B3-baseline' && s.stepId !== 'C2-trinity-loop',
     )
     // C1-mvp left this set when the C channel began running its experiment for real;
     // B2-data is excluded because its level tracks dataset presence on this host, and
     // B3-baseline because it now measures its own baseline.
-    expect(fixtureSteps.length).toBe(7)
+    expect(fixtureSteps.length).toBe(6)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -420,7 +420,7 @@ describe('T19-B happy path — auditable reports', () => {
     expect(cmp).toContain('NOT')
 
     const json = JSON.parse(jsonContent) as Record<string, unknown>
-    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(7)
+    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(8)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()
