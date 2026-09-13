@@ -447,6 +447,8 @@ describe('T19-B happy path — auditable reports', () => {
     const md = mdContent
     expect(md).toContain('real_tool_fixture_input')
     expect(md).toContain('`live_external`: 0')
+    // The report must say that a page of "A: passed" is not red-team agreement.
+    expect(md).toContain('The A channel cannot fail in this configuration')
     // Honesty: a real tool over synthetic input must never be sold as real science.
     expect(md).not.toContain('真实科研验证')
     expect(md).toContain('NOT real scientific verification')

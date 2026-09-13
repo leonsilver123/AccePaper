@@ -196,6 +196,14 @@ function renderRunMarkdown(run: RunResult, mode: string): string {
     '- Every artifact of a non-fixture step carries `__producer` equal to the registry producer.',
     '- All gate adjudication goes through core `submitGateVerdict` → `_adjudicate`; the runner',
     '  re-implements no gate logic and adds no audit event of its own.',
+    '- **The A channel cannot fail in this configuration.** Its three votes are built by',
+    '  `supportVote()` with `position: \'support\'` written literally, so every step carrying',
+    '  an A component reads "A: passed". That is disclosed in the gate-channel table above',
+    '  ("the rebuttal round votes are synthetic fixture input"), and it is repeated here',
+    '  because a page of A passes otherwise reads as evidence the red team agreed. The only',
+    '  way an A component abstains today is an INJECTED abstention (the recovery scenario).',
+    '  Feeding real votes through `submitRebuttal` is what would give this channel a',
+    '  failing path.',
     '',
   ].join('\n')
 }
