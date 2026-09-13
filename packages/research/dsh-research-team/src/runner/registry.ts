@@ -672,7 +672,11 @@ function bodyTextFor(
     case 'experiments':
       return `Both policies were run against the same profile. Demand-weighted mean delay was ${measured.baselineDelaySeconds.toFixed(2)} s/veh under the frozen plan and ${measured.variantDelaySeconds.toFixed(2)} s/veh under re-planning, a relative reduction of ${measured.reductionPct.toFixed(2)}%. The profile, its derivation from ${STUDY_SERIES_PROVENANCE.file} and the assumptions made on top of it are recorded on the mvp-results artifact.`
     case 'results':
-      return 'The figure and the table below carry the same measurement the C gate adjudicated. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
+      // The manuscript body carries the RESULTS TABLE, not the rendered figure: the
+      // data figure and the roadmap are rendered as image artifacts in the
+      // reproducible package, and this section previously claimed "the figure and
+      // the table below" over a document that holds only the table.
+      return 'The table below carries the same measurement the C gate adjudicated; the rendered data figure and roadmap are emitted as image artifacts beside this manuscript. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
     case 'conclusion':
       return `On this demand profile the frozen plan is worse than re-planning by ${measured.reductionPct.toFixed(2)}%, measured inside the study's own delay model. The scope is one isolated two-phase intersection under a scaled measured series; submission remains a human act at E2.`
     case 'references':
