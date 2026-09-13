@@ -102,9 +102,9 @@ describe('T34 — 16 步单步可运行验证', () => {
     const humanGate = rows.filter(r => r.kind === 'humanGate').map(r => r.stepId)
 
     // 与 registry 的声明一致:5 真实工具 / 10 fixture / 1 人工门。
-    expect(realTool).toHaveLength(6)
-    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'C1-mvp', 'C3-boundary', 'D1-figure-map', 'E1-format'])
-    expect(fixture).toHaveLength(9)
+    expect(realTool).toHaveLength(7)
+    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'B3-baseline', 'C1-mvp', 'C3-boundary', 'D1-figure-map', 'E1-format'])
+    expect(fixture).toHaveLength(8)
     expect(humanGate).toEqual(['E2-submit'])
   })
 })

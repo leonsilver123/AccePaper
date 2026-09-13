@@ -255,8 +255,10 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
       expect(heading, id).toBeDefined()
       expect(manuscript).toContain(heading as string)
     }
-    // …the selected venue from A4…
-    expect(manuscript).toContain(SCENARIO.venueName)
+    // …while the selected venue from A4 is carried as submission metadata rather
+    // than as body text: the assembled manuscript is what gets submitted, and a
+    // venue name is a property of the submission, not of the paper.
+    expect(formatted.venueName).toBe(SCENARIO.venueName)
     // …and the results-table rows rendered by the three-line-table sub-capability.
     expect(manuscript).toContain('Adaptive')
     expect(manuscript).toContain('Fixed-time')
@@ -418,7 +420,7 @@ describe('T19-B happy path — auditable reports', () => {
     expect(cmp).toContain('NOT')
 
     const json = JSON.parse(jsonContent) as Record<string, unknown>
-    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(6)
+    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(7)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()

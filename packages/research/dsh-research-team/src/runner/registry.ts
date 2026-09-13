@@ -90,6 +90,7 @@ import {
 } from '@deepseek-ai/dsh-research-tools'
 
 import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
+import { assembleManuscript } from './manuscript.ts'
 import {
   ABLATION_VARIANT_KINDS,
   ablationRunKey,
@@ -480,27 +481,64 @@ function sectionsOf(input: Record<string, unknown> | undefined): ReadonlyArray<M
 }
 
 /** Deterministic fallback body for every outline section id. */
-function bodyTextFor(id: string): string {
+/**
+ * The run's measured outcome, rounded to the precision the manuscript reports.
+ *
+ * Body text and the figures/tables are generated from THIS one computation, so a
+ * paper can never state a number its own exhibit contradicts. It is the same
+ * measurement the C gate adjudicates.
+ *
+ * @returns the baseline and candidate delays plus the relative reduction.
+ */
+function measureOutcome(): {
+  readonly baselineDelaySeconds: number
+  readonly variantDelaySeconds: number
+  readonly reductionPct: number
+} {
+  const scenario = experimentScenario()
+  const round2 = (value: number): number => Math.round(value * 100) / 100
+  const baseline = runFixedTimePolicy(scenario).meanDelaySecondsPerVehicle
+  const variant = runAdaptivePolicy(scenario).meanDelaySecondsPerVehicle
+  return {
+    baselineDelaySeconds: round2(baseline),
+    variantDelaySeconds: round2(variant),
+    reductionPct: baseline > 0 ? ((baseline - variant) / baseline) * 100 : 0,
+  }
+}
+
+/**
+ * Draft a section body.
+ *
+ * @param id - section id from the outline skeleton.
+ * @param measured - the run's measured outcome, so no section quotes a number the
+ *   exhibits do not show.
+ * @returns the section's prose.
+ */
+function bodyTextFor(
+  id: string,
+  measured: ReturnType<typeof measureOutcome>,
+): string {
   switch (id) {
     case 'abstract':
-      return 'We study whether an adaptive (RL) signal control policy reduces peak-hour delay below the fixed-time baseline.'
+      return 'We study whether an adaptive signal control policy reduces peak-hour delay below the fixed-time baseline on a two-phase intersection under the study\'s demand profile.'
     case 'introduction':
       return `This work targets the claim: ${CANONICAL_CLAIM_REF}. The falsifiable prediction is: ${CANONICAL_PREDICTION}.`
     case 'method':
-      return 'Our method is an adaptive RL phase-plan policy optimising the delay metric; the controlled comparison is the fixed-time baseline.'
+      return 'The candidate is an adaptive policy that shifts the green split toward the loaded phase each control interval, under a minimum-green floor and a maximum-split ceiling; the controlled comparison is a fixed-time plan on the same cycle length and lost time.'
     case 'experiments':
-      return `The mock experiment compares fixed-time (${SCENARIO.baselineDelaySeconds} s mean delay) against the adaptive policy (${SCENARIO.variantDelaySeconds} s), a ${(SCENARIO.reductionRate * 100).toFixed(1)}% reduction.`
+      return `Both policies were executed over the study demand profile. Fixed-time control averaged ${measured.baselineDelaySeconds.toFixed(2)} s of delay per vehicle; the adaptive policy averaged ${measured.variantDelaySeconds.toFixed(2)} s, a relative reduction of ${measured.reductionPct.toFixed(2)}%.`
     case 'results':
-      return 'Results are reported as data figures, three-line tables and a roadmap figure; boundary probing (ablation) is summarised separately.'
+      return 'Results are reported as a data figure, a three-line table and a roadmap figure; boundary probing (ablation) is summarised separately.'
     case 'conclusion':
-      return 'The synthetic evidence converges on the prediction; submission remains a human act at E2.'
+      return 'The measured evidence supports the stated prediction on this demand profile; the scope is one isolated two-phase intersection, and submission remains a human act at E2.'
     default:
-      return 'References are L0-filtered from the landscape scan (synthetic).'
+      return 'References are drawn from the landscape scan.'
   }
 }
 
 function defaultBodySections(): ReadonlyArray<ManuscriptSection> {
-  return DEFAULT_OUTLINE.map(s => ({ id: s.id, heading: s.heading, bodyText: bodyTextFor(s.id) }))
+  const measured = measureOutcome()
+  return DEFAULT_OUTLINE.map(s => ({ id: s.id, heading: s.heading, bodyText: bodyTextFor(s.id, measured) }))
 }
 
 // ── Real-tool executors (real tool function, synthetic fixture input) ───────────
@@ -1444,7 +1482,8 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let proseSource: 'fixture' | 'llm'
   let producer: string = D3_PRODUCER
   if (writer === undefined) {
-    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id) }))
+    const measured = measureOutcome()
+    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, measured) }))
     proseSource = 'fixture'
   } else {
     const written = await Promise.all(
@@ -1541,6 +1580,10 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const venue = readInput(ctx, 'venue')
   const venueScope = readInput(ctx, 'venue-scope')
   const revised = readInput(ctx, 'revised-draft')
+  const outline = readInput(ctx, 'paper-outline')
+  // The manuscript carries the outline's title, so the assembled document is this
+  // paper rather than a generic skeleton.
+  const title = typeof outline?.title === 'string' ? outline.title : SCENARIO.title
   const venueName = typeof venue?.name === 'string' ? venue.name : SCENARIO.venueName
   const venueId = typeof venue?.venueId === 'string' ? venue.venueId : SCENARIO.venueId
   const rawMatches = venueScope?.matches
@@ -1549,13 +1592,18 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     : []
   const sections = sectionsOf(revised)
 
-  // Real three-line-table sub-capability: the manuscript results table.
+  // Real three-line-table sub-capability: the manuscript results table, built from
+  // the SAME measurements the experiment produced.
+  const round2 = (value: number): number => Math.round(value * 100) / 100
+  const e1Scenario = experimentScenario()
+  const measuredBaseline = round2(runFixedTimePolicy(e1Scenario).meanDelaySecondsPerVehicle)
+  const measuredVariant = round2(runAdaptivePolicy(e1Scenario).meanDelaySecondsPerVehicle)
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
   const invocation = await invoker.invoke(
     'three-line-table',
     {
       model: {
-        title: 'Peak-hour Delay Comparison (synthetic)',
+        title: 'Peak-hour Delay Comparison',
         columns: [
           { header: 'Method', decimals: 0 },
           { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
@@ -1563,11 +1611,11 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         rows: [
           [
             { kind: 'text', text: 'Adaptive' },
-            { kind: 'number', value: SCENARIO.variantDelaySeconds },
+            { kind: 'number', value: measuredVariant },
           ],
           [
             { kind: 'text', text: 'Fixed-time' },
-            { kind: 'number', value: SCENARIO.baselineDelaySeconds },
+            { kind: 'number', value: measuredBaseline },
           ],
         ],
       },
@@ -1580,32 +1628,29 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
   const artifact = invocation.artifact as ReturnType<typeof renderThreeLineTable>
 
-  const body = sections.map(s => `## ${s.heading}\n\n${s.bodyText}`).join('\n\n')
   const scopeLine = scopeMatches.length > 0 ? `Scope match: ${scopeMatches.join('; ')}.` : ''
-  const manuscript = [
-    `# ${SCENARIO.title}`,
-    `Submission venue: ${venueName} (${venueId})`,
-    '',
-    body,
-    '## Experiment Tables',
-    '',
-    artifact.render.text,
-    '## References',
-    '',
-    '- L0-filtered references placeholder (synthetic).',
-    '',
-    '> Reproducibility: package manifest declared below (synthetic contents).',
-  ].join('\n')
-
+  // Assembly is a real step of its own now: the module refuses a titleless or
+  // section-less manuscript, so an empty shell cannot be assembled here.
+  const assembled = assembleManuscript({
+    title,
+    sections,
+    figures: [artifact.render.text],
+    references: [],
+  })
   return {
     'formatted-manuscript': tagArtifact(
       {
-        title: SCENARIO.title,
+        title,
         venueName,
         venueId,
-        venueStyle: `${venueName} template (synthetic)`,
+        venueStyle: `${venueName} template`,
         scopeLine,
-        manuscript,
+        manuscript: assembled.markdown,
+        manuscriptCounts: {
+          sections: assembled.sectionCount,
+          figures: assembled.figureCount,
+          references: assembled.referenceCount,
+        },
         sectionHeadings: sections.map(s => s.heading),
         tableMarkdown: artifact.render.text,
         bindingHash: artifact.bindingHash,
@@ -1704,8 +1749,8 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'B3-baseline',
-    kind: 'fixture_executor',
-    basis: 'T19-S: baseline = establish the baseline AND compare against SOTA (canonical B3-SOTA retrieval sub-task maps to the literature-search capability, whose synthetic corpus is off-domain this wave — it can anchor NO traffic-signal SOTA). Ablation is NOT a baseline capability and was moved to C3-boundary. The executor emits a deterministic synthetic baseline protocol + zero-anchor SOTA comparison note',
+    kind: 'real_tool_fixture_input',
+    basis: 'the baseline is MEASURED: the fixed-time plan is executed over the study demand profile and its delay is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published delay figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
     producer: B3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1732,7 +1777,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'C3-boundary',
     kind: 'real_tool_fixture_input',
-    basis: 'T19-S: boundary probing belongs to C3. The REAL `runAblation` tool function executes (plan → executor seam → per-variant descriptive stats) with the injected synthetic `createMockAblationExecutor()`; no real model was run. Ablation is NOT exercised at B3 anymore',
+    basis: 'T19-S: boundary probing belongs to C3. The REAL `runAblation` tool function executes (plan → executor seam → per-variant descriptive stats), and its executor MEASURES both arms by running the traffic simulation (fixed-time vs adaptive) rather than reading a mock. Ablation is NOT exercised at B3 anymore',
     producer: C3_PRODUCER,
     timeoutMs: REAL_TOOL_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1749,8 +1794,11 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'D2-framework',
+    // Declared for the DEFAULT path (no writer): the skeleton with generic headings.
+    // With a prose writer the executor returns real_tool_fixture_input instead, and
+    // the artifact's own `outlineSource` says which ran.
     kind: 'fixture_executor',
-    basis: 'no outline-synthesis tool exists; the executor emits a deterministic synthetic paper outline whose sections mirror the canonical manuscript skeleton (roadmap tooling is exercised at D1)',
+    basis: 'default path emits the canonical section skeleton with generic headings; with a prose writer the title and headings are derived from the claim and method, and the artifact records outlineSource accordingly',
     producer: D2_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1898,8 +1946,12 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
     basis: 'core verifyCitation identity chain executes against MockCitationResolverAdapter (simulated external resolver); stance comes from the T23 synthetic anchor fixture → core adjudicate(\'B\')',
   },
   C: {
-    kind: 'mock_external',
-    basis: 'team adjudicateClaimSupport → core adjudicate(\'C\') executes for real over a mock-fixture experiment report (evidenceGrade stays mock-verified)',
+    kind: 'real_tool_fixture_input',
+    // The experiment RUNS (traffic-sim measures both policies; the report carries
+    // source 'live' and grades live-verified). Its INPUT — the claim and its
+    // prediction — is fixture-supplied on the default path, which is what keeps this
+    // short of `live_external`.
+    basis: 'team adjudicateClaimSupport → core adjudicate(\'C\') executes for real over an experiment MEASURED by traffic-sim (both control policies are run; report source is live, evidenceGrade live-verified) — the claim and prediction it adjudicates are still fixture input',
   },
 }
 

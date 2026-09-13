@@ -185,22 +185,27 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
    * C1-mvp executes the traffic-sim experiment engine, so it is a real-tool step
    * (its artifact carries measured numbers) without appearing in the tool-id map.
    */
-  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp'] as const
+  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp', 'B3-baseline'] as const
 
   it('marks exactly the real-tool steps as real_tool_fixture_input', () => {
     const real = [...STEP_EXECUTOR_REGISTRY.values()]
       .filter(e => e.kind === 'real_tool_fixture_input')
       .map(e => e.stepId)
-    // Registry order, not grouped by kind: C1-mvp sits between A2 and C3.
+    // Registry order, not grouped by kind: B3-baseline sits between A2 and C1.
     expect(real).toEqual([
       'A1-landscape',
       'A2-claim',
+      'B3-baseline',
       'C1-mvp',
       'C3-boundary',
       'D1-figure-map',
       'E1-format',
     ])
-    expect(real).toEqual(expect.arrayContaining([...Object.keys(EXPECTED_REAL_TOOLS), ...REAL_RUNTIME_STEPS_WITHOUT_TOOL]))
+    expect(real).toEqual(expect.arrayContaining([
+      ...Object.keys(EXPECTED_REAL_TOOLS),
+      ...REAL_RUNTIME_STEPS_WITHOUT_TOOL,
+      'B3-baseline',
+    ]))
   })
 
   it('brands each real-tool producer with the tool id@version', () => {

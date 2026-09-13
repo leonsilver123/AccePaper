@@ -47,6 +47,30 @@ interface SessionHostFace {
   createUserMessage: (input: { content: Array<{ type: 'text'; text: string }>; source: { kind: string } }) => unknown
 }
 
+/**
+ * Text blocks out of one `assistant/message` event.
+ *
+ * The session emits `assistant/message` with the message under `data.message`; the
+ * earlier reading of a `message.assistant` type with `data.content` matched nothing
+ * that is ever emitted, so the writer resolved every call as "no text".
+ *
+ * @param event - one entry from a session's snapshot events.
+ * @returns the concatenated text blocks, empty when the event carries none.
+ */
+export function assistantTextOf(event: unknown): ReadonlyArray<string> {
+  if (event === null || typeof event !== 'object') return []
+  const record = event as { type?: unknown; data?: { message?: { content?: unknown } } }
+  if (record.type !== 'assistant/message') return []
+  const content = record.data?.message?.content
+  if (!Array.isArray(content)) return []
+  const parts: string[] = []
+  for (const block of content) {
+    const piece = block as { type?: unknown; text?: unknown }
+    if (piece.type === 'text' && typeof piece.text === 'string') parts.push(piece.text)
+  }
+  return parts
+}
+
 export interface LlmProseWriterConfig {
   /** Registered provider route, e.g. `deepseek-official`. */
   readonly provider: string
@@ -75,18 +99,7 @@ function promptFor(request: ProseRequestLike): string {
 
 /** Collect the assistant text from a session's snapshot events. */
 function assistantTextFrom(events: ReadonlyArray<unknown>): string {
-  const parts: string[] = []
-  for (const event of events) {
-    const record = event as { type?: unknown; data?: { content?: unknown } }
-    if (record.type !== 'message.assistant') continue
-    const content = record.data?.content
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      const piece = block as { type?: unknown; text?: unknown }
-      if (piece.type === 'text' && typeof piece.text === 'string') parts.push(piece.text)
-    }
-  }
-  return parts.join('\n').trim()
+  return events.flatMap(event => assistantTextOf(event)).join('\n').trim()
 }
 
 /**
@@ -109,11 +122,22 @@ export class LlmProseWriter {
 
   private async loadHost(): Promise<SessionHostFace> {
     if (this.host !== undefined) return this.host
+    // `SessionId` belongs to the session package; `createUserMessage` belongs to the
+    // LLM package. Reading both from one of them silently yields undefined for the
+    // other, which is why each is resolved from its own module.
     const sessions = (await import('@deepseek-ai/' + 'dsh-session')) as {
       SessionId: SessionHostFace['SessionId']
+    }
+    const llm = (await import('@deepseek-ai/' + 'dsh-llm')) as {
       createUserMessage: SessionHostFace['createUserMessage']
     }
-    this.host = { SessionId: sessions.SessionId, createUserMessage: sessions.createUserMessage }
+    if (typeof llm.createUserMessage !== 'function' || typeof sessions.SessionId !== 'function') {
+      throw new Error(
+        '[research-prose] host services are missing createUserMessage/SessionId — the prose '
+        + 'channel cannot send a request (failing rather than returning empty text)',
+      )
+    }
+    this.host = { SessionId: sessions.SessionId, createUserMessage: llm.createUserMessage }
     return this.host
   }
 
