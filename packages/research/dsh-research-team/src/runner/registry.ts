@@ -1307,34 +1307,108 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
 /** D2-framework: fixture shaped as a real paper outline derived from the claim +
  *  agenda + converged verdict (upstream references in `covers`). */
-function d2Executor(ctx: ExecCtx): Record<string, unknown> {
+/** The canonical section skeleton and what each section is answerable to. */
+const OUTLINE_SKELETON: ReadonlyArray<{ id: string; covers: ReadonlyArray<string> }> = [
+  { id: 'abstract', covers: [] },
+  { id: 'introduction', covers: ['claim', 'gap'] },
+  { id: 'method', covers: ['method-spec'] },
+  { id: 'experiments', covers: ['baseline', 'mvp', 'ablation'] },
+  { id: 'results', covers: ['figures', 'tables', 'roadmap'] },
+  { id: 'conclusion', covers: ['converged-verdict'] },
+  { id: 'references', covers: ['landscape'] },
+]
+
+/** Default headings when no writer is injected (the skeleton's own names). */
+const DEFAULT_HEADING: Readonly<Record<string, string>> = {
+  abstract: 'Abstract',
+  introduction: 'Introduction',
+  method: 'Method',
+  experiments: 'Experiments',
+  results: 'Results',
+  conclusion: 'Conclusion',
+  references: 'References',
+}
+
+async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const agenda = readInput(ctx, 'agenda')
   const verdict = readInput(ctx, 'converged-verdict')
-  const outline: ReadonlyArray<OutlineSection & { covers: ReadonlyArray<string> }> = [
-    { id: 'abstract', heading: 'Abstract', covers: [] },
-    { id: 'introduction', heading: 'Introduction', covers: ['claim', 'gap'] },
-    { id: 'method', heading: 'Method', covers: ['method-spec'] },
-    { id: 'experiments', heading: 'Experiments', covers: ['baseline', 'mvp', 'ablation'] },
-    { id: 'results', heading: 'Results', covers: ['figures', 'tables', 'roadmap'] },
-    { id: 'conclusion', heading: 'Conclusion', covers: ['converged-verdict'] },
-    { id: 'references', heading: 'References', covers: ['landscape'] },
-  ]
+  const claim = readInput(ctx, 'claim')
+  const method = readInput(ctx, 'method-spec')
+
+  // The outline's TITLE and HEADINGS are what make it this paper rather than a
+  // skeleton: a generic "Method" heading states nothing about the work. With a
+  // writer, both are derived from the claim and the method; the section IDS and
+  // their `covers` links stay fixed, because they are the structure every
+  // downstream step depends on.
+  let title: string = SCENARIO.title
+  const headings: Record<string, string> = { ...DEFAULT_HEADING }
+  let outlineSource: 'model' | 'fixture' = 'fixture'
+
+  const writer = ctx.proseWriter
+  if (writer !== undefined) {
+    const analysis = await writer.write({
+      stepId: 'D2-framework',
+      instruction: [
+        'Write the title and section headings for the paper that reports this work.',
+        'Reply with exactly these two lines and nothing else:',
+        'TITLE: <a specific paper title>',
+        `SECTIONS: ${OUTLINE_SKELETON.length} headings separated by " | ", in this order: `
+          + `${OUTLINE_SKELETON.map(s => s.id).join(', ')}`,
+      ].join('\n'),
+      context: {
+        claim: claim?.assertion ?? claimRef,
+        methodFamily: method?.family ?? null,
+      },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    const parsedTitle = labelledField(analysis.text, 'TITLE')
+    const parsedSections = labelledField(analysis.text, 'SECTIONS')
+    if (parsedTitle === undefined || parsedSections === undefined) {
+      throw new Error(
+        '[D2-framework] the model response did not carry TITLE/SECTIONS '
+        + '(an outline without headings cannot structure the manuscript — NO DEFAULT PASS)',
+      )
+    }
+    const parsedHeadings = parsedSections.split('|').map(s => s.trim()).filter(s => s.length > 0)
+    if (parsedHeadings.length !== OUTLINE_SKELETON.length) {
+      throw new Error(
+        `[D2-framework] expected ${OUTLINE_SKELETON.length} section headings, got ${parsedHeadings.length} `
+        + '(the skeleton is fixed; a partial outline would drop a section downstream steps depend on)',
+      )
+    }
+    title = parsedTitle
+    OUTLINE_SKELETON.forEach((section, index) => {
+      headings[section.id] = parsedHeadings[index] as string
+    })
+    outlineSource = 'model'
+  }
+
+  const outline: ReadonlyArray<OutlineSection & { covers: ReadonlyArray<string> }> =
+    OUTLINE_SKELETON.map(section => ({
+      id: section.id,
+      heading: headings[section.id] as string,
+      covers: section.covers,
+    }))
+
   return {
     'paper-outline': tagArtifact(
       {
-        fixture: true,
+        fixture: outlineSource === 'fixture',
         stepId: 'D2-framework',
         slug: 'paper-outline',
-        title: SCENARIO.title,
+        title,
+        outlineSource,
         claimRef,
         agendaRef: (agenda?.claimRef as string | undefined) ?? claimRef,
         convergenceRef: (verdict?.verdict as string | undefined) ?? 'converged (mock dossier)',
         sections: outline,
-        note: 'synthetic paper outline — sections mirror the canonical manuscript skeleton; roadmap tooling is exercised at D1 (figure families)',
+        note: outlineSource === 'fixture'
+          ? 'skeleton outline with default headings — no phrasing model was called'
+          : 'title and headings derived from the claim and the method',
       },
       D2_PRODUCER,
-      'fixture_executor',
+      outlineSource === 'fixture' ? 'fixture_executor' : 'real_tool_fixture_input',
     ),
   }
 }
