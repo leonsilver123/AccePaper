@@ -1210,17 +1210,25 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *  evidence produced by its real tool execution. */
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
+  // The figures plot the SAME measurements the experiment produced, so a chart can
+  // never disagree with the verdict it illustrates.
+  const scenario = experimentScenario()
+  // Rounded to the precision the table column declares: the tool refuses a value
+  // carrying more decimals than its column, and that guard is right to.
+  const round2 = (value: number): number => Math.round(value * 100) / 100
+  const measuredBaseline = round2(runFixedTimePolicy(scenario).meanDelaySecondsPerVehicle)
+  const measuredVariant = round2(runAdaptivePolicy(scenario).meanDelaySecondsPerVehicle)
   const figureSpec = {
     kind: 'bar',
-    title: 'Peak-hour Delay by Control Policy (synthetic)',
+    title: 'Peak-hour Delay by Control Policy',
     width: 320,
     height: 240,
-    series: [{ name: 'delay (s)', values: [SCENARIO.variantDelaySeconds, SCENARIO.baselineDelaySeconds] }],
+    series: [{ name: 'delay (s)', values: [measuredVariant, measuredBaseline] }],
     tokens: { palette: ['#1f77b4'] },
     seed: 7,
   }
   const tableModel = {
-    title: 'Peak-hour Delay Comparison (synthetic)',
+    title: 'Peak-hour Delay Comparison',
     columns: [
       { header: 'Method', decimals: 0 },
       { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
@@ -1228,11 +1236,11 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     rows: [
       [
         { kind: 'text', text: 'Adaptive' },
-        { kind: 'number', value: SCENARIO.variantDelaySeconds },
+        { kind: 'number', value: measuredVariant },
       ],
       [
         { kind: 'text', text: 'Fixed-time' },
-        { kind: 'number', value: SCENARIO.baselineDelaySeconds },
+        { kind: 'number', value: measuredBaseline },
       ],
     ],
   }
@@ -1241,7 +1249,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { id: 'baseline-input', label: 'Fixed-time baseline', kind: 'input' },
       { id: 'adaptive-policy', label: 'Adaptive RL policy', kind: 'process' },
       { id: 'delay-experiment', label: 'Delay experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: 'Delay reduction >= 8%', kind: 'output' },
+      { id: 'reduction-outcome', label: 'Delay reduction >= 5%', kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },
