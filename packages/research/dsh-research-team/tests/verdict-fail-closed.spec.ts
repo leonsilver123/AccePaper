@@ -13,6 +13,7 @@ import { getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
 import type { StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
+import { CANONICAL } from '../src/runner/registry.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
 
@@ -40,16 +41,37 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     expect(String(c?.evidence)).not.toContain('exp-fixture-synthetic')
   })
 
-  it('still adjudicates to `passed` when the experiment supports the prediction', async () => {
+  it('still adjudicates to `passed` when the run states a prediction the experiment supports', async () => {
     if (C2 === undefined) throw new Error('verdict-fail-closed: C2-trinity-loop is not a core step')
     const runCtx = createRunContext()
+    // The run's OWN prediction. The gate grades this one; it is no longer allowed
+    // to substitute the canonical constant when the run states none (next test).
+    runCtx.predictionText = CANONICAL.prediction
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 
     const built = await buildStepVerdicts(ctx)
     const c = built.find(v => v.component === 'C')
     expect(c?.outcome).toBe('passed')
-    // The real fixture row is used, not a synthetic fallback.
-    // The verdict now cites the live measurement, not a fixture channel.
+    // The verdict cites the live measurement, not a fixture channel.
     expect(String(c?.evidence)).toContain('live experiment')
+  })
+
+  it('does NOT grade the canonical prediction when the run states none', async () => {
+    // Regression: `verdictC` used to fall back to `CANONICAL.prediction` whenever
+    // `runCtx.predictionText` was empty, so a run that stated no prediction was
+    // adjudicated against the fixture one and reported `passed` — while the C1
+    // executor threw on the very same emptiness. The gate now sees an absent
+    // prediction as absent, and `adjudicateClaimSupport` decides what that means.
+    if (C2 === undefined) throw new Error('verdict-fail-closed: C2-trinity-loop is not a core step')
+    const runCtx = createRunContext() // predictionText stays ''
+    const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
+
+    const built = await buildStepVerdicts(ctx)
+    const c = built.find(v => v.component === 'C')
+    expect(c?.passed).toBe(false)
+    // `adjudicateClaimSupport` names the reason: no falsifiable prediction at all,
+    // as against a prediction that merely lacks a numeric threshold.
+    expect(c?.outcome).toBe('blocked')
+    expect(String(c?.rationale)).toContain('no falsifiable prediction')
   })
 })

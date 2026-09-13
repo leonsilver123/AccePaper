@@ -42,6 +42,15 @@ import {
   STUDY_DESIGN_INPUTS,
 } from './study-demand.ts'
 
+/**
+ * Version of the rule that MEASURES this experiment.
+ *
+ * The C channel used to stamp its live report with the fixture table's version
+ * (`fixture-mock-v1`), which named a table this path never reads. A measurement's
+ * rule version has to identify the measurement.
+ */
+export const EXPERIMENT_RULE_VERSION = 'traffic-sim-webster-v2'
+
 /** Demand and geometry for one experiment run. */
 export interface TrafficScenario {
   /** Number of control intervals the run is divided into. */

@@ -89,7 +89,6 @@ import {
   runLiteratureSearch,
 } from '@deepseek-ai/dsh-research-tools'
 
-import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
 import { assembleManuscript } from './manuscript.ts'
 import { evaluateConvergence, summarizeConvergence } from './convergence.ts'
 import type { ChannelVerdict } from './convergence.ts'
@@ -110,6 +109,8 @@ import {
   experimentScenario,
   runAdaptivePolicy,
   runFixedTimePolicy,
+  thresholdFromPrediction,
+  EXPERIMENT_RULE_VERSION,
 } from './traffic-sim.ts'
 import {
   STUDY_ASSUMPTIONS,
@@ -387,9 +388,13 @@ const A3_PRODUCER = 'fixture:agenda'
 const A4_PRODUCER = 'fixture:venue'
 const B1_PRODUCER = 'fixture:method'
 const B2_PRODUCER = 'fixture:data'
-const B3_PRODUCER = 'fixture:baseline'
-const C1_PRODUCER = 'fixture:mvp'
-const C2_PRODUCER = 'fixture:trinity-loop'
+// The baseline, the MVP measurement and the convergence dossier are computed by
+// THIS package's experiment and convergence modules, not by a registered tool and
+// not by a fixture table. Naming them `fixture:*` understated what ran and made the
+// artifact brand contradict the artifact's own `fixture: false`.
+const B3_PRODUCER = 'traffic-sim:baseline'
+const C1_PRODUCER = 'traffic-sim:mvp'
+const C2_PRODUCER = 'convergence:trinity-loop'
 const C3_PRODUCER = `${ABLATION_TOOL_ID}@${ABLATION_TOOL_VERSION}`
 const D1_PRODUCER = `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`
 const D2_PRODUCER = 'fixture:framework'
@@ -462,6 +467,23 @@ function readInput(ctx: ExecCtx, slug: string): Record<string, unknown> | undefi
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
+}
+
+/**
+ * The threshold the run's prediction actually commits to, as artifact text.
+ *
+ * Several artifacts describe the bar the experiment has to clear. They used to
+ * hardcode "5%", which is the fixture prediction's number — so a run whose claim
+ * committed to 11% still published artifacts promising 5% while the C gate
+ * adjudicated against the 11% it parsed. The bar is whatever the prediction says,
+ * and when it says nothing this reports that rather than inventing one.
+ *
+ * @param predictionText - the run's falsifiable prediction.
+ * @returns the committed threshold, or a phrase saying none was stated.
+ */
+function thresholdLabel(predictionText: string): string {
+  const threshold = thresholdFromPrediction(predictionText)
+  return threshold === undefined ? 'no numeric threshold stated' : `${threshold}%`
 }
 
 /** Claim identity from the run context (falls back to the canonical constants). */
@@ -578,6 +600,20 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
   const artifact = invocation.artifact as Awaited<ReturnType<typeof runLiteratureSearch>>
 
+  // An OUTAGE is not an empty result set. The tool already distinguishes them in
+  // its own contract (`unavailable` vs `ok` with zero hits), and this step used to
+  // ignore that distinction: it emitted a landscape-map and a gap list either way,
+  // so a dead catalogue produced a pass whose artifact still said the corpus was
+  // live. A landscape built from no records is a fabricated one, so the step fails
+  // instead (NO DEFAULT PASS) — the same posture the tool itself takes.
+  if (artifact.outcome === 'unavailable') {
+    throw new Error(
+      '[A1-landscape] the retrieval adapter reported its catalogue UNAVAILABLE: an outage '
+      + 'is not "no literature found", and a landscape derived from no records would be '
+      + 'invented (NO DEFAULT PASS)',
+    )
+  }
+
   // A1's second product is the gap analysis, and it must derive from the records
   // just retrieved. Without a writer it stays the fixture gap so offline runs keep
   // their deterministic output; with one, the model reads the retrieved literature.
@@ -622,22 +658,31 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'landscape-map produced by a REAL runLiteratureSearch execution over a SYNTHETIC corpus — not real literature',
       },
       A1_PRODUCER,
-      'real_tool_fixture_input',
+      // A live catalogue is an external system this host actually reached, so the
+      // record says so. The static ENTRY_SPECS kind cannot know which channel the
+      // deployment configured; the artifact can, and this is the one the report
+      // reads.
+      liveCorpus ? 'live_external' : 'real_tool_fixture_input',
       { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
     'gap-list': tagArtifact(
       {
         gaps,
         gapSource,
-        // The source label must track the channel that actually ran. A hardcoded
-        // "synthetic" label would misreport live evidence as fixture evidence —
-        // the exact confusion the truthfulness vocabulary exists to prevent.
-        source: liveCorpus
+        // Two different producers meet in this artifact and the labels keep them
+        // apart: `corpusSource` says where the literature came from, `gapSource`
+        // says who wrote the gaps. On the default path they DISAGREE — a live
+        // corpus with fixture gaps — and a single "source" field used to paper
+        // over exactly that.
+        corpusSource: liveCorpus
           ? 'live catalogue via the configured retrieval adapter'
           : 'synthetic literature adapter (mockLiteratureSearchAdapter)',
+        gapProducer: gapSource === 'model'
+          ? 'the configured prose writer, reading the retrieved records'
+          : 'the built-in fixture statement (no prose writer configured)',
       },
       A1_PRODUCER,
-      'real_tool_fixture_input',
+      liveCorpus ? 'live_external' : 'real_tool_fixture_input',
       { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
@@ -823,7 +868,7 @@ function a3Executor(ctx: ExecCtx): Record<string, unknown> {
             id: 'c1',
             claimRef,
             claim: 'adaptive control beats the fixed-time baseline on peak-hour delay',
-            expectedEvidence: `delay reduction >= 5% (prediction: ${predictionText})`,
+            expectedEvidence: `delay reduction >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
           },
         ],
         note: 'synthetic contribution list — claim-level, not yet literature-supported',
@@ -1113,6 +1158,7 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
  *  pre-registered baseline protocol + a SOTA-comparison note with zero anchored
  *  rows. Ablation is NOT here — it belongs to C3-boundary (T19-S fix). */
 function b3Executor(ctx: ExecCtx): Record<string, unknown> {
+  const { predictionText } = canonicalOf(ctx)
   const method = readInput(ctx, 'method-spec')
   const dataset = readInput(ctx, 'dataset')
   // The baseline is MEASURED, not declared: the fixed-time plan is run against the
@@ -1145,7 +1191,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           source: 'traffic-sim (both policies executed over the study demand profile)',
           demand: studyDemandEvidence(),
         },
-        beatsBaselineWhen: 'candidate delay < baseline delay by >= 5%',
+        beatsBaselineWhen: `candidate delay < baseline delay by >= ${thresholdLabel(predictionText)}`,
         note: 'baseline MEASURED by running the fixed-time plan; the candidate row is the same run, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
@@ -1204,7 +1250,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         predictionText,
         experiment: {
           source: 'traffic-sim (Webster delay model, two-phase intersection)',
-          ruleVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
+          ruleVersion: EXPERIMENT_RULE_VERSION,
           demand: studyDemandEvidence(),
         },
         outcome: { supportsPrediction: verdict.supportsPrediction, detail: verdict.detail },
@@ -1333,7 +1379,11 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ranRuns: artifact.runs.length,
         counts: artifact.counts,
         aggregate: artifact.aggregate,
-        convergedRef: (verdict?.verdict as string | undefined) ?? 'converged (mock dossier)',
+        // C2's dossier carries `convergence`, not `verdict`. Reading the wrong key
+        // made the `??` fire on every run, so this field asserted "converged" while
+        // the dossier it cites said "pending" — two constants pointing opposite
+        // ways. A missing input is now reported as absent, never as converged.
+        convergedRef: (verdict?.convergence as string | undefined) ?? 'not-observed',
         note: 'ablation-results produced by a REAL runAblation execution whose arms were MEASURED by the traffic simulation (fixed-time vs adaptive) — boundary probing belongs to C3, not B3',
       },
       C3_PRODUCER,
@@ -1363,6 +1413,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *  purpose names (数据图/三线表/路线图). figure-plan lists each figure with the
  *  evidence produced by its real tool execution. */
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const { predictionText } = canonicalOf(ctx)
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
   // The figures plot the SAME measurements the experiment produced, so a chart can
   // never disagree with the verdict it illustrates.
@@ -1403,7 +1454,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { id: 'baseline-input', label: 'Fixed-time baseline', kind: 'input' },
       { id: 'adaptive-policy', label: 'Adaptive RL policy', kind: 'process' },
       { id: 'delay-experiment', label: 'Delay experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: 'Delay reduction >= 5%', kind: 'output' },
+      { id: 'reduction-outcome', label: `Delay reduction >= ${thresholdLabel(predictionText)}`, kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },
@@ -1555,7 +1606,9 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         outlineSource,
         claimRef,
         agendaRef: (agenda?.claimRef as string | undefined) ?? claimRef,
-        convergenceRef: (verdict?.verdict as string | undefined) ?? 'converged (mock dossier)',
+        // See C3's `convergedRef`: the key is `convergence`, and a missing dossier
+        // is reported as absent rather than as a convergence nobody computed.
+        convergenceRef: (verdict?.convergence as string | undefined) ?? 'not-observed',
         sections: outline,
         note: outlineSource === 'fixture'
           ? 'skeleton outline with default headings — no phrasing model was called'
@@ -1883,7 +1936,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'A1-landscape',
     kind: 'real_tool_fixture_input',
-    basis: 'the REAL `runLiteratureSearch` tool function executes; its corpus is the synthetic `mockLiteratureSearchAdapter` (fixture input). Real code path, synthetic data — NOT real literature evidence',
+    basis: 'the REAL `runLiteratureSearch` tool function executes. WHICH corpus it reaches is a DEPLOYMENT fact, not a property of this step: with no configured channel it is the synthetic `mockLiteratureSearchAdapter`, and with a real one it is a live catalogue. The artifact records which ran, and an adapter outage FAILS the step instead of producing a landscape from no records',
     producer: A1_PRODUCER,
     timeoutMs: REAL_TOOL_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',

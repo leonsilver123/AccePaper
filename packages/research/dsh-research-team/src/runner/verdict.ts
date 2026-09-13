@@ -34,9 +34,9 @@ import type { ResearchRebuttal, SessionId } from '../types.ts'
 import type { RebuttalRound } from '../redteam/rebuttal.ts'
 import { judgeRound } from '../redteam/judge.ts'
 import { adjudicateClaimSupport } from '../experiment/support.ts'
-import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
+
 import { B_CHANNEL_CONTRADICT_REF, buildBChannelAnchors } from './anchor-fixture.ts'
-import { evaluatePrediction } from './traffic-sim.ts'
+import { EXPERIMENT_RULE_VERSION, evaluatePrediction } from './traffic-sim.ts'
 import { CANONICAL } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
@@ -141,7 +141,12 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
 /** Build the C-channel verdict via team `adjudicateClaimSupport` → core `adjudicate('C')`. */
 function verdictC(ctx: VerdictBuildCtx): GateVerdict {
   const useAbstain = ctx.abstain.has('C')
-  const predictionText = ctx.runCtx.predictionText || CANONICAL.prediction
+  // The run's OWN prediction, with no substitution. Falling back to the canonical
+  // constant graded a claim this run never made: with an empty run context the gate
+  // reported `passed` on the fixture prediction while the C1 executor threw on the
+  // same emptiness. An absent prediction now reaches `adjudicateClaimSupport` as an
+  // absent prediction, which is what it is (`NO_FALSIFIABLE_PREDICTION`).
+  const predictionText = ctx.runCtx.predictionText
   const claimRef = ctx.runCtx.claimRef || CANONICAL.claimRef
 
   if (useAbstain) {
@@ -189,7 +194,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     supportsPrediction: experiment.supportsPrediction,
     detail: experiment.detail,
     evaluator: 'traffic-sim (Webster delay model, two-phase intersection, measured demand profile)',
-    fixtureVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
+    ruleVersion: EXPERIMENT_RULE_VERSION,
   }
   const rec = adjudicateClaimSupport({
     claimRef,

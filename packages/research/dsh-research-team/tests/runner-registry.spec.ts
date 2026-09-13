@@ -356,7 +356,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
   it('B3-baseline producer is the honest fixture brand (ablation producer moved to C3)', async () => {
     const b3 = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
     const c3 = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
-    expect(String(b3?.producer).startsWith('fixture:baseline')).toBe(true)
+    expect(String(b3?.producer).startsWith('traffic-sim:baseline')).toBe(true)
     expect(String(c3?.producer).startsWith(`${ABLATION_TOOL_ID}@`)).toBe(true)
   })
 

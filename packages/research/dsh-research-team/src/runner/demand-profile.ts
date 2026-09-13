@@ -104,8 +104,9 @@ export function parseSeries(csvText: string, timeColumn: string, valueColumn: st
   readonly dropped: number
 } {
   const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '')
-  if (lines.length === 0) return { rows: [], dropped: 0 }
-  const header = lines[0].split(',').map(cell => cell.trim())
+  const headerLine = lines[0]
+  if (headerLine === undefined) return { rows: [], dropped: 0 }
+  const header = headerLine.split(',').map(cell => cell.trim())
   const timeIndex = header.indexOf(timeColumn)
   const valueIndex = header.indexOf(valueColumn)
   if (timeIndex < 0 || valueIndex < 0) {
@@ -117,13 +118,20 @@ export function parseSeries(csvText: string, timeColumn: string, valueColumn: st
   const rows: Array<{ date: string; hour: number; value: number }> = []
   let dropped = 0
   for (let i = 1; i < lines.length; i++) {
-    const cells = lines[i].split(',')
-    if (cells.length <= Math.max(timeIndex, valueIndex)) {
+    const line = lines[i]
+    if (line === undefined) {
       dropped++
       continue
     }
-    const stamp = cells[timeIndex].trim()
-    const value = Number(cells[valueIndex])
+    const cells = line.split(',')
+    const rawStamp = cells[timeIndex]
+    const rawValue = cells[valueIndex]
+    if (rawStamp === undefined || rawValue === undefined) {
+      dropped++
+      continue
+    }
+    const stamp = rawStamp.trim()
+    const value = Number(rawValue)
     const [date, time] = stamp.split(' ')
     const hour = Number((time ?? '').split(':')[0])
     if (date === undefined || date === '' || !Number.isFinite(hour) || !Number.isFinite(value)) {
