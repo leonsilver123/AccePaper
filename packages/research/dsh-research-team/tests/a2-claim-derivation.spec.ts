@@ -44,13 +44,21 @@ const WELL_FORMED = [
   'PREDICTION: peak-hour delay falls by at least 12% relative to baseline',
 ].join('\n')
 
-/** The step that builds the claim is A2, so stop right after it. */
+/**
+ * Stop after A2. A2 itself lands `gated` under a derived claim: the C channel's
+ * experiment fixture is keyed by (claimId, prediction), and a derived prediction is
+ * absent from that table, so the C gate abstains and the step holds rather than
+ * passing. That is the designed fail-closed behaviour, and it is also the coupling
+ * P5 removes — these tests therefore assert A2's ARTIFACTS, not its status.
+ */
 const STOP_AFTER_CLAIM = 'A3-agenda'
 
 describe('A2 claim derivation', () => {
   it('stays a labelled fixture when no writer is injected', async () => {
     const store: ResearchRunStore = new Map()
-    const run = await runT19B(store, { stopBefore: STOP_AFTER_CLAIM })
+    // No writer means no C-channel dependency on a derived prediction, so the run
+    // proceeds normally; read the artifact from a completed prefix.
+    const run = await runT19B(store, { stopBefore: 'A3-agenda' })
 
     const claim = getArtifact(store, run.runId, 'claim') as ClaimShape
     expect(claim.claimSource).toBe('fixture')
@@ -109,6 +117,8 @@ describe('A2 claim derivation', () => {
     const run = await runT19B(store, { proseWriter: writer, stopBefore: STOP_AFTER_CLAIM })
     const a2 = run.steps.find(step => step.stepId === 'A2-claim')
 
+    // The step fails: it stays rollback-able with no artifacts, rather than emitting
+    // a claim that no gate could adjudicate.
     expect(a2?.status).toBe('in_progress')
     expect(a2?.outputSlugs).toEqual([])
   })

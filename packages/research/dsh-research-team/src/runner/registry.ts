@@ -576,7 +576,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  * @param label - the upper-case field label to look for.
  * @returns the trimmed value, or undefined when the label is absent or empty.
  */
-function labelledField(text: string, label: string): string | undefined {
+export function labelledField(text: string, label: string): string | undefined {
   for (const line of text.split('\n')) {
     const trimmed = line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
     if (!trimmed.toUpperCase().startsWith(label)) continue
@@ -752,32 +752,91 @@ function a4Executor(ctx: ExecCtx): Record<string, unknown> {
 }
 
 /** B1-method: fixture shaped as a method spec + measurable predictions. */
-function b1Executor(ctx: ExecCtx): Record<string, unknown> {
+async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef, predictionText } = canonicalOf(ctx)
+  const claimArtifact = readInput(ctx, 'claim')
+
+  // The method is how the claim is made testable, so it must derive from the claim
+  // when a model is available. With no writer the fixture spec stands, keeping the
+  // offline pipeline deterministic.
+  const writer = ctx.proseWriter
+  let family = 'reinforcement-learning phase-plan policy (synthetic spec)'
+  let steps: ReadonlyArray<string> = ['observe intersection state', 'select phase plan', 'optimise delay']
+  let metricName: string = SCENARIO.metric
+  let metricDirection: string = SCENARIO.metricDirection
+  let methodSource: 'model' | 'fixture' = 'fixture'
+
+  if (writer !== undefined) {
+    const analysis = await writer.write({
+      stepId: 'B1-method',
+      instruction: [
+        'Derive the method that makes the central claim testable.',
+        'Reply with exactly these four lines and nothing else:',
+        'FAMILY: <the method family, one phrase>',
+        'STEPS: <step> | <step> | <step>',
+        'METRIC: <the single primary metric name>',
+        'DIRECTION: <"lower is better" or "higher is better">',
+      ].join('\n'),
+      context: { claim: claimArtifact?.assertion ?? claimRef, prediction: predictionText },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    const parsedFamily = labelledField(analysis.text, 'FAMILY')
+    const parsedSteps = labelledField(analysis.text, 'STEPS')
+    const parsedMetric = labelledField(analysis.text, 'METRIC')
+    const parsedDirection = labelledField(analysis.text, 'DIRECTION')
+    // A method spec missing its family, its steps, or its metric cannot be
+    // implemented or measured downstream, so an incomplete response fails the step
+    // rather than emitting a spec that only looks complete (NO DEFAULT PASS).
+    if (
+      parsedFamily === undefined
+      || parsedSteps === undefined
+      || parsedMetric === undefined
+      || parsedDirection === undefined
+    ) {
+      throw new Error(
+        '[B1-method] the model response did not carry FAMILY/STEPS/METRIC/DIRECTION '
+        + '(an incomplete method spec cannot be implemented or measured — NO DEFAULT PASS)',
+      )
+    }
+    const parsedStepList = parsedSteps.split('|').map(s => s.trim()).filter(s => s.length > 0)
+    if (parsedStepList.length === 0) {
+      throw new Error('[B1-method] the model returned an empty STEPS list (NO DEFAULT PASS)')
+    }
+    family = parsedFamily
+    steps = parsedStepList
+    metricName = parsedMetric
+    metricDirection = parsedDirection
+    methodSource = 'model'
+  }
+
   return {
     'method-spec': tagArtifact(
       {
-        fixture: true,
+        fixture: methodSource === 'fixture',
         stepId: 'B1-method',
         slug: 'method-spec',
         methodId: SCENARIO.variantIdentity,
-        family: 'reinforcement-learning phase-plan policy (synthetic spec)',
+        family,
         claimRef,
         derivedFrom: 'falsifiable-prediction',
-        steps: ['observe intersection state', 'select phase plan', 'optimise delay'],
-        metric: { name: SCENARIO.metric, direction: SCENARIO.metricDirection },
-        note: 'synthetic method spec — no method-derivation tool exists',
+        steps,
+        metric: { name: metricName, direction: metricDirection },
+        methodSource,
+        note: methodSource === 'fixture'
+          ? 'synthetic method spec — no method-derivation tool exists'
+          : 'method spec derived from the claim and its falsifiable prediction',
       },
       B1_PRODUCER,
       'fixture_executor',
     ),
     'method-predictions': tagArtifact(
       {
-        fixture: true,
+        fixture: methodSource === 'fixture',
         stepId: 'B1-method',
         slug: 'method-predictions',
-        predictions: [{ id: 'p1', text: predictionText, adjudicatedBy: 'C1-mvp experiment (mock)' }],
-        note: 'synthetic measurable-prediction set — must be adjudicable by the C1 experiment',
+        predictions: [{ id: 'p1', text: predictionText, adjudicatedBy: 'C1-mvp experiment' }],
+        methodSource,
+        note: 'measurable-prediction set — must be adjudicable by the C1 experiment',
       },
       B1_PRODUCER,
       'fixture_executor',
