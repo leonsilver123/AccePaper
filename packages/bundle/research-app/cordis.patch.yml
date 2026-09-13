@@ -38,6 +38,11 @@
     - id: research-cordis
       name: '@deepseek-ai/dsh-research-cordis'
       config:
+        # Making the seven-tool registration a STARTUP requirement. Without it the
+        # engine takes the tolerant path and a registration failure is swallowed,
+        # which is the failure mode this flag exists to remove. Verified against a
+        # real 1120 boot: the profile starts with all seven tools registered.
+        requireResearchTools: true
         # Retrieval channel for the seven research tools. `openalex` is the real
         # catalogue, so A1-landscape retrieves genuine literature and every
         # downstream artifact carries real records. Set `{ kind: fixture }` to run
@@ -51,6 +56,15 @@
         # fixture verdict. Set `{ kind: fixture }` to keep the chain offline.
         citationResolver:
           kind: openalex
+        # Real-model channel for the prose steps (A1 gap analysis, B1 method,
+        # D2 outline, D3 writing, D4 rebuttal). Without it those steps emit their
+        # fixture text and no model is ever called on the shipped path. The writer
+        # routes through the host agent loop and NEEDS a credential for this
+        # provider route: with none, a prose write fails the step loudly rather
+        # than falling back to fixture text (fail-closed, no silent downgrade).
+        prose:
+          provider: deepseek-official
+          model: deepseek-v4-pro
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.

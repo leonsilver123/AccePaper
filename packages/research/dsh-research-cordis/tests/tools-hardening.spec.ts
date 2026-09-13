@@ -41,6 +41,18 @@ async function setupWithTools(): Promise<Context> {
 function toolsOf(ctx: Context): ToolRegistryFace {
   return (ctx as Context & { tools: ToolRegistryFace }).tools
 }
+/**
+ * Await a condition that settles on a later macrotask. Registration commits from a
+ * service-ready callback rather than from the engine's own load, so it cannot be
+ * observed by awaiting `ctx.plugin` alone.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('waitFor: condition not met within the timeout')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
 
 describe('T13-R Phase 1.1 hardening', () => {
   describe('host module loader is fail-closed', () => {
@@ -61,21 +73,44 @@ describe('T13-R Phase 1.1 hardening', () => {
     })
   })
 
-  describe('requireResearchTools makes registration a startup requirement', () => {
-    it('FAILS the engine load (no silent skip) when the tools service is absent', async () => {
+  describe('tool registration waits for the tools service', () => {
+    it('registers NOTHING, without throwing, when no tools service ever appears', async () => {
       const ctx = new Context() // no SystemPrompt / no ToolRuntime
-      let threw = false
-      try {
-        await ctx.plugin(ResearchEngine, { requireResearchTools: true })
-      } catch {
-        threw = true
-      }
-      expect(threw).toBe(true)
+      await ctx.plugin(ResearchEngine, { requireResearchTools: true })
+
+      // Absence of the service is not a failure the engine can act on at load: the
+      // service is provided by a concurrently-started sibling entry, so "not there
+      // yet" and "never there" are indistinguishable at this point. What the engine
+      // must NOT do is claim readiness it does not have.
+      expect(ctx.research.toolsReady).toBe(false)
+      expect(ctx.research).toBeInstanceOf(ResearchEngine)
+      await ctx.fiber.dispose()
     })
 
-    it('loads and verifies readiness when the tools service is present', async () => {
+    it('registers the seven tools when the tools service appears AFTER the engine loads', async () => {
+      // The regression this pins: the loader starts entries concurrently, so the
+      // engine's load runs BEFORE the sibling `tools` row is up. Mounting the tool
+      // plugin during that load skipped it permanently — the shipped bundle served
+      // a UI with no research tools registered and swallowed the skip.
+      const ctx = new Context()
+      await ctx.plugin(ResearchEngine, { requireResearchTools: true })
+      expect(ctx.research.toolsReady).toBe(false)
+
+      await ctx.plugin(await loadSystemPrompt())
+      await ctx.plugin(await loadToolRuntime())
+      await waitFor(() => ctx.research.toolsReady)
+
+      expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+      for (const entry of RESEARCH_TOOL_DIRECTORY) {
+        expect(toolsOf(ctx).get(entry.toolId)).toBeDefined()
+      }
+      await ctx.fiber.dispose()
+    })
+
+    it('loads and verifies readiness when the tools service is already present', async () => {
       const ctx = await setupWithTools()
       await ctx.plugin(ResearchEngine, { requireResearchTools: true })
+      expect(ctx.research.toolsReady).toBe(true)
       expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
       for (const entry of RESEARCH_TOOL_DIRECTORY) {
         expect(toolsOf(ctx).get(entry.toolId)).toBeDefined()
