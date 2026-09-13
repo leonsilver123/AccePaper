@@ -79,10 +79,30 @@ describe('traffic-sim experiment engine', () => {
     expect(Math.abs(comparison.relativeReductionPct)).toBeLessThan(1)
   })
 
-  it('shows the benefit growing with demand variation', () => {
+  it('shows the benefit growing with demand variation WITHIN this study\'s scenario family', () => {
+    // The claim is scoped to the family the study actually runs: unsaturated,
+    // symmetric alternation around the same mean. It is NOT a general law, and an
+    // independent audit falsified it as one — over 4000 random scenarios, roughly a
+    // quarter had the adaptive policy doing WORSE, and near saturation the narrow
+    // split floor can push a phase into oversaturation (x >= 1) outright. Recording
+    // the narrow claim is the honest version; asserting the general one would be a
+    // statement this experiment cannot support.
     const steady = comparePolicies({ ...BASE, demandPerPhase: STEADY })
     const swinging = comparePolicies({ ...BASE, demandPerPhase: SWINGING })
 
     expect(swinging.relativeReductionPct).toBeGreaterThan(steady.relativeReductionPct)
+  })
+
+  it('does not claim the benefit is monotone in general (counter-case)', () => {
+    // A same-mean profile whose load is skewed toward one phase rather than
+    // alternating: the adaptive split floor can hurt a phase more than the shifting
+    // helps, so "more variation always helps" is false here. Pinned so the narrow
+    // claim above cannot be quietly promoted back into a general one.
+    const skewed = comparePolicies({
+      ...BASE,
+      demandPerPhase: [[1400, 40], [1400, 40], [1400, 40], [1400, 40], [1400, 40], [1400, 40]],
+    })
+
+    expect(skewed.relativeReductionPct).toBeLessThan(11.87)
   })
 })

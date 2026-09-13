@@ -642,12 +642,49 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  * @param label - the upper-case field label to look for.
  * @returns the trimmed value, or undefined when the label is absent or empty.
  */
+/**
+ * Does this value look like the template placeholder rather than an answer?
+ *
+ * The prompts ask for `LABEL: <what to write>`. A model that echoes the template
+ * produces a non-empty value for every field, so a presence check alone accepts it
+ * and the placeholder flows downstream as if it were content. Matching the
+ * placeholder shape is what stops that.
+ *
+ * @param value - the parsed field value.
+ * @returns true when the value is a bracketed placeholder or a bare filler word.
+ */
+export function looksLikePlaceholder(value: string): boolean {
+  const trimmed = value.trim()
+  if (/^<[^>]*>$/.test(trimmed)) return true
+  return /^(?:tbd|todo|xxx|n\/a|none|null|\.\.\.)$/i.test(trimmed)
+}
+
+/**
+ * Read one labelled field out of a model response.
+ *
+ * The runner asks for `LABEL: value` lines rather than JSON: a model that wraps its
+ * answer in prose or a code fence still yields a parseable field, whereas a brittle
+ * JSON parse would fail the step for a formatting reason that carries no meaning.
+ *
+ * The label must be followed by a separator (`:` or `=`), so `ASSERTIONX: stray` is
+ * not read as `ASSERTION` with the value `X: stray`.
+ *
+ * @param text - the model's response.
+ * @param label - the upper-case field label to look for.
+ * @returns the trimmed value, or undefined when the label is absent or empty.
+ */
 export function labelledField(text: string, label: string): string | undefined {
   for (const line of text.split('\n')) {
+    // Strip a leading bullet or list number, then require the label to be followed
+    // by a separator: without that, `ASSERTIONX: stray` reads as ASSERTION with the
+    // value `X: stray`, inventing a field from a different word.
     const trimmed = line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
-    if (!trimmed.toUpperCase().startsWith(label)) continue
-    const value = trimmed.slice(label.length).replace(/^\s*[:=]\s*/, '').trim()
-    if (value.length > 0) return value
+    // Models frequently emphasise the label (`**ASSERTION:**`). Accept the emphasis
+    // rather than failing the step over decoration the field still carries.
+    const separator = new RegExp(`^\\**\\s*${label}\\s*[:=]\\s*\\**\\s*(.*)$`, 'i').exec(trimmed)
+    if (separator === null) continue
+    const value = (separator[1] ?? '').trim()
+    if (value.length > 0 && !looksLikePlaceholder(value)) return value
   }
   return undefined
 }

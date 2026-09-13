@@ -33,10 +33,8 @@ export interface TrafficScenario {
   readonly cycleSeconds: number
   /** Total lost time per cycle in seconds (start-up + clearance, both phases). */
   readonly lostTimeSeconds: number
-  /** Saturation flow per lane in veh/h. */
+  /** Saturation flow per lane in veh/h; drives every approach's capacity. */
   readonly saturationFlowPerLane: number
-  /** Throughput capacity per phase in veh/h. */
-  readonly capacityPerPhase: number
   /** Demand in veh/h for each phase, per control interval. */
   readonly demandPerPhase: ReadonlyArray<readonly [number, number]>
   /** Number of control intervals the run is divided into. */
@@ -60,27 +58,44 @@ export interface PolicyResult {
   readonly worstPhaseDelaySecondsPerVehicle: number
 }
 
-/** Webster's delay for one approach: d = A + B − C, in seconds per vehicle. */
+/**
+ * Webster's delay for one approach: d = A + B − C, in seconds per vehicle.
+ *
+ * UNITS MATTER HERE. Webster (1958) writes the incremental and correction terms in
+ * veh/s, and those terms are only meaningful at that scale: fed veh/h they collapse
+ * to ~0.02% of the total, which silently reduced this model to its uniform term
+ * alone. The demand is therefore converted to veh/s for those two terms while the
+ * uniform term keeps the cycle in seconds.
+ *
+ * @param demandVehPerHour - approach demand.
+ * @param greenRatio - effective green over cycle length.
+ * @param cycleSeconds - cycle length.
+ * @returns delay in seconds per vehicle, or the saturation sentinel when x >= 1.
+ */
 function websterDelaySeconds(
   demandVehPerHour: number,
   greenRatio: number,
   cycleSeconds: number,
+  saturationFlowPerLane: number,
 ): number {
   if (demandVehPerHour <= 0) return 0
   // Effective green capacity of the approach under this split.
-  const capacity = 1800 * greenRatio
+  const capacity = saturationFlowPerLane * greenRatio
   if (capacity <= 0) return Number.POSITIVE_INFINITY
   const degreeOfSaturation = demandVehPerHour / capacity
   // Oversaturated: Webster is undefined (1 − x → 0) and delay grows without bound.
   // Report a large finite value so the aggregate stays comparable rather than NaN.
   if (degreeOfSaturation >= 1) return 999
 
+  /** Webster's own unit for the incremental and correction terms. */
+  const demandVehPerSecond = demandVehPerHour / 3600
+
   const uniformDelay =
     (cycleSeconds * (1 - greenRatio) ** 2) / (2 * (1 - Math.min(1, degreeOfSaturation) * greenRatio))
   const incrementalDelay =
-    (degreeOfSaturation ** 2) / (2 * demandVehPerHour * (1 - degreeOfSaturation))
+    (degreeOfSaturation ** 2) / (2 * demandVehPerSecond * (1 - degreeOfSaturation))
   const correction =
-    0.65 * (cycleSeconds / demandVehPerHour ** 2) ** (1 / 3) * degreeOfSaturation ** (2 + 5 * greenRatio)
+    0.65 * (cycleSeconds / demandVehPerSecond ** 2) ** (1 / 3) * degreeOfSaturation ** (2 + 5 * greenRatio)
   return Math.max(0, uniformDelay + incrementalDelay - correction)
 }
 
@@ -112,8 +127,8 @@ function runPolicy(
     const greenRatio = effectiveGreenRatios(scenario, splitShare)
 
     const delay: [number, number] = [
-      websterDelaySeconds(demand[0], greenRatio[0], scenario.cycleSeconds),
-      websterDelaySeconds(demand[1], greenRatio[1], scenario.cycleSeconds),
+      websterDelaySeconds(demand[0], greenRatio[0], scenario.cycleSeconds, scenario.saturationFlowPerLane),
+      websterDelaySeconds(demand[1], greenRatio[1], scenario.cycleSeconds, scenario.saturationFlowPerLane),
     ]
     intervals.push({ interval: index, greenSplit: greenRatio, delaySecondsPerVehicle: delay })
 
@@ -200,7 +215,6 @@ export function experimentScenario(): TrafficScenario {
     cycleSeconds: 90,
     lostTimeSeconds: 8,
     saturationFlowPerLane: 1800,
-    capacityPerPhase: 1800,
     intervals: 6,
     demandPerPhase: [
       [950, 250],

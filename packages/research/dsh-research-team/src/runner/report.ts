@@ -14,7 +14,10 @@
 //   - `fixture_executor`        = the whole executor is a fixture.
 //   - `mock_external`           = real adaptation logic over a SIMULATED external
 //     system (the B gate channel).
-//   - `live_external`           = a real external system. MUST be 0 this wave.
+//   - `live_external`           = a real external system. Whether this is 0 is a
+//     DEPLOYMENT property, not a wave property: the research bundle configures a live
+//     literature channel, so a deployment shipping that bundle contacts a real
+//     catalogue at A1. The report prints the observed count rather than asserting 0.
 //
 // Every non-fixture step is reported with its producer + per-artifact
 // `__producer` evidence so a reviewer can verify from the report alone which
@@ -131,7 +134,7 @@ function truthfulnessLegend(): string {
     '| `real_tool_fixture_input` | the REAL tool function executed; its INPUT was a synthetic fixture. NOT real scientific verification. |',
     '| `fixture_executor` | the whole executor is a deterministic fixture — no tool exists for this step yet. |',
     '| `mock_external` | REAL adaptation logic executed against a SIMULATED external system. |',
-    '| `live_external` | a real external system. MUST be 0 in this wave. |',
+    '| `live_external` | a real external system. Depends on the deployment\'s channel config, not on the wave. |',
   ].join('\n')
 }
 
@@ -175,7 +178,10 @@ function renderRunMarkdown(run: RunResult, mode: string): string {
     '',
     '## Discipline checks',
     '',
-    '- `live_external` count MUST be 0 (no real external system was contacted).',
+    '- `live_external` counts steps whose executor contacted a real external system. The',
+    '  count follows the DEPLOYMENT\'s channel configuration, not a wave-wide rule: the',
+    '  research bundle ships `literatureSearch: openalex`, so A1 reaches a live catalogue',
+    '  there. A zero means this deployment stayed offline.',
     '- E2-submit status MUST be `gated` (human gate; never auto-approved by the driver).',
     '- `abstained` verdicts are preserved verbatim — core holds the step at `gated`',
     '  (`holdReason=gate_abstained`); the runner never coerces them to `passed`.',
@@ -232,7 +238,8 @@ export function writeComparisonReport(
     '> Honesty note: `real_tool_fixture_input` means the real tool FUNCTION executed over a',
     '> SYNTHETIC input. It is evidence that the code path is wired and runs — it is NOT',
     '> evidence of real scientific verification, real literature, or a real model run.',
-    '> `live_external` is 0 in both waves: no real external system was contacted.',
+    `> \`live_external\` is ${counts.live_external} for this run: the count tracks the`,
+    '> deployment\'s retrieval-channel configuration, so it is not a fixed property of the wave.',
     '',
     '## Headline',
     '',
