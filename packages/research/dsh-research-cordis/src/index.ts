@@ -96,15 +96,16 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Adapter config. `requireResearchTools` turns tool registration into a
- *  WHAT THIS DOES AND DOES NOT GATE (corrected 2026-09-14 against a real 1120
- *  boot). The engine waits for the `tools` service with `ctx.inject`; if the
- *  service never appears the callback never runs, and that absence is tolerated
- *  either way — the engine stays a standalone `ctx.research` state machine. What
- *  this flag decides is the OTHER failure: the service IS present and registering
- *  the seven catalog tools did not produce Ours. With the flag set that throw
- *  propagates instead of being swallowed; unset, registration failure is
- *  tolerated.
+/** Adapter config.
+ *
+ *  `requireResearchTools` decides what happens when registering the seven catalog
+ *  tools FAILS (corrected 2026-09-14 against a real 1120 boot). The engine waits
+ *  for the `tools` service with `ctx.inject`; if the service never appears the
+ *  callback never runs, and that absence is tolerated either way — the engine stays
+ *  a standalone `ctx.research` state machine. What this flag decides is the OTHER
+ *  failure: the service IS present and registration did not produce Ours. With the
+ *  flag set that throw propagates instead of being swallowed; unset, a registration
+ *  failure is tolerated.
  *
  *  The shipped `research-app` bundle sets it. Setting it is not what makes the
  *  tools register — `ctx.inject` is — and the earlier claim that this flag made
