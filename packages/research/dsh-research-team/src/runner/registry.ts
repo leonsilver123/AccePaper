@@ -115,7 +115,9 @@ import type {
   AblationRunResult,
 } from '@deepseek-ai/dsh-research-tools'
 import {
+  DEFAULT_POLICY_BOUNDS,
   comparePolicies,
+  designInterval,
   evaluatePrediction,
   experimentScenario,
   runAdaptivePolicy,
@@ -340,7 +342,10 @@ export interface StepCapability {
  *  experiment fixture table (`experiment/fixture.ts`) so the C-channel adjudicates
  *  to `passed` on the happy path. */
 const CANONICAL_CLAIM_ID = 'mock-claim-001'
-const CANONICAL_CLAIM_REF = 'adaptive signal control reduces peak-hour delay'
+// The claim names the quantity the experiment actually measures. It said "peak-hour
+// delay" while the measurement is the DEMAND-WEIGHTED MEAN over every control
+// interval, and the C gate adjudicates the prediction's threshold against that mean.
+const CANONICAL_CLAIM_REF = 're-planning the signal plan each interval reduces demand-weighted mean delay below a fixed-time plan'
 /**
  * The fixture claim's falsifiable prediction.
  *
@@ -351,7 +356,7 @@ const CANONICAL_CLAIM_REF = 'adaptive signal control reduces peak-hour delay'
  * for a pipeline whose whole point is to be run. A real study's threshold comes from
  * its own claim, which is what the model path produces.
  */
-const CANONICAL_PREDICTION = 'peak-hour delay falls by at least 5% under adaptive control'
+const CANONICAL_PREDICTION = 'demand-weighted mean delay falls by at least 5% under per-interval re-planning'
 
 /**
  * The study's identity fields: what is being compared, and under which name.
@@ -373,7 +378,7 @@ export const SCENARIO = {
   // The demand the experiment runs on is derived from THIS measured series, so the
   // fallback reference names it rather than a synthetic placeholder.
   datasetId: STUDY_SERIES_PROVENANCE.datasetId,
-  title: 'Adaptive Signal Control Reduces Peak-Hour Delay',
+  title: 'Per-Interval Signal Re-Planning Reduces Mean Vehicle Delay',
 } as const
 
 /** Writer-section model shared by D2/D3/D4/E1 (paper-outline → draft →
@@ -632,30 +637,50 @@ function measureOutcome(): {
  *   exhibits do not show.
  * @returns the section's prose.
  */
+/**
+ * The fallback section prose, generated FROM the experiment's own parameters.
+ *
+ * These sentences used to be written by hand, and the method section kept describing
+ * the design the experiment had BEFORE it changed: it said the two policies ran on
+ * "the same cycle length", while the measured reduction comes precisely from the
+ * adaptive policy being allowed a different cycle. A hand-written description of a
+ * code path is a claim that expires silently, so the parameters are interpolated
+ * here and the numbers come from {@link measureOutcome}.
+ *
+ * @param id - the section id from the outline.
+ * @param measured - the current measurement of the study experiment.
+ * @param referenceCount - entries the draft carries for the reference list.
+ * @returns the section body.
+ */
 function bodyTextFor(
   id: string,
   measured: ReturnType<typeof measureOutcome>,
   referenceCount: number,
 ): string {
+  const scenario = experimentScenario()
+  const design = designInterval(scenario)
+  const designDemand = scenario.demandPerPhase[design] ?? [0, 0]
+  const peakTotal = (designDemand[0] + designDemand[1]).toFixed(0)
+  const bounds = DEFAULT_POLICY_BOUNDS
   switch (id) {
     case 'abstract':
-      return 'We study whether an adaptive signal control policy reduces peak-hour delay below the fixed-time baseline on a two-phase intersection under the study\'s demand profile.'
+      return `We test whether re-planning the signal plan each control interval reduces mean vehicle delay below a fixed-time plan at one isolated two-phase intersection. Demand is a ${String(scenario.intervals)}-interval profile derived from ${STUDY_SERIES_PROVENANCE.file} (${STUDY_SERIES_PROVENANCE.licence}), scaled so the busiest interval carries the study's design volume; delay is estimated with Webster's formula.`
     case 'introduction':
       return `This work targets the claim: ${CANONICAL_CLAIM_REF}. The falsifiable prediction is: ${CANONICAL_PREDICTION}.`
     case 'method':
-      return 'The candidate is an adaptive policy that shifts the green split toward the loaded phase each control interval, under a minimum-green floor and a maximum-split ceiling; the controlled comparison is a fixed-time plan on the same cycle length and lost time.'
+      return `Both policies are the SAME plan-selection rule: Webster's optimum cycle for the demand in hand, clamped to ${String(scenario.minCycleSeconds)}-${String(scenario.maxCycleSeconds)} s, with the green split proportional to that demand between a ${bounds.minShare.toFixed(2)} floor and a ${bounds.maxShare.toFixed(2)} ceiling and ${String(scenario.lostTimeSeconds)} s of lost time per cycle. The fixed-time baseline applies the rule once, to the design interval (interval ${String(design)}, ${peakTotal} veh/h), and holds the result for the whole run; the adaptive policy re-applies it in every interval. The comparison is therefore between a frozen plan and a re-planned one, not between two different algorithms.`
     case 'experiments':
-      return `Both policies were executed over the study demand profile. Fixed-time control averaged ${measured.baselineDelaySeconds.toFixed(2)} s of delay per vehicle; the adaptive policy averaged ${measured.variantDelaySeconds.toFixed(2)} s, a relative reduction of ${measured.reductionPct.toFixed(2)}%.`
+      return `Both policies were run against the same profile. Demand-weighted mean delay was ${measured.baselineDelaySeconds.toFixed(2)} s/veh under the frozen plan and ${measured.variantDelaySeconds.toFixed(2)} s/veh under re-planning, a relative reduction of ${measured.reductionPct.toFixed(2)}%. The profile, its derivation from ${STUDY_SERIES_PROVENANCE.file} and the assumptions made on top of it are recorded on the mvp-results artifact.`
     case 'results':
-      return 'Results are reported as a data figure, a three-line table and a roadmap figure; boundary probing (ablation) is summarised separately.'
+      return 'The figure and the table below carry the same measurement the C gate adjudicated. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
     case 'conclusion':
-      return 'The measured evidence supports the stated prediction on this demand profile; the scope is one isolated two-phase intersection, and submission remains a human act at E2.'
+      return `On this demand profile the frozen plan is worse than re-planning by ${measured.reductionPct.toFixed(2)}%, measured inside the study's own delay model. The scope is one isolated two-phase intersection under a scaled measured series; submission remains a human act at E2.`
     case 'references':
       // The body states what the draft actually carries. It used to assert that
       // references were drawn from the landscape scan above an empty list.
       return referenceCount === 0
         ? 'No reference entries were derived: no record the landscape scan returned carried a title.'
-        : `References are the ${referenceCount} record(s) the landscape scan retrieved; each entry and its identifier is listed on the draft artifact.`
+        : `The ${String(referenceCount)} record(s) the landscape scan retrieved, listed below.`
     default:
       return 'This section carries no generated content in this wave.'
   }
@@ -2047,9 +2072,13 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
 
   const record = buildRevisionRecord(points)
-  const revised: ManuscriptSection[] = sections.map(s => ({
+  // The revision is recorded as a FLAG per section, not as a marker pasted into the
+  // prose. The marker used to travel with the body all the way into the formatted
+  // manuscript, so the submitted paper carried `[revised: rebuttal addressed]` after
+  // every paragraph — process metadata printed as content.
+  const revised: ReadonlyArray<ManuscriptSection & { readonly revised: boolean }> = sections.map(s => ({
     ...s,
-    bodyText: record.hasRevisions ? `${s.bodyText} [revised: rebuttal addressed]` : s.bodyText,
+    revised: record.hasRevisions,
   }))
   return {
     rebuttal: tagArtifact(
@@ -2161,9 +2190,17 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   })
   // Assembly is a real step of its own now: the module refuses a titleless or
   // section-less manuscript, so an empty shell cannot be assembled here.
+  // The assembler renders its own `## References` block from these entries, and the
+  // outline already carries a `references` section — passing both printed the heading
+  // twice. The assembler's block wins because it is the one that actually holds the
+  // entries, so the empty outline section is dropped here and the replacement is
+  // recorded on the artifact rather than happening silently.
+  const sectionsForAssembly = referenceEntries.length > 0
+    ? sections.filter(section => section.id !== 'references')
+    : sections
   const assembled = assembleManuscript({
     title,
-    sections,
+    sections: sectionsForAssembly,
     figures: [artifact.render.text],
     references: referenceEntries,
   })
@@ -2175,6 +2212,9 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         venueId,
         venueStyle: `${venueName} template`,
         scopeLine,
+        // Which outline sections the assembly replaced, and by what. Empty means the
+        // outline's own sections all survive into the manuscript.
+        sectionsReplaced: referenceEntries.length > 0 ? ['references'] : [],
         manuscript: assembled.markdown,
         manuscriptCounts: {
           sections: assembled.sectionCount,
