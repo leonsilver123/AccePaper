@@ -117,11 +117,13 @@ describe('T19-B happy path — real tool execution is provable from the artifact
   it('brands fixture artifacts as fixture_executor (no level inflation)', async () => {
     const { store, run } = await happyRun()
     const fixtureSteps = run.steps.filter(
-      s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit' && s.stepId !== 'B2-data',
+      s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit'
+        && s.stepId !== 'B2-data' && s.stepId !== 'B3-baseline',
     )
     // C1-mvp left this set when the C channel began running its experiment for real;
-    // B2-data is excluded because its level tracks dataset presence on this host.
-    expect(fixtureSteps.length).toBe(8)
+    // B2-data is excluded because its level tracks dataset presence on this host, and
+    // B3-baseline because it now measures its own baseline.
+    expect(fixtureSteps.length).toBe(7)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -177,9 +179,11 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     const { store, run } = await happyRun()
     const res = artifactOf(store, run.runId, 'baseline-results')
     expect((res.baseline as { identity?: unknown }).identity).toBe(SCENARIO.baselineIdentity)
-    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe(SCENARIO.metric)
-    expect((res.preRegistered as { baselineDelaySeconds?: unknown }).baselineDelaySeconds)
-      .toBe(SCENARIO.baselineDelaySeconds)
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('peak-hour delay')
+    // The reference row is MEASURED by running the fixed-time plan over the study's
+    // demand profile, so it is a positive number this study produced.
+    expect((res.measured as { baselineDelaySeconds?: unknown }).baselineDelaySeconds)
+      .toBeGreaterThan(0)
     // Regression: ablation measurement belongs to C3, never to B3.
     expect(res.aggregate).toBeUndefined()
     expect(res.ranRuns).toBeUndefined()

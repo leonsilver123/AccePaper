@@ -285,7 +285,8 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
   const fixtureSteps = [...STEP_EXECUTOR_REGISTRY.values()]
     // B2-data's level depends on whether its dataset is present on this host, so it
     // is asserted separately (below) rather than counted as a fixed fixture.
-    .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true && e.stepId !== 'B2-data')
+    .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true
+      && e.stepId !== 'B2-data' && e.stepId !== 'B3-baseline')
     .map(e => e.stepId)
 
   it('leaves 8 steps as unconditional fixture executors', () => {
@@ -295,7 +296,6 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
       'A3-agenda',
       'A4-venue',
       'B1-method',
-      'B3-baseline',
       'C2-trinity-loop',
       'D2-framework',
       'D3-writing',
@@ -337,8 +337,9 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
     const res = out['baseline-results']
     // Canonical B3 = establish baseline + compare against SOTA.
     expect((res.baseline as { identity?: unknown }).identity).toBe('fixed-time')
-    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('delay')
-    expect((res.preRegistered as { baselineDelaySeconds?: unknown }).baselineDelaySeconds).toBe(10.0)
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('peak-hour delay')
+    // The reference row is MEASURED by running the plan, not a pre-registered constant.
+    expect((res.measured as { baselineDelaySeconds?: unknown }).baselineDelaySeconds).toBeGreaterThan(0)
     // Regression guard: ablation must NOT appear inside the baseline step.
     expect(res.ranRuns).toBeUndefined()
     expect(res.counts).toBeUndefined()

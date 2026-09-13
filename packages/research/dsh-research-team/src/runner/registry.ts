@@ -982,42 +982,59 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
 function b3Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
   const dataset = readInput(ctx, 'dataset')
+  // The baseline is MEASURED, not declared: the fixed-time plan is run against the
+  // study's demand profile, so the reference row is a number this study produced.
+  const scenario = experimentScenario()
+  const baseline = runFixedTimePolicy(scenario)
+  const candidate = runAdaptivePolicy(scenario)
+  const measuredReductionPct = baseline.meanDelaySecondsPerVehicle > 0
+    ? ((baseline.meanDelaySecondsPerVehicle - candidate.meanDelaySecondsPerVehicle)
+      / baseline.meanDelaySecondsPerVehicle) * 100
+    : 0
+
   return {
     'baseline-results': tagArtifact(
       {
-        fixture: true,
+        fixture: false,
         stepId: 'B3-baseline',
         slug: 'baseline-results',
         baseline: {
-          identity: SCENARIO.baselineIdentity,
-          protocol: 'measure delay under fixed-time control over the dataset split',
-          metric: { name: SCENARIO.metric, direction: SCENARIO.metricDirection },
+          identity: 'fixed-time',
+          protocol: 'measure demand-weighted delay under a fixed-time plan over the study demand profile',
+          metric: { name: 'peak-hour delay', direction: 'lower is better' },
           datasetRef: (dataset?.datasetId as string | undefined) ?? SCENARIO.datasetId,
           methodRef: (method?.methodId as string | undefined) ?? SCENARIO.variantIdentity,
         },
-        preRegistered: {
-          baselineDelaySeconds: SCENARIO.baselineDelaySeconds,
-          source: 'experiment fixture (mock)',
+        measured: {
+          baselineDelaySeconds: baseline.meanDelaySecondsPerVehicle,
+          candidateDelaySeconds: candidate.meanDelaySecondsPerVehicle,
+          candidateReductionPct: measuredReductionPct,
+          source: 'traffic-sim (both policies executed over the study demand profile)',
         },
-        beatsBaselineWhen: 'variant delay < baseline delay by >= 5%',
-        note: 'synthetic baseline protocol + pre-registered fixed-time reference row; NO model was run; ablation measurements are NOT part of baseline (they belong to C3-boundary)',
+        beatsBaselineWhen: 'candidate delay < baseline delay by >= 5%',
+        note: 'baseline MEASURED by running the fixed-time plan; the candidate row is the same run, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
-      'fixture_executor',
+      'real_tool_fixture_input',
     ),
     'sota-comparison': tagArtifact(
       {
-        fixture: true,
+        fixture: false,
         stepId: 'B3-baseline',
         slug: 'sota-comparison',
-        targetMetric: SCENARIO.metric,
+        targetMetric: 'peak-hour delay',
         rows: [
-          { method: `${SCENARIO.baselineIdentity} (baseline)`, delaySeconds: SCENARIO.baselineDelaySeconds, source: 'pre-registered fixture' },
-          { method: `${SCENARIO.variantIdentity} (candidate)`, delaySeconds: SCENARIO.variantDelaySeconds, expectedReductionRate: SCENARIO.reductionRate, source: 'experiment fixture mock-claim-001' },
+          { method: 'fixed-time (this study baseline)', delaySeconds: baseline.meanDelaySecondsPerVehicle, source: 'measured by traffic-sim' },
+          { method: 'adaptive (this study candidate)', delaySeconds: candidate.meanDelaySecondsPerVehicle, measuredReductionPct, source: 'measured by traffic-sim' },
         ],
+        // No external SOTA row is recorded, and THAT is stated rather than filled in.
+        // Published delay figures are prose in papers, not machine-readable fields, so
+        // a retrieved record cannot supply one without someone reading the number out
+        // of the text. Recording a guess here would manufacture the comparison this
+        // step exists to ground.
         anchoring: 'none',
-        sotaGapClaim: 'candidate must beat fixed-time by >= 5% (SOTA delay-reduction gap under adaptive control unverified)',
-        note: 'synthetic SOTA comparison — the canonical B3-SOTA retrieval sub-task maps to the literature-search capability, whose synthetic corpus is off-domain this wave, so NO anchored SOTA row is recorded; external anchoring is exercised by the B-gate channel (T23)',
+        sotaGapClaim: "the candidate beats this study's own fixed-time baseline; a claim against PUBLISHED SOTA remains unanchored",
+        note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a delay figure has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
       },
       B3_PRODUCER,
       'fixture_executor',
