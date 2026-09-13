@@ -65,7 +65,7 @@ import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { AblationDefinition, RoadmapGraph } from '@deepseek-ai/dsh-research-tools'
 import { DirectResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
-import type { ResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
+import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   ABLATION_TOOL_ID,
   ABLATION_TOOL_VERSION,
@@ -213,6 +213,13 @@ export interface ExecCtx {
    * text. See {@link ResearchProseWriter}.
    */
   readonly proseWriter?: ResearchProseWriter
+  /**
+   * Tool dependencies handed to capability steps. The Cordis adapter assembles
+   * these from its own Config (fixture corpus vs. a real retrieval channel), so a
+   * step's evidence follows from the deployment rather than from a literal here.
+   * When absent, steps fall back to the package's fixture deps.
+   */
+  readonly toolDeps?: ResearchToolDeps
 }
 
 export type StepExecutorFn = (ctx: ExecCtx) => Promise<Record<string, unknown>> | Record<string, unknown>
@@ -473,10 +480,15 @@ function defaultBodySections(): ReadonlyArray<ManuscriptSection> {
 /** A1-landscape: real `runLiteratureSearch` over the synthetic mock adapter. */
 async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('a1-fixture')
+  // The retrieval channel is a deployment fact: when the Cordis adapter assembled
+  // real deps, A1 retrieves the live catalogue; otherwise it stays on the fixture.
+  const deps = ctx.toolDeps ?? { literatureAdapter: mockLiteratureSearchAdapter }
+  const liveCorpus = deps.literatureAdapter !== undefined
+    && deps.literatureAdapter !== mockLiteratureSearchAdapter
   const invocation = await invoker.invoke(
     'literature-search',
     { topic: 'adaptive traffic signal control' },
-    { timestamp: FIXED_TS, deps: { literatureAdapter: mockLiteratureSearchAdapter } },
+    { timestamp: FIXED_TS, deps },
   )
   if (!invocation.ok) {
     throw new Error(`[A1-landscape] literature-search invocation failed: ${invocation.message}`)
@@ -489,7 +501,10 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         outcome: artifact.outcome,
         hitCount: artifact.hits.length,
         hits: artifact.hits,
-        note: 'landscape-map produced by a REAL runLiteratureSearch execution over a SYNTHETIC corpus — not real literature',
+        corpus: liveCorpus ? 'live-catalogue' : 'synthetic-fixture',
+        note: liveCorpus
+          ? 'landscape-map produced by a REAL runLiteratureSearch execution over a LIVE catalogue'
+          : 'landscape-map produced by a REAL runLiteratureSearch execution over a SYNTHETIC corpus — not real literature',
       },
       A1_PRODUCER,
       'real_tool_fixture_input',

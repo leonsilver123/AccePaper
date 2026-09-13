@@ -51,6 +51,10 @@ import type { TeamTaskId } from './types.ts'
 import type { SessionId } from './types.ts'
 import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
 import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
+import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
+import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { runT19B } from './runner/drive.ts'
+import type { RunResult } from './runner/types.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
 // The package entry re-exports its caller-visible brands, errors, entities,
@@ -136,6 +140,13 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Deployment configuration for the research-team service. */
+/** Options for one {@link ResearchTeamService.runPipeline} invocation. */
+export interface ResearchPipelineOptions {
+  /** Seed for the run's single seedable input (`domain-direction`). */
+  readonly domainDirection?: string
+  readonly signal?: AbortSignal
+}
+
 export interface ResearchTeamServiceConfig {
   /**
    * Write-tool allowlist whose writes are expressible as one path argument and
@@ -293,6 +304,37 @@ export class ResearchTeamService extends Service {
    *  @param roundId - the open or closed round identity. */
   roundVotes(roundId: string): ReturnType<ResearchFleetOrchestrator['roundVotes']> {
     return this.fleet.roundVotes(roundId)
+  }
+
+  /**
+   * Drive the full 16-step pipeline once and return its auditable result.
+   *
+   * This is the runner's production entry. Without it the driver had no caller
+   * outside the tests, which is why the assembled tool dependencies could reach
+   * the cordis tool surface but never a pipeline run.
+   *
+   * @param options - the run seed and a cancellation signal.
+   * @returns the per-step outcomes plus the run id.
+   */
+  async runPipeline(options: ResearchPipelineOptions = {}): Promise<RunResult> {
+    const store: ResearchRunStore = new Map()
+    const toolDeps = this.hostToolDeps()
+    return runT19B(store, {
+      ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      ...(toolDeps !== undefined ? { toolDeps } : {}),
+    })
+  }
+
+  /**
+   * Tool dependencies assembled by the mounted research adapter, when present.
+   * Read lazily through `ctx.get` (the documented read for an optional service) so
+   * a late-mounted adapter still governs later runs, and a deployment without one
+   * falls back to the fixture graph instead of failing.
+   */
+  private hostToolDeps(): ResearchToolDeps | undefined {
+    const research = this.ctx.get('research') as { toolDeps?: ResearchToolDeps } | undefined
+    return research?.toolDeps
   }
 
   /** Queue one contained recovery pass after publication has unwound. */

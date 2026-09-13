@@ -77,6 +77,7 @@ function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions 
     ...(opts.abstainComponents !== undefined ? { abstainComponents: opts.abstainComponents } : {}),
     ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
     ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
+    ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
   }
 }
 
@@ -131,6 +132,7 @@ export async function driveStep(
         runCtx: opts.runCtx,
         ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
         ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
+        ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
       }),
     ...(effectiveTimeoutMs > 0 ? { timeoutMs: effectiveTimeoutMs } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

@@ -136,8 +136,13 @@ export class ResearchEngine extends Service {
   static Config: z<Config> = z.object({})
 
   private readonly requireResearchTools: boolean
-  /** Assembled per deployment from {@link Config.literatureSearch}. */
-  private readonly toolDeps: ResearchToolDeps
+  /**
+   * The assembled tool dependency graph for this deployment. Public on purpose:
+   * the team service reads it so that ONE retrieval-channel decision governs every
+   * capability step, instead of each step carrying its own literal. It is
+   * configuration data, not hidden run state, so exposing it is safe.
+   */
+  readonly toolDeps: ResearchToolDeps
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
