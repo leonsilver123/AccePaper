@@ -48,6 +48,10 @@ import type {
 } from './adapter.ts'
 
 /** Stable tool id used in every artifact's meta. */
+// The run-key convention, so a real executor outside this package can implement the
+// contract without re-declaring the key format.
+export { ABLATION_VARIANT_KINDS, ablationRunKey, ablationRunSeed } from './adapter.ts'
+
 export const ABLATION_TOOL_ID = 'ablation'
 
 /** Version of this tool's artifact schema / implementation. Kept in lockstep

@@ -90,7 +90,22 @@ import {
 } from '@deepseek-ai/dsh-research-tools'
 
 import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
-import { comparePolicies, evaluatePrediction, experimentScenario } from './traffic-sim.ts'
+import {
+  ABLATION_VARIANT_KINDS,
+  ablationRunKey,
+} from '@deepseek-ai/dsh-research-tools'
+import type {
+  AblationExecutor,
+  AblationRunRequest,
+  AblationRunResult,
+} from '@deepseek-ai/dsh-research-tools'
+import {
+  comparePolicies,
+  evaluatePrediction,
+  experimentScenario,
+  runAdaptivePolicy,
+  runFixedTimePolicy,
+} from './traffic-sim.ts'
 
 /** Truthfulness classification of an executor / gate channel (4-level ruling). */
 export type Truthfulness =
@@ -1096,6 +1111,38 @@ const ABLATION_DEFINITION: AblationDefinition = {
   repetitions: 4,
 }
 
+/**
+ * The ablation's execution seam, implemented for real.
+ *
+ * Both arms are MEASURED by running the traffic simulation: the baseline arm is the
+ * fixed-time plan, the variant arm is the adaptive policy the definition names. The
+ * measurement is therefore the same delay model the C channel adjudicates against,
+ * so a boundary claim and an experiment claim come from one source rather than two.
+ *
+ * @returns an executor that runs both arms for every declared repetition.
+ */
+function trafficAblationExecutor(): AblationExecutor {
+  return {
+    execute(request: AblationRunRequest): ReadonlyArray<AblationRunResult> {
+      const scenario = experimentScenario()
+      const results: AblationRunResult[] = []
+      for (let repetition = 0; repetition < request.definition.repetitions; repetition++) {
+        for (const arm of ABLATION_VARIANT_KINDS) {
+          const measured = arm === 'baseline'
+            ? runFixedTimePolicy(scenario)
+            : runAdaptivePolicy(scenario)
+          results.push({
+            runKey: ablationRunKey(arm, repetition),
+            status: 'executed',
+            measurement: measured.meanDelaySecondsPerVehicle,
+          })
+        }
+      }
+      return results
+    },
+  }
+}
+
 /** C3-boundary: real `runAblation` — boundary probing (variant vs baseline).
  *  Ablation lives HERE (canonical C3), not in B3-baseline (T19-S fix). */
 async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
@@ -1104,7 +1151,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invocation = await invoker.invoke(
     'ablation',
     { definition: ABLATION_DEFINITION },
-    { timestamp: FIXED_TS },
+    { timestamp: FIXED_TS, deps: { ablationExecutor: trafficAblationExecutor() } },
   )
   if (!invocation.ok) {
     throw new Error(`[C3-boundary] ablation invocation failed: ${invocation.message}`)
@@ -1117,7 +1164,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         counts: artifact.counts,
         aggregate: artifact.aggregate,
         convergedRef: (verdict?.verdict as string | undefined) ?? 'converged (mock dossier)',
-        note: 'ablation-results produced by a REAL runAblation execution over SYNTHETIC mock measurements — boundary probing belongs to C3, not B3',
+        note: 'ablation-results produced by a REAL runAblation execution whose arms were MEASURED by the traffic simulation (fixed-time vs adaptive) — boundary probing belongs to C3, not B3',
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
@@ -1132,7 +1179,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         },
         metric: ABLATION_DEFINITION.metric,
         aggregate: artifact.aggregate,
-        note: 'boundary-map derived from the REAL runAblation execution over SYNTHETIC mock measurements — never a real applicability claim',
+        note: 'boundary-map derived from the REAL runAblation execution over simulated arms — an applicability claim for this demand profile only, not a general one',
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
