@@ -47,6 +47,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildToolDeps, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
+import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   adjudicate,
@@ -121,6 +122,12 @@ export interface Config {
    * separates fixture from live evidence.
    */
   readonly literatureSearch?: LiteratureChannel
+  /**
+   * Real-model channel for prose steps (A1 gap analysis, D2 outline, D3 writing,
+   * D4 rebuttal). Omitted, those steps emit their fixture text and the deployment
+   * stays fully offline — the same posture as an omitted `literatureSearch`.
+   */
+  readonly prose?: LlmProseWriterConfig
 }
 
 /**
@@ -143,11 +150,18 @@ export class ResearchEngine extends Service {
    * configuration data, not hidden run state, so exposing it is safe.
    */
   readonly toolDeps: ResearchToolDeps
+  /**
+   * The real-model prose writer when `config.prose` names a route, else undefined.
+   * Public for the same reason {@link ResearchEngine.toolDeps} is: the team service
+   * reads it so one deployment-level choice governs every prose step.
+   */
+  readonly proseWriter: LlmProseWriter | undefined
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
     this.toolDeps = buildToolDeps(config.literatureSearch)
+    this.proseWriter = config.prose !== undefined ? new LlmProseWriter(ctx, config.prose) : undefined
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
@@ -315,3 +329,7 @@ export default ResearchEngine
  *  module, so the tool package keeps holding zero network code. */
 export { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
 export type { OpenAlexAdapterOptions } from './openalex-adapter.ts'
+
+/** Real-model prose channel for the runner's text-producing steps. */
+export { LlmProseWriter } from './llm-prose-writer.ts'
+export type { LlmProseWriterConfig, ProseRequestLike, ProseResultLike } from './llm-prose-writer.ts'

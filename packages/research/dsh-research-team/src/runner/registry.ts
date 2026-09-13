@@ -336,6 +336,10 @@ const DEFAULT_OUTLINE: ReadonlyArray<OutlineSection> = [
 
 // ── Producer brands (read from the tools' own id/version constants) ─────────────
 const A1_PRODUCER = `${LITERATURE_SEARCH_TOOL_ID}@${LITERATURE_SEARCH_TOOL_VERSION}`
+
+/** A1's offline gap statement, emitted only when no model writer is injected.
+ *  It is a fixture constant, never a finding — the artifact labels it `fixture`. */
+const FIXTURE_GAP_STATEMENT = 'SOTA delay-reduction gap under adaptive control is unverified'
 const A2_PRODUCER = `${CLAIM_CONSTRUCT_TOOL_ID}@${CLAIM_CONSTRUCT_TOOL_VERSION}`
 const A3_PRODUCER = 'fixture:agenda'
 const A4_PRODUCER = 'fixture:venue'
@@ -494,6 +498,38 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     throw new Error(`[A1-landscape] literature-search invocation failed: ${invocation.message}`)
   }
   const artifact = invocation.artifact as Awaited<ReturnType<typeof runLiteratureSearch>>
+
+  // A1's second product is the gap analysis, and it must derive from the records
+  // just retrieved. Without a writer it stays the fixture gap so offline runs keep
+  // their deterministic output; with one, the model reads the retrieved literature.
+  const writer = ctx.proseWriter
+  let gaps: ReadonlyArray<string>
+  let gapSource: 'model' | 'fixture'
+  if (writer === undefined) {
+    gaps = [FIXTURE_GAP_STATEMENT]
+    gapSource = 'fixture'
+  } else {
+    const analysis = await writer.write({
+      stepId: 'A1-landscape',
+      instruction: `Identify the research gaps that the following papers leave open with respect to "${artifact.query.topic}". Return one gap per line. No numbering, no preamble, no closing commentary.`,
+      context: {
+        topic: artifact.query.topic,
+        papers: artifact.hits.slice(0, 30).map(hit => ({ title: hit.title, venue: hit.venue })),
+      },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    gaps = analysis.text
+      .split('\n')
+      .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim())
+      .filter(line => line.length > 0)
+    // An empty analysis is not a pass: a step whose whole product is "the gaps"
+    // must not report success while carrying none (NO DEFAULT PASS).
+    if (gaps.length === 0) {
+      throw new Error('[A1-landscape] the gap analysis produced no gaps (NO DEFAULT PASS)')
+    }
+    gapSource = 'model'
+  }
+
   return {
     'landscape-map': tagArtifact(
       {
@@ -512,7 +548,8 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ),
     'gap-list': tagArtifact(
       {
-        gaps: ['SOTA delay-reduction gap under adaptive control is unverified'],
+        gaps,
+        gapSource,
         // The source label must track the channel that actually ran. A hardcoded
         // "synthetic" label would misreport live evidence as fixture evidence —
         // the exact confusion the truthfulness vocabulary exists to prevent.

@@ -54,6 +54,7 @@ import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestr
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from './runner/drive.ts'
+import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
@@ -319,10 +320,12 @@ export class ResearchTeamService extends Service {
   async runPipeline(options: ResearchPipelineOptions = {}): Promise<RunResult> {
     const store: ResearchRunStore = new Map()
     const toolDeps = this.hostToolDeps()
+    const proseWriter = this.hostProseWriter()
     return runT19B(store, {
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
+      ...(proseWriter !== undefined ? { proseWriter } : {}),
     })
   }
 
@@ -335,6 +338,16 @@ export class ResearchTeamService extends Service {
   private hostToolDeps(): ResearchToolDeps | undefined {
     const research = this.ctx.get('research') as { toolDeps?: ResearchToolDeps } | undefined
     return research?.toolDeps
+  }
+
+  /**
+   * The real-model prose writer assembled by the mounted research adapter, when
+   * configured. Read alongside {@link ResearchTeamService.hostToolDeps} so one
+   * deployment decision governs both the retrieval channel and the prose channel.
+   */
+  private hostProseWriter(): ResearchProseWriter | undefined {
+    const research = this.ctx.get('research') as { proseWriter?: ResearchProseWriter } | undefined
+    return research?.proseWriter
   }
 
   /** Queue one contained recovery pass after publication has unwound. */
