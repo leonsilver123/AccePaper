@@ -513,7 +513,12 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'gap-list': tagArtifact(
       {
         gaps: ['SOTA delay-reduction gap under adaptive control is unverified'],
-        source: 'synthetic literature adapter (mockLiteratureSearchAdapter)',
+        // The source label must track the channel that actually ran. A hardcoded
+        // "synthetic" label would misreport live evidence as fixture evidence —
+        // the exact confusion the truthfulness vocabulary exists to prevent.
+        source: liveCorpus
+          ? 'live catalogue via the configured retrieval adapter'
+          : 'synthetic literature adapter (mockLiteratureSearchAdapter)',
       },
       A1_PRODUCER,
       'real_tool_fixture_input',
