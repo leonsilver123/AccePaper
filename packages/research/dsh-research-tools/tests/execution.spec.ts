@@ -109,13 +109,18 @@ describe('executeResearchTool — single dispatch map', () => {
     expect(viaAdapter).toEqual(direct)
   })
 
-  it('roadmap matches the direct call (mermaid default render)', async () => {
+  it('roadmap matches the direct call (no options means the svg branch)', async () => {
+    // The title used to say "mermaid default render". It is not: an absent `options`
+    // normalizes to `{}`, and `renderRoadmap` only takes the mermaid branch when
+    // `options.format === 'mermaid'`, so the DEFAULT is the svg renderer. The
+    // assertion was right and its name was wrong, which is the kind of label a reader
+    // trusts instead of checking.
     const input = { graph: ROADMAP_GRAPH }
     const viaAdapter = await executeResearchTool('roadmap', input, undefined, TS)
-    // The adapter normalizes an absent `options` to `{}` (execution.ts), so the direct
-    // call must supply the same empty record to compare against the same render branch.
     const direct = renderRoadmap(ROADMAP_GRAPH, {} as RoadmapRenderOptions, TS)
     expect(viaAdapter).toEqual(direct)
+    expect(String((direct as { content: string }).content)).toContain('<svg')
+    expect(String((direct as { content: string }).content)).not.toContain('flowchart')
   })
 
   it('ablation matches the direct call (fixture executor injected by default)', async () => {
