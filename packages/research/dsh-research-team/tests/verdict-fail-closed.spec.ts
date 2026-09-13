@@ -19,7 +19,7 @@ import type { VerdictBuildCtx } from '../src/runner/types.ts'
 const C2: StepDefinition | undefined = getStepDefinitionById('C2-trinity-loop')
 
 describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
-  it('abstains when the experiment fixture row is missing (no default pass)', () => {
+  it('abstains when the experiment fixture row is missing (no default pass)', async () => {
     if (C2 === undefined) throw new Error('verdict-fail-closed: C2-trinity-loop is not a core step')
     const runCtx = createRunContext()
     runCtx.claimId = 'mock-claim-999'
@@ -27,7 +27,7 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     runCtx.predictionText = 'no such experiment row'
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 
-    const built = buildStepVerdicts(ctx)
+    const built = await buildStepVerdicts(ctx)
     const c = built.find(v => v.component === 'C')
     expect(c).toBeDefined()
     expect(c?.outcome).toBe('abstained')
@@ -38,12 +38,12 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     expect(String(c?.evidence)).not.toContain('exp-fixture-synthetic')
   })
 
-  it('still adjudicates to `passed` when the fixture row exists (happy path sanity)', () => {
+  it('still adjudicates to `passed` when the fixture row exists (happy path sanity)', async () => {
     if (C2 === undefined) throw new Error('verdict-fail-closed: C2-trinity-loop is not a core step')
     const runCtx = createRunContext()
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 
-    const built = buildStepVerdicts(ctx)
+    const built = await buildStepVerdicts(ctx)
     const c = built.find(v => v.component === 'C')
     expect(c?.outcome).toBe('passed')
     // The real fixture row is used, not a synthetic fallback.

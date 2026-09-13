@@ -298,7 +298,7 @@ export class ResearchEngine extends Service {
     resolverAdapter: CitationResolverAdapter,
     timestamp: number,
     options: VerifyCitationOptions,
-  ): VerificationResult {
+  ): Promise<VerificationResult> {
     return verifyCitation(claimId, citationId, ref, evidence, resolverAdapter, timestamp, options)
   }
 

@@ -84,7 +84,7 @@ export class MockCitationResolverAdapter implements CitationResolverAdapter {
     this.ambiguousKeys = new Set(options.ambiguousKeys ?? [])
   }
 
-  resolveMetadata(ref: CitationRef): ResolverOutcome {
+  async resolveMetadata(ref: CitationRef): Promise<ResolverOutcome> {
     const key = fixtureKey(ref)
     if (this.unavailableKeys.has(key)) {
       return {

@@ -92,7 +92,7 @@ export interface BChannelAnchors {
  * obtain an anchoring {@link VerificationResult}. The outcome is whatever the
  * chain decides — this function does not post-process or override it.
  */
-function verifyAgainstMockResolver(spec: AnchorVerificationSpec): VerificationResult {
+async function verifyAgainstMockResolver(spec: AnchorVerificationSpec): Promise<VerificationResult> {
   const ref: CitationRef = {
     kind: 'doi',
     id: SYNTHETIC_DOI,
@@ -110,7 +110,7 @@ function verifyAgainstMockResolver(spec: AnchorVerificationSpec): VerificationRe
     contentHash: 'deadbeef00',
     retrievedAt: new Date(spec.timestamp).toISOString(),
   }
-  return verifyCitation(
+  return await verifyCitation(
     spec.claimId,
     `anchor-${spec.stepId}` as unknown as CitationId,
     ref,
@@ -126,7 +126,7 @@ function verifyAgainstMockResolver(spec: AnchorVerificationSpec): VerificationRe
  * header for the four-stage chain. The core B gate — not this function — decides
  * pass / abstain / block.
  */
-export function buildBChannelAnchors(spec: AnchorVerificationSpec): BChannelAnchors {
+export async function buildBChannelAnchors(spec: AnchorVerificationSpec): Promise<BChannelAnchors> {
   const ref = spec.anchorRef ?? B_CHANNEL_ANCHOR_REF
   const key = anchorKey('l0-tier', ref)
   const signal =
@@ -152,7 +152,7 @@ export function buildBChannelAnchors(spec: AnchorVerificationSpec): BChannelAnch
     }
   }
 
-  const verified = verifyAgainstMockResolver(spec)
+  const verified = await verifyAgainstMockResolver(spec)
   const anchoring =
     verified.evidence.originalTextAccessed &&
     verified.evidence.method !== 'none' &&

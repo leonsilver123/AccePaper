@@ -92,8 +92,8 @@ const fixtureResolver = (): MockCitationResolverAdapter =>
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe('citation-verify tool: delegation + artifact envelope', () => {
-  it('resolved + original accessed + claimed supported => supported, artifact frozen', () => {
-    const artifact = verifyCitationTool(
+  it('resolved + original accessed + claimed supported => supported, artifact frozen', async () => {
+    const artifact = await verifyCitationTool(
       {
         claimId: claim('c1'),
         citationId: citation('cit1'),
@@ -134,14 +134,14 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     }).toThrow()
   })
 
-  it('#6 red line short-circuits BEFORE resolver contact (through the tool)', () => {
+  it('#6 red line short-circuits BEFORE resolver contact (through the tool)', async () => {
     // A resolver that EXPLODES if contacted — proves the tool + core never
     // reach it when the #6 red line fires first.
     const resolveMetadata = vi.fn((_ref: CitationRef): never => {
       throw new Error('resolver MUST NOT be contacted when method=none claims supported')
     })
 
-    const artifact = verifyCitationTool(
+    const artifact = await verifyCitationTool(
       {
         claimId: claim('c1'),
         citationId: citation('cit1'),
@@ -161,8 +161,8 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     expect(resolveMetadata).not.toHaveBeenCalled()
   })
 
-  it('fabricated literature (resolver-confirmed miss) => blocked + NOT_FOUND, never unverified', () => {
-    const artifact = verifyCitationTool(
+  it('fabricated literature (resolver-confirmed miss) => blocked + NOT_FOUND, never unverified', async () => {
+    const artifact = await verifyCitationTool(
       {
         claimId: claim('c1'),
         citationId: citation('cit1'),
@@ -182,7 +182,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     expect(artifact.result.conclusion).not.toBe('unverified')
   })
 
-  it('resolver availability (seeded unavailable key) => unverified, NO red line, NOT found', () => {
+  it('resolver availability (seeded unavailable key) => unverified, NO red line, NOT found', async () => {
     // Core semantics (verify.ts branch #1): 'temporarily_unavailable' is a
     // service fault, NOT a literature judgment => 'unverified', no red line,
     // and never misread as fabricated (not_found).
@@ -191,7 +191,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
       { unavailableKeys: ['doi:10.1000/real'] },
     )
 
-    const artifact = verifyCitationTool(
+    const artifact = await verifyCitationTool(
       {
         claimId: claim('c1'),
         citationId: citation('cit1'),
@@ -212,7 +212,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     expect(artifact.result.reasonCode).not.toBe(CITATION_CODE_NOT_FOUND)
   })
 
-  it('empty branded ids throw the core ResearchError (code DSH_CITATION_INVALID_REF)', () => {
+  it('empty branded ids throw the core ResearchError (code DSH_CITATION_INVALID_REF)', async () => {
     const deps: CitationVerifyToolDeps = { resolver: fixtureResolver() }
     const base = {
       ref: ref('doi', '10.1000/real'),
@@ -221,22 +221,22 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
       options: { claimedConclusion: 'supported' as const },
     }
 
-    expect(() =>
+    await expect(
       verifyCitationTool({ ...base, claimId: '' as ClaimId, citationId: citation('cit1') }, deps),
-    ).toThrow(ResearchError)
-    expect(() =>
+    ).rejects.toThrow(ResearchError)
+    await expect(
       verifyCitationTool({ ...base, claimId: '' as ClaimId, citationId: citation('cit1') }, deps),
-    ).toThrow(/DSH_CITATION_INVALID_REF/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_REF/)
 
-    expect(() =>
+    await expect(
       verifyCitationTool({ ...base, claimId: claim('c1'), citationId: '' as CitationId }, deps),
-    ).toThrow(ResearchError)
-    expect(() =>
+    ).rejects.toThrow(ResearchError)
+    await expect(
       verifyCitationTool({ ...base, claimId: claim('c1'), citationId: '' as CitationId }, deps),
-    ).toThrow(/DSH_CITATION_INVALID_REF/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_REF/)
   })
 
-  it('core runtime errors propagate unwrapped (no reinterpretation at the tool layer)', () => {
+  it('core runtime errors propagate unwrapped (no reinterpretation at the tool layer)', async () => {
     // Non-cloneable evidence (function property) is rejected by core AFTER the
     // tool's id check; the tool must not swallow or re-wrap the failure.
     const badEvidence = {
@@ -259,16 +259,17 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
         { resolver: fixtureResolver() },
       )
 
-    expect(run).toThrow(ResearchError)
-    expect(run).toThrow(/DSH_CITATION_VALUE_NOT_CLONEABLE/)
+    // The tool is asynchronous, so its refusal is a rejection, not a throw.
+    await expect(run()).rejects.toThrow(ResearchError)
+    await expect(run()).rejects.toThrow(/DSH_CITATION_VALUE_NOT_CLONEABLE/)
   })
 
-  it('falls back to the wall clock when timestamp is omitted (producedAt === result.timestamp)', () => {
+  it('falls back to the wall clock when timestamp is omitted (producedAt === result.timestamp)', async () => {
     // Same supported path as the first test, but WITHOUT the caller-injected
     // timestamp — the tool's Date.now() fallback must stamp both the artifact
     // meta and the delegated core result with one identical clock value.
     const before = Date.now()
-    const artifact = verifyCitationTool(
+    const artifact = await verifyCitationTool(
       {
         claimId: claim('c1'),
         citationId: citation('cit1'),
@@ -290,7 +291,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     expect(artifact.result.conclusion).toBe('supported')
   })
 
-  it('delegates to core verifyCitation EXACTLY ONCE, in core 7-argument order, and wraps the result', () => {
+  it('delegates to core verifyCitation EXACTLY ONCE, in core 7-argument order, and wraps the result', async () => {
     // The top-level `verifyCitation` import is the mocked delegating spy.
     const spy = coreVerifyCitation as unknown as ReturnType<typeof vi.fn>
     spy.mockClear()
@@ -305,7 +306,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
     }
     const deps: CitationVerifyToolDeps = { resolver: fixtureResolver() }
 
-    const artifact = verifyCitationTool(input, deps)
+    const artifact = await verifyCitationTool(input, deps)
 
     // Thin delegation: one and only one core call (no retry / no fallback /
     // no copied adjudication path that would bypass core).
@@ -325,7 +326,8 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
 
     // The returned artifact wraps that same core verdict, attributed to this tool.
     expect(artifact.meta.toolId).toBe('citation-verify')
-    expect(artifact.result).toEqual(spy.mock.results[0].value)
+    // The spy now returns core's promise, so settle it before comparing.
+    expect(artifact.result).toEqual(await spy.mock.results[0]?.value)
     expect(artifact.result.conclusion).toBe('supported')
     expect(artifact.result.reasonCode).toBe(CITATION_CODE_SUPPORTED)
   })

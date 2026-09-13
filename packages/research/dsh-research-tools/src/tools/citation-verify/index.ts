@@ -82,10 +82,10 @@ function assertNonEmptyBrand(value: ClaimId | CitationId, name: 'claimId' | 'cit
  * @throws ResearchError — from the tool for empty branded ids, or propagated
  *   unwrapped from core for any deeper validation/adjudication fault.
  */
-export function verifyCitationTool(
+export async function verifyCitationTool(
   input: CitationVerifyToolInput,
   deps: CitationVerifyToolDeps,
-): CitationVerifyToolArtifact {
+): Promise<CitationVerifyToolArtifact> {
   // Tool-boundary validation — ONLY the non-empty branded ids. Ref/evidence/
   // options shape and all verdict sanity stay in core (delegated below).
   assertNonEmptyBrand(input.claimId, 'claimId')
@@ -96,7 +96,7 @@ export function verifyCitationTool(
   const timestamp: number = input.timestamp ?? Date.now()
 
   // THIN DELEGATION — core's exact argument order, result handed back as-is.
-  const result: VerificationResult = verifyCitation(
+  const result: VerificationResult = await verifyCitation(
     input.claimId,
     input.citationId,
     input.ref,

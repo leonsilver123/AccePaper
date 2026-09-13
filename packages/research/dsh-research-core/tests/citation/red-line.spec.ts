@@ -14,20 +14,20 @@ const REAL = ref('doi', '10.1000/real', { title: 'Real Paper', authors: ['Alice 
 // bypass attempts: getter tricks, prototype pollution, input mutation.
 describe('#6 RED LINE — claimed verification WITHOUT original-text access is HARD-blocked', () => {
   describe('plain triggers', () => {
-    it('method=none + claimed supported => blocked + redLine', () => {
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
+    it('method=none + claimed supported => blocked + redLine', async () => {
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
     })
-    it('method=none + claimed partially_supported => blocked + redLine', () => {
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'partially_supported' })
+    it('method=none + claimed partially_supported => blocked + redLine', async () => {
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'partially_supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
     })
-    it('originalTextAccessed=false + method=manual_review + claimed supported => blocked + redLine', () => {
-      const r = verifyCitation(
+    it('originalTextAccessed=false + method=manual_review + claimed supported => blocked + redLine', async () => {
+      const r = await verifyCitation(
         claim('c1'), citation('cit1'), REAL,
         ev('manual_review', { originalTextAccessed: false }),
         fixtureResolver(), TS, { claimedConclusion: 'supported' },
@@ -36,25 +36,25 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
     })
-    it('the red line fires BEFORE softer checks (never bypassed by a real-looking resolver)', () => {
+    it('the red line fires BEFORE softer checks (never bypassed by a real-looking resolver)', async () => {
       // Even with a resolver that would otherwise confirm identity, no-original
       // access with a supportive claim is blocked FIRST.
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).not.toBe('supported')
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
     })
-    it('the #6 short-circuit NEVER consults the resolver: resolverStatus stays ABSENT even when the resolver would resolve', () => {
+    it('the #6 short-circuit NEVER consults the resolver: resolverStatus stays ABSENT even when the resolver would resolve', async () => {
       // resolverStatus is present ONLY when the resolver was actually contacted
       // (fabricated / outage / ambiguous / resolved all stamp it). The #6 hard
       // block happens BEFORE resolver contact, so it must carry NO resolverStatus.
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
       expect(r.resolverStatus).toBeUndefined()
     })
-    it('the #6 red line short-circuits with ZERO resolver calls (a contacting implementation would throw)', () => {
+    it('the #6 red line short-circuits with ZERO resolver calls (a contacting implementation would throw)', async () => {
       // resolverStatus==undefined alone only proves the outcome field is absent —
       // a future implementation could still call the resolver and DISCARD the
       // result while leaving resolverStatus undefined, and the old test would
@@ -63,7 +63,7 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
       const resolveMetadata = vi.fn(() => {
         throw new Error('resolver must not be called')
       })
-      const r = verifyCitation(
+      const r = await verifyCitation(
         claim('c1'), citation('cit1'), REAL, ev('none'),
         { resolveMetadata }, TS, { claimedConclusion: 'supported' },
       )
@@ -73,11 +73,11 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
       expect(r.resolverStatus).toBeUndefined()
     })
-    it('even an authoritative miss (not_found) cannot leak into the #6 result: reasonCode stays RED_LINE_NO_ORIGINAL', () => {
+    it('even an authoritative miss (not_found) cannot leak into the #6 result: reasonCode stays RED_LINE_NO_ORIGINAL', async () => {
       // When both #1 (would-be fabrication) and #6 (no original access) apply,
       // the #6 discriminator must win AND the resolver outcome must not leak —
       // otherwise downstream could mis-attribute a no-access block to fabrication.
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), notFoundResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), notFoundResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
@@ -86,7 +86,7 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
   })
 
   describe('getter tricks (method accessed via getter) — neutralized by boundary clone', () => {
-    it('a getter returning none is captured as none at clone time => red line fires', () => {
+    it('a getter returning none is captured as none at clone time => red line fires', async () => {
       const eTricky = {
         originalTextAccessed: true,
         accessedAt: undefined,
@@ -94,14 +94,14 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
           return 'none'
         },
       } as CitationEvidence
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, eTricky, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, eTricky, fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       expect(r.reasonCode).toBe(CITATION_CODE_RED_LINE_NO_ORIGINAL)
       // the returned snapshot stores the captured static value
       expect(r.evidence.method).toBe('none')
     })
-    it('a method getter that flips values cannot make the verifier see two different values (clone captures ONE)', () => {
+    it('a method getter that flips values cannot make the verifier see two different values (clone captures ONE)', async () => {
       let n = 0
       const eFlip = {
         originalTextAccessed: true,
@@ -115,7 +115,7 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
       // structuredClone invokes the getter ONCE and stores the result; the
       // verifier then reads only that frozen static value. The captured value
       // is 'none' (first invocation), so the red line fires — no bypass.
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, eFlip, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, eFlip, fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.evidence.method).toBe('none')
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
@@ -123,12 +123,12 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
   })
 
   describe('prototype pollution — own property is read, polluted prototype cannot mask none', () => {
-    it('Object.prototype.method=manual_review does NOT override evidence.method=none', () => {
+    it('Object.prototype.method=manual_review does NOT override evidence.method=none', async () => {
       const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'method')
       ;(Object.prototype as { method?: unknown }).method = 'manual_review'
       try {
         const e = ev('none') // own prop method='none'
-        const r = verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+        const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
         expect(r.evidence.method).toBe('none')
         expect(r.conclusion).toBe('blocked')
         expect(r.redLineTriggered).toBe(true)
@@ -138,12 +138,12 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
         else Object.defineProperty(Object.prototype, 'method', saved)
       }
     })
-    it('polluting Object.prototype.originalTextAccessed=true cannot force a pass when own prop is false', () => {
+    it('polluting Object.prototype.originalTextAccessed=true cannot force a pass when own prop is false', async () => {
       const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'originalTextAccessed')
       ;(Object.prototype as { originalTextAccessed?: unknown }).originalTextAccessed = true
       try {
         const e = ev('manual_review', { originalTextAccessed: false }) // own=false
-        const r = verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+        const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
         expect(r.evidence.originalTextAccessed).toBe(false)
         expect(r.conclusion).toBe('blocked')
         expect(r.redLineTriggered).toBe(true)
@@ -155,9 +155,9 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
   })
 
   describe('post-call input mutation cannot retrofit a pass', () => {
-    it('after a blocked red-line result, mutating the caller evidence to look accessed does NOT unblock', () => {
+    it('after a blocked red-line result, mutating the caller evidence to look accessed does NOT unblock', async () => {
       const e = ev('none')
-      const r = verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+      const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
       // Attempt to retrofit a pass: mutate caller evidence AFTER adjudication.
@@ -171,8 +171,8 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
   })
 
   describe('a legitimately-supported result is NOT blocked (red line only fires on no-access)', () => {
-    it('method=manual_review + originalTextAccessed=true + claimed supported => supported (NOT blocked)', () => {
-      const r = verifyCitation(
+    it('method=manual_review + originalTextAccessed=true + claimed supported => supported (NOT blocked)', async () => {
+      const r = await verifyCitation(
         claim('c1'), citation('cit1'), REAL,
         ev('manual_review', { originalTextAccessed: true, excerpt: 'x' }),
         fixtureResolver(), TS, { claimedConclusion: 'supported' },

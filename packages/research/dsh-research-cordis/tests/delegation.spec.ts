@@ -118,7 +118,7 @@ describe('ResearchEngine T10-R thin T07/T08/T09 delegation (batch 2 wave-1 I1)',
       contentHash: 'sha256:aa',
       retrievedAt: '2026-09-03T00:00:00.000Z',
     })
-    const r = ctx.research.verifyCitation(
+    const r = await ctx.research.verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/synth-1', 'Synthetic Paper'),
       ev, resolver, TS, { claimedConclusion: 'supported' },
     )
@@ -132,7 +132,7 @@ describe('ResearchEngine T10-R thin T07/T08/T09 delegation (batch 2 wave-1 I1)',
     const ctx = new Context()
     await ctx.plugin(ResearchEngine)
     const resolveMetadata = vi.fn(() => { throw new Error('resolver must not be called') })
-    const r = ctx.research.verifyCitation(
+    const r = await ctx.research.verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/synth-1'),
       evidence({ originalTextAccessed: false, method: 'none', accessedAt: undefined }),
       { resolveMetadata }, TS, { claimedConclusion: 'supported' },
@@ -148,7 +148,7 @@ describe('ResearchEngine T10-R thin T07/T08/T09 delegation (batch 2 wave-1 I1)',
     const ctx = new Context()
     await ctx.plugin(ResearchEngine)
     const emptyResolver = new MockCitationResolverAdapter() // nothing resolves -> not_found
-    const r = ctx.research.verifyCitation(
+    const r = await ctx.research.verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/ghost'),
       evidence(), emptyResolver, TS, { claimedConclusion: 'supported' },
     )

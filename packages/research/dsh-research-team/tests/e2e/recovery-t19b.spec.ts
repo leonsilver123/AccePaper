@@ -85,7 +85,7 @@ describe('T19-B recovery — gate abstention holds the step (no default pass)', 
       abstainComponents: () => ['B'],
     })
     const stepDef = { id: 'A1-landscape', gate: ['B'] as const }
-    const better = buildStepVerdicts({
+    const better = await buildStepVerdicts({
       step: getRunSnapshot(store, runId).steps['A1-landscape'] === undefined
         ? (undefined as never)
         : ({ ...stepDef, gate: ['B'], humanGate: false } as never),

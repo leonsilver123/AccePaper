@@ -25,8 +25,8 @@ const REAL = ref('doi', '10.1000/real', { title: 'Real Paper', authors: ['Alice 
 
 // ── #1 fabricated literature (resolver CONFIRMS not_found) ─────────────────
 describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverified)', () => {
-  it('resolver not_found => conclusion blocked (never "unverified" — no double meaning)', () => {
-    const r = verifyCitation(
+  it('resolver not_found => conclusion blocked (never "unverified" — no double meaning)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/ghost'), ev('manual_review', { originalTextAccessed: true }),
       notFoundResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -35,8 +35,8 @@ describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverifi
     expect(r.reasonCode).toBe(CITATION_CODE_NOT_FOUND)
     expect(r.resolverStatus).toBe('not_found')
   })
-  it('fabrication is a hard block even when the claim honestly asserts unverified', () => {
-    const r = verifyCitation(
+  it('fabrication is a hard block even when the claim honestly asserts unverified', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/ghost'), ev('manual_review', { originalTextAccessed: true }),
       notFoundResolver(), TS, { claimedConclusion: 'unverified' },
     )
@@ -44,8 +44,8 @@ describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverifi
     expect(r.redLineTriggered).toBe(true)
     expect(r.reasonCode).toBe(CITATION_CODE_NOT_FOUND)
   })
-  it('a resolver outage is NOT fabrication: temporarily_unavailable => unverified, NO red line', () => {
-    const r = verifyCitation(
+  it('a resolver outage is NOT fabrication: temporarily_unavailable => unverified, NO red line', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }),
       outageResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -54,8 +54,8 @@ describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverifi
     expect(r.reasonCode).toBe(CITATION_CODE_TEMPORARILY_UNAVAILABLE)
     expect(r.resolverStatus).toBe('temporarily_unavailable')
   })
-  it('an ambiguous resolver response => unverified, NO red line (not fabrication, not identity fraud)', () => {
-    const r = verifyCitation(
+  it('an ambiguous resolver response => unverified, NO red line (not fabrication, not identity fraud)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }),
       ambiguousResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -64,8 +64,8 @@ describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverifi
     expect(r.reasonCode).toBe(CITATION_CODE_AMBIGUOUS)
     expect(r.resolverStatus).toBe('ambiguous')
   })
-  it('a structurally malformed resolver outcome => unverified, NO red line (adapter fault, never fabrication)', () => {
-    const r = verifyCitation(
+  it('a structurally malformed resolver outcome => unverified, NO red line (adapter fault, never fabrication)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }),
       malformedResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -77,8 +77,8 @@ describe('#1 fabricated literature -> blocked + redLineTriggered (NEVER unverifi
 
 // ── #2 DOI/title/author identity mismatch ─────────────────────────────────
 describe('#2 identity mismatch -> identity_mismatch', () => {
-  it('title mismatch => identity_mismatch', () => {
-    const r = verifyCitation(
+  it('title mismatch => identity_mismatch', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/real', { title: 'Wrong Title', authors: ['Alice A'] }),
       ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -87,8 +87,8 @@ describe('#2 identity mismatch -> identity_mismatch', () => {
     expect(r.reasonCode).toBe(CITATION_CODE_IDENTITY_MISMATCH)
     expect(r.resolverStatus).toBe('resolved')
   })
-  it('author mismatch (no shared author) => identity_mismatch', () => {
-    const r = verifyCitation(
+  it('author mismatch (no shared author) => identity_mismatch', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/real', { title: 'Real Paper', authors: ['Nobody'] }),
       ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -99,8 +99,8 @@ describe('#2 identity mismatch -> identity_mismatch', () => {
 
 // ── #3 literature content does not support the claim ──────────────────────
 describe('#3 content does not support the claim -> unsupported', () => {
-  it('claimed supported + contentSupportsClaim=false => unsupported (no redLine; original WAS accessed)', () => {
-    const r = verifyCitation(
+  it('claimed supported + contentSupportsClaim=false => unsupported (no redLine; original WAS accessed)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true, excerpt: '...' }),
       fixtureResolver(), TS, { claimedConclusion: 'supported', contentSupportsClaim: false },
     )
@@ -112,8 +112,8 @@ describe('#3 content does not support the claim -> unsupported', () => {
 
 // ── #4 retracted literature ────────────────────────────────────────────────
 describe('#4 retracted literature', () => {
-  it('retracted + NOT explicitly marked => retracted + redLineTriggered (REDACTED_UNMARKED hard block)', () => {
-    const r = verifyCitation(
+  it('retracted + NOT explicitly marked => retracted + redLineTriggered (REDACTED_UNMARKED hard block)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/retracted', { title: 'Retracted Paper', authors: ['Carol C'] }),
       ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' },
     )
@@ -121,8 +121,8 @@ describe('#4 retracted literature', () => {
     expect(r.redLineTriggered).toBe(true)
     expect(r.reasonCode).toBe(CITATION_CODE_REDACTED_UNMARKED)
   })
-  it('retracted + explicitly marked => retracted, no redLine (retraction surfaced)', () => {
-    const r = verifyCitation(
+  it('retracted + explicitly marked => retracted, no redLine (retraction surfaced)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), ref('doi', '10.1000/retracted', { title: 'Retracted Paper', authors: ['Carol C'] }),
       ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS,
       { claimedConclusion: 'supported', retractionExplicitlyMarked: true },
@@ -135,8 +135,8 @@ describe('#4 retracted literature', () => {
 
 // ── #5 correlation written as causation ────────────────────────────────────
 describe('#5 correlation as causation -> unsupported + redLineTriggered', () => {
-  it('correlationAsCausation=true => unsupported (hard block, overstatement)', () => {
-    const r = verifyCitation(
+  it('correlationAsCausation=true => unsupported (hard block, overstatement)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }),
       fixtureResolver(), TS, { claimedConclusion: 'supported', correlationAsCausation: true },
     )
@@ -148,8 +148,8 @@ describe('#5 correlation as causation -> unsupported + redLineTriggered', () => 
 
 // ── happy paths ────────────────────────────────────────────────────────────
 describe('happy paths (chain checks pass)', () => {
-  it('supported: original accessed, identity ok, not retracted => supported', () => {
-    const r = verifyCitation(
+  it('supported: original accessed, identity ok, not retracted => supported', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL,
       ev('manual_review', { originalTextAccessed: true, excerpt: 'supports', provenance: { sourceUri: 'https://doi.example/10.1000/real', sourceVersion: 'v1', contentHash: 'abc123', retrievedAt: '2026-09-03T00:00:00Z' } }),
       fixtureResolver(), TS, { claimedConclusion: 'supported' },
@@ -162,16 +162,16 @@ describe('happy paths (chain checks pass)', () => {
     expect(r.evidence.sourceUri).toBe('https://doi.example/10.1000/real')
     expect(r.evidence.contentHash).toBe('abc123')
   })
-  it('partially_supported => partially_supported', () => {
-    const r = verifyCitation(
+  it('partially_supported => partially_supported', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('specialist_agent', { originalTextAccessed: true }),
       fixtureResolver(), TS, { claimedConclusion: 'partially_supported' },
     )
     expect(r.conclusion).toBe('partially_supported')
     expect(r.reasonCode).toBe(CITATION_CODE_PARTIALLY_SUPPORTED)
   })
-  it('unsupported (claimed) => unsupported (legit acknowledgement)', () => {
-    const r = verifyCitation(
+  it('unsupported (claimed) => unsupported (legit acknowledgement)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }),
       fixtureResolver(), TS, { claimedConclusion: 'unsupported' },
     )
@@ -179,9 +179,9 @@ describe('happy paths (chain checks pass)', () => {
     expect(r.redLineTriggered).toBe(false)
     expect(r.reasonCode).toBe(CITATION_CODE_UNSUPPORTED)
   })
-  it('unverified (claimed, resolver ok, original not accessed but NOT claiming supported) => unverified', () => {
+  it('unverified (claimed, resolver ok, original not accessed but NOT claiming supported) => unverified', async () => {
     // method=none is fine here because the claim does not assert supported.
-    const r = verifyCitation(
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL, ev('none'), fixtureResolver(), TS, { claimedConclusion: 'unverified' },
     )
     expect(r.conclusion).toBe('unverified')
@@ -193,68 +193,68 @@ describe('happy paths (chain checks pass)', () => {
 
 // ── sad paths / input validation ───────────────────────────────────────────
 describe('input validation (NO DEFAULT PASS — reject malformed inputs)', () => {
-  it('rejects non-cloneable evidence (function property) with DSH_CITATION_VALUE_NOT_CLONEABLE', () => {
+  it('rejects non-cloneable evidence (function property) with DSH_CITATION_VALUE_NOT_CLONEABLE', async () => {
     const bad = { originalTextAccessed: true, method: 'manual_review', accessedAt: 1, fn: () => 1 } as unknown as CitationEvidence
-    expect(() =>
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, bad, fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(ResearchError)
-    expect(() =>
+    ).rejects.toThrow(ResearchError)
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, bad, fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_VALUE_NOT_CLONEABLE/)
+    ).rejects.toThrow(/DSH_CITATION_VALUE_NOT_CLONEABLE/)
   })
-  it('rejects invalid ref.kind', () => {
-    expect(() =>
+  it('rejects invalid ref.kind', async () => {
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), ref('magically' as never, 'x'), ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_REF/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_REF/)
   })
-  it('rejects invalid evidence.method', () => {
+  it('rejects invalid evidence.method', async () => {
     const e = { originalTextAccessed: true, method: 'psychic' as never, accessedAt: 1 }
-    expect(() =>
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, e as never, fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
   })
-  it('rejects method=none with accessedAt present (contract iff violation)', () => {
+  it('rejects method=none with accessedAt present (contract iff violation)', async () => {
     const e = { originalTextAccessed: false, method: 'none' as const, accessedAt: 1 }
-    expect(() =>
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, e as never, fixtureResolver(), TS, { claimedConclusion: 'unverified' }),
-    ).toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
   })
-  it('rejects method!=none with accessedAt undefined (contract iff violation)', () => {
+  it('rejects method!=none with accessedAt undefined (contract iff violation)', async () => {
     const e = { originalTextAccessed: true, method: 'manual_review' as const }
-    expect(() =>
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, e as never, fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
   })
-  it('rejects a non-string provenance field (sourceUri must be a string when present)', () => {
+  it('rejects a non-string provenance field (sourceUri must be a string when present)', async () => {
     const e = {
       originalTextAccessed: true, method: 'manual_review' as const, accessedAt: 1,
       sourceUri: 42,
     }
-    expect(() =>
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, e as unknown as CitationEvidence, fixtureResolver(), TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_EVIDENCE/)
   })
-  it('rejects invalid adapter', () => {
-    expect(() =>
+  it('rejects invalid adapter', async () => {
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }), null as never, TS, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_ADAPTER/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_ADAPTER/)
   })
-  it('rejects invalid options.claimedConclusion', () => {
-    expect(() =>
+  it('rejects invalid options.claimedConclusion', async () => {
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'maybe' as never }),
-    ).toThrow(/DSH_CITATION_INVALID_OPTIONS/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_OPTIONS/)
   })
-  it('rejects non-finite timestamp', () => {
-    expect(() =>
+  it('rejects non-finite timestamp', async () => {
+    await expect(
       verifyCitation(claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), NaN, { claimedConclusion: 'supported' }),
-    ).toThrow(/DSH_CITATION_INVALID_OPTIONS/)
+    ).rejects.toThrow(/DSH_CITATION_INVALID_OPTIONS/)
   })
 })
 
 // ── immutability + non-retention ───────────────────────────────────────────
 describe('IMMUTABLE SNAPSHOTS (INV-SNAPSHOT)', () => {
-  it('returned VerificationResult is frozen (top + nested evidence + locator)', () => {
-    const r = verifyCitation(
+  it('returned VerificationResult is frozen (top + nested evidence + locator)', async () => {
+    const r = await verifyCitation(
       claim('c1'), citation('cit1'), REAL,
       ev('manual_review', { originalTextAccessed: true, locator: { page: 42 } }),
       fixtureResolver(), TS, { claimedConclusion: 'supported' },
@@ -263,13 +263,13 @@ describe('IMMUTABLE SNAPSHOTS (INV-SNAPSHOT)', () => {
     expect(Object.isFrozen(r.evidence)).toBe(true)
     expect(Object.isFrozen(r.evidence.locator as object)).toBe(true)
   })
-  it('caller cannot mutate the returned result', () => {
-    const r = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' })
+  it('caller cannot mutate the returned result', async () => {
+    const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' })
     expect(() => { (r as { conclusion: string }).conclusion = 'unsupported' }).toThrow()
   })
-  it('caller input mutation after the call does NOT change the result (input not retained)', () => {
+  it('caller input mutation after the call does NOT change the result (input not retained)', async () => {
     const e = ev('manual_review', { originalTextAccessed: true })
-    const r = verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
+    const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, e, fixtureResolver(), TS, { claimedConclusion: 'supported' })
     expect(r.conclusion).toBe('supported')
     // Mutate the caller's original evidence AFTER the call.
     ;(e as { method: string }).method = 'none'
@@ -279,9 +279,9 @@ describe('IMMUTABLE SNAPSHOTS (INV-SNAPSHOT)', () => {
     expect(r.evidence.originalTextAccessed).toBe(true)
     expect(r.conclusion).toBe('supported')
   })
-  it('caller ref mutation after the call does NOT change the result', () => {
+  it('caller ref mutation after the call does NOT change the result', async () => {
     const rf = ref('doi', '10.1000/real', { title: 'Real Paper', authors: ['Alice A'] })
-    const r = verifyCitation(claim('c1'), citation('cit1'), rf, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' })
+    const r = await verifyCitation(claim('c1'), citation('cit1'), rf, ev('manual_review', { originalTextAccessed: true }), fixtureResolver(), TS, { claimedConclusion: 'supported' })
     ;(rf as { id: string }).id = '10.1000/ghost'
     expect(r.ref.id).toBe('10.1000/real')
   })
@@ -289,16 +289,16 @@ describe('IMMUTABLE SNAPSHOTS (INV-SNAPSHOT)', () => {
 
 // ── cross-run isolation (no shared mutable state) ───────────────────────────
 describe('cross-run isolation', () => {
-  it('two independent calls do not share state; fixture unchanged across calls', () => {
+  it('two independent calls do not share state; fixture unchanged across calls', async () => {
     const resolver = fixtureResolver()
-    const r1 = verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), resolver, TS, { claimedConclusion: 'supported' })
-    const r2 = verifyCitation(claim('c2'), citation('cit2'), REAL, ev('manual_review', { originalTextAccessed: true }), resolver, TS, { claimedConclusion: 'supported' })
+    const r1 = await verifyCitation(claim('c1'), citation('cit1'), REAL, ev('none'), resolver, TS, { claimedConclusion: 'supported' })
+    const r2 = await verifyCitation(claim('c2'), citation('cit2'), REAL, ev('manual_review', { originalTextAccessed: true }), resolver, TS, { claimedConclusion: 'supported' })
     expect(r1.conclusion).toBe('blocked') // #6 red line (method none, claimed supported)
     expect(r1.redLineTriggered).toBe(true)
     expect(r2.conclusion).toBe('supported')
     expect(r2.redLineTriggered).toBe(false)
     // fixture still resolves the same record (state not consumed/mutated)
-    const r3 = verifyCitation(claim('c3'), citation('cit3'), REAL, ev('manual_review', { originalTextAccessed: true }), resolver, TS, { claimedConclusion: 'supported' })
+    const r3 = await verifyCitation(claim('c3'), citation('cit3'), REAL, ev('manual_review', { originalTextAccessed: true }), resolver, TS, { claimedConclusion: 'supported' })
     expect(r3.conclusion).toBe('supported')
   })
 })

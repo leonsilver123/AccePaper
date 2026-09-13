@@ -80,5 +80,5 @@ export interface ResolvedCitationMetadata {
  *   a bare `null` (a confirmed miss is `{ status: 'not_found' }`).
  */
 export interface CitationResolverAdapter {
-  resolveMetadata(ref: CitationRef): ResolverOutcome
+  resolveMetadata(ref: CitationRef): Promise<ResolverOutcome>
 }

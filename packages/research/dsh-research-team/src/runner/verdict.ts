@@ -108,16 +108,17 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
  * lookup at the `contradict` fixture row, so the fail-closed path produces no
  * anchoring verification and the real core gate abstains on its own.
  */
-function verdictB(ctx: VerdictBuildCtx): GateVerdict {
+async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
   const useAbstain = ctx.abstain.has('B')
   const claimId = (ctx.runCtx.claimId || CANONICAL.claimId) as ClaimId
-  const anchors = buildBChannelAnchors({
+  const anchors = await buildBChannelAnchors({
     claimId,
     stepId: ctx.step.id,
     timestamp: ctx.runCtx.timestamp,
     ...(useAbstain ? { anchorRef: B_CHANNEL_CONTRADICT_REF } : {}),
   })
   const verifications: ReadonlyArray<VerificationResult> = anchors.verifications
+
   const input: AdjudicationInput = {
     claimId,
     component: 'B',
@@ -212,11 +213,11 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 }
 
 /** Build the genuine gate verdicts for every component of one step's gate. */
-export function buildStepVerdicts(ctx: VerdictBuildCtx): ReadonlyArray<GateVerdict> {
+export async function buildStepVerdicts(ctx: VerdictBuildCtx): Promise<ReadonlyArray<GateVerdict>> {
   const out: GateVerdict[] = []
   for (const comp of ctx.step.gate) {
     if (comp === 'A') out.push(verdictA(ctx))
-    else if (comp === 'B') out.push(verdictB(ctx))
+    else if (comp === 'B') out.push(await verdictB(ctx))
     else out.push(verdictC(ctx))
   }
   return out

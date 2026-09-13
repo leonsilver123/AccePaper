@@ -318,7 +318,7 @@ function makeResult(params: {
  *  7. otherwise honor claimedConclusion (all chain checks passed for supportive
  *     claims; non-supportive claims pass through).
  */
-export function verifyCitation(
+export async function verifyCitation(
   claimId: ClaimId,
   citationId: CitationId,
   ref: CitationRef,
@@ -326,7 +326,7 @@ export function verifyCitation(
   resolverAdapter: CitationResolverAdapter,
   timestamp: number,
   options: VerifyCitationOptions,
-): VerificationResult {
+): Promise<VerificationResult> {
   // Validate scalar inputs (before cloning — cheap structural checks).
   assertNonEmptyBrand(claimId as string, 'claimId')
   assertNonEmptyBrand(citationId as string, 'citationId')
@@ -371,7 +371,7 @@ export function verifyCitation(
   //    the adapter cannot mutate the verifier's state; clone+freeze the return. ──
   let outcome: ResolverOutcome
   try {
-    outcome = resolverAdapter.resolveMetadata(refSnap)
+    outcome = await resolverAdapter.resolveMetadata(refSnap)
   } catch (e) {
     if (e instanceof ResearchError) throw e
     throw new ResearchError(CODE_RESOLVER_FAILED, 'resolverAdapter.resolveMetadata threw a non-ResearchError', e)

@@ -168,7 +168,7 @@ export async function driveStep(
       runCtx: opts.runCtx,
       abstain: new Set(comps),
     }
-    const built = buildStepVerdicts(vctx)
+    const built = await buildStepVerdicts(vctx)
     for (const v of built) {
       submitGateVerdict(store, runId, stepId, v)
       verdicts[v.component] = v.outcome
