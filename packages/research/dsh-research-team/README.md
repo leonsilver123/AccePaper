@@ -23,7 +23,7 @@
 - **实验引擎是解析模型,不是微观仿真**:C 通道用 Webster 延误公式,两相位、每相位一条关键进口道、到达均匀、无排队尾部。绝对延误值是模型输出而非实测;两条控制策略在同一模型内比较,所以"比较"是测量,"绝对数值"不是。
 - **解析模型已由 Eclipse SUMO 独立复跑**:`scripts/sumo-validation.mjs` 把同一组策略、同一份实测需求放进真实微观仿真,得到 17.93%(解析模型 11.09%)。方向一致、量级不同,原因与限制逐条记在 `plan/overnight/2026-09-14/sumo-validation.md`。**该脚本不接入流水线**,没有装 SUMO 的主机上一切不变。
 - **基线是单一固定计划,不是分时段计划**:真实部署的 time-of-day 计划会吃掉部分降幅。这个比较对自适应有利,必须随结果一起声明。
-- 驱动器的 `invoker` 与 `proseWriter` 注入面已接通,但 `proseWriter` **尚无生产装配点**:能同时看到 team 类型与具体实现的只有 bundle 层,而 `research-app` 目前是纯 YAML patch。真实模型路径因此未在出货路径启用。
+- **`proseWriter` 的生产装配点已经存在**(2026-09-14 更正):`dsh-research-cordis` 的 `Config.prose` 构造 `LlmProseWriter`,`ResearchTeamService.hostProseWriter()` 读 `ctx.research.proseWriter` 并交给 `DriveOptions`,出货 bundle 的 `research-cordis` 行也配了它(`deepseek-official` / `deepseek-v4-pro`)。此前记的"尚无装配点"在当时已不准确。**仍未验证的是这一条链在真实模型上跑通** —— 该路径需要该路由的凭据,本 checkout 未做 live 复验。
 - `runner/registry.ts` 单文件约 2250 行,同时承担类型词汇表、固定数据、15 个执行器与审计投影四类职责,拆分是已识别的债。
 - **本包的测试不被任何 typecheck 聚合覆盖**(`tsconfig.host.json` 的 `exclude` 列出 `packages/research/*/tests/**`),因此测试源码的类型漂移不可见。实测:把 host 面的四个 research 测试 glob 重新纳入后有 184 个类型错误(cordis 23 / core 19 / team 89 / tools 53)。`dsh-research-web/tests/**` 必须留在 exclude —— 它是 client 面。
 

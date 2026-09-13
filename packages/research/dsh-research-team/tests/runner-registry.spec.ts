@@ -151,9 +151,13 @@ describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
     ])
   })
 
-  it('classifies every step with one of the 5 levels', () => {
+  it('classifies every step with one of the 5 levels, or the human gate', () => {
     for (const entry of STEP_EXECUTOR_REGISTRY.values()) {
-      expect(TRUTHFULNESS_LEVELS).toContain(entry.kind)
+      // E2-submit runs no executor at all, so it carries `'humanGate'` — the same
+      // level `StepOutcome.kind` reports for it. Declaring it a `fixture_executor`
+      // made the registry table describe an executor its own basis says never runs.
+      const allowed = entry.humanGateStop === true ? [...TRUTHFULNESS_LEVELS, 'humanGate'] : TRUTHFULNESS_LEVELS
+      expect(allowed).toContain(entry.kind)
     }
   })
 

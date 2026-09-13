@@ -269,8 +269,16 @@ export type StepExecutorFn = (ctx: ExecCtx) => Promise<Record<string, unknown>> 
 /** A registry entry: the full auditable declaration of how one step is executed. */
 export interface StepExecutorEntry {
   readonly stepId: string
-  /** Truthfulness of THIS executor (not of the step's gate — see verdict.ts). */
-  readonly kind: Truthfulness
+  /**
+   * Truthfulness of THIS executor (not of the step's gate — see verdict.ts), or
+   * `'humanGate'` for a step no executor runs (E2-submit).
+   *
+   * `'humanGate'` is the level `StepOutcome.kind` uses for exactly that case, so the
+   * registry table and the per-step table now say the same thing about E2. Declaring
+   * it `fixture_executor` made the registry table claim a fixture executor for a step
+   * whose own basis says no executor runs.
+   */
+  readonly kind: Truthfulness | 'humanGate'
   /** Why the step carries this `kind` (audit basis; required for every entry). */
   readonly basis: string
   /** Producer brand, e.g. 'literature-search@0.1.2-alpha.4' or 'fixture:baseline'. */
@@ -1577,6 +1585,16 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ranRuns: artifact.runs.length,
         counts: artifact.counts,
         aggregate: artifact.aggregate,
+        // The tool reports a population stddev per arm. In THIS study the arm
+        // executor is deterministic — the same demand goes through the same model —
+        // so the repetitions exist to exercise the run/aggregate seam, and the
+        // dispersion is 0 BY CONSTRUCTION rather than by measurement. Presenting it
+        // without that sentence invites reading it as experimental variability.
+        variability: {
+          repetitions: artifact.runs.length,
+          dispersionIsMeasured: false,
+          note: 'the arm executor is deterministic: dispersion across repetitions is 0 by construction and is NOT an estimate of experimental variability',
+        },
         // C2's dossier carries `convergence`, not `verdict`. Reading the wrong key
         // made the `??` fire on every run, so this field asserted "converged" while
         // the dossier it cites said "pending" — two constants pointing opposite
@@ -2151,7 +2169,8 @@ function noExecutor(): Record<string, unknown> {
 
 interface EntrySpec {
   readonly stepId: string
-  readonly kind: Truthfulness
+  /** See {@link StepExecutorEntry.kind}: `'humanGate'` for the step no executor runs. */
+  readonly kind: Truthfulness | 'humanGate'
   readonly basis: string
   readonly producer: string
   readonly timeoutMs: number
@@ -2313,7 +2332,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'E2-submit',
-    kind: 'fixture_executor',
+    kind: 'humanGate',
     basis: 'NO executor runs and NO artifact is produced: submission is a human act. The step reaches `gated` via completeStep (empty machine gate + humanGate) and is never auto-approved',
     producer: 'human-gate:E2-submit',
     timeoutMs: 0,
