@@ -283,23 +283,38 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
 
 describe('T19-B registry — fixture executors are honest about being fixtures', () => {
   const fixtureSteps = [...STEP_EXECUTOR_REGISTRY.values()]
-    .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true)
+    // B2-data's level depends on whether its dataset is present on this host, so it
+    // is asserted separately (below) rather than counted as a fixed fixture.
+    .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true && e.stepId !== 'B2-data')
     .map(e => e.stepId)
 
-  it('leaves 9 steps as fixture executors (real tools not yet available)', () => {
+  it('leaves 8 steps as unconditional fixture executors', () => {
     // C1-mvp left this list when the C channel began running its experiment for real
-    // (traffic-sim) instead of reading a fixture table; it is now a real-tool step.
+    // (traffic-sim); B2-data left it because its level now tracks dataset presence.
     expect(fixtureSteps).toEqual([
       'A3-agenda',
       'A4-venue',
       'B1-method',
-      'B2-data',
       'B3-baseline',
       'C2-trinity-loop',
       'D2-framework',
       'D3-writing',
       'D4-rebuttal',
     ])
+  })
+
+  it('B2-data declares a level consistent with whether its dataset is on disk', () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('B2-data')
+    const out = (entry?.executor(execCtx('B2-data'))) as {
+      dataset?: { __kind?: unknown; acquisition?: unknown; files?: ReadonlyArray<{ present?: unknown }> }
+    }
+    const dataset = out.dataset
+    expect(dataset).toBeDefined()
+    const acquired = String(dataset?.acquisition).startsWith('acquired')
+    // The claim and the evidence must agree: a descriptor may only call itself real
+    // when every declared file was actually found on this host.
+    expect(acquired).toBe(dataset?.files?.every(f => f.present === true) ?? false)
+    expect(dataset?.__kind).toBe(acquired ? 'real_tool_fixture_input' : 'fixture_executor')
   })
 
   it.each(fixtureSteps)('fixture executor %s stamps fixture provenance', async (stepId) => {

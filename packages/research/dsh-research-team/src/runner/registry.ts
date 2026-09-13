@@ -61,6 +61,8 @@
 // (declared dependency). No tools src is modified. All core engine functions used
 // here come from the public `@deepseek-ai/dsh-research-core` entry.
 
+import { statSync } from 'node:fs'
+
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { AblationDefinition, RoadmapGraph } from '@deepseek-ai/dsh-research-tools'
@@ -852,41 +854,106 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 }
 
 /** B2-data: fixture shaped as a dataset descriptor + profile. */
+/**
+ * The real dataset this study's model is evaluated against.
+ *
+ * Recorded in `data/README.md` with its licence and hashes. B2 does not merely NAME
+ * it: it stats the files, so a descriptor can only claim a dataset that is actually
+ * on disk with the expected size.
+ */
+const DATASET = {
+  id: 'sumo-krauss-signal-control',
+  source: 'https://huggingface.co/datasets/ranjanyash543/sumo-krauss-simulation',
+  license: 'Apache-2.0',
+  version: 'v1',
+  split: 'single-run',
+  /** State + signal files that make up one simulation run. */
+  files: [
+    { path: 'H:/datasets/sumo-krauss/signal_record49999.txt', bytes: 1_188_890, kind: 'signal-state' },
+    { path: 'H:/datasets/sumo-krauss/record49999.txt', bytes: 41_975_152, kind: 'vehicle-state' },
+  ],
+} as const
+
+/** What one file check found. */
+interface FileCheck {
+  readonly path: string
+  readonly kind: string
+  readonly present: boolean
+  readonly actualBytes: number | null
+  readonly sizeMatches: boolean
+}
+
+/** Stat each declared dataset file. Never throws: a missing file is data, not a fault. */
+function checkDatasetFiles(): ReadonlyArray<FileCheck> {
+  return DATASET.files.map((file) => {
+    try {
+      const stat = statSync(file.path)
+      return {
+        path: file.path,
+        kind: file.kind,
+        present: true,
+        actualBytes: stat.size,
+        sizeMatches: stat.size === file.bytes,
+      }
+    } catch {
+      // Absent (or unreadable) on this host: reported as absent below, which the
+      // descriptor turns into an explicit "not acquired here" rather than a claim.
+      return { path: file.path, kind: file.kind, present: false, actualBytes: null, sizeMatches: false }
+    }
+  })
+}
+
 function b2Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
+  const checks = checkDatasetFiles()
+  const acquired = checks.every(check => check.present && check.sizeMatches)
+
   return {
     dataset: tagArtifact(
       {
-        fixture: true,
+        fixture: !acquired,
         stepId: 'B2-data',
         slug: 'dataset',
-        datasetId: SCENARIO.datasetId,
-        version: 'v1',
-        split: 'train',
-        rows: 1200,
-        source: 'synthetic',
+        datasetId: DATASET.id,
+        version: DATASET.version,
+        split: DATASET.split,
+        source: DATASET.source,
+        license: DATASET.license,
         methodRef: (method?.methodId as string | undefined) ?? SCENARIO.variantIdentity,
-        note: 'synthetic dataset descriptor — no data acquisition/profiling tool exists',
+        files: checks,
+        // The descriptor states what is ON DISK, not what was intended.
+        acquisition: acquired
+          ? 'acquired — every declared file is present at its recorded size'
+          : 'not acquired on this host — the dataset is named but its files were not found',
+        note: acquired
+          ? 'dataset descriptor for the real SUMO signal-control run recorded in data/README.md'
+          : 'dataset descriptor names a real, openly-licensed dataset; its bytes are not present on this host',
       },
       B2_PRODUCER,
-      'fixture_executor',
+      acquired ? 'real_tool_fixture_input' : 'fixture_executor',
     ),
     'data-profile': tagArtifact(
       {
-        fixture: true,
+        fixture: !acquired,
         stepId: 'B2-data',
         slug: 'data-profile',
-        datasetId: SCENARIO.datasetId,
+        datasetId: DATASET.id,
         columns: [
-          { name: 'delay_seconds', type: 'number' },
-          { name: 'policy', type: 'categorical' },
+          { name: 'step', type: 'integer', note: 'simulation step index (column 0)' },
+          { name: 'link_state', type: 'categorical', note: 'per-controlled-link signal state (remaining columns of signal_record*)' },
         ],
-        missingRate: 0.0,
-        provenance: 'synthetic fixture (no real acquisition)',
-        note: 'synthetic profile — data provenance is declared, not real',
+        // A profile is only meaningful over bytes we have; without them the claim is
+        // not made at all rather than estimated from nothing.
+        missingRate: null,
+        provenance: acquired
+          ? 'real acquisition — files present and size-verified (see data/README.md)'
+          : 'not acquired on this host (files absent); no profile is claimed',
+        note: acquired
+          ? 'column meaning per the dataset record; unlabelled columns are not given an invented meaning'
+          : 'no profile claimed — the dataset files are not present on this host',
       },
       B2_PRODUCER,
-      'fixture_executor',
+      acquired ? 'real_tool_fixture_input' : 'fixture_executor',
     ),
   }
 }

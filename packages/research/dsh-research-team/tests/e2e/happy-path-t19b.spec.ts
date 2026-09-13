@@ -116,9 +116,12 @@ describe('T19-B happy path — real tool execution is provable from the artifact
 
   it('brands fixture artifacts as fixture_executor (no level inflation)', async () => {
     const { store, run } = await happyRun()
-    const fixtureSteps = run.steps.filter(s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit')
-    // C1-mvp left this set when the C channel began running its experiment for real.
-    expect(fixtureSteps.length).toBe(9)
+    const fixtureSteps = run.steps.filter(
+      s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit' && s.stepId !== 'B2-data',
+    )
+    // C1-mvp left this set when the C channel began running its experiment for real;
+    // B2-data is excluded because its level tracks dataset presence on this host.
+    expect(fixtureSteps.length).toBe(8)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -141,11 +144,12 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     expect(snap.registry['submission-record']).toBeUndefined()
   })
 
-  it('reports exactly 6 real-tool steps and 0 live_external', async () => {
+  it('accounts for all 15 executing steps and reports 0 live_external', async () => {
     const { run } = await happyRun()
     const counts = countKinds(run.steps)
-    expect(counts.real_tool_fixture_input).toBe(6)
-    expect(counts.fixture_executor).toBe(9)
+    // B2-data's level follows whether its dataset is on this host, so the split
+    // between the two levels is asserted as an identity rather than a fixed count.
+    expect(counts.real_tool_fixture_input + counts.fixture_executor).toBe(15)
     expect(counts.live_external).toBe(0)
     expect(counts.humanGate).toBe(1)
     const total = TRUTHFULNESS_LEVELS.reduce((n, l) => n + counts[l], 0) + counts.humanGate
