@@ -71,7 +71,8 @@
 // (declared dependency). No tools src is modified. All core engine functions used
 // here come from the public `@deepseek-ai/dsh-research-core` entry.
 
-import { statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
@@ -1060,8 +1061,18 @@ const DATASET = {
   split: 'single-run',
   /** State + signal files that make up one simulation run. */
   files: [
-    { path: 'H:/datasets/sumo-krauss/signal_record49999.txt', bytes: 1_188_890, kind: 'signal-state' },
-    { path: 'H:/datasets/sumo-krauss/record49999.txt', bytes: 41_975_152, kind: 'vehicle-state' },
+    {
+      path: 'H:/datasets/sumo-krauss/signal_record49999.txt',
+      bytes: 1_188_890,
+      kind: 'signal-state',
+      sha256: '76a86401eb2705b30230278ea5694702300c178a289bcd7d24afc0ccde643fcd',
+    },
+    {
+      path: 'H:/datasets/sumo-krauss/record49999.txt',
+      bytes: 41_975_152,
+      kind: 'vehicle-state',
+      sha256: '2f1475fa774fcab63558eea2f9dc2d13e5f34ac9eed79c4859072df21b91a5cb',
+    },
   ],
 } as const
 
@@ -1072,24 +1083,45 @@ interface FileCheck {
   readonly present: boolean
   readonly actualBytes: number | null
   readonly sizeMatches: boolean
+  /** null when the file is absent, so nothing was hashed. */
+  readonly sha256Matches: boolean | null
 }
 
-/** Stat each declared dataset file. Never throws: a missing file is data, not a fault. */
+/**
+ * Check each declared dataset file by SIZE AND HASH.
+ *
+ * The size check alone is not an identity check: `data/README.md` records a SHA-256
+ * per file and this function used to compare only byte counts, so any same-size
+ * substitution passed as the recorded dataset. The hash is recomputed here, which is
+ * what makes "acquired" mean "these are the recorded bytes".
+ *
+ * Never throws: a missing file is data, not a fault.
+ *
+ * @returns one check per declared file, in declaration order.
+ */
 function checkDatasetFiles(): ReadonlyArray<FileCheck> {
   return DATASET.files.map((file) => {
     try {
       const stat = statSync(file.path)
+      const sizeMatches = stat.size === file.bytes
+      // Hashing a file whose size is already wrong cannot rescue the claim, and it
+      // costs a full read of a 42 MB file, so the hash is only computed when the
+      // cheap check passed.
+      const sha256Matches = sizeMatches
+        ? createHash('sha256').update(readFileSync(file.path)).digest('hex') === file.sha256
+        : false
       return {
         path: file.path,
         kind: file.kind,
         present: true,
         actualBytes: stat.size,
-        sizeMatches: stat.size === file.bytes,
+        sizeMatches,
+        sha256Matches,
       }
     } catch {
       // Absent (or unreadable) on this host: reported as absent below, which the
       // descriptor turns into an explicit "not acquired here" rather than a claim.
-      return { path: file.path, kind: file.kind, present: false, actualBytes: null, sizeMatches: false }
+      return { path: file.path, kind: file.kind, present: false, actualBytes: null, sizeMatches: false, sha256Matches: null }
     }
   })
 }
@@ -1138,7 +1170,10 @@ function studyDemandEvidence(): Record<string, unknown> {
 function b2Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
   const checks = checkDatasetFiles()
-  const acquired = checks.every(check => check.present && check.sizeMatches)
+  // "Acquired" now means the recorded BYTES are here, not merely a file of the right
+  // length: the size check alone let any same-size substitution stand in for the
+  // dataset this study cites.
+  const acquired = checks.every(check => check.present && check.sizeMatches && check.sha256Matches === true)
 
   return {
     dataset: tagArtifact(
@@ -1155,8 +1190,8 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
         files: checks,
         // The descriptor states what is ON DISK, not what was intended.
         acquisition: acquired
-          ? 'acquired — every declared file is present at its recorded size'
-          : 'not acquired on this host — the dataset is named but its files were not found',
+          ? 'acquired — every declared file is present, size-matched and hash-matched against the record in data/README.md'
+          : 'not acquired on this host — the dataset is named but its recorded bytes were not verified here',
         note: acquired
           ? 'dataset descriptor for the real SUMO signal-control run recorded in data/README.md'
           : 'dataset descriptor names a real, openly-licensed dataset; its bytes are not present on this host',
@@ -1174,12 +1209,22 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
           { name: 'step', type: 'integer', note: 'simulation step index (column 0)' },
           { name: 'link_state', type: 'categorical', note: 'per-controlled-link signal state (remaining columns of signal_record*)' },
         ],
-        // A profile is only meaningful over bytes we have; without them the claim is
-        // not made at all rather than estimated from nothing.
-        missingRate: null,
+        // NO `missingRate`. The field existed and was `null` on every run ever made:
+        // no code computed it, and a declared-but-uncomputed metric is a claim, not an
+        // observation (the same defect the audit found elsewhere). What IS claimed here
+        // is the verification that ran — see `verified`.
+        verified: {
+          files: checks.map(check => ({
+            path: check.path,
+            present: check.present,
+            sizeMatches: check.sizeMatches,
+            sha256Matches: check.sha256Matches,
+          })),
+          method: 'byte length + SHA-256 of the file contents, against the values recorded in data/README.md',
+        },
         provenance: acquired
-          ? 'real acquisition — files present and size-verified (see data/README.md)'
-          : 'not acquired on this host (files absent); no profile is claimed',
+          ? 'real acquisition — files present, size-verified and hash-verified (see data/README.md)'
+          : 'not acquired on this host (files absent or hashes unmatched); no profile is claimed',
         note: acquired
           ? 'column meaning per the dataset record; unlabelled columns are not given an invented meaning'
           : 'no profile claimed — the dataset files are not present on this host',

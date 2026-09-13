@@ -317,14 +317,26 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
   it('B2-data declares a level consistent with whether its dataset is on disk', () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('B2-data')
     const out = (entry?.executor(execCtx('B2-data'))) as {
-      dataset?: { __kind?: unknown; acquisition?: unknown; files?: ReadonlyArray<{ present?: unknown }> }
+      dataset?: {
+        __kind?: unknown
+        acquisition?: unknown
+        files?: ReadonlyArray<{ present?: unknown; sizeMatches?: unknown; sha256Matches?: unknown }>
+      }
     }
     const dataset = out.dataset
     expect(dataset).toBeDefined()
     const acquired = String(dataset?.acquisition).startsWith('acquired')
     // The claim and the evidence must agree: a descriptor may only call itself real
     // when every declared file was actually found on this host.
-    expect(acquired).toBe(dataset?.files?.every(f => f.present === true) ?? false)
+    // The claim requires BYTES, not a file of the right length: a same-size
+    // substitution must not satisfy it, so the hash is part of the predicate.
+    expect(acquired).toBe(
+      dataset?.files?.every(f => f.present === true && f.sizeMatches === true && f.sha256Matches === true) ?? false,
+    )
+    for (const file of dataset?.files ?? []) {
+      // `sha256Matches` is null exactly when there was nothing to hash.
+      expect(file.sha256Matches === null).toBe(file.present === false)
+    }
     // B2 runs no catalogue tool, so it can never claim `real_tool_fixture_input`
     // (the level the report prints as "real tool functions executed"). What its
     // level tracks is whether the bytes were found: a real local computation over
