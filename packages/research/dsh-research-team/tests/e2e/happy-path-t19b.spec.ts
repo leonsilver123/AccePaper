@@ -17,6 +17,8 @@
 // Reports (run snapshot JSON, run markdown, T19-A vs T19-B comparison) are
 // written to `.workbuddy/tmp/e2e-out-t19b/` by report.ts.
 
+import { existsSync, readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 import {
   getArtifact,
@@ -409,13 +411,17 @@ describe('T19-B happy path — auditable reports', () => {
       ),
     })
     const { path: cmpPath, content: cmpContent } = writeComparisonReport(run)
-    // The writers returned non-empty content + a path, proving the files were produced.
-    expect(typeof jsonPath).toBe('string')
-    expect(typeof mdPath).toBe('string')
-    expect(typeof cmpPath).toBe('string')
+    // The files are READ BACK from disk. The writers returning content and a path
+    // proves nothing about the filesystem, and an earlier version of this test
+    // claimed exactly that while never touching a file.
+    const readBack = (path: string): string => {
+      expect(existsSync(path), path).toBe(true)
+      return readFileSync(path, 'utf8')
+    }
+    expect(readBack(mdPath)).toBe(mdContent)
+    expect(readBack(cmpPath)).toBe(cmpContent)
+    expect(JSON.parse(readBack(jsonPath))).toEqual(JSON.parse(jsonContent))
     expect(jsonContent.length).toBeGreaterThan(0)
-    expect(mdContent.length).toBeGreaterThan(0)
-    expect(cmpContent.length).toBeGreaterThan(0)
 
     const md = mdContent
     expect(md).toContain('real_tool_fixture_input')
@@ -441,9 +447,15 @@ describe('T19-B happy path — auditable reports', () => {
     expect(json.artifactManifest).toBeDefined()
   })
 
-  it('records the observed run cost for the T19-A/T19-B comparison', async () => {
+  it('records a finite run cost for the T19-A/T19-B comparison', async () => {
     const { run, durationMs } = await happyRun()
     expect(run.steps.length).toBe(16)
-    expect(durationMs).toBeGreaterThanOrEqual(0)
+    // A duration is a real number or it is not a measurement. `>= 0` held for every
+    // possible value including NaN-adjacent nonsense, so it asserted nothing.
+    expect(Number.isFinite(durationMs)).toBe(true)
+    expect(durationMs).toBeGreaterThan(0)
+    expect(durationMs).toBeLessThan(10 * 60 * 1000)
+    // All 16 steps were actually driven, not merely declared.
+    expect(run.steps.map(s => s.stepId)).toHaveLength(16)
   })
 })

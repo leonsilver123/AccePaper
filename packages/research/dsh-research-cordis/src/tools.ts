@@ -16,9 +16,12 @@
  *    DENIES any agent-loop execution — their real input is an injected adapter
  *    or the canonical fixture scenario, not model arguments.
  *
- * No real model/gateway is used anywhere: literature runs over the mock corpus
- * adapter, ablation over the mock executor, citations over the core
- * MockCitationResolverAdapter (all fixture, `live_external` = 0).
+ * THIS FILE is what decides which corpus the tools run over, and it holds no
+ * literal for it: `Config.literatureSearch` / `Config.citationResolver` /
+ * `Config.prose` select the channels (see index.ts). With none configured the
+ * corpus is the mock adapter and `live_external` is 0; with `openalex` the
+ * literature and citation paths reach a real catalogue, and the artifacts — not
+ * this comment — record which one ran.
  *
  * Type seam: the model-facing `@deepseek-ai/dsh-tools` surface is only needed
  * at RUNTIME (defineTool). It is loaded dynamically with a non-literal

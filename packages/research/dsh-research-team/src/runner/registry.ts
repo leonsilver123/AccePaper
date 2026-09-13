@@ -31,19 +31,29 @@
 // `getStepDefinitions()` at module load, so the registry can never drift from
 // the frozen 16-step definition owned by core.
 //
-// ── Truthfulness levels (4-level ruling; supersedes the old 3-level
-//    'real_tool' | 'fixture' | 'mock_external' scheme) ─────────────────────────
+// ── Truthfulness levels (5-level ruling; supersedes the old 3-level
+//    'real_tool' | 'fixture' | 'mock_external' scheme, and the 4-level ruling that
+//    had no name for a step which computes a measurement without a tool) ────────
 //  - `real_tool_fixture_input` : the REAL tool function executes; its INPUT is a
 //    synthetic fixture. Honest reading: "the code really ran", NOT "this is real
-//    science". Reports must never call this real research verification.
+//    science". Reports must never call this real research verification. The report
+//    renders this level as "Real tool functions executed", so only steps that
+//    actually invoke a catalogue tool may carry it.
+//  - `local_computation`       : NO tool function and no external system — the
+//    executor computes its product from its inputs with code inside this package.
+//    The computation is real (B3/C1/C2 measure the experiment; B2 stats the
+//    dataset files); it is not tool-mediated evidence.
 //  - `fixture_executor`        : the whole executor is a deterministic fixture —
 //    no tool is implemented for this step yet (or, for B3, the tool capability
 //    exists but cannot anchor SOTA in this wave's synthetic corpus).
 //  - `mock_external`           : real ADAPTATION logic runs against a SIMULATED
 //    external system (e.g. core `verifyCitation` over
 //    `MockCitationResolverAdapter`). Used by the gate channels (see verdict.ts).
-//  - `live_external`           : a real external system. MUST be 0 in this wave
-//    (asserted by the registry spec and by the report).
+//  - `live_external`           : a real external system was reached. Whether this
+//    appears is a DEPLOYMENT property, not a wave property: A1 reaches a live
+//    catalogue where one is configured, and D2/D3/D4 reach a real model where a
+//    prose writer is. The registry's static entries declare none of it; the
+//    artifacts do, and `drive.ts` takes the step's level from them.
 //
 // Discipline (spec §7, frozen):
 //  - kind is declared honestly and matches the implementation, and every entry
@@ -1183,7 +1193,13 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           identity: 'fixed-time',
           protocol: 'measure demand-weighted delay under a fixed-time plan over the study demand profile',
           metric: { name: 'peak-hour delay', direction: 'lower is better' },
-          datasetRef: (dataset?.datasetId as string | undefined) ?? SCENARIO.datasetId,
+          // The dataset this NUMBER came from, which is not the dataset B2
+          // registered. The baseline is measured on the demand profile derived from
+          // the study series; B2's descriptor names a SUMO run that no arithmetic in
+          // this step touches. Naming the wrong one attributed the measurement to a
+          // dataset it never read.
+          datasetRef: STUDY_SERIES_PROVENANCE.datasetId,
+          registeredDatasetRef: (dataset?.datasetId as string | undefined) ?? null,
           methodRef: (method?.methodId as string | undefined) ?? SCENARIO.variantIdentity,
         },
         measured: {
@@ -2236,7 +2252,7 @@ export const SEMANTIC_TASKS: Readonly<Record<string, string>> = {
   'A4-venue': '期刊与审稿标准: 依中科院分区∪CCF 双体系确定目标投稿域与格式约束',
   'B1-method': '方法推导: 从研究问题推导可执行方法(自适应策略形式化)',
   'B2-data': '数据与复现基础: 声明数据来源/版本/种子与复现协议(mock 显式标记)',
-  'B3-baseline': 'baseline 与指标: 建立对照基线并定义评估指标(固定配时 10.0s)',
+  'B3-baseline': 'baseline 与指标: 建立对照基线并定义评估指标(固定配时的实测延误)',
   'C1-mvp': '方法 MVP: 最小可行实现并产出首轮实验结果(自适应变体)',
   'C2-trinity-loop': '迭代实验与三一收敛: 以 A/B/C 三组件收敛 claim 判定',
   'C3-boundary': '边界与反例: 以消融探测 claim 成立边界与反例',

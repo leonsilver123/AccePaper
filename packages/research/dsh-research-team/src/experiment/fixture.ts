@@ -26,7 +26,7 @@ const FIXTURE_TABLE: ReadonlyMap<string, ExperimentFixtureOutcome> = new Map([
   // keep path: the (synthetic) experiment supports the (synthetic) prediction.
   ['mock-claim-001|peak-hour delay falls by at least 8% under adaptive control', {
     supportsPrediction: true,
-    detail: 'synthetic fixture: simulated signal plan shows 9.1% mean delay reduction (mock, not real data)',
+    detail: 'synthetic fixture row: a mock corpus adjudication, not a measurement (the C channel measures with traffic-sim now)',
   }],
   // refute path.
   ['mock-claim-002|greedy re-timing improves throughput in oversaturated grids', {

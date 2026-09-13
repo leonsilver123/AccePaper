@@ -8,7 +8,9 @@
 //     / recovery policy / basis);
 //   - the input + output schemas and the gate requirement are DERIVED from core
 //     (they can never drift from `getStepDefinitions()`);
-//   - `kind` is one of the 4 levels and `live_external` is 0 this wave;
+//   - `kind` is one of the 5 levels, and the static declarations carry no
+//     `live_external` (that level appears only where a deployment wires a live
+//     channel, and it comes from the artifact rather than the registry);
 //   - the truthfulness claim is falsifiable: a `real_tool_fixture_input` step's
 //     artifact must actually carry the real tool's `__producer` brand.
 

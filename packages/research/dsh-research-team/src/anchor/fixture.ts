@@ -82,7 +82,7 @@ interface ReproFixtureRow {
 
 const REPRO_FIXTURE: ReadonlyMap<string, ReproFixtureRow> = deepFreezeMap(
   new Map<string, ReproFixtureRow>([
-    ['syn-repro-001', { supportsPrediction: true, detail: 'synthetic fixture: reproduced 9.1% delay reduction on mock corpus (not real data)' }],
+    ['syn-repro-001', { supportsPrediction: true, detail: 'synthetic fixture row on a mock corpus (not real data)' }],
     ['syn-repro-002', { supportsPrediction: false, detail: 'synthetic fixture: reproduced 0.4% throughput change, contradicts prediction (not real data)' }],
   ]),
 )
