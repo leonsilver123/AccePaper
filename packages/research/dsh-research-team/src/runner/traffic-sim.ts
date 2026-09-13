@@ -188,6 +188,90 @@ export interface ComparisonResult {
 }
 
 /**
+ * The study's demand profile: a corridor-scale intersection whose phase demand swings
+ * between intervals. It is the scenario the model is evaluated on, and it is fixed
+ * here so the experiment is reproducible — a claim's verdict must not depend on a
+ * scenario chosen after seeing the result.
+ *
+ * @returns the scenario both policies are run against.
+ */
+export function experimentScenario(): TrafficScenario {
+  return {
+    cycleSeconds: 90,
+    lostTimeSeconds: 8,
+    saturationFlowPerLane: 1800,
+    capacityPerPhase: 1800,
+    intervals: 6,
+    demandPerPhase: [
+      [950, 250],
+      [450, 350],
+      [980, 220],
+      [420, 380],
+      [900, 260],
+      [500, 340],
+    ],
+  }
+}
+
+/** Verdict of one falsifiable prediction against the experiment. */
+export interface PredictionVerdict {
+  /** True when the measured reduction meets the threshold the prediction stated. */
+  readonly supportsPrediction: boolean
+  /** Measured relative reduction (%). */
+  readonly reductionPct: number
+  /** Threshold parsed out of the prediction text (%). */
+  readonly thresholdPct: number
+  /** Auditable one-line basis for the verdict. */
+  readonly detail: string
+}
+
+/**
+ * Read the numeric threshold a prediction commits to.
+ *
+ * The prediction is prose, but a falsifiable one names a quantity, so the first
+ * percentage in the text is the commitment. A prediction with no percentage is not
+ * falsifiable in this study's terms and yields undefined, which callers must treat
+ * as "cannot adjudicate" rather than as a pass.
+ *
+ * @param predictionText - the prediction as written.
+ * @returns the threshold in percent, or undefined when none is stated.
+ */
+export function thresholdFromPrediction(predictionText: string): number | undefined {
+  const match = predictionText.match(/(\d+(?:\.\d+)?)\s*%/)
+  if (match === null) return undefined
+  const value = Number(match[1])
+  return Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Run the experiment and adjudicate one prediction against it.
+ *
+ * This is the single source the C1 executor and the C gate both consume, so the
+ * artifact and the verdict can never disagree: they are the same measurement.
+ *
+ * @param predictionText - the claim's falsifiable prediction.
+ * @returns the verdict, or undefined when the prediction states no threshold.
+ */
+export function evaluatePrediction(predictionText: string): PredictionVerdict | undefined {
+  const thresholdPct = thresholdFromPrediction(predictionText)
+  if (thresholdPct === undefined) return undefined
+
+  const comparison = comparePolicies(experimentScenario())
+  const reductionPct = comparison.relativeReductionPct
+  const supportsPrediction = comparison.meetsThreshold(thresholdPct)
+  return {
+    supportsPrediction,
+    reductionPct,
+    thresholdPct,
+    detail:
+      `adaptive control ${supportsPrediction ? 'met' : 'missed'} the stated threshold: `
+      + `measured reduction ${reductionPct.toFixed(2)}% vs required ${String(thresholdPct)}% `
+      + `(fixed-time ${comparison.baseline.meanDelaySecondsPerVehicle.toFixed(2)} s/veh -> `
+      + `adaptive ${comparison.variant.meanDelaySecondsPerVehicle.toFixed(2)} s/veh)`,
+  }
+}
+
+/**
  * Run both policies over the same scenario and compare them.
  *
  * @param scenario - the demand and geometry to run.

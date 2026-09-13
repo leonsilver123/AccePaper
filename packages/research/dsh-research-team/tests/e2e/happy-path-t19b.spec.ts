@@ -1,7 +1,7 @@
 // @deepseek-ai/dsh-research-team — T19-B happy-path E2E.
 //
 // Drives all 16 steps through the CORE engine with the T19-B executor registry
-// (5 real tool functions + 10 fixture executors + the E2 human gate) and the
+// (6 real-runtime steps + 9 fixture executors + the E2 human gate) and the
 // genuine trinity gate channels, then asserts the truthfulness claims are
 // FALSIFIABLE from the run state alone:
 //
@@ -42,7 +42,7 @@ const CORE_ORDER: ReadonlyArray<string> = getStepDefinitions().map(d => d.id)
 // T19-S canonical alignment: ablation (C3) is the real-tool boundary probe;
 // B3-baseline is baseline+SOTA (honest fixture); E1-format assembles the
 // formatted manuscript (three-line-table is its real table sub-capability).
-const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format']
+const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C1-mvp', 'C3-boundary', 'D1-figure-map', 'E1-format']
 
 interface Driven {
   readonly store: ResearchRunStore
@@ -117,7 +117,8 @@ describe('T19-B happy path — real tool execution is provable from the artifact
   it('brands fixture artifacts as fixture_executor (no level inflation)', async () => {
     const { store, run } = await happyRun()
     const fixtureSteps = run.steps.filter(s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit')
-    expect(fixtureSteps.length).toBe(10)
+    // C1-mvp left this set when the C channel began running its experiment for real.
+    expect(fixtureSteps.length).toBe(9)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -140,11 +141,11 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     expect(snap.registry['submission-record']).toBeUndefined()
   })
 
-  it('reports exactly 5 real-tool steps and 0 live_external', async () => {
+  it('reports exactly 6 real-tool steps and 0 live_external', async () => {
     const { run } = await happyRun()
     const counts = countKinds(run.steps)
-    expect(counts.real_tool_fixture_input).toBe(5)
-    expect(counts.fixture_executor).toBe(10)
+    expect(counts.real_tool_fixture_input).toBe(6)
+    expect(counts.fixture_executor).toBe(9)
     expect(counts.live_external).toBe(0)
     expect(counts.humanGate).toBe(1)
     const total = TRUTHFULNESS_LEVELS.reduce((n, l) => n + counts[l], 0) + counts.humanGate
@@ -182,13 +183,26 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(sota.anchoring).toBe('none')
   })
 
-  it('C1 mvp-results supports the prediction with the fixture-consistent 9.1% reduction', async () => {
+  it('C1 mvp-results reports the MEASURED reduction, not a fixture constant', async () => {
     const { store, run } = await happyRun()
     const mvp = artifactOf(store, run.runId, 'mvp-results')
     expect(mvp.claimId).toBe(CANONICAL.claimId)
+    // The experiment ran, so support is a measurement against the stated threshold
+    // rather than a table lookup; the observed block carries the actual numbers.
     expect((mvp.outcome as { supportsPrediction?: unknown }).supportsPrediction).toBe(true)
-    expect(String((mvp.outcome as { detail?: unknown }).detail)).toContain('9.1%')
-    expect((mvp.observed as { reductionRate?: unknown }).reductionRate).toBe(SCENARIO.reductionRate)
+    const observed = mvp.observed as {
+      reductionPct?: unknown
+      thresholdPct?: unknown
+      baselineDelaySeconds?: unknown
+      variantDelaySeconds?: unknown
+    }
+    expect(observed.thresholdPct).toBe(5)
+    expect(typeof observed.reductionPct).toBe('number')
+    expect(observed.reductionPct as number).toBeGreaterThanOrEqual(5)
+    // Both policies were actually run, so both numbers are present and the variant
+    // is the lower one.
+    expect(observed.baselineDelaySeconds as number).toBeGreaterThan(observed.variantDelaySeconds as number)
+    expect(String((mvp.outcome as { detail?: unknown }).detail)).toContain('%')
   })
 
   it('C3 ablation-results + boundary-map prove boundary probing runs at C3', async () => {
@@ -396,7 +410,7 @@ describe('T19-B happy path — auditable reports', () => {
     expect(cmp).toContain('NOT')
 
     const json = JSON.parse(jsonContent) as Record<string, unknown>
-    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(5)
+    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(6)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()

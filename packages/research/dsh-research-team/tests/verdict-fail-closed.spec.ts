@@ -32,13 +32,15 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     expect(c).toBeDefined()
     expect(c?.outcome).toBe('abstained')
     expect(c?.passed).toBe(false)
-    expect(String(c?.evidence)).toContain('no experiment fixture row')
+    // The experiment is RUN now, so the fail-closed condition is "no adjudicable
+    // threshold in the prediction" rather than "no fixture row".
+    expect(String(c?.evidence)).toContain('no numeric threshold')
     expect(String(c?.evidence)).toContain('fail-closed')
     // The miss must NOT be smuggled in as support.
     expect(String(c?.evidence)).not.toContain('exp-fixture-synthetic')
   })
 
-  it('still adjudicates to `passed` when the fixture row exists (happy path sanity)', async () => {
+  it('still adjudicates to `passed` when the experiment supports the prediction', async () => {
     if (C2 === undefined) throw new Error('verdict-fail-closed: C2-trinity-loop is not a core step')
     const runCtx = createRunContext()
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
@@ -47,6 +49,7 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     const c = built.find(v => v.component === 'C')
     expect(c?.outcome).toBe('passed')
     // The real fixture row is used, not a synthetic fallback.
-    expect(String(c?.evidence)).toContain('mock_external experiment')
+    // The verdict now cites the live measurement, not a fixture channel.
+    expect(String(c?.evidence)).toContain('live experiment')
   })
 })

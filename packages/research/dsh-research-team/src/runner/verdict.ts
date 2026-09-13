@@ -34,12 +34,9 @@ import type { ResearchRebuttal, SessionId } from '../types.ts'
 import type { RebuttalRound } from '../redteam/rebuttal.ts'
 import { judgeRound } from '../redteam/judge.ts'
 import { adjudicateClaimSupport } from '../experiment/support.ts'
-import {
-  EXPERIMENT_FIXTURE_RULE_VERSION,
-  experimentFixtureKey,
-  lookupExperimentFixture,
-} from '../experiment/fixture.ts'
+import { EXPERIMENT_FIXTURE_RULE_VERSION } from '../experiment/fixture.ts'
 import { B_CHANNEL_CONTRADICT_REF, buildBChannelAnchors } from './anchor-fixture.ts'
+import { evaluatePrediction } from './traffic-sim.ts'
 import { CANONICAL } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
@@ -145,7 +142,6 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
 function verdictC(ctx: VerdictBuildCtx): GateVerdict {
   const useAbstain = ctx.abstain.has('C')
   const predictionText = ctx.runCtx.predictionText || CANONICAL.prediction
-  const claimId = (ctx.runCtx.claimId || CANONICAL.claimId) as ClaimId
   const claimRef = ctx.runCtx.claimRef || CANONICAL.claimRef
 
   if (useAbstain) {
@@ -165,14 +161,13 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     }
   }
 
-  const key = experimentFixtureKey(claimId, predictionText)
-  const fx = lookupExperimentFixture(key)
-  if (fx === undefined) {
-    // FAIL-CLOSED (T19-S P2-1): no experiment fixture row means there is NO
-    // experiment report, so the C gate abstains instead of fabricating a
-    // keep-path report. Symmetric with the C1-mvp executor, which throws on the
-    // same missing lookup (registry.ts `c1Executor`) — no default pass anywhere.
-    // (never coerced to `passed`: core holds the step at gate_abstained.)
+  // The experiment is RUN, not looked up. Both this gate and the C1 executor call
+  // the same measurement, so the verdict can never disagree with the artifact.
+  const experiment = evaluatePrediction(predictionText)
+  if (experiment === undefined) {
+    // FAIL-CLOSED: a prediction that states no numeric threshold cannot be
+    // adjudicated by this study, so the gate holds instead of fabricating a report.
+    // Symmetric with the C1 executor, which throws on the same condition.
     const held = adjudicateClaimSupport({
       claimRef,
       prediction: { text: predictionText },
@@ -183,17 +178,17 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
       outcome: held.outcome,
       passed: held.outcome === 'passed',
       evidence:
-        `team:adjudicateClaimSupport outcome=${held.outcome} ` +
-        `(no experiment fixture row for key '${key}' → hold; fail-closed, symmetric with C1-mvp)`,
+        `team:adjudicateClaimSupport outcome=${held.outcome} `
+        + '(the prediction states no numeric threshold → hold; fail-closed, symmetric with C1-mvp)',
       rationale: held.summary,
       timestamp: ctx.runCtx.timestamp,
     }
   }
   const report = {
-    source: 'mock-fixture' as const,
-    supportsPrediction: fx.supportsPrediction,
-    detail: fx.detail,
-    fixtureId: 'exp-fixture',
+    source: 'live' as const,
+    supportsPrediction: experiment.supportsPrediction,
+    detail: experiment.detail,
+    evaluator: 'traffic-sim (Webster delay model, two-phase intersection)',
     fixtureVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
   }
   const rec = adjudicateClaimSupport({
@@ -206,7 +201,9 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     component: 'C',
     outcome: rec.outcome,
     passed: rec.outcome === 'passed',
-    evidence: `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} (mock_external experiment)`,
+    evidence:
+      `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
+      + `(live experiment: measured ${experiment.reductionPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}%)`,
     rationale: rec.summary,
     timestamp: ctx.runCtx.timestamp,
   }

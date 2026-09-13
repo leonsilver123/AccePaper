@@ -180,11 +180,27 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     'E1-format': THREE_LINE_TABLE_TOOL_ID,
   }
 
+  /**
+   * Steps that really run something but take no research tool from the catalogue.
+   * C1-mvp executes the traffic-sim experiment engine, so it is a real-tool step
+   * (its artifact carries measured numbers) without appearing in the tool-id map.
+   */
+  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp'] as const
+
   it('marks exactly the real-tool steps as real_tool_fixture_input', () => {
     const real = [...STEP_EXECUTOR_REGISTRY.values()]
       .filter(e => e.kind === 'real_tool_fixture_input')
       .map(e => e.stepId)
-    expect(real).toEqual(Object.keys(EXPECTED_REAL_TOOLS))
+    // Registry order, not grouped by kind: C1-mvp sits between A2 and C3.
+    expect(real).toEqual([
+      'A1-landscape',
+      'A2-claim',
+      'C1-mvp',
+      'C3-boundary',
+      'D1-figure-map',
+      'E1-format',
+    ])
+    expect(real).toEqual(expect.arrayContaining([...Object.keys(EXPECTED_REAL_TOOLS), ...REAL_RUNTIME_STEPS_WITHOUT_TOOL]))
   })
 
   it('brands each real-tool producer with the tool id@version', () => {
@@ -270,14 +286,15 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
     .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true)
     .map(e => e.stepId)
 
-  it('leaves 10 steps as fixture executors (real tools not yet available)', () => {
+  it('leaves 9 steps as fixture executors (real tools not yet available)', () => {
+    // C1-mvp left this list when the C channel began running its experiment for real
+    // (traffic-sim) instead of reading a fixture table; it is now a real-tool step.
     expect(fixtureSteps).toEqual([
       'A3-agenda',
       'A4-venue',
       'B1-method',
       'B2-data',
       'B3-baseline',
-      'C1-mvp',
       'C2-trinity-loop',
       'D2-framework',
       'D3-writing',
@@ -322,7 +339,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
     expect(String(c3?.producer).startsWith(`${ABLATION_TOOL_ID}@`)).toBe(true)
   })
 
-  it('C1-mvp fail-closes when the experiment fixture row is missing (no experiment ⇒ no pass)', async () => {
+  it('C1-mvp fail-closes when the prediction states no adjudicable threshold', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('C1-mvp')
     expect(entry).toBeDefined()
     const missing: RunContext = {
@@ -331,7 +348,9 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       claimRef: 'missing row',
       timestamp: FIXED_TS,
     }
-    expect(() => entry?.executor(execCtx('C1-mvp', missing))).toThrow(/no experiment fixture row/i)
+    // The experiment is now RUN, so the fail-closed condition is no longer "no fixture
+    // row" but "the prediction states no threshold this study can check".
+    expect(() => entry?.executor(execCtx('C1-mvp', missing))).toThrow(/no numeric threshold/i)
   })
 })
 
