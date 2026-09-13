@@ -500,6 +500,43 @@ function thresholdLabel(predictionText: string): string {
 }
 
 /**
+ * The reference list D3 is supposed to produce, built from the retrieved records.
+ *
+ * D3's canonical purpose is "draft the sections AND add references", and the draft
+ * used to carry only a COUNT of the landscape hits with an empty reference list — so
+ * the assembled manuscript announced references it did not have. Each entry here
+ * keeps the identifier the corpus gave it (`doi:...` / `arxiv:...`) or says `null`,
+ * and a record with no title is skipped rather than emitted half-formed.
+ *
+ * @param rawHits - the `hits` array off the landscape-map artifact.
+ * @returns one entry per usable record, in retrieval order.
+ */
+function buildReferences(rawHits: unknown): ReadonlyArray<Record<string, unknown>> {
+  if (!Array.isArray(rawHits)) return []
+  const out: Array<Record<string, unknown>> = []
+  for (const raw of rawHits) {
+    if (raw === null || typeof raw !== 'object') continue
+    const hit = raw as {
+      title?: unknown
+      venue?: unknown
+      ref?: { kind?: unknown; id?: unknown; authors?: unknown }
+    }
+    if (typeof hit.title !== 'string' || hit.title.trim() === '') continue
+    const kind = typeof hit.ref?.kind === 'string' ? hit.ref.kind : undefined
+    const identifier = typeof hit.ref?.id === 'string' ? hit.ref.id : undefined
+    out.push({
+      title: hit.title,
+      venue: typeof hit.venue === 'string' ? hit.venue : 'unknown venue',
+      identifier: kind !== undefined && identifier !== undefined ? `${kind}:${identifier}` : null,
+      authors: Array.isArray(hit.ref?.authors)
+        ? (hit.ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string')
+        : [],
+    })
+  }
+  return out
+}
+
+/**
  * The prose route a step's text came from, as the artifact records it.
  *
  * A `*Source: 'model'` label used to be the whole claim, and it proved only that a
@@ -590,6 +627,7 @@ function measureOutcome(): {
 function bodyTextFor(
   id: string,
   measured: ReturnType<typeof measureOutcome>,
+  referenceCount: number,
 ): string {
   switch (id) {
     case 'abstract':
@@ -604,14 +642,24 @@ function bodyTextFor(
       return 'Results are reported as a data figure, a three-line table and a roadmap figure; boundary probing (ablation) is summarised separately.'
     case 'conclusion':
       return 'The measured evidence supports the stated prediction on this demand profile; the scope is one isolated two-phase intersection, and submission remains a human act at E2.'
+    case 'references':
+      // The body states what the draft actually carries. It used to assert that
+      // references were drawn from the landscape scan above an empty list.
+      return referenceCount === 0
+        ? 'No reference entries were derived: no record the landscape scan returned carried a title.'
+        : `References are the ${referenceCount} record(s) the landscape scan retrieved; each entry and its identifier is listed on the draft artifact.`
     default:
-      return 'References are drawn from the landscape scan.'
+      return 'This section carries no generated content in this wave.'
   }
 }
 
-function defaultBodySections(): ReadonlyArray<ManuscriptSection> {
+function defaultBodySections(referenceCount = 0): ReadonlyArray<ManuscriptSection> {
   const measured = measureOutcome()
-  return DEFAULT_OUTLINE.map(s => ({ id: s.id, heading: s.heading, bodyText: bodyTextFor(s.id, measured) }))
+  return DEFAULT_OUTLINE.map(s => ({
+    id: s.id,
+    heading: s.heading,
+    bodyText: bodyTextFor(s.id, measured, referenceCount),
+  }))
 }
 
 // ── Real-tool executors (real tool function, synthetic fixture input) ───────────
@@ -1726,6 +1774,9 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     : DEFAULT_OUTLINE.map(s => s.id)
   const figures = figurePlan?.totalFigures as number | undefined
   const hitCount = landscape?.hitCount as number | undefined
+  // D3's canonical purpose includes adding the references, so the draft builds them
+  // from the records A1 actually retrieved rather than reporting a count of them.
+  const references = buildReferences(landscape?.hits)
   const headings: ReadonlyArray<{ id: string; heading: string }> = ids.map((id, index) => {
     const heading =
       Array.isArray(rawOutline) && typeof (rawOutline[index] as { heading?: unknown } | undefined)?.heading === 'string'
@@ -1746,7 +1797,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let producer: string = D3_PRODUCER
   if (writer === undefined) {
     const measured = measureOutcome()
-    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, measured) }))
+    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, measured, references.length) }))
     proseSource = 'fixture'
   } else {
     const written = await Promise.all(
@@ -1779,6 +1830,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         proseRoute,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
+        references,
         note: proseSource === 'fixture'
           ? 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave'
           : 'manuscript draft whose section bodies came from a real model call',
@@ -1824,6 +1876,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const draft = readInput(ctx, 'draft')
   const sections = sectionsOf(draft)
+  // A revision keeps the reference list it is revising. Dropping it here is what
+  // made the assembled manuscript report zero references while its own references
+  // section described the landscape scan it was built from.
+  const references = Array.isArray(draft?.references) ? draft.references : []
   const measured = measureOutcome()
 
   // The exchanges are organised by the real module, which computes the revision
@@ -1904,6 +1960,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         title: SCENARIO.title,
         claimRef,
         sections: revised,
+        references,
         note: 'synthetic revised draft — same section ids as the D3 draft with revision markers',
       },
       D4_PRODUCER,
@@ -1968,13 +2025,28 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const artifact = invocation.artifact as ReturnType<typeof renderThreeLineTable>
 
   const scopeLine = scopeMatches.length > 0 ? `Scope match: ${scopeMatches.join('; ')}.` : ''
+  // The references come from the draft, which built them from the retrieved
+  // records. This line used to pass a literal empty array, so every assembled
+  // manuscript reported zero references while its own references section described
+  // a landscape scan — the document contradicted itself.
+  const rawRefs = (revised?.references as ReadonlyArray<unknown> | undefined) ?? []
+  const referenceEntries = rawRefs.map((raw) => {
+    const ref = raw as { title?: unknown; venue?: unknown; identifier?: unknown; authors?: unknown }
+    const authors = Array.isArray(ref.authors)
+      ? (ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string')
+      : []
+    const identifier = typeof ref.identifier === 'string' ? ` ${ref.identifier}` : ''
+    const byline = authors.length > 0 ? `${authors.join(', ')}. ` : ''
+    const venue = typeof ref.venue === 'string' ? ` ${ref.venue}.` : ''
+    return `${byline}${String(ref.title)}.${venue}${identifier}`.trim()
+  })
   // Assembly is a real step of its own now: the module refuses a titleless or
   // section-less manuscript, so an empty shell cannot be assembled here.
   const assembled = assembleManuscript({
     title,
     sections,
     figures: [artifact.render.text],
-    references: [],
+    references: referenceEntries,
   })
   return {
     'formatted-manuscript': tagArtifact(

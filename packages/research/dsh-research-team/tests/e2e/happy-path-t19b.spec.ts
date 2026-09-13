@@ -259,6 +259,22 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(draftIds).toEqual(outlineIds)
     expect(revisedIds).toEqual(outlineIds)
 
+    // D3's canonical purpose includes adding the references, so the draft carries
+    // them, the revision keeps them, and the assembled manuscript reports the same
+    // number. Before this the manuscript reported zero references while its own
+    // references section described a landscape scan.
+    const draftRefs = draft.references as ReadonlyArray<unknown>
+    expect(Array.isArray(draftRefs)).toBe(true)
+    expect(draftRefs.length).toBeGreaterThan(0)
+    expect((revised.references as ReadonlyArray<unknown>).length).toBe(draftRefs.length)
+    expect((formatted.manuscriptCounts as { references: number }).references).toBe(draftRefs.length)
+    // Every entry names where it came from; a record with no title never got in.
+    for (const ref of draftRefs) {
+      const entry = ref as { title?: unknown; identifier?: unknown }
+      expect(typeof entry.title).toBe('string')
+      expect(String(entry.title).length).toBeGreaterThan(0)
+    }
+
     const manuscript = String(formatted.manuscript)
     // The E1 formatted manuscript contains the section headings from the outline…
     for (const id of ['introduction', 'method', 'experiments', 'results']) {
