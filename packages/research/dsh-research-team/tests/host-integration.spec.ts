@@ -1230,6 +1230,52 @@ describe('red-team fleet orchestrator — host integration', () => {
   })
 })
 
+describe('ResearchTeamService — the production pipeline entry', () => {
+  it('drives all 16 steps through the mounted service and stops at the human gate', async () => {
+    // `runPipeline` is documented as the runner's PRODUCTION entry, and until this
+    // test it had no caller anywhere in the repository — not even in a spec. Every
+    // other end-to-end assertion drove `runT19B` directly, so nothing checked that
+    // the service method the app would call actually reaches the driver.
+    const host = await bootHost()
+    try {
+      const result = await host.service.runPipeline()
+      expect(result.steps).toHaveLength(16)
+      expect(result.runId.length).toBeGreaterThan(0)
+
+      // E2-submit is the only step that does not pass: submission is a human act.
+      const gated = result.steps.filter(step => step.status === 'gated').map(step => step.stepId)
+      expect(gated).toEqual(['E2-submit'])
+      for (const step of result.steps) {
+        if (step.stepId === 'E2-submit') continue
+        expect(step.status, step.stepId).toBe('passed')
+      }
+
+      // No `ctx.research` adapter is mounted in this harness, so the run takes the
+      // fixture channels and says so: nothing claims a live catalogue or a model.
+      expect(result.steps.find(s => s.stepId === 'A1-landscape')?.kind)
+        .toBe('real_tool_fixture_input')
+      expect(result.steps.find(s => s.stepId === 'C1-mvp')?.kind).toBe('local_computation')
+      expect(result.steps.every(step => step.kind !== 'live_external')).toBe(true)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('returns a fresh run each call (the store does not leak between runs)', async () => {
+    const host = await bootHost()
+    try {
+      const first = await host.service.runPipeline()
+      const second = await host.service.runPipeline()
+      // A shared store would make the second run see its predecessors as satisfied
+      // and report different per-step attempts; the ids differ and the shape does not.
+      expect(second.runId).not.toBe(first.runId)
+      expect(second.steps.map(s => s.status)).toEqual(first.steps.map(s => s.status))
+    } finally {
+      await host.dispose()
+    }
+  })
+})
+
 // Re-export the team-state brand so coverage tools treat types like the rest
 // of the suite's pure specs (types.ts is exempt from the per-file gate).
 export type { TeamState }
