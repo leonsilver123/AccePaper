@@ -18,6 +18,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId as CoreSessionId } from '@deepseek-ai/dsh-session'
 import { SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
 import { ResearchTeamError, TeamId, sessionId } from '../src/types.ts'
@@ -41,7 +42,14 @@ class MemorySession {
   }
 
   get header(): SessionHeader {
-    return { id: this.id, parentSession: this.parent }
+    // Only `id` reaches the projection fold; the rest completes SessionHeader.
+    return {
+      version: SESSION_FORMAT_VERSION,
+      id: this.id,
+      createdAt: 0,
+      ...(this.parent === undefined ? {} : { parentSession: this.parent }),
+      isSeeded: false,
+    }
   }
 
   /** Append one raw event (no validation — used to seed replay-only cases). */
@@ -173,7 +181,7 @@ interface Host {
   readonly startControl: {
     calls: StartCall[]
     started: Promise<void>
-    release: Promise<void>
+    release: () => Promise<void>
     fail: (error: Error) => void
   }
   /** Captured Lead → member assignment deliveries. */
@@ -229,7 +237,7 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
   // Live agent registry.
   ctx.provide('agents', {
     get: (id: CoreSessionId): Agent | undefined => agents.get(id as unknown as string) as Agent | undefined,
-    list: (): Agent[] => [...agents.values()] as Agent[],
+    list: (): Agent[] => [...agents.values()].map(asAgent),
   })
 
   // startContinuable control.
@@ -314,7 +322,9 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
   const fiber = await ctx.plugin(ResearchTeamService, {
     scopeCheckedTools: options.scopeCheckedTools ?? [],
   })
-  const service = ctx.agentTeams
+  // `Context.agentTeams` is co-declared by @deepseek-ai/dsh-agent-team with a
+  // different class; only THIS package's service is mounted in this spec.
+  const service = ctx.agentTeams as unknown as ResearchTeamService
 
   const fold = (): ResearchProjectionState => {
     const definition = researchTeamProjectionDefinition
@@ -406,7 +416,7 @@ describe('ResearchTeamService — host integration', () => {
     const host = await bootHost({ holdStart: true })
     const spawned = host.service.spawnMember(asAgent(host.lead), spawnRequest('researcher-a'))
     await host.startControl.started
-    const call = host.startControl.calls[0]
+    const call = host.startControl.calls[0]!
     expect(call).toBeDefined()
     expect(call.parentId).toBe(host.lead.id)
     expect(call.provider).toBe('spawn')
@@ -462,7 +472,7 @@ describe('ResearchTeamService — host integration', () => {
     try {
       const member = await host.service.spawnMember(asAgent(host.lead), spawnRequest('researcher-a'))
       void member
-      await expect(host.service.spawnMember(host.agents.get(member.id as unknown as string) as Agent, spawnRequest('researcher-b')))
+      await expect(host.service.spawnMember(asAgent(host.agents.get(member.id as unknown as string)!), spawnRequest('researcher-b')))
         .rejects.toMatchObject({ code: 'DSH_RESEARCH_TEAM_NOT_AUTHORIZED' })
     } finally {
       await host.dispose()
@@ -1096,7 +1106,7 @@ describe('red-team fleet orchestrator — host integration', () => {
       expect(settled.status).toBe('submitted')
       const recorded = settled.votes[0]
       expect(recorded?.modelFamily).toBeUndefined()
-      expect('modelFamily' in (recorded as Record<string, unknown>)).toBe(false)
+      expect('modelFamily' in (recorded as unknown as Record<string, unknown>)).toBe(false)
     } finally {
       await host.dispose()
     }

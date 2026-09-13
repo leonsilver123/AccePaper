@@ -314,7 +314,7 @@ describe('citation-verify tool: delegation + artifact envelope', () => {
 
     // The tool must pass core's EXACT 7-argument order — the same positional
     // order as verify.ts exports — forwarding the caller's values untouched.
-    const args = spy.mock.calls[0]
+    const args = spy.mock.calls[0]!
     expect(args).toHaveLength(7)
     expect(args[0]).toBe(input.claimId) // claimId
     expect(args[1]).toBe(input.citationId) // citationId

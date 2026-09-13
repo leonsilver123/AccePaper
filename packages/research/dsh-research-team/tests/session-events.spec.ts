@@ -108,7 +108,7 @@ function codeOf(fn: () => unknown): string {
 }
 
 const expectedMember = memberPayload.member as ResearchMember
-const expectedTask = { ...taskPayload.task } as ResearchTask
+const expectedTask = { ...taskPayload.task } as unknown as ResearchTask
 const expectedRev = revPayload.rev as ResearchRev
 const expectedRebuttal = rebuttalPayload.rebuttal as ResearchRebuttal
 

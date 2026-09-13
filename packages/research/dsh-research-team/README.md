@@ -25,6 +25,7 @@
 - **基线是单一固定计划,不是分时段计划**:真实部署的 time-of-day 计划会吃掉部分降幅。这个比较对自适应有利,必须随结果一起声明。
 - **`proseWriter` 的生产装配点已经存在**(2026-09-14 更正):`dsh-research-cordis` 的 `Config.prose` 构造 `LlmProseWriter`,`ResearchTeamService.hostProseWriter()` 读 `ctx.research.proseWriter` 并交给 `DriveOptions`,出货 bundle 的 `research-cordis` 行也配了它(`deepseek-official` / `deepseek-v4-pro`)。此前记的"尚无装配点"在当时已不准确。**仍未验证的是这一条链在真实模型上跑通** —— 该路径需要该路由的凭据,本 checkout 未做 live 复验。
 - `runner/registry.ts` 单文件约 2250 行,同时承担类型词汇表、固定数据、15 个执行器与审计投影四类职责,拆分是已识别的债。
-- **本包的测试不被任何 typecheck 聚合覆盖**(`tsconfig.host.json` 的 `exclude` 列出 `packages/research/*/tests/**`),因此测试源码的类型漂移不可见。2026-09-14 复测:把 host 面的四个 research 测试 glob 重新纳入后仍有 **159** 个类型错误(cordis 23 / core 19 / team 64 / tools 53),其中不全是机械问题 —— 例如 `dsh-research-core/tests/orchestration.spec.ts` 引用的 `../../src/index.ts` 根本不存在。`dsh-research-web/tests/**` 必须留在 exclude —— 它是 client 面。
+- **本包的测试现在被 host 聚合覆盖**(2026-09-14 修复):四个 host 面的 research 测试 glob 已从 `tsconfig.host.json` 的 `exclude` 移出,`tsc -b tsconfig.host.json` 会读它们。移出时暴露出 **159 个类型错误**,已全部修完 —— 其中不全是机械问题(一个指向不存在模块的 type-only 导入、一个被 import 了从未导出过的成员的 helper、一次实参个数错误的 `isComplete` 调用)。`dsh-research-web/tests/**` **必须留在 exclude** —— 它是 client 面,纳入会把浏览器源码拖进 host 程序。详见 `.agents/notes/implemented/testing/2026-09-14-research-tests-join-the-typecheck-aggregate.md`。
+- **`pnpm run lint` 对 research 包仍然是红的(改动之前就是)**:改动前实测 299 个错误,测试并入聚合后为 155,其中 research `src/` 的 62 个不受该改动影响、是既存问题;剩余 90 个测试侧错误是真实规则违反(动态 import 产生 `any` 导致的不安全赋值等),留给单独的改动。
 
 No invariant companion is published: the team fold and authorization relations are asserted by this package's own revision, projection and scope specs, and independent observers cannot diverge here, so no `./invariant` entry is published alongside it.

@@ -58,11 +58,11 @@ describe('R3 per-step invocation channel (planned vs actual)', () => {
   it('e2e-default ACTUAL channel mix: 5 direct (incl D1), 10 fixture, 1 human, 0 agent-loop', () => {
     const summary = invocationChannelSummary()
     const byName = Object.fromEntries(summary.map(stat => [stat.channel, stat]))
-    expect(byName.direct.count).toBe(5) // A1 A2 C3 D1 E1 all default Direct in E2E
-    expect(byName.fixture.count).toBe(10)
-    expect(byName.human.count).toBe(1)
+    expect(byName.direct!.count).toBe(5) // A1 A2 C3 D1 E1 all default Direct in E2E
+    expect(byName.fixture!.count).toBe(10)
+    expect(byName.human!.count).toBe(1)
     expect(byName['agent-loop']).toBeUndefined()
-    expect([...byName.direct.stepIds, ...byName.fixture.stepIds, ...byName.human.stepIds]).toHaveLength(16)
+    expect([...byName.direct!.stepIds, ...byName.fixture!.stepIds, ...byName.human!.stepIds]).toHaveLength(16)
   })
 
   it('separates PLANNED (agent-loop-capable D1) from ACTUAL (direct with fallbackReason)', () => {

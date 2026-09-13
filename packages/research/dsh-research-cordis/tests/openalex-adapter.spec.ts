@@ -47,8 +47,9 @@ describe('OpenAlexLiteratureAdapter', () => {
     expect(outcome.status).toBe('ok')
     if (outcome.status !== 'ok') return
     expect(outcome.hits).toHaveLength(1)
-    expect(outcome.hits[0].venue).toBe('Synthetic Journal of Transport')
-    expect(outcome.hits[0].ref).toMatchObject({
+    // The length assertion above pins the only element this test reads.
+    expect(outcome.hits[0]!.venue).toBe('Synthetic Journal of Transport')
+    expect(outcome.hits[0]!.ref).toMatchObject({
       kind: 'doi',
       // The https://doi.org/ prefix is stripped down to the bare identifier.
       id: '10.1000/example',

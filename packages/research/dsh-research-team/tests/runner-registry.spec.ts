@@ -254,18 +254,18 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
   it('D1-figure-map really rendered all three figure families (figure/table/roadmap)', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('D1-figure-map')
     const out = (await entry?.executor(execCtx('D1-figure-map'))) as Record<string, Record<string, unknown>>
-    const plan = out['figure-plan']
+    const plan = out['figure-plan']!
     const figures = plan.figures as ReadonlyArray<Record<string, unknown>>
     expect(plan.totalFigures).toBe(3)
     expect(figures.map(f => f.kind)).toEqual(['data-figure', 'three-line-table', 'roadmap'])
-    const dataFigure = figures[0]
+    const dataFigure = figures[0]!
     expect(typeof dataFigure.svgByteLength).toBe('number')
     expect(dataFigure.svgByteLength as number).toBeGreaterThan(0)
     expect(dataFigure.pngByteLength as number).toBeGreaterThan(0)
     expect(String(dataFigure.svgPreview)).toContain('<svg')
-    const table = figures[1]
+    const table = figures[1]!
     expect(String(table.tableMarkdown)).toContain('Adaptive')
-    const roadmap = figures[2]
+    const roadmap = figures[2]!
     expect(roadmap.validationOk).toBe(true)
     expect(String(roadmap.contentPreview)).toContain('flowchart')
   })
@@ -273,7 +273,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
   it('E1-format really assembled a manuscript WITH a three-line table sub-render', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
     const out = (await entry?.executor(execCtx('E1-format'))) as Record<string, Record<string, unknown>>
-    const doc = out['formatted-manuscript']
+    const doc = out['formatted-manuscript']!
     // The E1 artifact is the FORMATTED MANUSCRIPT, not merely the table (T19-S):
     // the table is a sub-capability embedded inside a longer assembled manuscript.
     expect(String(doc.manuscript)).toContain('## Results')
@@ -290,7 +290,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
   it('C3-boundary really aggregated repeated ablation runs (ablation lives at C3)', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
     const out = (await entry?.executor(execCtx('C3-boundary'))) as Record<string, Record<string, unknown>>
-    const res = out['ablation-results']
+    const res = out['ablation-results']!
     expect(res.ranRuns as number).toBeGreaterThan(0)
     expect(res.aggregate).toBeDefined()
     expect(out['boundary-map']).toBeDefined()
@@ -364,7 +364,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
   it('B3-baseline is a baseline protocol, NOT an ablation (no runAblation fields)', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
     const out = (await entry?.executor(execCtx('B3-baseline'))) as Record<string, Record<string, unknown>>
-    const res = out['baseline-results']
+    const res = out['baseline-results']!
     // Canonical B3 = establish baseline + compare against SOTA.
     expect((res.baseline as { identity?: unknown }).identity).toBe('fixed-time')
     expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('peak-hour delay')
@@ -456,7 +456,12 @@ describe('T19 calibration R1 — executor depends on ResearchToolInvoker', () =>
         return { ok: false as const, code: 'X', message: 'boom', truthfulness: 'direct_fixture' as const, provenance: 'direct' as const }
       },
     }
-    const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: { invoker: unknown }) => Promise<unknown> | Record<string, unknown> }>).get('A1-landscape')
+    // Widened view of the registry: this spec drives the executor with a partial
+    // ExecCtx (an injected invoker only), which StepExecutorEntry's signature forbids.
+    const partialRegistry = STEP_EXECUTOR_REGISTRY as unknown as ReadonlyMap<string, {
+      executor: (c: { invoker: unknown }) => Promise<unknown> | Record<string, unknown>
+    }>
+    const entry = partialRegistry.get('A1-landscape')
     expect(entry).toBeDefined()
     const ctx = execCtx('A1-landscape', freshRunCtx()) as unknown as { invoker: unknown }
     // Inject the failing invoker: A1 must propagate the failure (fail-closed),
@@ -506,7 +511,7 @@ describe('F1 audit fix — invoker provenance propagates onto real-tool artifact
     expect(entry).toBeDefined()
     const ctx = execCtx('A1-landscape', freshRunCtx())
     const output = (await entry!.executor(ctx)) as Record<string, Record<string, unknown>>
-    const map = output['landscape-map']
+    const map = output['landscape-map']!
     expect(map.__kind).toBe('real_tool_fixture_input')
     expect(map.__provenance).toBe('direct')
     expect(map.__invokerTruthfulness).toBe('direct_fixture')

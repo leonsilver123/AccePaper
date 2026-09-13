@@ -97,7 +97,8 @@ describe('T19-B happy path — all 16 steps drive through the core engine', () =
     const e2 = snap.steps['E2-submit']
     expect(e2?.status).toBe('gated')
     expect(e2?.approval).toBeUndefined()
-    expect(isComplete(store, run.runId)).toBe(false)
+    // Completion is per step (INV-COMPLETE-ATTEMPT); E2 is the only step left unfinished.
+    expect(isComplete(store, run.runId, 'E2-submit')).toBe(false)
     expect(snap.events.some(e => e.kind === 'human-approval')).toBe(false)
   })
 })

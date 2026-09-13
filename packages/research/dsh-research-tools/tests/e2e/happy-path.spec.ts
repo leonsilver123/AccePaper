@@ -53,7 +53,7 @@ describe('E2E-1 Happy Path — 16 steps A1→E2, real figure tool on D1, stop at
     expect(results.map(r => r.stepId)).toEqual(STEPS.map(s => s.id))
 
     // 2) Steps 1..15 all PASS; E2-submit stops at GATED (human gate, no auto-approval).
-    const e2 = results[results.length - 1]
+    const e2 = results[results.length - 1]!
     for (const r of results.slice(0, 15)) {
       expect(r.status, `step ${r.stepId} should pass`).toBe('passed')
     }
@@ -61,7 +61,7 @@ describe('E2E-1 Happy Path — 16 steps A1→E2, real figure tool on D1, stop at
     expect(e2.status).toBe('gated')
 
     // 3) E2 is a humanGate step and was NOT auto-approved: no approval record, isComplete false.
-    const e2Snap = getRunSnapshot(store, runId).steps['E2-submit']
+    const e2Snap = getRunSnapshot(store, runId).steps['E2-submit']!
     expect(lookupStep('E2-submit')?.humanGate).toBe(true)
     expect(e2Snap.approval).toBeUndefined()
     // isComplete on a humanGate step requires an approved approval for the current attempt.

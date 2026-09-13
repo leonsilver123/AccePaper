@@ -93,7 +93,7 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
         get method(): VerificationMethod {
           return 'none'
         },
-      } as CitationEvidence
+      } as unknown as CitationEvidence
       const r = await verifyCitation(claim('c1'), citation('cit1'), REAL, eTricky, fixtureResolver(), TS, { claimedConclusion: 'supported' })
       expect(r.conclusion).toBe('blocked')
       expect(r.redLineTriggered).toBe(true)
@@ -111,7 +111,7 @@ describe('#6 RED LINE — claimed verification WITHOUT original-text access is H
           n++
           return v
         },
-      } as CitationEvidence
+      } as unknown as CitationEvidence
       // structuredClone invokes the getter ONCE and stores the result; the
       // verifier then reads only that frozen static value. The captured value
       // is 'none' (first invocation), so the red line fires — no bypass.

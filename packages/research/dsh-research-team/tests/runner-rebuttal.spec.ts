@@ -221,8 +221,7 @@ describe('buildRevisionRecord — snapshot isolation', () => {
   it('is an independent clone: later input mutation cannot reach the record', () => {
     const input: RebuttalPoint[] = [point('c1', 'r1', true)]
     const record = buildRevisionRecord(input)
-    input[0].requiresRevision = false
-    input[0].concern = 'rewritten after the fact'
+    Object.assign(input[0]!, { requiresRevision: false, concern: 'rewritten after the fact' })
     input.push(point('c2', 'r2', true))
     expect(record.revisionCount).toBe(1)
     expect(record.hasRevisions).toBe(true)

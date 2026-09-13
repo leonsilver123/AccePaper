@@ -41,7 +41,7 @@ async function loadHost() {
     ToolCallId: tools.ToolCallId as (id: string) => unknown,
     AgentRegistry: agent.default as new (ctx: Context) => unknown,
     AgentLoop: loop.default as new (ctx: Context, cfg: { agents: unknown[] }) => unknown,
-    LlmAdapter: llm.LlmAdapter as new () => unknown,
+    LlmAdapter: llm.LlmAdapter as new () => object,
     createUserMessage: llm.createUserMessage as (content: unknown) => unknown,
   }
 }
@@ -79,14 +79,14 @@ async function buildHarness(host: Awaited<ReturnType<typeof loadHost>>, script: 
   const ctx = new Context()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const anyCtx = ctx as any
-  await ctx.plugin(host.LlmRuntime as never)
-  await ctx.plugin(host.SessionStore as never)
-  await ctx.plugin(host.SessionProjectionRegistry as never)
-  await ctx.plugin(host.SystemPrompt as never, { persona: '' })
-  await ctx.plugin(host.ToolRuntime as never)
-  await ctx.plugin(host.AgentRegistry as never)
-  await ctx.plugin(host.AgentLoop as never, { agents: [] })
-  await ctx.plugin(ResearchEngine as never, { requireResearchTools: true })
+  await ctx.plugin(host.LlmRuntime)
+  await ctx.plugin(host.SessionStore)
+  await ctx.plugin(host.SessionProjectionRegistry)
+  await ctx.plugin(host.SystemPrompt, { persona: '' })
+  await ctx.plugin(host.ToolRuntime)
+  await ctx.plugin(host.AgentRegistry)
+  await ctx.plugin(host.AgentLoop, { agents: [] })
+  await ctx.plugin(ResearchEngine, { requireResearchTools: true })
 
   // Deterministic mock LLM: subclass at runtime over the real LlmAdapter base.
   class MockAdapter extends host.LlmAdapter {
@@ -103,9 +103,9 @@ async function buildHarness(host: Awaited<ReturnType<typeof loadHost>>, script: 
   // @ts-expect-error dynamic subclass contract
   adapter.resolveModel = () => Promise.resolve({ provider: 'mock', id: 'mock', name: 'mock' })
   // @ts-expect-error dynamic subclass contract
-  adapter.stream = async function* (options: { signal?: AbortSignal }) {
+  adapter.stream = async function* (this: { script: unknown[] }, options: { signal?: AbortSignal }) {
     requests.push(options)
-    const entry = (this as { script: unknown[] }).script.shift()
+    const entry = this.script.shift()
     if (entry === undefined) throw new Error('MockAdapter script exhausted')
     const chunks = Array.isArray(entry) ? entry : [entry]
     for (const chunk of chunks) {

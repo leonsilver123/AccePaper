@@ -85,7 +85,7 @@ describe('E2E-2 Abstained / Failure / Recovery — recover through 3 faults to E
       verdictFactory: abstainComponentFactory('B', 'citation evidence insufficient for external anchoring'),
     })
     expect(c2.status).toBe('gated')
-    const c2Snap = getRunSnapshot(store, runId).steps['C2-trinity-loop']
+    const c2Snap = getRunSnapshot(store, runId).steps['C2-trinity-loop']!
     expect(c2Snap.status).toBe('gated')
     expect(c2Snap.holdReason).toBe('gate_abstained')
     // dedicated gate-abstention audit emitted, and NO step-completed audit
@@ -104,11 +104,11 @@ describe('E2E-2 Abstained / Failure / Recovery — recover through 3 faults to E
       /DSH_ABSTENTION_REQUIRES_ROLLBACK/,
     )
     // still held after the refused attempt
-    expect(getRunSnapshot(store, runId).steps['C2-trinity-loop'].status).toBe('gated')
+    expect(getRunSnapshot(store, runId).steps['C2-trinity-loop']!.status).toBe('gated')
 
     // release via rollback → new attempt → re-adjudicate passed
     rollback(store, runId, 'C2-trinity-loop')
-    expect(getRunSnapshot(store, runId).steps['C2-trinity-loop'].status).toBe('pending')
+    expect(getRunSnapshot(store, runId).steps['C2-trinity-loop']!.status).toBe('pending')
     expect(canStart(store, runId, 'C2-trinity-loop')).toBe(true)
     const c2b = await runStepWithGate(store, runId, 'C2-trinity-loop', {
       verdictFactory: passedVerdictFactory(),
@@ -128,7 +128,7 @@ describe('E2E-2 Abstained / Failure / Recovery — recover through 3 faults to E
     expect(getArtifact(store, runId, 'paper-outline')).toBeUndefined()
     assertStepExecuted(store, runId, 'D2-framework', 'error')
     // rollback-able, then re-drive success
-    expect(getRunSnapshot(store, runId).steps['D2-framework'].status).toBe('in_progress')
+    expect(getRunSnapshot(store, runId).steps['D2-framework']!.status).toBe('in_progress')
     rollback(store, runId, 'D2-framework')
     const d2b = await runStepWithGate(store, runId, 'D2-framework', { verdictFactory: passedVerdictFactory() })
     expect(d2b.status).toBe('passed')
@@ -153,12 +153,12 @@ describe('E2E-2 Abstained / Failure / Recovery — recover through 3 faults to E
     // Final invariant: every step passed except E2 (human gate).
     const finalSnap = getRunSnapshot(store, runId)
     for (const s of STEPS) {
-      const st = finalSnap.steps[s.id].status
+      const st = finalSnap.steps[s.id]!.status
       if (s.id === 'E2-submit') expect(st).toBe('gated')
       else expect(st, `step ${s.id} should be passed at end`).toBe('passed')
     }
     // E2 still not auto-approved
-    expect(finalSnap.steps['E2-submit'].approval).toBeUndefined()
+    expect(finalSnap.steps['E2-submit']!.approval).toBeUndefined()
 
     // ── Success: emit reports (NOT on failure). ──
     const report = collectRunReport(store, runId, 'recovery')

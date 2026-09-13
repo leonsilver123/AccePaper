@@ -17,7 +17,12 @@
 
 // ── Core execution pipeline (NOT exported from the public core entry) ──
 import { runStep } from '../../../../../research/dsh-research-core/src/engine/pipeline.ts'
+// `StepExecutor` is the per-step function type the pipeline takes. Re-exported here
+// so the e2e fixtures have ONE import surface; it was referenced from this module
+// without ever being exported from it, which is a type error no gate could see.
+import type { StepExecutor } from '../../../../../research/dsh-research-core/src/engine/pipeline.ts'
 export { runStep }
+export type { StepExecutor }
 
 // ── Core state-machine API (read-only consumption, no re-implementation) ──
 import {

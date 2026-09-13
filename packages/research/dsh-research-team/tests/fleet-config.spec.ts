@@ -18,7 +18,10 @@ import {
 } from '../src/redteam/fleet-config.ts'
 import { defaultFleetPersonas } from '../src/redteam/personas.ts'
 import type { RedTeamFleetConfig } from '../src/redteam/fleet-config.ts'
-import type { RedTeamPersona } from '../src/redteam/personas.ts'
+import type { RedTeamModelTier, RedTeamPersona } from '../src/redteam/personas.ts'
+
+/** A model route that names a tier outside the known set (off-contract runtime input). */
+const UNKNOWN_TIER_ROUTE = { ultra: 'x' } as unknown as Readonly<Partial<Record<RedTeamModelTier, string>>>
 
 const INVALID_MODEL = `${DSH_RESEARCH_TEAM_ERROR_PREFIX}INVALID_MODEL`
 const INVALID_PERSONA = `${DSH_RESEARCH_TEAM_ERROR_PREFIX}INVALID_PERSONA`
@@ -58,7 +61,7 @@ describe('validateModelRoute', () => {
   })
 
   it('rejects an unknown tier key', () => {
-    expect(codeOf(() => validateModelRoute({ ultra: 'x' as never }))).toBe(INVALID_MODEL)
+    expect(codeOf(() => validateModelRoute(UNKNOWN_TIER_ROUTE))).toBe(INVALID_MODEL)
   })
 
   it('rejects an empty or non-string model per known tier', () => {
@@ -151,7 +154,7 @@ describe('resolveFleet', () => {
   })
 
   it('rejects an unknown tier in the model route', () => {
-    expect(codeOf(() => resolveFleet({ modelRoute: { ultra: 'x' as never } })))
+    expect(codeOf(() => resolveFleet({ modelRoute: UNKNOWN_TIER_ROUTE })))
       .toBe(INVALID_MODEL)
   })
 

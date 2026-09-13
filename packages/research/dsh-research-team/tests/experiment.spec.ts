@@ -78,7 +78,7 @@ describe('adjudicateClaimSupport — C-channel (no default pass)', () => {
     const r = adjudicateClaimSupport(baseInput({ report }))
     expect(r.verdict).toBe('supported')
     expect(r.evidenceGrade).toBe('live-verified')
-    expect(r.evaluator).toBeUndefined()
+    expect((r as unknown as Record<string, unknown>).evaluator).toBeUndefined()
   })
 
   it('rejects a raw process record (exitCode only) as INVALID_EXPERIMENT', () => {

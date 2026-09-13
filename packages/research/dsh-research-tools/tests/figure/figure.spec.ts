@@ -115,7 +115,7 @@ function xmlWellFormed(xml: string): boolean {
   tagRe.lastIndex = 0
   while ((match = tagRe.exec(xml)) !== null) {
     const full = match[0]
-    const name = match[1]
+    const name = match[1]!
     const closing = full.startsWith('</')
     const selfClosing = match[3] === '/'
     if (closing) {
@@ -197,8 +197,8 @@ describe('ok path — real artifact for bar + line figures', () => {
     const twoSeries = specWith({ seed: 7 })
     const art = renderFigure(twoSeries, TS)
     // offset = 7 % 2 = 1 -> series[0] <- palette[1], series[1] <- palette[0]
-    expect(art.spec.series[0].color).toBe('#ff7f0e')
-    expect(art.spec.series[1].color).toBe('#1f77b4')
+    expect(art.spec.series[0]!.color).toBe('#ff7f0e')
+    expect(art.spec.series[1]!.color).toBe('#1f77b4')
   })
 
   it('derives index categories when none are provided and echoes them', () => {
@@ -224,13 +224,13 @@ describe('ok path — real artifact for bar + line figures', () => {
       TS,
     )
     expect(negative.svg.content).toContain('<polyline')
-    expect(negative.spec.series[0].values).toEqual([-3, 0, 4, -1])
+    expect(negative.spec.series[0]!.values).toEqual([-3, 0, 4, -1])
 
     const zeros = renderFigure(
       specWith({ series: [{ name: 'empty', values: [0, 0, 0] }], legend: { visible: false } }),
       TS,
     )
-    expect(zeros.spec.series[0].values).toEqual([0, 0, 0])
+    expect(zeros.spec.series[0]!.values).toEqual([0, 0, 0])
     expect(xmlWellFormed(zeros.svg.content)).toBe(true)
   })
 })
@@ -245,7 +245,7 @@ describe('spec validation — every malformed input throws FigureError', () => {
 
   it('rejects an invalid kind', () => {
     expect(
-      outcome(() => renderFigure(specWith({ kind: 'pie' as FigureSpec['kind'] }), TS)),
+      outcome(() => renderFigure(specWith({ kind: 'pie' as NonNullable<FigureSpec['kind']> }), TS)),
     ).toBe('DSH_FIGURE_INVALID_KIND')
     // Non-string kinds also reach the kind guard (serializable and non-serializable).
     expect(outcome(() => renderFigure(specWith({ kind: 7 as never }), TS))).toBe(
@@ -300,7 +300,7 @@ describe('spec validation — every malformed input throws FigureError', () => {
     expect(
       outcome(() => renderFigure(specWith({ series: [undefined as never] }), TS)),
     ).toBe('DSH_FIGURE_INVALID_SERIES')
-    const nine = Array.from({ length: 9 }, () => BASE_SPEC.series[0])
+    const nine = Array.from({ length: 9 }, () => BASE_SPEC.series[0]!)
     expect(outcome(() => renderFigure(specWith({ series: nine }), TS))).toBe('DSH_FIGURE_INVALID_SERIES')
   })
 
@@ -587,7 +587,9 @@ function collectChunkTypes(bytes: Uint8Array): string[] {
   let offset = 8
   while (offset + 8 <= bytes.length) {
     const length = new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getUint32(0)
-    types.push(String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]))
+    types.push(
+      String.fromCharCode(bytes[offset + 4] ?? 0, bytes[offset + 5] ?? 0, bytes[offset + 6] ?? 0, bytes[offset + 7] ?? 0),
+    )
     if (types[types.length - 1] === 'IEND') {
       break
     }
@@ -602,7 +604,9 @@ function collectIdat(bytes: Uint8Array): Uint8Array {
   while (offset + 8 <= bytes.length) {
     const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 8)
     const length = view.getUint32(0)
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7])
+    const type = String.fromCharCode(
+      bytes[offset + 4] ?? 0, bytes[offset + 5] ?? 0, bytes[offset + 6] ?? 0, bytes[offset + 7] ?? 0,
+    )
     if (type === 'IDAT') {
       parts.push(bytes.slice(offset + 8, offset + 8 + length))
     }
@@ -635,7 +639,9 @@ describe('PNG is a REAL encoded image', () => {
     expect(collectChunkTypes(bytes)).toEqual(['IHDR', 'IDAT', 'IEND'])
     const ihdrLength = new DataView(bytes.buffer, bytes.byteOffset + 8, 4).getUint32(0)
     expect(ihdrLength).toBe(13)
-    expect(String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15])).toBe('IHDR')
+    expect(
+      String.fromCharCode(bytes[12] ?? 0, bytes[13] ?? 0, bytes[14] ?? 0, bytes[15] ?? 0),
+    ).toBe('IHDR')
     const ihdr = new DataView(bytes.buffer, bytes.byteOffset + 16, 13)
     expect(ihdr.getUint32(0)).toBe(640)
     expect(ihdr.getUint32(4)).toBe(400)
@@ -666,10 +672,10 @@ describe('PNG is a REAL encoded image', () => {
     expect(bytes[bytes.length - 9]).toBe(0)
     expect(
       String.fromCharCode(
-        bytes[bytes.length - 8],
-        bytes[bytes.length - 7],
-        bytes[bytes.length - 6],
-        bytes[bytes.length - 5],
+        bytes[bytes.length - 8] ?? 0,
+        bytes[bytes.length - 7] ?? 0,
+        bytes[bytes.length - 6] ?? 0,
+        bytes[bytes.length - 5] ?? 0,
       ),
     ).toBe('IEND')
     expect(artifact.png.base64).toBe(Buffer.from(bytes).toString('base64'))
@@ -792,7 +798,7 @@ describe('reproducibility — identical input yields identical bytes', () => {
   it('different seeds rotate the palette but keep geometry deterministic', () => {
     const a = renderFigure(specWith({ seed: 1 }), TS)
     const b = renderFigure(specWith({ seed: 2 }), TS)
-    expect(a.spec.series[0].color).not.toBe(b.spec.series[0].color)
+    expect(a.spec.series[0]!.color).not.toBe(b.spec.series[0]!.color)
     expect(bytesEqual(a.png.bytes, b.png.bytes)).toBe(false)
   })
 })
@@ -888,7 +894,7 @@ describe('artifact is deeply frozen with a meta envelope', () => {
     const snapshot = artifact.spec
     // Trimming, canonical colours, defaults are all materialized.
     expect(snapshot.title).toBe('Latency by stage')
-    expect(snapshot.series[0].color).toMatch(/^#[0-9a-f]{6}$/u)
+    expect(snapshot.series[0]!.color).toMatch(/^#[0-9a-f]{6}$/u)
     expect(snapshot.axes?.categories).toEqual(['encode', 'transmit', 'decode'])
     expect(artifact.config.fontSize).toBe(13)
     expect(artifact.config.fontFamily).toBe('sans-serif')
@@ -1019,7 +1025,7 @@ describe('normalization defaults (kind/axes/legend/optional-text)', () => {
     const art = renderFigure(bare, TS)
     expect(art.spec.kind).toBe('bar')
     expect(art.spec.axes?.categories).toEqual(['1', '2', '3'])
-    expect(art.spec.series[0].unit).toBeUndefined()
+    expect(art.spec.series[0]!.unit).toBeUndefined()
     expect(art.spec.legend).toBeUndefined()
     expect(xmlWellFormed(art.svg.content)).toBe(true)
   })

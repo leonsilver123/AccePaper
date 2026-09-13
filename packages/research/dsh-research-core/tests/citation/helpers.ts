@@ -65,20 +65,20 @@ export function fixtureResolver(): MockCitationResolverAdapter {
 /** A resolver that always reports an authoritative miss (every citation is
  *  fabricated — must hard-block, never surface as 'unverified'). */
 export function notFoundResolver(): CitationResolverAdapter {
-  return { resolveMetadata: () => ({ status: 'not_found' as const }) }
+  return { resolveMetadata: async () => ({ status: 'not_found' as const }) }
 }
 
 /** A resolver simulating a service outage (must NOT be misjudged as fiction). */
 export function outageResolver(): CitationResolverAdapter {
-  return { resolveMetadata: () => ({ status: 'temporarily_unavailable' as const, detail: 'down' }) }
+  return { resolveMetadata: async () => ({ status: 'temporarily_unavailable' as const, detail: 'down' }) }
 }
 
 /** A resolver simulating an ambiguous multi-record response. */
 export function ambiguousResolver(): CitationResolverAdapter {
-  return { resolveMetadata: () => ({ status: 'ambiguous' as const, detail: 'multi' }) }
+  return { resolveMetadata: async () => ({ status: 'ambiguous' as const, detail: 'multi' }) }
 }
 
 /** A resolver returning a structurally malformed outcome (adapter fault). */
 export function malformedResolver(): CitationResolverAdapter {
-  return { resolveMetadata: () => ({ status: 'telepathic' } as unknown as ResolverOutcome) }
+  return { resolveMetadata: async () => ({ status: 'telepathic' } as unknown as ResolverOutcome) }
 }

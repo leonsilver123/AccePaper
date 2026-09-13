@@ -39,14 +39,14 @@ async function loadHost() {
 async function setupRuntime() {
   const host = await loadHost()
   const ctx = new Context()
-  await ctx.plugin(host.LlmRuntime as never)
-  await ctx.plugin(host.SessionStore as never)
-  await ctx.plugin(host.SessionProjectionRegistry as never)
-  await ctx.plugin(host.SystemPrompt as never, { persona: '' })
-  await ctx.plugin(host.ToolRuntime as never)
-  await ctx.plugin(host.AgentRegistry as never)
-  await ctx.plugin(host.AgentLoop as never, { agents: [] })
-  await ctx.plugin(ResearchEngine as never, { requireResearchTools: true })
+  await ctx.plugin(host.LlmRuntime)
+  await ctx.plugin(host.SessionStore)
+  await ctx.plugin(host.SessionProjectionRegistry)
+  await ctx.plugin(host.SystemPrompt, { persona: '' })
+  await ctx.plugin(host.ToolRuntime)
+  await ctx.plugin(host.AgentRegistry)
+  await ctx.plugin(host.AgentLoop, { agents: [] })
+  await ctx.plugin(ResearchEngine, { requireResearchTools: true })
   return ctx
 }
 

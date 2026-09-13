@@ -75,14 +75,14 @@ describe('P3 success — declared outputs written, step-executed audit', () => {
     const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }) })
     expect(res.ok).toBe(true)
     expect(res.status).toBe('success')
-    expect(res.outputSlugs).toEqual(expect.arrayContaining(OUTS))
+    expect(res.outputSlugs).toEqual(expect.arrayContaining([...OUTS]))
     // artifacts persisted + deep-cloned into registry
     expect(getArtifact(store, id, 'landscape-map')).toBe(1)
     expect(getArtifact(store, id, 'gap-list')).toBe(2)
     // step stays in_progress — pipeline does NOT transition; upper layer continues gate
     expect(getRunSnapshot(store, id).steps[STEP]?.status).toBe('in_progress')
     const rec = execRecorded(store, id, 'success')
-    expect(rec.outputSlugs).toEqual(expect.arrayContaining(OUTS))
+    expect(rec.outputSlugs).toEqual(expect.arrayContaining([...OUTS]))
     expect(typeof rec.durationMs).toBe('number')
   })
 

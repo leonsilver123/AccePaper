@@ -39,15 +39,25 @@ const TS = 1700000000000
 
 const claim = (s: string): ClaimId => s as ClaimId
 const citation = (s: string): CitationId => s as CitationId
-const ref = (kind: CitationRef['kind'], id: string, title?: string): CitationRef => ({ kind, id, title })
+const ref = (kind: CitationRef['kind'], id: string, title?: string): CitationRef =>
+  (title === undefined ? { kind, id } : { kind, id, title })
 
-const evidence = (over: Partial<CitationEvidence> = {}): CitationEvidence => ({
-  originalTextAccessed: true,
-  method: 'manual_review',
-  accessedAt: TS,
-  excerpt: 'synthetic excerpt',
-  ...over,
-})
+/** Overrides; an explicit `accessedAt: undefined` is the documented "not accessed" form. */
+type EvidenceOverrides = Omit<Partial<CitationEvidence>, 'accessedAt'> & { accessedAt?: number | undefined }
+
+const evidence = (over: EvidenceOverrides = {}): CitationEvidence => {
+  const { accessedAt, ...rest } = over
+  // An absent override keeps the default access time; an explicit `undefined`
+  // leaves the field out, which is how `method: 'none'` is expressed.
+  const accessTime = 'accessedAt' in over ? accessedAt : TS
+  return {
+    originalTextAccessed: true,
+    method: 'manual_review',
+    excerpt: 'synthetic excerpt',
+    ...(accessTime === undefined ? {} : { accessedAt: accessTime }),
+    ...rest,
+  }
+}
 
 const l0src = (over: Partial<L0SourceInput> = {}): L0SourceInput => ({
   sourceId: 's-1' as L0SourceId,

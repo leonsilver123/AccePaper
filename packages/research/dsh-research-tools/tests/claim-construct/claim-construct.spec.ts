@@ -175,7 +175,7 @@ describe('claim-construct', () => {
   it('rejects a non-object falsifiability scaffold', () => {
     for (const bad of ['nope', 42, []]) {
       expect(() =>
-        constructClaim(baseInput({ falsifiability: bad as unknown as ClaimConstructInput['falsifiability'] })),
+        constructClaim(baseInput({ falsifiability: bad as unknown as NonNullable<ClaimConstructInput['falsifiability']> })),
       ).toThrow(/\[claim-construct\] falsifiability must be a plain object/)
     }
   })
@@ -235,7 +235,7 @@ describe('claim-construct', () => {
       // Non-object falsifiability scaffold.
       thrown(() =>
         constructClaim(
-          baseInput({ falsifiability: 'nope' as unknown as ClaimConstructInput['falsifiability'] }),
+          baseInput({ falsifiability: 'nope' as unknown as NonNullable<ClaimConstructInput['falsifiability']> }),
         ),
       ),
       // Whitespace-only caller-supplied claimId.

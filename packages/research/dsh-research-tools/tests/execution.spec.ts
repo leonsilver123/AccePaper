@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type {
-  AblationDefinition, FigureSpec, RoadmapGraph, ThreeLineTableModel,
+  AblationDefinition, FigureSpec, RoadmapGraph, RoadmapRenderOptions, ThreeLineTableModel,
 } from '@deepseek-ai/dsh-research-tools'
 import {
   ResearchToolExecutionError,
@@ -112,7 +112,9 @@ describe('executeResearchTool — single dispatch map', () => {
   it('roadmap matches the direct call (mermaid default render)', async () => {
     const input = { graph: ROADMAP_GRAPH }
     const viaAdapter = await executeResearchTool('roadmap', input, undefined, TS)
-    const direct = renderRoadmap(ROADMAP_GRAPH, {}, TS)
+    // The adapter normalizes an absent `options` to `{}` (execution.ts), so the direct
+    // call must supply the same empty record to compare against the same render branch.
+    const direct = renderRoadmap(ROADMAP_GRAPH, {} as RoadmapRenderOptions, TS)
     expect(viaAdapter).toEqual(direct)
   })
 

@@ -130,7 +130,7 @@ describe('reduceTeamState — member events', () => {
     const state = reduceTeamState(createTeamState(TEAM), memberEvent(TEAM, source))
     const stored = state.members[M1]!
     expect(Object.isFrozen(stored)).toBe(true)
-    source.name = 'mutated-after-fold'
+    Object.assign(source, { name: 'mutated-after-fold' })
     expect(stored.name).toBe('name-member-1')
   })
 })

@@ -506,7 +506,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('c'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['a', 'b'],
+      blockedBy: [taskId('a'), taskId('b')],
     })
     expect([...next.blockedBy]).toEqual([taskId('a'), taskId('b')])
   })
@@ -518,7 +518,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('a'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['a'],
+      blockedBy: [taskId('a')],
     }))).toBe('DSH_RESEARCH_TEAM_DEPENDENCY_CYCLE')
   })
 
@@ -530,7 +530,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('t1'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['t2'],
+      blockedBy: [taskId('t2')],
     }))).toBe('DSH_RESEARCH_TEAM_DEPENDENCY_CYCLE')
   })
 
@@ -541,7 +541,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('t1'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['ghost'],
+      blockedBy: [taskId('ghost')],
     }))).toBe('DSH_RESEARCH_TEAM_TASK_NOT_FOUND')
     const deleted = task('gone', { status: 'deleted' })
     expect(codeOf(() => mutate([t, deleted], {
@@ -549,7 +549,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('t1'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['gone'],
+      blockedBy: [taskId('gone')],
     }))).toBe('DSH_RESEARCH_TEAM_TASK_DELETED')
   })
 
@@ -580,7 +580,7 @@ describe('applyTaskAction — blockedBy cycle detection', () => {
       taskId: taskId('t4'),
       expectedRevision: 0,
       actor: lead(),
-      blockedBy: ['t5'],
+      blockedBy: [taskId('t5')],
     })
     expect([...next.blockedBy]).toEqual([taskId('t5')])
   })

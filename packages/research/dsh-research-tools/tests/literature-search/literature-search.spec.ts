@@ -206,7 +206,7 @@ describe('adapter outage — NO DEFAULT PASS', () => {
 
   it('structurally-invalid adapter output is an adapter fault, never a pass', async () => {
     const adapter: LiteratureSearchAdapter = {
-      search: () => ({ status: 'maybe' }) as unknown as LiteratureSearchOutcome,
+      search: async () => ({ status: 'maybe' }) as unknown as LiteratureSearchOutcome,
     }
     expect(
       await errorCodeOfAsync(() => run({ topic: 'synthetic' }, adapter, TS)),
@@ -227,7 +227,7 @@ describe('structurally-invalid adapter output — ok-outcome contract violations
   }
 
   function adapterReturning(outcome: unknown): LiteratureSearchAdapter {
-    return { search: () => outcome as unknown as LiteratureSearchOutcome }
+    return { search: async () => outcome as unknown as LiteratureSearchOutcome }
   }
 
   it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when the outcome is null', async () => {

@@ -79,7 +79,13 @@ function cInput(
   config: AdjudicationConfig = {},
   timestamp = 1,
 ): AdjudicationInput {
-  return { claimId: CLAIM, component: 'C', falsifiable, config, timestamp }
+  return {
+    claimId: CLAIM,
+    component: 'C',
+    ...(falsifiable !== undefined ? { falsifiable } : {}),
+    config,
+    timestamp,
+  }
 }
 
 const CAL = { minValidVotes: 2, passThreshold: 0.6 }
@@ -403,7 +409,7 @@ describe('immutability + isolation (INV-SNAPSHOT-T2 / no live refs)', () => {
     expect(Object.isFrozen(r.voteTally)).toBe(true)
     expect(() => {
       // @ts-expect-error mutating a frozen readonly result
-      ;(r as { outcome?: string }).outcome = 'passed'
+      r.outcome = 'passed'
     }).toThrow()
   })
 
@@ -454,7 +460,7 @@ describe('immutability + isolation (INV-SNAPSHOT-T2 / no live refs)', () => {
       enumerable: true,
       configurable: true,
     })
-    const input = { claimId: CID('c'), component: 'A', votes: [vote('r1', 'support')], config: cfg, timestamp: 1 }
+    const input: AdjudicationInput = { claimId: CID('c'), component: 'A', votes: [vote('r1', 'support')], config: cfg, timestamp: 1 }
     expect(() => adjudicate(input)).toThrow(ResearchError)
     expect(() => adjudicate(input)).toThrow(/DSH_VALUE_NOT_CLONEABLE/)
   })

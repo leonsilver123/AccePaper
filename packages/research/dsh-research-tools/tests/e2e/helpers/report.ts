@@ -28,7 +28,8 @@ const TIMESTAMP_KEYS = new Set(['runId', 'ts', 'recordedAt', 'producedAt', 'star
 
 export interface GateVerdictRow {
   readonly component: TrinityComponent
-  readonly outcome: GateOutcome
+  /** `'pending'` when no verdict was recorded for this component (step not adjudicated yet). */
+  readonly outcome: GateOutcome | 'pending'
 }
 
 export interface StepReportRow {
@@ -36,7 +37,8 @@ export interface StepReportRow {
   readonly stepId: string
   readonly phase: string
   readonly name: string
-  readonly status: StepStatus
+  /** `'missing'` when the run snapshot carries no state for this step yet. */
+  readonly status: StepStatus | 'missing'
   readonly attemptId: number
   readonly outputs: ReadonlyArray<string>
   readonly gate: ReadonlyArray<TrinityComponent>

@@ -29,7 +29,7 @@ import {
   startStep,
   submitGateVerdict,
 } from '../src/index.ts'
-import type { ResearchRunStore, RunState, StepDefinition } from '../../src/index.ts'
+import type { ResearchRunStore, RunState, StepDefinition } from '../src/index.ts'
 
 const EXPECTED_ORDER = [
   'A1-landscape', 'A2-claim', 'A3-agenda', 'A4-venue',
@@ -90,20 +90,20 @@ describe('orchestration surface — step accessors (getStepDefinitions / getStep
 
   it('caller mutation attempts cannot affect a later read (frozen + isolated)', () => {
     const before = getStepDefinitions()
-    expect(before[0].humanGate).toBe(false)
+    expect(before[0]!.humanGate).toBe(false)
     // Strict-mode (ESM) mutation of a frozen object THROWS — so it can never stick.
     expect(() => {
-      ;(before[0] as { humanGate: boolean }).humanGate = true
+      ;(before[0]! as { humanGate: boolean }).humanGate = true
     }).toThrow()
     expect(() => {
-      ;(before[1].inputs as string[]).push('injected')
+      ;(before[1]!.inputs as string[]).push('injected')
     }).toThrow()
     const after = getStepDefinitions()
-    expect(after[0].humanGate).toBe(false)
-    expect(after[1].inputs).not.toContain('injected')
+    expect(after[0]!.humanGate).toBe(false)
+    expect(after[1]!.inputs).not.toContain('injected')
     // Independent reads stay identical to the frozen canonical definitions.
-    expect(after[0].id).toBe('A1-landscape')
-    expect(after[1].gate).toEqual(['A', 'C'])
+    expect(after[0]!.id).toBe('A1-landscape')
+    expect(after[1]!.gate).toEqual(['A', 'C'])
   })
 
   it('getStepDefinitionById returns exact canonical metadata and undefined for unknown ids', () => {
@@ -279,7 +279,7 @@ describe('orchestration surface — plain built-package smoke (name-based entry)
     expect(typeof built.getStepDefinitionById).toBe('function')
     const defs = built.getStepDefinitions() as readonly StepDefinition[]
     expect(defs).toHaveLength(16)
-    expect(defs[0].id).toBe('A1-landscape')
+    expect(defs[0]!.id).toBe('A1-landscape')
 
     const store = new Map<string, RunState>()
     const runId = built.createRun(store)
@@ -296,7 +296,7 @@ describe('orchestration surface — plain built-package smoke (name-based entry)
     // seed every upstream output minimally? E2 needs upstream artifacts; drive seeds via canStart.
     // Just assert completeStep exists and E2 metadata stays human-gated by contract.
     expect(built.completeStep).toBeTypeOf('function')
-    expect(defs[15].id).toBe('E2-submit')
-    expect(defs[15].humanGate).toBe(true)
+    expect(defs[15]!.id).toBe('E2-submit')
+    expect(defs[15]!.humanGate).toBe(true)
   })
 })

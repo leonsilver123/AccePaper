@@ -291,9 +291,9 @@ describe('registration lifecycle reinforcement (Phase 1.1-R track A)', () => {
   })
 
   it('readiness refuses a pre-existing impostor object (not ours, no marker)', () => {
-    const impostor: ToolRegistryFace = {
+    const impostor = {
       get: name => (name === 'roadmap' ? { name: 'roadmap' } as never : undefined),
-    }
+    } as ToolRegistryFace
     const ctxStub = { tools: impostor } as unknown as Context
     expect(() => { assertResearchToolsReady(ctxStub) }).toThrow(/not ours/)
   })

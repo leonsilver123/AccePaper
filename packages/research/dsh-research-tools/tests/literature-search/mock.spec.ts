@@ -104,13 +104,13 @@ describe('T12 mock fixture contract — venue + refId join the haystack', () => 
 
     const doiHit = okOf(await adapter.search({ topic: 'synth-lit-0002' }))
     expect(doiHit.total).toBe(1)
-    expect(doiHit.hits[0].id).toBe('syn-lit-0002')
-    expect(doiHit.hits[0].ref).toMatchObject({ kind: 'doi', id: '10.1000/synth-lit-0002' })
+    expect(doiHit.hits[0]!.id).toBe('syn-lit-0002')
+    expect(doiHit.hits[0]!.ref).toMatchObject({ kind: 'doi', id: '10.1000/synth-lit-0002' })
 
     const arxivHit = okOf(await adapter.search({ topic: '2499.00001' }))
     expect(arxivHit.total).toBe(1)
-    expect(arxivHit.hits[0].id).toBe('syn-lit-0004')
-    expect(arxivHit.hits[0].ref).toMatchObject({ kind: 'arxiv', id: '2499.00001' })
+    expect(arxivHit.hits[0]!.id).toBe('syn-lit-0004')
+    expect(arxivHit.hits[0]!.ref).toMatchObject({ kind: 'arxiv', id: '2499.00001' })
   })
 })
 
@@ -123,14 +123,14 @@ describe('T12 mock fixture contract — fresh hits + instance isolation', () => 
     // Distinct array + distinct hit instances per call.
     expect(first.hits).not.toBe(second.hits)
     expect(first.hits[0]).not.toBe(second.hits[0])
-    expect(first.hits[0].ref).not.toBe(second.hits[0].ref)
+    expect(first.hits[0]!.ref).not.toBe(second.hits[0]!.ref)
 
     // Hits are plain (unfrozen) per-call objects: mutating a previous result
     // must never leak into a later result (no fixture-state mutation possible).
     ;(first.hits[0] as { title: string }).title = 'MUTATED via first result'
     const third = okOf(await adapter.search({ topic: 'synthetic' }))
-    expect(third.hits[0].title).toBe(ROW1_TITLE)
-    expect(second.hits[0].title).toBe(ROW1_TITLE)
+    expect(third.hits[0]!.title).toBe(ROW1_TITLE)
+    expect(second.hits[0]!.title).toBe(ROW1_TITLE)
   })
 
   it('separate instances are isolated: the unavailable seed never leaks', async () => {
@@ -205,6 +205,6 @@ describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
   it('the shared stateless mock instance also answers fresh, deterministic results', async () => {
     const ok = okOf(await mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
     expect(ok.total).toBe(14)
-    expect(ok.hits[0].id).toBe('syn-lit-0001')
+    expect(ok.hits[0]!.id).toBe('syn-lit-0001')
   })
 })

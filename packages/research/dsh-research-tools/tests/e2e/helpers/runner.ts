@@ -91,8 +91,10 @@ export async function runStepWithGate(
 
   const res = await runStep(store, runId, stepId, {
     executor: executorFor(stepId, opts.executor),
-    timeoutMs: opts.timeoutMs,
-    signal: opts.signal,
+    // `RunStepOptions` forbids an explicitly-`undefined` value under
+    // exactOptionalPropertyTypes, so absent options are omitted entirely.
+    ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   })
 
   // Execute did NOT succeed: step stays 'in_progress' (rollback-able), NO gate adjudication,
@@ -105,7 +107,7 @@ export async function runStepWithGate(
       status: 'in_progress',
       outputSlugs: res.outputSlugs,
       usedRealTool,
-      executeError: res.error?.message,
+      ...(res.error === undefined ? {} : { executeError: res.error.message }),
     }
   }
 
@@ -121,7 +123,7 @@ export async function runStepWithGate(
   for (const comp of stepDef.gate) {
     const ctx: VerdictContext = { ...ctxBase, component: comp }
     submitGateVerdict(store, runId, stepId, verdictFactory(ctx))
-    lastStatus = getRunSnapshot(store, runId).steps[stepId].status
+    lastStatus = getRunSnapshot(store, runId).steps[stepId]!.status
   }
   return { runId, stepId, attemptId, status: lastStatus, outputSlugs: res.outputSlugs, usedRealTool }
 }
