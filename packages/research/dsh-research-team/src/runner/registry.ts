@@ -565,36 +565,112 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 }
 
 /** A2-claim: real `constructClaim` producing a claim + falsifiable prediction. */
+/**
+ * Read one labelled field out of a model response.
+ *
+ * The runner asks for `LABEL: value` lines rather than JSON: a model that wraps its
+ * answer in prose or a code fence still yields a parseable field, whereas a brittle
+ * JSON parse would fail the step for a formatting reason that carries no meaning.
+ *
+ * @param text - the model's response.
+ * @param label - the upper-case field label to look for.
+ * @returns the trimmed value, or undefined when the label is absent or empty.
+ */
+function labelledField(text: string, label: string): string | undefined {
+  for (const line of text.split('\n')) {
+    const trimmed = line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
+    if (!trimmed.toUpperCase().startsWith(label)) continue
+    const value = trimmed.slice(label.length).replace(/^\s*[:=]\s*/, '').trim()
+    if (value.length > 0) return value
+  }
+  return undefined
+}
+
 async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('a2-fixture')
+
+  // The claim is the answer to A1's gap, so it must be derived from that gap when a
+  // model is available. With no writer it stays the fixture claim, keeping the
+  // offline pipeline deterministic.
+  const writer = ctx.proseWriter
+  const gapsArtifact = readInput(ctx, 'gap-list')
+  const gaps = Array.isArray(gapsArtifact?.gaps)
+    ? (gapsArtifact.gaps as ReadonlyArray<unknown>).filter((g): g is string => typeof g === 'string')
+    : []
+
+  let assertion = 'Adaptive signal control reduces peak-hour delay beyond the 8% SOTA gap.'
+  let essentialDifference = 'control policy is adaptive (RL) rather than fixed-time'
+  let experimentToFalsify = 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.'
+  let prediction = CANONICAL_PREDICTION
+  let claimSource: 'model' | 'fixture' = 'fixture'
+
+  if (writer !== undefined) {
+    const analysis = await writer.write({
+      stepId: 'A2-claim',
+      instruction: [
+        'Answer ONE of the research gaps below with a falsifiable central claim.',
+        'Reply with exactly these four lines and nothing else:',
+        'ASSERTION: <one sentence claim>',
+        'DIFFERENCE: <what makes this essentially different from prior work>',
+        'EXPERIMENT: <the experiment that would falsify it>',
+        'PREDICTION: <the measurable prediction, with a numeric threshold>',
+      ].join('\n'),
+      context: { gaps },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    const parsed = {
+      assertion: labelledField(analysis.text, 'ASSERTION'),
+      essentialDifference: labelledField(analysis.text, 'DIFFERENCE'),
+      experimentToFalsify: labelledField(analysis.text, 'EXPERIMENT'),
+      prediction: labelledField(analysis.text, 'PREDICTION'),
+    }
+    // A claim without a falsifiable prediction cannot pass the C gate, so an
+    // unparseable response fails the step here rather than emitting a claim that
+    // downstream would have to reject (NO DEFAULT PASS).
+    if (
+      parsed.assertion === undefined
+      || parsed.essentialDifference === undefined
+      || parsed.experimentToFalsify === undefined
+      || parsed.prediction === undefined
+    ) {
+      throw new Error(
+        '[A2-claim] the model response did not carry ASSERTION/DIFFERENCE/EXPERIMENT/PREDICTION '
+        + '(a claim without a falsifiable prediction cannot be adjudicated — NO DEFAULT PASS)',
+      )
+    }
+    assertion = parsed.assertion
+    essentialDifference = parsed.essentialDifference
+    experimentToFalsify = parsed.experimentToFalsify
+    prediction = parsed.prediction
+    claimSource = 'model'
+  }
+
   const invocation = await invoker.invoke(
     'claim-construct',
     {
-      assertion: 'Adaptive signal control reduces peak-hour delay beyond the 8% SOTA gap.',
+      assertion,
       claimId: CANONICAL_CLAIM_ID,
       now: FIXED_TS,
-      falsifiability: {
-        essentialDifference: 'control policy is adaptive (RL) rather than fixed-time',
-        experimentToFalsify: 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.',
-      },
+      falsifiability: { essentialDifference, experimentToFalsify },
     },
     { timestamp: FIXED_TS },
   )
   if (!invocation.ok) {
     throw new Error(`[A2-claim] claim-construct invocation failed: ${invocation.message}`)
   }
-  const artifact = invocation.artifact as ReturnType<typeof constructClaim>
+  const artifact = invocation.artifact as Awaited<ReturnType<typeof constructClaim>>
   // Wire the claim + prediction into the shared context for downstream C-gates.
   ctx.runCtx.claimId = CANONICAL_CLAIM_ID
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
-  ctx.runCtx.predictionText = CANONICAL_PREDICTION
+  ctx.runCtx.predictionText = prediction
   return {
-    claim: tagArtifact(artifact.claim, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
+    claim: tagArtifact({ ...artifact.claim, claimSource }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
       {
-        text: CANONICAL_PREDICTION,
+        text: prediction,
         ref: CANONICAL_CLAIM_ID,
         supportStatus: artifact.claim.supportStatus,
+        claimSource,
       },
       A2_PRODUCER,
       'real_tool_fixture_input',
