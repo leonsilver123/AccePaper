@@ -926,40 +926,100 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 }
 
 /** A3-agenda: fixture shaped as a research agenda + contribution list. */
-function a3Executor(ctx: ExecCtx): Record<string, unknown> {
+async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef, predictionText } = canonicalOf(ctx)
   const claim = readInput(ctx, 'claim')
+
+  // The agenda and the contribution list are what the claim commits the study to
+  // delivering, so they derive from the claim when a writer is available. With none
+  // they stay the built-in fixture, keeping the offline pipeline deterministic.
+  const writer = ctx.proseWriter
+  let phases: ReadonlyArray<string> = ['A 定位', 'B 构造', 'C 迭代', 'D 论证', 'E 落地']
+  let plan: ReadonlyArray<string> = [
+    'claim → method → data → baseline → mvp → trinity → boundary → figures → outline → writing → format → submit',
+  ]
+  let contributions: ReadonlyArray<{ id: string; statement: string }> = [
+    { id: 'c1', statement: 'adaptive control beats the fixed-time baseline on peak-hour delay' },
+  ]
+  let agendaSource: 'model' | 'fixture' = 'fixture'
+  let agendaRoute: Record<string, unknown> = proseRouteOf(undefined)
+
+  if (writer !== undefined) {
+    const analysis = await writer.write({
+      stepId: 'A3-agenda',
+      instruction: [
+        'Derive the research agenda and the contribution list that the claim commits this study to delivering.',
+        'Reply with exactly these two labelled blocks and nothing else:',
+        'PHASES: <phase> | <phase> | <phase>',
+        'CONTRIBUTIONS: <one contribution> || <another contribution>',
+      ].join('\n'),
+      context: {
+        claim: claim?.assertion ?? claimRef,
+        prediction: predictionText,
+      },
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    })
+    const parsedPhases = labelledField(analysis.text, 'PHASES')
+    const parsedContributions = labelledField(analysis.text, 'CONTRIBUTIONS')
+    // An agenda with no stages, or a contribution list with nothing in it, is not an
+    // agenda — the step fails rather than emitting empty structure (NO DEFAULT PASS).
+    if (parsedPhases === undefined || parsedContributions === undefined) {
+      throw new Error(
+        '[A3-agenda] the model response did not carry PHASES/CONTRIBUTIONS '
+        + '(an agenda with no stages and no contributions is not an agenda — NO DEFAULT PASS)',
+      )
+    }
+    const parsedPhaseList = parsedPhases.split('|').map(p => p.trim()).filter(p => p.length > 0)
+    const parsedContributionList = parsedContributions
+      .split('||')
+      .map(c => c.trim())
+      .filter(c => c.length > 0)
+    if (parsedPhaseList.length === 0 || parsedContributionList.length === 0) {
+      throw new Error('[A3-agenda] the model returned an empty PHASES or CONTRIBUTIONS list (NO DEFAULT PASS)')
+    }
+    phases = parsedPhaseList
+    contributions = parsedContributionList.map((statement, index) => ({ id: `c${index + 1}`, statement }))
+    plan = parsedPhaseList
+    agendaSource = 'model'
+    agendaRoute = proseRouteOf(analysis)
+  }
+
   return {
     agenda: tagArtifact(
       {
-        fixture: true,
+        fixture: agendaSource === 'fixture',
         stepId: 'A3-agenda',
         slug: 'agenda',
         claimRef: (claim?.claimRef as string | undefined) ?? claimRef,
-        phases: ['A 定位', 'B 构造', 'C 迭代', 'D 论证', 'E 落地'],
-        plan: ['claim → method → data → baseline → mvp → trinity → boundary → figures → outline → writing → format → submit'],
-        note: 'synthetic agenda fixture — no agenda/contribution-derivation tool exists',
+        phases,
+        plan,
+        agendaSource,
+        agendaRoute,
+        note: agendaSource === 'fixture'
+          ? 'built-in agenda fixture — no prose writer is configured, so the stages are the canonical pipeline phases'
+          : 'agenda derived from the claim and its falsifiable prediction',
       },
       A3_PRODUCER,
-      'fixture_executor',
+      agendaSource === 'fixture' ? 'fixture_executor' : 'live_external',
     ),
     'contribution-list': tagArtifact(
       {
-        fixture: true,
+        fixture: agendaSource === 'fixture',
         stepId: 'A3-agenda',
         slug: 'contribution-list',
-        contributions: [
-          {
-            id: 'c1',
-            claimRef,
-            claim: 'adaptive control beats the fixed-time baseline on peak-hour delay',
-            expectedEvidence: `delay reduction >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
-          },
-        ],
-        note: 'synthetic contribution list — claim-level, not yet literature-supported',
+        contributions: contributions.map(contribution => ({
+          id: contribution.id,
+          claimRef,
+          claim: contribution.statement,
+          expectedEvidence: `delay reduction >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
+        })),
+        agendaSource,
+        note: agendaSource === 'fixture'
+          ? 'built-in contribution list — claim-level, not yet literature-supported'
+          : 'contribution list derived from the claim; still claim-level, not literature-supported',
       },
       A3_PRODUCER,
-      'fixture_executor',
+      agendaSource === 'fixture' ? 'fixture_executor' : 'live_external',
     ),
   }
 }

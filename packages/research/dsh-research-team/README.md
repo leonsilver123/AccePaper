@@ -11,13 +11,14 @@
 - **真值等级是 5 级**(2026-09-14 增补 `local_computation`)。16 步的划分:
   - `real_tool_fixture_input`(5 步,工具函数真的执行):A1 / A2 / C3 / D1 / E1;
   - `local_computation`(4 步,无工具、无外部系统,由本包代码算出真实测量):B2 / B3 / C1 / C2;
-  - `fixture_executor`(6 步):A3 / A4 / B1 / D2 / D3 / D4(其中 B1/D2/D3/D4 在有 `proseWriter` 时走真实模型,该路径记为 `live_external`);
+  - `fixture_executor`(6 步):A3 / A4 / B1 / D2 / D3 / D4(其中 A3/B1/D2/D3/D4 在有 `proseWriter` 时走真实模型,该路径记为 `live_external`;只有 A4-venue 两条路径都没有,因为它需要一个本步没有声明的输入面 —— 见下);
   - `humanGate`(1 步):E2。
   该边界由 `tests/t34-single-step.spec.ts` 与 `tests/runner-registry.spec.ts` 以断言锁定。
   **为什么加这一级**:报告把 `real_tool_fixture_input` 印成 "Real tool functions executed",
   而 B3/C1/C2 根本不执行任何工具函数 —— 把它们挂在那一级等于让报告说了一句假话。
 - 产物自己声明的等级(artifact 的 `__kind`)在本步所有产物一致时,是 `StepOutcome.kind` 的
   来源;静态注册表条目无法知道部署事实(A1 只有在配了真实通道时才触达活目录)。
+- **A4-venue 仍是纯 fixture**,而且**接不了真实来源**:选刊要从检索到的文献所在期刊里选(`hits[].venue` 是真实字段),但 A4 声明的输入是 `['claim', 'agenda']` —— 检索语料不在它的输入面里。接线需要改 core 的步骤定义(`dsh-research-core/src/engine/steps.ts`),那是跨包的契约变更,留给下一次。
 - **实验的需求是测量出来的,不是写死的**:`runner/study-demand.ts` 由 `scripts/derive-demand-profile.mjs` 从真实小时交通量序列(UCI Metro Interstate Traffic Volume,CC BY 4.0)推导,序列哈希、推导步骤与全部建模假设都记录在产物里;`tests/demand-profile.spec.ts` 在数据集存在的机器上重新推导并比对,手改会失败。C1/B3/C3 的产物各带一份相同的 `demand` 证据块。
 - **实验引擎是解析模型,不是微观仿真**:C 通道用 Webster 延误公式,两相位、每相位一条关键进口道、到达均匀、无排队尾部。绝对延误值是模型输出而非实测;两条控制策略在同一模型内比较,所以"比较"是测量,"绝对数值"不是。
 - **解析模型已由 Eclipse SUMO 独立复跑**:`scripts/sumo-validation.mjs` 把同一组策略、同一份实测需求放进真实微观仿真,得到 17.93%(解析模型 11.09%)。方向一致、量级不同,原因与限制逐条记在 `plan/overnight/2026-09-14/sumo-validation.md`。**该脚本不接入流水线**,没有装 SUMO 的主机上一切不变。
