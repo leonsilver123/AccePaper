@@ -672,11 +672,7 @@ function bodyTextFor(
     case 'experiments':
       return `Both policies were run against the same profile. Demand-weighted mean delay was ${measured.baselineDelaySeconds.toFixed(2)} s/veh under the frozen plan and ${measured.variantDelaySeconds.toFixed(2)} s/veh under re-planning, a relative reduction of ${measured.reductionPct.toFixed(2)}%. The profile, its derivation from ${STUDY_SERIES_PROVENANCE.file} and the assumptions made on top of it are recorded on the mvp-results artifact.`
     case 'results':
-      // The manuscript body carries the RESULTS TABLE, not the rendered figure: the
-      // data figure and the roadmap are rendered as image artifacts in the
-      // reproducible package, and this section previously claimed "the figure and
-      // the table below" over a document that holds only the table.
-      return 'The table below carries the same measurement the C gate adjudicated; the rendered data figure and roadmap are emitted as image artifacts beside this manuscript. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
+      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
     case 'conclusion':
       return `On this demand profile the frozen plan is worse than re-planning by ${measured.reductionPct.toFixed(2)}%, measured inside the study's own delay model. The scope is one isolated two-phase intersection under a scaled measured series; submission remains a human act at E2.`
     case 'references':
@@ -1769,7 +1765,10 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             toolId: FIGURE_TOOL_ID,
             svgByteLength: figure.svg.byteLength,
             pngByteLength: figure.png.byteLength,
-            svgPreview: figure.svg.content.slice(0, 80),
+            // The FULL svg, not a preview. D3 carries it into the draft and E1 embeds
+            // it, so the manuscript holds the figure the tool actually rendered
+            // instead of pointing at one.
+            svg: figure.svg.content,
           },
           {
             kind: 'three-line-table',
@@ -1783,11 +1782,13 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             format: roadmap.format,
             nodeCount: roadmap.nodeCount,
             validationOk: roadmap.validation.ok,
-            contentPreview: roadmap.content.slice(0, 80),
+            // Full content, for the same reason as the svg above. The roadmap renders
+            // as mermaid, which a markdown reader draws natively.
+            content: roadmap.content,
           },
         ],
         totalFigures: 3,
-        note: 'figure-plan derived from REAL figure + three-line-table + roadmap tool executions over synthetic content — 数据图/三线表/路线图 all wired (canonical D1)',
+        note: 'figure-plan derived from REAL figure + three-line-table + roadmap tool executions; the rendered svg and mermaid travel with the draft so the assembled manuscript EMBEDS the figures rather than pointing at them',
       },
       D1_PRODUCER,
       'real_tool_fixture_input',
@@ -1922,6 +1923,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     : DEFAULT_OUTLINE.map(s => s.id)
   const figures = figurePlan?.totalFigures as number | undefined
   const hitCount = landscape?.hitCount as number | undefined
+  // The rendered figures travel with the draft so E1 can embed them. D1 owns the
+  // render; the manuscript is where a reader meets it.
+  const renderedFigures = Array.isArray(figurePlan?.figures)
+    ? (figurePlan.figures as ReadonlyArray<{ kind?: unknown; svg?: unknown; content?: unknown; format?: unknown; tableMarkdown?: unknown }>)
+    : []
   // D3's canonical purpose includes adding the references, so the draft builds them
   // from the records A1 actually retrieved rather than reporting a count of them.
   const references = buildReferences(landscape?.hits)
@@ -1979,6 +1985,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
         references,
+        renderedFigures,
         note: proseSource === 'fixture'
           ? 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave'
           : 'manuscript draft whose section bodies came from a real model call',
@@ -2028,6 +2035,8 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // made the assembled manuscript report zero references while its own references
   // section described the landscape scan it was built from.
   const references = Array.isArray(draft?.references) ? draft.references : []
+  // Same reasoning as the references: a revision keeps the figures it is revising.
+  const renderedFigures = Array.isArray(draft?.renderedFigures) ? draft.renderedFigures : []
   const measured = measureOutcome()
 
   // The exchanges are organised by the real module, which computes the revision
@@ -2113,6 +2122,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         claimRef,
         sections: revised,
         references,
+        renderedFigures,
         note: 'synthetic revised draft — same section ids as the D3 draft with revision markers',
       },
       D4_PRODUCER,
@@ -2202,10 +2212,27 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const sectionsForAssembly = referenceEntries.length > 0
     ? sections.filter(section => section.id !== 'references')
     : sections
+  // The manuscript carries the figures D1 actually rendered: the data figure as the
+  // svg it produced, the roadmap as the mermaid block it produced, then the results
+  // table. Until this, the Figures section held the table alone and the rendered
+  // figure and roadmap were emitted as artifacts the paper never mentioned.
+  const rendered = Array.isArray(revised?.renderedFigures)
+    ? (revised.renderedFigures as ReadonlyArray<{ kind?: unknown; svg?: unknown; content?: unknown; format?: unknown }>)
+    : []
+  const figureBlocks: string[] = []
+  for (const entry of rendered) {
+    if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
+      figureBlocks.push(entry.svg)
+    }
+    if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
+      figureBlocks.push(['```mermaid', entry.content.trim(), '```'].join('\n'))
+    }
+  }
+  figureBlocks.push(artifact.render.text)
   const assembled = assembleManuscript({
     title,
     sections: sectionsForAssembly,
-    figures: [artifact.render.text],
+    figures: figureBlocks,
     references: referenceEntries,
   })
   return {

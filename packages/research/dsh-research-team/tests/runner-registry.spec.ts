@@ -262,12 +262,15 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(typeof dataFigure.svgByteLength).toBe('number')
     expect(dataFigure.svgByteLength as number).toBeGreaterThan(0)
     expect(dataFigure.pngByteLength as number).toBeGreaterThan(0)
-    expect(String(dataFigure.svgPreview)).toContain('<svg')
+    // The FULL svg, not a preview: the draft carries it and the manuscript embeds it.
+    expect(String(dataFigure.svg)).toContain('<svg')
+    expect(String(dataFigure.svg).length).toBe(dataFigure.svgByteLength)
     const table = figures[1]!
     expect(String(table.tableMarkdown)).toContain('Adaptive')
     const roadmap = figures[2]!
     expect(roadmap.validationOk).toBe(true)
-    expect(String(roadmap.contentPreview)).toContain('flowchart')
+    // Full content, for the same reason as the svg: it ends up in the manuscript.
+    expect(String(roadmap.content)).toContain('flowchart')
   })
 
   it('E1-format really assembled a manuscript WITH a three-line table sub-render', async () => {

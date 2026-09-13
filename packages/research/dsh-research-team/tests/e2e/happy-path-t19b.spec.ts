@@ -276,6 +276,19 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
       expect(String(entry.title).length).toBeGreaterThan(0)
     }
 
+    // The rendered figures are IN the manuscript, not merely referenced: the data
+    // figure as the svg the tool produced, the roadmap as a mermaid block, plus the
+    // results table. D1 renders them, D3 carries them, D4 keeps them, E1 embeds them.
+    expect((formatted.manuscriptCounts as { figures: number }).figures).toBe(3)
+    const figures = (draft.renderedFigures as ReadonlyArray<{ kind: string; svg?: string; content?: string }>)
+    const svg = figures.find(f => f.kind === 'data-figure')?.svg
+    const mermaid = figures.find(f => f.kind === 'roadmap')?.content
+    expect(typeof svg).toBe('string')
+    expect(typeof mermaid).toBe('string')
+    expect(String(formatted.manuscript)).toContain(String(svg))
+    expect(String(formatted.manuscript)).toContain('```mermaid')
+    expect(String(formatted.manuscript)).toContain(String(mermaid).split(String.fromCharCode(10))[0] as string)
+
     const manuscript = String(formatted.manuscript)
     // The E1 formatted manuscript contains the section headings from the outline…
     for (const id of ['introduction', 'method', 'experiments', 'results']) {
