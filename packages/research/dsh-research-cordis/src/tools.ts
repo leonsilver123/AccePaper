@@ -29,6 +29,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { MockCitationResolverAdapter } from '@deepseek-ai/dsh-research-core'
 import { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
+import { OpenAlexCitationResolver } from './openalex-citation-resolver.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   RESEARCH_TOOL_DIRECTORY,
@@ -149,6 +150,11 @@ export type LiteratureChannel =
   | { readonly kind: 'fixture' }
   | { readonly kind: 'openalex'; readonly mailto?: string }
 
+/** Bibliographic-resolver selection, configured the same way as the channel above. */
+export type CitationChannel =
+  | { readonly kind: 'fixture' }
+  | { readonly kind: 'openalex'; readonly mailto?: string }
+
 /**
  * Assemble the tool dependency graph for one deployment's retrieval channel.
  * `'fixture'` (and an absent channel) reproduce the offline graph exactly; a real
@@ -158,16 +164,30 @@ export type LiteratureChannel =
  * @param channel - the configured retrieval channel, or undefined for the fixture.
  * @returns the dependency graph handed to every tool invocation.
  */
-export function buildToolDeps(channel: LiteratureChannel | undefined): ResearchToolDeps {
-  if (channel?.kind === 'openalex') {
-    return {
-      ...FIXTURE_DEPS,
-      literatureAdapter: new OpenAlexLiteratureAdapter(
-        channel.mailto !== undefined ? { mailto: channel.mailto } : {},
-      ),
-    }
+export function buildToolDeps(
+  channel: LiteratureChannel | undefined,
+  citation: CitationChannel | undefined = undefined,
+): ResearchToolDeps {
+  const deps: ResearchToolDeps = {
+    ...FIXTURE_DEPS,
+    ...(channel?.kind === 'openalex'
+      ? {
+        literatureAdapter: new OpenAlexLiteratureAdapter(
+          channel.mailto !== undefined ? { mailto: channel.mailto } : {},
+        ),
+      }
+      : {}),
+    ...(citation?.kind === 'openalex'
+      ? {
+        citationDeps: {
+          resolver: new OpenAlexCitationResolver(
+            citation.mailto !== undefined ? { mailto: citation.mailto } : {},
+          ),
+        },
+      }
+      : {}),
   }
-  return FIXTURE_DEPS
+  return deps
 }
 
 /** JSON-safe model-facing projection of a research artifact (drops Buffer bytes). */

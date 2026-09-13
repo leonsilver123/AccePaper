@@ -46,7 +46,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { buildToolDeps, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
+import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
@@ -123,6 +123,13 @@ export interface Config {
    */
   readonly literatureSearch?: LiteratureChannel
   /**
+   * Bibliographic-resolver channel for the citation identity chain. Omitted (or
+   * `'fixture'`), citations resolve against the fixture; `'openalex'` resolves them
+   * against the real catalogue, so a fabricated DOI becomes an authoritative
+   * `not_found` (a hard block) instead of a fixture verdict.
+   */
+  readonly citationResolver?: CitationChannel
+  /**
    * Real-model channel for prose steps (A1 gap analysis, D2 outline, D3 writing,
    * D4 rebuttal). Omitted, those steps emit their fixture text and the deployment
    * stays fully offline — the same posture as an omitted `literatureSearch`.
@@ -160,7 +167,7 @@ export class ResearchEngine extends Service {
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
-    this.toolDeps = buildToolDeps(config.literatureSearch)
+    this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
     this.proseWriter = config.prose !== undefined ? new LlmProseWriter(ctx, config.prose) : undefined
   }
 
@@ -329,6 +336,10 @@ export default ResearchEngine
  *  module, so the tool package keeps holding zero network code. */
 export { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
 export type { OpenAlexAdapterOptions } from './openalex-adapter.ts'
+
+/** Real bibliographic resolver (OpenAlex) for the citation identity chain. */
+export { OpenAlexCitationResolver } from './openalex-citation-resolver.ts'
+export type { OpenAlexCitationResolverOptions } from './openalex-citation-resolver.ts'
 
 /** Real-model prose channel for the runner's text-producing steps. */
 export { LlmProseWriter } from './llm-prose-writer.ts'

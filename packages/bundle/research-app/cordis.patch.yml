@@ -46,6 +46,11 @@
         # retrieval and should not be removed casually.
         literatureSearch:
           kind: openalex
+        # Bibliographic resolver for the citation identity chain. `openalex` makes a
+        # fabricated DOI an authoritative not_found (a hard block) instead of a
+        # fixture verdict. Set `{ kind: fixture }` to keep the chain offline.
+        citationResolver:
+          kind: openalex
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.
