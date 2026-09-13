@@ -138,17 +138,18 @@ describe('T19-B registry — per-entry declaration completeness', () => {
   })
 })
 
-describe('T19-B registry — truthfulness levels (4-level ruling)', () => {
-  it('exposes exactly the 4 declared levels', () => {
+describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
+  it('exposes exactly the 5 declared levels', () => {
     expect(TRUTHFULNESS_LEVELS).toEqual([
       'real_tool_fixture_input',
+      'local_computation',
       'fixture_executor',
       'mock_external',
       'live_external',
     ])
   })
 
-  it('classifies every step with one of the 4 levels', () => {
+  it('classifies every step with one of the 5 levels', () => {
     for (const entry of STEP_EXECUTOR_REGISTRY.values()) {
       expect(TRUTHFULNESS_LEVELS).toContain(entry.kind)
     }
@@ -185,9 +186,9 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
    * C1-mvp executes the traffic-sim experiment engine, so it is a real-tool step
    * (its artifact carries measured numbers) without appearing in the tool-id map.
    */
-  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['C1-mvp', 'B3-baseline', 'C2-trinity-loop'] as const
+  const REAL_RUNTIME_STEPS_WITHOUT_TOOL = ['B3-baseline', 'C1-mvp', 'C2-trinity-loop'] as const
 
-  it('marks exactly the real-tool steps as real_tool_fixture_input', () => {
+  it('marks exactly the tool-executing steps as real_tool_fixture_input', () => {
     const real = [...STEP_EXECUTOR_REGISTRY.values()]
       .filter(e => e.kind === 'real_tool_fixture_input')
       .map(e => e.stepId)
@@ -195,18 +196,21 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(real).toEqual([
       'A1-landscape',
       'A2-claim',
-      'B3-baseline',
-      'C1-mvp',
-      'C2-trinity-loop',
       'C3-boundary',
       'D1-figure-map',
       'E1-format',
     ])
-    expect(real).toEqual(expect.arrayContaining([
-      ...Object.keys(EXPECTED_REAL_TOOLS),
-      ...REAL_RUNTIME_STEPS_WITHOUT_TOOL,
-      'B3-baseline',
-    ]))
+    expect(real).toEqual(expect.arrayContaining(Object.keys(EXPECTED_REAL_TOOLS)))
+  })
+
+  it('marks the runtime steps that run NO catalogue tool as local_computation', () => {
+    // These compute real measurements with this package's own code. They used to
+    // be filed under `real_tool_fixture_input`, which the report renders as "real
+    // tool functions executed" — a claim that only the five entries above satisfy.
+    const local = [...STEP_EXECUTOR_REGISTRY.values()]
+      .filter(e => e.kind === 'local_computation')
+      .map(e => e.stepId)
+    expect(local).toEqual(['B2-data', ...REAL_RUNTIME_STEPS_WITHOUT_TOOL])
   })
 
   it('brands each real-tool producer with the tool id@version', () => {
@@ -319,7 +323,11 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
     // The claim and the evidence must agree: a descriptor may only call itself real
     // when every declared file was actually found on this host.
     expect(acquired).toBe(dataset?.files?.every(f => f.present === true) ?? false)
-    expect(dataset?.__kind).toBe(acquired ? 'real_tool_fixture_input' : 'fixture_executor')
+    // B2 runs no catalogue tool, so it can never claim `real_tool_fixture_input`
+    // (the level the report prints as "real tool functions executed"). What its
+    // level tracks is whether the bytes were found: a real local computation over
+    // real files, or a fixture that claims no acquisition.
+    expect(dataset?.__kind).toBe(acquired ? 'local_computation' : 'fixture_executor')
   })
 
   it.each(fixtureSteps)('fixture executor %s stamps fixture provenance', async (stepId) => {

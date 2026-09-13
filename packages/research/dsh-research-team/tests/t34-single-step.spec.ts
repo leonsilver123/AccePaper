@@ -98,13 +98,17 @@ describe('T34 — 16 步单步可运行验证', () => {
   it('汇总:真实工具步骤与 fixture 步骤的边界如实分离', async () => {
     const rows = await driveEveryStepIndividually()
     const realTool = rows.filter(r => r.kind === 'real_tool_fixture_input').map(r => r.stepId)
+    const localComputation = rows.filter(r => r.kind === 'local_computation').map(r => r.stepId)
     const fixture = rows.filter(r => r.kind === 'fixture_executor').map(r => r.stepId)
     const humanGate = rows.filter(r => r.kind === 'humanGate').map(r => r.stepId)
 
-    // 与 registry 的声明一致:5 真实工具 / 10 fixture / 1 人工门。
-    expect(realTool).toHaveLength(8)
-    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop', 'C3-boundary', 'D1-figure-map', 'E1-format'])
-    expect(fixture).toHaveLength(7)
+    // 与 registry 的声明一致:5 步真的执行了目录里的工具函数 / 3 步用本包自己的代码
+    // 算出真实测量(无工具、无外部系统)/ 7 步 fixture / 1 人工门。
+    // `real_tool_fixture_input` 的含义是"工具函数执行了",报告把它印成
+    // "Real tool functions executed" —— 所以本地计算不能挂在这个等级下。
+    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format'])
+    expect(localComputation).toEqual(['B2-data', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop'])
+    expect(fixture).toHaveLength(6)
     expect(humanGate).toEqual(['E2-submit'])
   })
 })

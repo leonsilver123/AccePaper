@@ -122,16 +122,18 @@ import {
   STUDY_SERIES_SHA256,
 } from './study-demand.ts'
 
-/** Truthfulness classification of an executor / gate channel (4-level ruling). */
+/** Truthfulness classification of an executor / gate channel (5-level ruling). */
 export type Truthfulness =
   | 'real_tool_fixture_input'
+  | 'local_computation'
   | 'fixture_executor'
   | 'mock_external'
   | 'live_external'
 
-/** The 4 levels in report order (also the runtime membership guard). */
+/** The 5 levels in report order (also the runtime membership guard). */
 export const TRUTHFULNESS_LEVELS: ReadonlyArray<Truthfulness> = [
   'real_tool_fixture_input',
+  'local_computation',
   'fixture_executor',
   'mock_external',
   'live_external',
@@ -1123,7 +1125,7 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
           : 'dataset descriptor names a real, openly-licensed dataset; its bytes are not present on this host',
       },
       B2_PRODUCER,
-      acquired ? 'real_tool_fixture_input' : 'fixture_executor',
+      acquired ? 'local_computation' : 'fixture_executor',
     ),
     'data-profile': tagArtifact(
       {
@@ -1146,7 +1148,7 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
           : 'no profile claimed — the dataset files are not present on this host',
       },
       B2_PRODUCER,
-      acquired ? 'real_tool_fixture_input' : 'fixture_executor',
+      acquired ? 'local_computation' : 'fixture_executor',
     ),
   }
 }
@@ -1195,7 +1197,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         note: 'baseline MEASURED by running the fixed-time plan; the candidate row is the same run, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
-      'real_tool_fixture_input',
+      'local_computation',
     ),
     'sota-comparison': tagArtifact(
       {
@@ -1217,7 +1219,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a delay figure has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
       },
       B3_PRODUCER,
-      'fixture_executor',
+      'local_computation',
     ),
   }
 }
@@ -1263,7 +1265,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         note: 'mvp-results measured by running both control policies against the study demand profile',
       },
       C1_PRODUCER,
-      'real_tool_fixture_input',
+      'local_computation',
     ),
   }
 }
@@ -1309,7 +1311,7 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
         note: 'dossier of the channels this step can observe from its declared inputs; the A+B+C gate verdicts are produced by the real trinity channels in verdict.ts, and the adversarial channel is not among this step\'s inputs',
       },
       C2_PRODUCER,
-      'real_tool_fixture_input',
+      'local_computation',
     ),
   }
 }
@@ -1615,7 +1617,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'title and headings derived from the claim and the method',
       },
       D2_PRODUCER,
-      outlineSource === 'fixture' ? 'fixture_executor' : 'real_tool_fixture_input',
+      outlineSource === 'fixture' ? 'fixture_executor' : 'live_external',
     ),
   }
 }
@@ -1688,7 +1690,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'manuscript draft whose section bodies came from a real model call',
       },
       producer,
-      'fixture_executor',
+      proseSource === 'fixture' ? 'fixture_executor' : 'live_external',
     ),
   }
 }
@@ -1795,7 +1797,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'exchanges written by the model from the measured outcome',
       },
       D4_PRODUCER,
-      rebuttalSource === 'fixture' ? 'fixture_executor' : 'real_tool_fixture_input',
+      rebuttalSource === 'fixture' ? 'fixture_executor' : 'live_external',
     ),
     'revised-draft': tagArtifact(
       {
@@ -1980,8 +1982,13 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'B2-data',
-    kind: 'fixture_executor',
-    basis: 'no dataset acquisition/profiling tool exists; the executor emits a deterministic synthetic dataset descriptor + profile with declared (non-real) provenance',
+    // No tool function runs: the executor stats the dataset files and computes the
+    // descriptor from what it finds. Which level it earns therefore follows the
+    // FILESYSTEM, not this line — `local_computation` when the declared files are
+    // present at their recorded sizes, `fixture_executor` when they are not (and
+    // then it claims no acquisition at all).
+    kind: 'local_computation',
+    basis: 'no dataset acquisition/profiling tool exists. The executor stats each declared dataset file and the descriptor reports what is ON DISK: present at the recorded size, or absent. With the files present it is a `local_computation` over real bytes; with them absent it degrades to `fixture_executor` and claims no acquisition',
     producer: B2_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1989,7 +1996,11 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'B3-baseline',
-    kind: 'real_tool_fixture_input',
+    // No tool function runs here and no external system is touched: the executor
+    // computes the baseline with THIS package's experiment module. Calling that
+    // `real_tool_fixture_input` made the report print it among the "real tool
+    // functions executed", which it is not.
+    kind: 'local_computation',
     basis: 'the baseline is MEASURED: the fixed-time plan is executed over the MEASURED demand profile (see C1-mvp for the series, hash and derivation) and its delay is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published delay figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
     producer: B3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
@@ -1998,7 +2009,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'C1-mvp',
-    kind: 'real_tool_fixture_input',
+    kind: 'local_computation',
     basis: 'the traffic-sim experiment engine RUNS both control policies against the MEASURED demand profile (derived from a real hourly vehicle-count series; series, hash, derivation and assumptions recorded on the artifact) and measures the delay reduction. The claim prediction is still fixture-supplied on the default path, so this is "the experiment really ran on measured demand", not "the claim is proven"',
     producer: C1_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
@@ -2007,7 +2018,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'C2-trinity-loop',
-    kind: 'real_tool_fixture_input',
+    kind: 'local_computation',
     basis: 'the convergence dossier is COMPUTED from the channels this step\'s declared inputs let it see (C from mvp-results, part of B from baseline-results) by the same rule the gate uses; the adversarial channel is not among its inputs, so it is reported absent rather than assumed — the step\'s A+B+C GATE is what actually adjudicates convergence (see VERDICT_CHANNELS). Inputs remain fixture-supplied.',
     producer: C2_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
@@ -2168,18 +2179,22 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  * Truthfulness of each trinity GATE channel (implemented in verdict.ts). Declared
  * here so the registry stays the single audit face for "what is real".
  *  - A: the REAL team `judgeRound` → core `adjudicate('A')` runs; the votes are a
- *    synthetic complete rebuttal round (fixture input).
+ *    synthetic complete rebuttal round (fixture input). No TOOL runs, so this is
+ *    `local_computation`, not `real_tool_fixture_input`.
  *  - B: the REAL core `verifyCitation` identity chain runs against the SIMULATED
  *    `MockCitationResolverAdapter`, with the claim stance taken from the T23
  *    synthetic anchor fixture → core `adjudicate('B')`. Real adapter logic +
  *    mocked external system.
  *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over a
  *    `live` experiment report measured by traffic-sim on the study's measured demand
- *    profile; the claim and its prediction are the fixture-supplied input.
+ *    profile; the claim and its prediction are the fixture-supplied input. The
+ *    measurement is this package's own code, hence `local_computation`.
  */
 export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfulness; basis: string }>> = {
   A: {
-    kind: 'real_tool_fixture_input',
+    // No tool function runs here either: `judgeRound` and core `adjudicate` are
+    // package code over a synthetic vote set.
+    kind: 'local_computation',
     basis: 'team judgeRound → core adjudicate(\'A\') executes for real; the rebuttal round votes are synthetic fixture input',
   },
   B: {
@@ -2187,7 +2202,8 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
     basis: 'core verifyCitation identity chain executes against MockCitationResolverAdapter (simulated external resolver); stance comes from the T23 synthetic anchor fixture → core adjudicate(\'B\')',
   },
   C: {
-    kind: 'real_tool_fixture_input',
+    // The measurement is made by this package's experiment module, not by a tool.
+    kind: 'local_computation',
     // The experiment RUNS (traffic-sim measures both policies over the measured
     // demand profile; the report carries source 'live' and grades live-verified).
     // Its INPUT — the claim and its prediction — is fixture-supplied on the default

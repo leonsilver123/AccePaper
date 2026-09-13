@@ -6,11 +6,16 @@
 //   - e2e-report-t19b-{happy,recovery}.md (human-readable run summary)
 //   - t19a-vs-t19b.md                     (T19-A vs T19-B comparison)
 //
-// TRUTHFULNESS DISCIPLINE (frozen): the report uses the 4-level vocabulary and
+// TRUTHFULNESS DISCIPLINE (frozen): the report uses the 5-level vocabulary and
 // never upgrades a level in prose.
 //   - `real_tool_fixture_input` = the real tool FUNCTION ran; its INPUT was a
 //     synthetic fixture. This is NOT real scientific verification and the report
 //     must never describe it as such.
+//   - `local_computation`       = NO tool function and no external system: the
+//     executor computed its product from its inputs with code in this package.
+//     Added 2026-09-14: the C-channel measurement steps (B3/C1/C2) were filed
+//     under `real_tool_fixture_input`, which this report renders as "Real tool
+//     functions executed" — a claim none of them satisfies.
 //   - `fixture_executor`        = the whole executor is a fixture.
 //   - `mock_external`           = real adaptation logic over a SIMULATED external
 //     system (the B gate channel).
@@ -51,9 +56,10 @@ const T19A = {
     'fixture executors; all gate verdicts are fixture-labelled; E2-submit stops gated.',
 } as const
 
-/** Per-level step counts for one run (4-level vocabulary + the E2 human gate). */
+/** Per-level step counts for one run (5-level vocabulary + the E2 human gate). */
 export interface KindCounts {
   readonly real_tool_fixture_input: number
+  readonly local_computation: number
   readonly fixture_executor: number
   readonly mock_external: number
   readonly live_external: number
@@ -63,6 +69,7 @@ export interface KindCounts {
 export function countKinds(steps: ReadonlyArray<StepOutcome>): KindCounts {
   const counts: Record<string, number> = {
     real_tool_fixture_input: 0,
+    local_computation: 0,
     fixture_executor: 0,
     mock_external: 0,
     live_external: 0,
@@ -132,6 +139,7 @@ function truthfulnessLegend(): string {
     '| level | meaning |',
     '| --- | --- |',
     '| `real_tool_fixture_input` | the REAL tool function executed; its INPUT was a synthetic fixture. NOT real scientific verification. |',
+    '| `local_computation` | NO tool function and no external system: the executor computed its product from its inputs using code in this package. The computation is real; it is not tool-mediated evidence. |',
     '| `fixture_executor` | the whole executor is a deterministic fixture — no tool exists for this step yet. |',
     '| `mock_external` | REAL adaptation logic executed against a SIMULATED external system. |',
     '| `live_external` | a real external system. Depends on the deployment\'s channel config, not on the wave. |',
@@ -246,6 +254,7 @@ export function writeComparisonReport(
     '| metric | T19-A | T19-B |',
     '| --- | --- | --- |',
     `| steps with a REAL tool function executing (\`real_tool_fixture_input\`) | ${T19A.realToolCount} | ${counts.real_tool_fixture_input} |`,
+    `| steps computing a measurement locally (\`local_computation\`, no tool, no external system) | 0 | ${counts.local_computation} |`,
     `| \`fixture_executor\` steps | ${T19A.fixtureCount} | ${counts.fixture_executor} |`,
     `| \`mock_external\` executor steps | ${T19A.mockExternalCount} | ${counts.mock_external} |`,
     `| \`live_external\` steps | 0 | ${counts.live_external} |`,

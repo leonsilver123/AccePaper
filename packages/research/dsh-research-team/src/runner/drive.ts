@@ -44,7 +44,7 @@ import {
   submitGateVerdict,
 } from '@deepseek-ai/dsh-research-core'
 
-import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY } from './registry.ts'
+import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
 import type {
   DriveOptions,
   DriveStepOptions,
@@ -183,28 +183,41 @@ export async function driveStep(
   const status: StepStatus = stepSnap.status
 
   const artifacts: StepArtifactEvidence[] = []
+  // The kind the artifacts declare about THEMSELVES, when every artifact this step
+  // produced agrees on one. The static registry entry cannot know a deployment
+  // fact — A1 reaches a live catalogue only where one is configured — so the
+  // artifact's own tag is the more specific statement. A step whose artifacts
+  // disagree declares nothing here and falls back to the registry entry.
+  const declaredKinds = new Set<Truthfulness>()
   for (const slug of stepDef.outputs) {
     const value = getArtifact(store, runId, slug)
-    const producedBy =
+    const record =
       value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>).__producer
+        ? (value as Record<string, unknown>)
         : undefined
+    const producedBy = record?.__producer
+    const artifactKind = record?.__kind
+    if (typeof artifactKind === 'string' && (TRUTHFULNESS_LEVELS as ReadonlyArray<string>).includes(artifactKind)) {
+      declaredKinds.add(artifactKind as Truthfulness)
+    }
     artifacts.push({
       slug,
       producedBy: typeof producedBy === 'string' ? producedBy : entry.producer,
     })
   }
+  const declaredKind = declaredKinds.size === 1 ? [...declaredKinds][0] : undefined
+  const effectiveKind = declaredKind ?? entry.kind
 
   return {
     stepId,
     status,
     attemptId,
-    kind: entry.kind,
+    kind: effectiveKind,
     producer: entry.producer,
     outputSlugs: stepDef.outputs,
     artifacts,
     verdicts,
-    usedRealTool,
+    usedRealTool: effectiveKind === 'real_tool_fixture_input',
     executeStatus: res.status,
   }
 }

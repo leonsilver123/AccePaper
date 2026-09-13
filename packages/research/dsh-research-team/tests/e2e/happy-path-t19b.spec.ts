@@ -42,7 +42,12 @@ const CORE_ORDER: ReadonlyArray<string> = getStepDefinitions().map(d => d.id)
 // T19-S canonical alignment: ablation (C3) is the real-tool boundary probe;
 // B3-baseline is baseline+SOTA (honest fixture); E1-format assembles the
 // formatted manuscript (three-line-table is its real table sub-capability).
-const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C1-mvp', 'C3-boundary', 'D1-figure-map', 'E1-format']
+/**
+ * Steps whose executor runs a function from the research TOOL catalogue. This is
+ * the set the level `real_tool_fixture_input` names, and the set the run report
+ * prints as "Real tool functions executed".
+ */
+const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format']
 
 interface Driven {
   readonly store: ResearchRunStore
@@ -116,13 +121,10 @@ describe('T19-B happy path — real tool execution is provable from the artifact
 
   it('brands fixture artifacts as fixture_executor (no level inflation)', async () => {
     const { store, run } = await happyRun()
+    // B2-data is excluded because its level tracks dataset presence on this host.
     const fixtureSteps = run.steps.filter(
-      s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit'
-        && s.stepId !== 'B2-data' && s.stepId !== 'B3-baseline' && s.stepId !== 'C2-trinity-loop',
+      s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit' && s.stepId !== 'B2-data',
     )
-    // C1-mvp left this set when the C channel began running its experiment for real;
-    // B2-data is excluded because its level tracks dataset presence on this host, and
-    // B3-baseline because it now measures its own baseline.
     expect(fixtureSteps.length).toBe(6)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
@@ -151,8 +153,16 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     const counts = countKinds(run.steps)
     // B2-data's level follows whether its dataset is on this host, so the split
     // between the two levels is asserted as an identity rather than a fixed count.
-    expect(counts.real_tool_fixture_input + counts.fixture_executor).toBe(15)
+    // B2-data's level follows whether its dataset is on this host, so the split
+    // between the non-tool levels is asserted as an identity rather than a count.
+    expect(
+      counts.real_tool_fixture_input + counts.local_computation + counts.fixture_executor,
+    ).toBe(15)
+    // No live channel is configured in this spec, so nothing reached an external
+    // system. That is a property of THIS deployment, not of the wave: with a live
+    // retrieval channel A1 reports `live_external` (see the A1-kind spec).
     expect(counts.live_external).toBe(0)
+    expect(counts.real_tool_fixture_input).toBe(REAL_TOOL_STEPS.length)
     expect(counts.humanGate).toBe(1)
     const total = TRUTHFULNESS_LEVELS.reduce((n, l) => n + counts[l], 0) + counts.humanGate
     expect(total).toBe(16)
@@ -420,7 +430,12 @@ describe('T19-B happy path — auditable reports', () => {
     expect(cmp).toContain('NOT')
 
     const json = JSON.parse(jsonContent) as Record<string, unknown>
-    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input).toBe(8)
+    // Five steps run a catalogue tool function. The three C-channel steps that
+    // compute their own measurements are `local_computation`, and the report's
+    // "Real tool functions executed" line counts only this number.
+    expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input)
+      .toBe(REAL_TOOL_STEPS.length)
+    expect((json.truthfulnessCounts as Record<string, number>).local_computation).toBe(4)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()
