@@ -498,6 +498,27 @@ function thresholdLabel(predictionText: string): string {
   return threshold === undefined ? 'no numeric threshold stated' : `${threshold}%`
 }
 
+/**
+ * The prose route a step's text came from, as the artifact records it.
+ *
+ * A `*Source: 'model'` label used to be the whole claim, and it proved only that a
+ * `ResearchProseWriter` object had been injected — any `{ write() }` satisfies the
+ * interface, including a test stub. The writer's own result carries the provider
+ * and model that produced the text, so the artifact can name the route instead of
+ * asserting a category. It still does not PROVE a model ran; it records which one
+ * the configuration said to use, which is what a reader can check against the
+ * deployment.
+ *
+ * @param result - the writer's result for this step.
+ * @returns the recorded route, or a phrase saying the built-in text was used.
+ */
+function proseRouteOf(result: { readonly provider: string; readonly model: string } | undefined): Record<string, unknown> {
+  if (result === undefined) {
+    return { producer: 'built-in fixture text (no prose writer configured)' }
+  }
+  return { producer: `configured prose writer: ${result.provider}/${result.model}` }
+}
+
 /** Claim identity from the run context (falls back to the canonical constants). */
 function canonicalOf(ctx: ExecCtx): {
   readonly claimId: string
@@ -632,6 +653,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const writer = ctx.proseWriter
   let gaps: ReadonlyArray<string>
   let gapSource: 'model' | 'fixture'
+  let gapRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
     gaps = [FIXTURE_GAP_STATEMENT]
     gapSource = 'fixture'
@@ -645,6 +667,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
+    gapRoute = proseRouteOf(analysis)
     gaps = analysis.text
       .split('\n')
       .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim())
@@ -689,9 +712,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         corpusSource: liveCorpus
           ? 'live catalogue via the configured retrieval adapter'
           : 'synthetic literature adapter (mockLiteratureSearchAdapter)',
-        gapProducer: gapSource === 'model'
-          ? 'the configured prose writer, reading the retrieved records'
-          : 'the built-in fixture statement (no prose writer configured)',
+        gapProducer: gapRoute,
       },
       A1_PRODUCER,
       liveCorpus ? 'live_external' : 'real_tool_fixture_input',
@@ -776,6 +797,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let experimentToFalsify = 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.'
   let prediction = CANONICAL_PREDICTION
   let claimSource: 'model' | 'fixture' = 'fixture'
+  let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
     const analysis = await writer.write({
@@ -816,6 +838,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     experimentToFalsify = parsed.experimentToFalsify
     prediction = parsed.prediction
     claimSource = 'model'
+    claimRoute = proseRouteOf(analysis)
   }
 
   const invocation = await invoker.invoke(
@@ -844,6 +867,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ref: CANONICAL_CLAIM_ID,
         supportStatus: artifact.claim.supportStatus,
         claimSource,
+        claimRoute,
       },
       A2_PRODUCER,
       'real_tool_fixture_input',
@@ -938,6 +962,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let metricName: string = SCENARIO.metric
   let metricDirection: string = SCENARIO.metricDirection
   let methodSource: 'model' | 'fixture' = 'fixture'
+  let methodRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
     const analysis = await writer.write({
@@ -980,6 +1005,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     metricName = parsedMetric
     metricDirection = parsedDirection
     methodSource = 'model'
+    methodRoute = proseRouteOf(analysis)
   }
 
   return {
@@ -995,6 +1021,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         steps,
         metric: { name: metricName, direction: metricDirection },
         methodSource,
+        methodRoute,
         note: methodSource === 'fixture'
           ? 'synthetic method spec — no method-derivation tool exists'
           : 'method spec derived from the claim and its falsifiable prediction',
@@ -1567,6 +1594,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let title: string = SCENARIO.title
   const headings: Record<string, string> = { ...DEFAULT_HEADING }
   let outlineSource: 'model' | 'fixture' = 'fixture'
+  let outlineRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   const writer = ctx.proseWriter
   if (writer !== undefined) {
@@ -1605,6 +1633,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       headings[section.id] = parsedHeadings[index] as string
     })
     outlineSource = 'model'
+    outlineRoute = proseRouteOf(analysis)
   }
 
   const outline: ReadonlyArray<OutlineSection & { covers: ReadonlyArray<string> }> =
@@ -1622,6 +1651,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         slug: 'paper-outline',
         title,
         outlineSource,
+        outlineRoute,
         claimRef,
         agendaRef: (agenda?.claimRef as string | undefined) ?? claimRef,
         // See C3's `convergedRef`: the key is `convergence`, and a missing dossier
@@ -1659,14 +1689,15 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     return { id, heading }
   })
 
-  // Prose path (T34): when the runner injected a real-model writer, each section body
-  // comes from the model; otherwise the built-in fixture sentences are used so the offline
-  // pipeline stays deterministic. `proseSource` records which path ran. The four-level
-  // truthfulness vocabulary is deliberately left unchanged: assigning a level to a real
-  // model call is a contract decision that stays with the project owner.
+  // Prose path (T34): when the runner injected a prose writer, each section body comes
+  // from it; otherwise the built-in fixture sentences are used so the offline pipeline
+  // stays deterministic. `proseSource` records which path ran, and `proseRoute` names the
+  // writer the configuration selected — the label alone only proves that SOME writer was
+  // injected, which any `{ write() }` object satisfies.
   const writer = ctx.proseWriter
   let sections: ManuscriptSection[]
   let proseSource: 'fixture' | 'llm'
+  let proseRoute: Record<string, unknown> = proseRouteOf(undefined)
   let producer: string = D3_PRODUCER
   if (writer === undefined) {
     const measured = measureOutcome()
@@ -1686,6 +1717,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     sections = headings.map((h, i) => ({ ...h, bodyText: written[i]?.text ?? '' }))
     proseSource = 'llm'
     const first = written[0]
+    proseRoute = proseRouteOf(first)
     if (first !== undefined) producer = `llm:${first.provider}/${first.model}`
   }
 
@@ -1699,6 +1731,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         claimRef,
         sections,
         proseSource,
+        proseRoute,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
         note: proseSource === 'fixture'
@@ -1755,6 +1788,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const writer = ctx.proseWriter
   let points: ReadonlyArray<RebuttalPoint>
   let rebuttalSource: 'model' | 'fixture' = 'fixture'
+  let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
     points = [
       {
@@ -1789,6 +1823,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     }
     points = parsed
     rebuttalSource = 'model'
+    rebuttalRoute = proseRouteOf(analysis)
   }
 
   const record = buildRevisionRecord(points)
@@ -1805,6 +1840,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         roundId: 't19s-rebuttal-1',
         claimRef,
         rebuttalSource,
+        rebuttalRoute,
         exchanges: record.points,
         revisionCount: record.revisionCount,
         hasRevisions: record.hasRevisions,

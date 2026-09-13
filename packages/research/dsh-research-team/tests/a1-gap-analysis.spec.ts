@@ -18,6 +18,7 @@ import { runT19B } from '../src/runner/drive.ts'
 interface GapListShape {
   readonly gaps: ReadonlyArray<string>
   readonly gapSource: 'model' | 'fixture'
+  readonly gapProducer: { readonly producer: string }
 }
 
 /** A writer that records what it was asked and answers with fixed lines. */
@@ -45,6 +46,8 @@ describe('A1 gap analysis', () => {
     const gapList = getArtifact(store, run.runId, 'gap-list') as GapListShape
     expect(gapList.gapSource).toBe('fixture')
     expect(gapList.gaps.length).toBeGreaterThan(0)
+    // The label says which path ran, and says it without claiming a model call.
+    expect(gapList.gapProducer.producer).toContain('built-in fixture text')
   })
 
   it('turns the model analysis into gaps and shows the writer the retrieved papers', async () => {
@@ -57,6 +60,9 @@ describe('A1 gap analysis', () => {
 
     const gapList = getArtifact(store, run.runId, 'gap-list') as GapListShape
     expect(gapList.gapSource).toBe('model')
+    // The artifact names the ROUTE the configuration selected, not just the category:
+    // `gapSource` alone proves only that some writer object was injected.
+    expect(gapList.gapProducer.producer).toContain('test-provider/test-model')
     expect(gapList.gaps).toEqual([
       'Gap A: no benchmark for mixed-connectivity corridors',
       'Gap B: transfer across signal controllers is unmeasured',
