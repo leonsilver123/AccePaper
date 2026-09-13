@@ -122,7 +122,7 @@ export class MockLiteratureSearchAdapter implements LiteratureSearchAdapter {
     Object.freeze(this.corpus)
   }
 
-  search(query: LiteratureQuery): LiteratureSearchOutcome {
+  async search(query: LiteratureQuery): Promise<LiteratureSearchOutcome> {
     if (this.unavailable) {
       return {
         status: 'unavailable',

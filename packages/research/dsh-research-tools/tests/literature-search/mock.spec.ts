@@ -32,9 +32,9 @@ function okOf(outcome: LiteratureSearchOutcome): OkOutcome {
 const ROW1_TITLE = 'Synthetic attention over memory hierarchies'
 
 describe('T12 mock fixture contract — token matching (OR semantics)', () => {
-  it('combines query tokens with OR: a hit matching only the second token is returned', () => {
+  it('combines query tokens with OR: a hit matching only the second token is returned', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const ok = okOf(adapter.search({ topic: 'memory retrieval' }))
+    const ok = okOf(await adapter.search({ topic: 'memory retrieval' }))
 
     // Row 3 matches ONLY the second token ('retrieval' — its title/venue/ref
     // never contain 'memory'); rows 7 + 14 match ONLY the first token. OR
@@ -57,10 +57,10 @@ describe('T12 mock fixture contract — token matching (OR semantics)', () => {
     ])
   })
 
-  it('matches on any single whitespace token (substring, case-insensitive)', () => {
+  it('matches on any single whitespace token (substring, case-insensitive)', async () => {
     const adapter = createMockLiteratureSearchAdapter()
     // 'MEMORY' appears in rows 1 + 7; 'GRAPH' in row 4 alone.
-    const ok = okOf(adapter.search({ topic: '  MEMORY graph ' }))
+    const ok = okOf(await adapter.search({ topic: '  MEMORY graph ' }))
     const titles = ok.hits.map(hit => hit.title)
     expect(titles).toContain(ROW1_TITLE)
     expect(titles).toContain('Synthetic fault analysis of memory controllers')
@@ -69,9 +69,9 @@ describe('T12 mock fixture contract — token matching (OR semantics)', () => {
 })
 
 describe('T12 mock fixture contract — venue + refId join the haystack', () => {
-  it('a venue-only token (no title/refId contains it) matches the venue rows', () => {
+  it('a venue-only token (no title/refId contains it) matches the venue rows', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const ok = okOf(adapter.search({ topic: 'conference' }))
+    const ok = okOf(await adapter.search({ topic: 'conference' }))
 
     // 'Conference' appears in NO title and NO refId — only in the two
     // Synthetic Conference venue strings. Rows 3/4/5 (Conference A) + 7/9
@@ -89,9 +89,9 @@ describe('T12 mock fixture contract — venue + refId join the haystack', () => 
     }
   })
 
-  it('venueTierFilter narrows a venue-haystack hit set to the requested tier', () => {
+  it('venueTierFilter narrows a venue-haystack hit set to the requested tier', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const ok = okOf(adapter.search({ topic: 'conference', venueTierFilter: 'tier1' }))
+    const ok = okOf(await adapter.search({ topic: 'conference', venueTierFilter: 'tier1' }))
     expect(ok.total).toBe(3)
     expect(ok.hits.map(hit => hit.id)).toEqual(['syn-lit-0003', 'syn-lit-0004', 'syn-lit-0005'])
     for (const hit of ok.hits) {
@@ -99,15 +99,15 @@ describe('T12 mock fixture contract — venue + refId join the haystack', () => 
     }
   })
 
-  it('a refId token (DOI / arXiv-style) locates the single owning corpus row', () => {
+  it('a refId token (DOI / arXiv-style) locates the single owning corpus row', async () => {
     const adapter = createMockLiteratureSearchAdapter()
 
-    const doiHit = okOf(adapter.search({ topic: 'synth-lit-0002' }))
+    const doiHit = okOf(await adapter.search({ topic: 'synth-lit-0002' }))
     expect(doiHit.total).toBe(1)
     expect(doiHit.hits[0].id).toBe('syn-lit-0002')
     expect(doiHit.hits[0].ref).toMatchObject({ kind: 'doi', id: '10.1000/synth-lit-0002' })
 
-    const arxivHit = okOf(adapter.search({ topic: '2499.00001' }))
+    const arxivHit = okOf(await adapter.search({ topic: '2499.00001' }))
     expect(arxivHit.total).toBe(1)
     expect(arxivHit.hits[0].id).toBe('syn-lit-0004')
     expect(arxivHit.hits[0].ref).toMatchObject({ kind: 'arxiv', id: '2499.00001' })
@@ -115,10 +115,10 @@ describe('T12 mock fixture contract — venue + refId join the haystack', () => 
 })
 
 describe('T12 mock fixture contract — fresh hits + instance isolation', () => {
-  it('every search returns FRESH hit objects (no aliasing between calls)', () => {
+  it('every search returns FRESH hit objects (no aliasing between calls)', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const first = okOf(adapter.search({ topic: 'synthetic' }))
-    const second = okOf(adapter.search({ topic: 'synthetic' }))
+    const first = okOf(await adapter.search({ topic: 'synthetic' }))
+    const second = okOf(await adapter.search({ topic: 'synthetic' }))
 
     // Distinct array + distinct hit instances per call.
     expect(first.hits).not.toBe(second.hits)
@@ -128,39 +128,39 @@ describe('T12 mock fixture contract — fresh hits + instance isolation', () => 
     // Hits are plain (unfrozen) per-call objects: mutating a previous result
     // must never leak into a later result (no fixture-state mutation possible).
     ;(first.hits[0] as { title: string }).title = 'MUTATED via first result'
-    const third = okOf(adapter.search({ topic: 'synthetic' }))
+    const third = okOf(await adapter.search({ topic: 'synthetic' }))
     expect(third.hits[0].title).toBe(ROW1_TITLE)
     expect(second.hits[0].title).toBe(ROW1_TITLE)
   })
 
-  it('separate instances are isolated: the unavailable seed never leaks', () => {
+  it('separate instances are isolated: the unavailable seed never leaks', async () => {
     const healthy = createMockLiteratureSearchAdapter()
     const seededOutage = createMockLiteratureSearchAdapter({ unavailable: true })
 
-    expect(seededOutage.search({ topic: 'synthetic' })).toEqual({
+    expect(await seededOutage.search({ topic: 'synthetic' })).toEqual({
       status: 'unavailable',
       detail: 'MockLiteratureSearchAdapter seeded outage (no external service was contacted)',
     })
 
     // The healthy instance (created before AND after the seeded one) still
     // answers 'ok' — outage seeding is per-instance state, never global.
-    expect(okOf(healthy.search({ topic: 'synthetic' })).total).toBe(14)
+    expect(okOf(await healthy.search({ topic: 'synthetic' })).total).toBe(14)
     const laterHealthy = createMockLiteratureSearchAdapter()
-    expect(okOf(laterHealthy.search({ topic: 'synthetic' })).total).toBe(14)
+    expect(okOf(await laterHealthy.search({ topic: 'synthetic' })).total).toBe(14)
   })
 
-  it('two healthy instances do not share hit objects', () => {
-    const a = okOf(createMockLiteratureSearchAdapter().search({ topic: 'synthetic' }))
-    const b = okOf(createMockLiteratureSearchAdapter().search({ topic: 'synthetic' }))
+  it('two healthy instances do not share hit objects', async () => {
+    const a = okOf(await createMockLiteratureSearchAdapter().search({ topic: 'synthetic' }))
+    const b = okOf(await createMockLiteratureSearchAdapter().search({ topic: 'synthetic' }))
     expect(a.hits[0]).not.toBe(b.hits[0])
     expect(a.hits).not.toBe(b.hits)
   })
 })
 
 describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
-  it('a full-corpus query returns syn-lit-0001..0014 in row order, every hit synthetic', () => {
+  it('a full-corpus query returns syn-lit-0001..0014 in row order, every hit synthetic', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const ok = okOf(adapter.search({ topic: 'synthetic' }))
+    const ok = okOf(await adapter.search({ topic: 'synthetic' }))
 
     expect(ok.total).toBe(14)
     expect(ok.hits.map(hit => hit.id)).toEqual(
@@ -174,9 +174,9 @@ describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
     }
   })
 
-  it('ids stay corpus-row-indexed even under filtering/capping (never re-numbered)', () => {
+  it('ids stay corpus-row-indexed even under filtering/capping (never re-numbered)', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const tier2 = okOf(adapter.search({ topic: 'synthetic', venueTierFilter: 'tier2' }))
+    const tier2 = okOf(await adapter.search({ topic: 'synthetic', venueTierFilter: 'tier2' }))
     expect(tier2.hits.map(hit => hit.id)).toEqual([
       'syn-lit-0006',
       'syn-lit-0007',
@@ -185,14 +185,14 @@ describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
       'syn-lit-0010',
     ])
 
-    const capped = okOf(adapter.search({ topic: 'synthetic', maxResults: 3 }))
+    const capped = okOf(await adapter.search({ topic: 'synthetic', maxResults: 3 }))
     expect(capped.hits.map(hit => hit.id)).toEqual(['syn-lit-0001', 'syn-lit-0002', 'syn-lit-0003'])
   })
 
-  it('is deterministic: repeated queries return identical ids/content', () => {
+  it('is deterministic: repeated queries return identical ids/content', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const first = okOf(adapter.search({ topic: 'synthetic', venueTierFilter: 'tier3' }))
-    const second = okOf(adapter.search({ topic: 'synthetic', venueTierFilter: 'tier3' }))
+    const first = okOf(await adapter.search({ topic: 'synthetic', venueTierFilter: 'tier3' }))
+    const second = okOf(await adapter.search({ topic: 'synthetic', venueTierFilter: 'tier3' }))
     expect(second).toEqual(first)
     expect(first.hits.map(hit => hit.id)).toEqual([
       'syn-lit-0011',
@@ -202,8 +202,8 @@ describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
     ])
   })
 
-  it('the shared stateless mock instance also answers fresh, deterministic results', () => {
-    const ok = okOf(mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
+  it('the shared stateless mock instance also answers fresh, deterministic results', async () => {
+    const ok = okOf(await mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
     expect(ok.total).toBe(14)
     expect(ok.hits[0].id).toBe('syn-lit-0001')
   })

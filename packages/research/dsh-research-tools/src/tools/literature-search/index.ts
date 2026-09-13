@@ -267,17 +267,17 @@ function buildArtifact(
  * @throws {LiteratureSearchError} on invalid query / maxResults / venueTierFilter
  *   / missing adapter / invalid timestamp / structurally-invalid adapter output.
  */
-export function runLiteratureSearch(
+export async function runLiteratureSearch(
   query: LiteratureQuery,
   adapter: LiteratureSearchAdapter,
   timestamp: number,
-): LiteratureSearchArtifact {
+): Promise<LiteratureSearchArtifact> {
   const normalizedQuery = normalizeQuery(query)
   validateAdapter(adapter)
   validateTimestamp(timestamp)
 
   // Call the adapter EXACTLY ONCE (no retry, no fallback adapter).
-  const outcome: LiteratureSearchOutcome = adapter.search(normalizedQuery)
+  const outcome: LiteratureSearchOutcome = await adapter.search(normalizedQuery)
 
   return buildArtifact(outcome, normalizedQuery, timestamp)
 }

@@ -132,10 +132,10 @@ describe('dsh-research-tools public entry (src/index.ts)', () => {
     expect(artifact.claim.claimId.startsWith('claim-')).toBe(true)
   })
 
-  it('produces a frozen, self-attributed artifact end-to-end through the entry (T12)', () => {
+  it('produces a frozen, self-attributed artifact end-to-end through the entry (T12)', async () => {
     // The synthetic mock adapter is this package's own fixture — same corpus
     // the T12 spec exercises; here we only lock the entry-level contract.
-    const artifact = runLiteratureSearch(
+    const artifact = await runLiteratureSearch(
       { topic: 'synthetic retraction', maxResults: 3 },
       mockLiteratureSearchAdapter,
       1_700_000_000_000,

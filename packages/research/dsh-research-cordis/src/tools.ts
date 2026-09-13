@@ -162,8 +162,10 @@ const jsonTextRender = (_args: unknown, value: unknown) => [
 ]
 
 function handler(toolId: string, toInput: (args: Record<string, unknown>) => unknown) {
-  return (args: Record<string, unknown>): unknown => {
-    const artifact = executeResearchTool(toolId, toInput(args), FIXTURE_DEPS, Date.now())
+  // Asynchronous: the dispatch is async because externally-backed tools perform a
+  // network round trip. Without the await, `toJsonSafe` would serialize a Promise.
+  return async (args: Record<string, unknown>): Promise<unknown> => {
+    const artifact = await executeResearchTool(toolId, toInput(args), FIXTURE_DEPS, Date.now())
     return toJsonSafe(artifact)
   }
 }

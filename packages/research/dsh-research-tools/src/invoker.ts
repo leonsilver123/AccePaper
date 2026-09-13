@@ -95,7 +95,7 @@ export class DirectResearchToolInvoker implements ResearchToolInvoker {
     void this.channelLabel
   }
 
-  invoke(
+  async invoke(
     toolId: ResearchToolId,
     input: unknown,
     context: ResearchToolInvocationContext,
@@ -107,10 +107,14 @@ export class DirectResearchToolInvoker implements ResearchToolInvoker {
       return Promise.resolve(failure(toolId, new Error(violations.join('; ')), this.truthfulness, this.provenance))
     }
     try {
-      const artifact = executeResearchTool(toolId, input, context.deps, context.timestamp)
-      return Promise.resolve({ ok: true, artifact, truthfulness: this.truthfulness, provenance: this.provenance })
+      // Awaited: `executeResearchTool` is asynchronous because externally-backed
+      // tools perform a network round trip. The await also keeps the failure path
+      // honest — a rejection must land in this catch rather than escaping as an
+      // unhandled rejection, which would defeat the fail-closed mapping below.
+      const artifact = await executeResearchTool(toolId, input, context.deps, context.timestamp)
+      return { ok: true, artifact, truthfulness: this.truthfulness, provenance: this.provenance }
     } catch (error) {
-      return Promise.resolve(failure(toolId, error, this.truthfulness, this.provenance))
+      return failure(toolId, error, this.truthfulness, this.provenance)
     }
   }
 }

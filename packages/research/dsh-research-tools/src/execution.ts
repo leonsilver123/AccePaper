@@ -95,14 +95,16 @@ function jsonSnapshot(value: unknown): unknown {
  * @param input - serializable business input for the tool.
  * @param deps - injected adapters/executors; fixture defaults where safe.
  * @param timestamp - epoch ms (deterministic in tests).
- * @returns the canonical tool artifact (same shape as a direct pure-function call).
+ * @returns a promise of the canonical tool artifact (same shape as a direct
+ *   pure-function call). Asynchronous because externally-backed tools perform a
+ *   network round trip through their adapter.
  */
-export function executeResearchTool(
+export async function executeResearchTool(
   toolId: string,
   input: unknown,
   deps?: ResearchToolDeps,
   timestamp: number = Date.now(),
-): unknown {
+): Promise<unknown> {
   const snapshot = jsonSnapshot(input)
   // Strict per-tool schema runs FIRST on the stable snapshot: an invalid input
   // must never reach a business function (zero calls on failure).
@@ -116,7 +118,7 @@ export function executeResearchTool(
     case 'literature-search': {
       const record = snapshot as Record<string, unknown>
       const adapter = deps?.literatureAdapter ?? mockLiteratureSearchAdapter
-      return runLiteratureSearch({ topic: String(record.topic) }, adapter, timestamp)
+      return await runLiteratureSearch({ topic: String(record.topic) }, adapter, timestamp)
     }
     case 'citation-verify': {
       const depsField = requireDepsField(deps, 'citationDeps', toolId) as CitationVerifyToolDeps

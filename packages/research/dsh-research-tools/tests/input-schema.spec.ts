@@ -166,7 +166,7 @@ describe('strict per-tool input schemas (Phase 1.1-R)', () => {
     expect(isForbiddenPath('relative/path/file.txt')).toBe(false)
   })
 
-  it('schema failure means ZERO business-function calls (validation runs first)', () => {
+  it('schema failure means ZERO business-function calls (validation runs first)', async () => {
     for (const [toolId, badInput] of [
       ['literature-search', { topic: '' }],
       ['claim-construct', { assertion: '' }],
@@ -176,7 +176,8 @@ describe('strict per-tool input schemas (Phase 1.1-R)', () => {
       ['roadmap', { graph: { nodes: [{ id: 'a', label: 'A' }] }, options: { format: 'bogus' } }],
     ] as Array<[string, unknown]>) {
       const spy = vi.spyOn({ run: () => {} }, 'run')
-      expect(() => executeResearchTool(toolId, badInput, undefined, TS)).toThrow()
+      // Dispatch is asynchronous, so a schema refusal surfaces as a rejection.
+      await expect(executeResearchTool(toolId, badInput, undefined, TS)).rejects.toThrow()
       expect(spy).not.toHaveBeenCalled()
       spy.mockRestore()
     }

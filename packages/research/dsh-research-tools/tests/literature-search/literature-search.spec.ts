@@ -28,11 +28,15 @@ import type {
 const TS = 1_700_000_000_000
 const run = runLiteratureSearch
 
-/** Run fn and return the LiteratureSearchError code (or undefined when it did
- *  not throw a LiteratureSearchError). */
-function errorCodeOf(fn: () => unknown): string | undefined {
+/**
+ * Run `fn` and return the `LiteratureSearchError` code (or undefined when it did
+ * not fail with one). Asynchronous because the search entry point is: an adapter
+ * performs a network round trip, so a refusal surfaces as a rejection rather than
+ * a synchronous throw.
+ */
+async function errorCodeOfAsync(fn: () => Promise<unknown>): Promise<string | undefined> {
   try {
-    fn()
+    await fn()
   } catch (e) {
     return e instanceof LiteratureSearchError ? e.code : undefined
   }
@@ -46,8 +50,8 @@ const TIER1_VENUES: ReadonlySet<string> = new Set([
 ])
 
 describe('ok path — frozen artifact + maxResults', () => {
-  it('returns a deeply-frozen ok artifact (mutating hits / hit fields throws)', () => {
-    const artifact = run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, TS)
+  it('returns a deeply-frozen ok artifact (mutating hits / hit fields throws)', async () => {
+    const artifact = await run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, TS)
     expect(artifact.outcome).toBe('ok')
 
     // Whole-artifact / hits-array mutation throws (frozen).
@@ -65,22 +69,22 @@ describe('ok path — frozen artifact + maxResults', () => {
     }).toThrow(TypeError)
 
     // Query echo is the normalized (trimmed) topic, also frozen.
-    const trimmed = run({ topic: '   synthetic  ' }, mockLiteratureSearchAdapter, TS)
+    const trimmed = await run({ topic: '   synthetic  ' }, mockLiteratureSearchAdapter, TS)
     expect(trimmed.query.topic).toBe('synthetic')
     expect(() => {
       (trimmed.query as { topic: string }).topic = 'mutated'
     }).toThrow(TypeError)
   })
 
-  it('keeps hits within a provided maxResults and reports truncation', () => {
-    const artifact = run({ topic: 'synthetic', maxResults: 5 }, mockLiteratureSearchAdapter, TS)
+  it('keeps hits within a provided maxResults and reports truncation', async () => {
+    const artifact = await run({ topic: 'synthetic', maxResults: 5 }, mockLiteratureSearchAdapter, TS)
     expect(artifact.outcome).toBe('ok')
     expect(artifact.hits).toHaveLength(5)
     expect(artifact.truncated).toBe(true)
   })
 
-  it('maxResults larger than the match set returns all matches without truncation', () => {
-    const artifact = run(
+  it('maxResults larger than the match set returns all matches without truncation', async () => {
+    const artifact = await run(
       { topic: 'synthetic', maxResults: 100 },
       mockLiteratureSearchAdapter,
       TS,
@@ -90,53 +94,53 @@ describe('ok path — frozen artifact + maxResults', () => {
     expect(artifact.truncated).toBe(false)
   })
 
-  it('calls the injected adapter exactly once', () => {
+  it('calls the injected adapter exactly once', async () => {
     let calls = 0
     const countingAdapter: LiteratureSearchAdapter = {
-      search(query) {
+      async search(query) {
         calls += 1
-        return mockLiteratureSearchAdapter.search(query)
+        return await mockLiteratureSearchAdapter.search(query)
       },
     }
-    run({ topic: 'synthetic' }, countingAdapter, TS)
+    await run({ topic: 'synthetic' }, countingAdapter, TS)
     expect(calls).toBe(1)
   })
 })
 
 describe('input validation — invalid input throws LiteratureSearchError', () => {
-  it('rejects empty and whitespace-only topics', () => {
-    expect(errorCodeOf(() => run({ topic: '' }, mockLiteratureSearchAdapter, TS))).toBe(
+  it('rejects empty and whitespace-only topics', async () => {
+    expect(await errorCodeOfAsync(() => run({ topic: '' }, mockLiteratureSearchAdapter, TS))).toBe(
       'DSH_LITERATURE_SEARCH_EMPTY_TOPIC',
     )
-    expect(errorCodeOf(() => run({ topic: '   ' }, mockLiteratureSearchAdapter, TS))).toBe(
+    expect(await errorCodeOfAsync(() => run({ topic: '   ' }, mockLiteratureSearchAdapter, TS))).toBe(
       'DSH_LITERATURE_SEARCH_EMPTY_TOPIC',
     )
   })
 
-  it('rejects a missing / non-string topic', () => {
+  it('rejects a missing / non-string topic', async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run({ topic: 42 as unknown as string }, mockLiteratureSearchAdapter, TS),
       ),
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_QUERY')
     expect(
-      errorCodeOf(() => run(null as unknown as LiteratureQuery, mockLiteratureSearchAdapter, TS)),
+      await errorCodeOfAsync(() => run(null as unknown as LiteratureQuery, mockLiteratureSearchAdapter, TS)),
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_QUERY')
   })
 
-  it('rejects maxResults < 1 (and non-integers)', () => {
+  it('rejects maxResults < 1 (and non-integers)', async () => {
     for (const bad of [0, -1, 1.5, Number.NaN]) {
       expect(
-        errorCodeOf(() =>
+        await errorCodeOfAsync(() =>
           run({ topic: 'synthetic', maxResults: bad }, mockLiteratureSearchAdapter, TS),
         ),
       ).toBe('DSH_LITERATURE_SEARCH_INVALID_MAX_RESULTS')
     }
   })
 
-  it('rejects an unknown venueTierFilter value', () => {
+  it('rejects an unknown venueTierFilter value', async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run(
           { topic: 'synthetic', venueTierFilter: 'tier9' as LiteratureVenueTier },
           mockLiteratureSearchAdapter,
@@ -146,14 +150,14 @@ describe('input validation — invalid input throws LiteratureSearchError', () =
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_VENUE_TIER_FILTER')
   })
 
-  it('rejects a missing / malformed adapter', () => {
+  it('rejects a missing / malformed adapter', async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run({ topic: 'synthetic' }, null as unknown as LiteratureSearchAdapter, TS),
       ),
     ).toBe('DSH_LITERATURE_SEARCH_MISSING_ADAPTER')
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run(
           { topic: 'synthetic' },
           {} as unknown as LiteratureSearchAdapter,
@@ -163,49 +167,49 @@ describe('input validation — invalid input throws LiteratureSearchError', () =
     ).toBe('DSH_LITERATURE_SEARCH_MISSING_ADAPTER')
   })
 
-  it('rejects a non-finite timestamp', () => {
-    expect(errorCodeOf(() => run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, Number.NaN)))
+  it('rejects a non-finite timestamp', async () => {
+    expect(await errorCodeOfAsync(() => run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, Number.NaN)))
       .toBe('DSH_LITERATURE_SEARCH_INVALID_TIMESTAMP')
   })
 
-  it('accepts maxResults = 1 as the lower bound', () => {
-    const artifact = run({ topic: 'synthetic', maxResults: 1 }, mockLiteratureSearchAdapter, TS)
+  it('accepts maxResults = 1 as the lower bound', async () => {
+    const artifact = await run({ topic: 'synthetic', maxResults: 1 }, mockLiteratureSearchAdapter, TS)
     expect(artifact.outcome).toBe('ok')
     expect(artifact.hits).toHaveLength(1)
   })
 })
 
 describe('adapter outage — NO DEFAULT PASS', () => {
-  it('a seeded-unavailable adapter surfaces outcome unavailable (never empty ok)', () => {
+  it('a seeded-unavailable adapter surfaces outcome unavailable (never empty ok)', async () => {
     const adapter = createMockLiteratureSearchAdapter({ unavailable: true })
-    const artifact = run({ topic: 'synthetic' }, adapter, TS)
+    const artifact = await run({ topic: 'synthetic' }, adapter, TS)
     expect(artifact.outcome).toBe('unavailable')
     expect(artifact.hits).toEqual([])
     expect(artifact.truncated).toBe(false)
   })
 
-  it('a genuine no-match is outcome ok with zero hits — distinct from unavailable', () => {
-    const artifact = run({ topic: 'no-such-token-xyzzy' }, mockLiteratureSearchAdapter, TS)
+  it('a genuine no-match is outcome ok with zero hits — distinct from unavailable', async () => {
+    const artifact = await run({ topic: 'no-such-token-xyzzy' }, mockLiteratureSearchAdapter, TS)
     expect(artifact.outcome).toBe('ok')
     expect(artifact.hits).toEqual([])
     expect(artifact.truncated).toBe(false)
   })
 
-  it('an adapter that throws is surfaced as-is, not swallowed into unavailable', () => {
+  it('an adapter that throws is surfaced as-is, not swallowed into unavailable', async () => {
     const adapter: LiteratureSearchAdapter = {
       search: () => {
         throw new Error('adapter exploded')
       },
     }
-    expect(() => run({ topic: 'synthetic' }, adapter, TS)).toThrow('adapter exploded')
+    await expect(run({ topic: 'synthetic' }, adapter, TS)).rejects.toThrow('adapter exploded')
   })
 
-  it('structurally-invalid adapter output is an adapter fault, never a pass', () => {
+  it('structurally-invalid adapter output is an adapter fault, never a pass', async () => {
     const adapter: LiteratureSearchAdapter = {
       search: () => ({ status: 'maybe' }) as unknown as LiteratureSearchOutcome,
     }
     expect(
-      errorCodeOf(() => run({ topic: 'synthetic' }, adapter, TS)),
+      await errorCodeOfAsync(() => run({ topic: 'synthetic' }, adapter, TS)),
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT')
   })
 })
@@ -226,35 +230,35 @@ describe('structurally-invalid adapter output — ok-outcome contract violations
     return { search: () => outcome as unknown as LiteratureSearchOutcome }
   }
 
-  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when the outcome is null', () => {
-    expect(errorCodeOf(() => run({ topic: 'synthetic' }, adapterReturning(null), TS))).toBe(
+  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when the outcome is null', async () => {
+    expect(await errorCodeOfAsync(() => run({ topic: 'synthetic' }, adapterReturning(null), TS))).toBe(
       'DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT',
     )
   })
 
-  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when the outcome is a non-object', () => {
-    expect(errorCodeOf(() => run({ topic: 'synthetic' }, adapterReturning(42), TS))).toBe(
+  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when the outcome is a non-object', async () => {
+    expect(await errorCodeOfAsync(() => run({ topic: 'synthetic' }, adapterReturning(42), TS))).toBe(
       'DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT',
     )
   })
 
-  it("throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when an 'ok' outcome lacks a hits array", () => {
-    expect(errorCodeOf(() => run({ topic: 'synthetic' }, adapterReturning({ status: 'ok' }), TS))).toBe(
+  it("throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when an 'ok' outcome lacks a hits array", async () => {
+    expect(await errorCodeOfAsync(() => run({ topic: 'synthetic' }, adapterReturning({ status: 'ok' }), TS))).toBe(
       'DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT',
     )
   })
 
-  it("throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when an 'ok' outcome carries a negative total", () => {
+  it("throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when an 'ok' outcome carries a negative total", async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run({ topic: 'synthetic' }, adapterReturning({ status: 'ok', hits: [validHit('a')], total: -1 }), TS),
       ),
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT')
   })
 
-  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when hits outnumber total (capping contract violated)', () => {
+  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when hits outnumber total (capping contract violated)', async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run(
           { topic: 'synthetic' },
           adapterReturning({ status: 'ok', hits: [validHit('a'), validHit('b')], total: 1 }),
@@ -264,9 +268,9 @@ describe('structurally-invalid adapter output — ok-outcome contract violations
     ).toBe('DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT')
   })
 
-  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when hits exceed the caller maxResults', () => {
+  it('throws DSH_LITERATURE_SEARCH_INVALID_ADAPTER_OUTPUT when hits exceed the caller maxResults', async () => {
     expect(
-      errorCodeOf(() =>
+      await errorCodeOfAsync(() =>
         run(
           { topic: 'synthetic', maxResults: 2 },
           adapterReturning({ status: 'ok', hits: [validHit('a'), validHit('b'), validHit('c')], total: 3 }),
@@ -280,17 +284,17 @@ describe('structurally-invalid adapter output — ok-outcome contract violations
 describe('mock adapter — direct search() defensive branches (tool validation bypassed)', () => {
   type OkOutcome = { status: 'ok'; hits: ReadonlyArray<unknown>; total: number }
 
-  it('caps a negative maxResults at zero hits (Math.max defensive floor)', () => {
+  it('caps a negative maxResults at zero hits (Math.max defensive floor)', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const outcome = adapter.search({ topic: 'synthetic', maxResults: -5 }) as unknown as OkOutcome
+    const outcome = await adapter.search({ topic: 'synthetic', maxResults: -5 }) as unknown as OkOutcome
     expect(outcome.status).toBe('ok')
     expect(outcome.total).toBe(14)
     expect(outcome.hits).toEqual([])
   })
 
-  it('an empty-topic query matches nothing and stays an ok outcome (defensive empty-token filter)', () => {
+  it('an empty-topic query matches nothing and stays an ok outcome (defensive empty-token filter)', async () => {
     const adapter = createMockLiteratureSearchAdapter()
-    const outcome = adapter.search({ topic: '   ' }) as unknown as OkOutcome
+    const outcome = await adapter.search({ topic: '   ' }) as unknown as OkOutcome
     expect(outcome.status).toBe('ok')
     expect(outcome.total).toBe(0)
     expect(outcome.hits).toEqual([])
@@ -298,8 +302,8 @@ describe('mock adapter — direct search() defensive branches (tool validation b
 })
 
 describe('venueTierFilter + truncation', () => {
-  it('venueTierFilter restricts hits to the requested synthetic tier', () => {
-    const artifact = run(
+  it('venueTierFilter restricts hits to the requested synthetic tier', async () => {
+    const artifact = await run(
       { topic: 'synthetic', venueTierFilter: 'tier1' },
       mockLiteratureSearchAdapter,
       TS,
@@ -312,8 +316,8 @@ describe('venueTierFilter + truncation', () => {
     expect(artifact.truncated).toBe(false)
   })
 
-  it('venueTierFilter + maxResults still truncates', () => {
-    const artifact = run(
+  it('venueTierFilter + maxResults still truncates', async () => {
+    const artifact = await run(
       { topic: 'synthetic', venueTierFilter: 'tier1', maxResults: 2 },
       mockLiteratureSearchAdapter,
       TS,
@@ -325,8 +329,8 @@ describe('venueTierFilter + truncation', () => {
 })
 
 describe('artifact meta envelope', () => {
-  it('carries toolId / version / numeric producedAt', () => {
-    const artifact = run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, TS)
+  it('carries toolId / version / numeric producedAt', async () => {
+    const artifact = await run({ topic: 'synthetic' }, mockLiteratureSearchAdapter, TS)
     expect(artifact.meta.toolId).toBe(LITERATURE_SEARCH_TOOL_ID)
     expect(artifact.meta.toolId).toBe('literature-search')
     expect(artifact.meta.version).toBe(LITERATURE_SEARCH_TOOL_VERSION)
@@ -334,8 +338,8 @@ describe('artifact meta envelope', () => {
     expect(artifact.meta.producedAt).toBe(TS)
   })
 
-  it('meta is present on the unavailable outcome too', () => {
-    const artifact = run(
+  it('meta is present on the unavailable outcome too', async () => {
+    const artifact = await run(
       { topic: 'synthetic' },
       createMockLiteratureSearchAdapter({ unavailable: true }),
       TS,

@@ -39,7 +39,7 @@ describe('DirectResearchToolInvoker', () => {
   it('produces the SAME business artifact as the unified adapter', async () => {
     const viaInvoker = await invoker.invoke('figure', FIGURE_SPEC, { timestamp: TS })
     expect(viaInvoker.ok).toBe(true)
-    const viaAdapter = executeResearchTool('figure', FIGURE_SPEC, undefined, TS)
+    const viaAdapter = await executeResearchTool('figure', FIGURE_SPEC, undefined, TS)
     expect(viaInvoker.ok && viaInvoker.artifact).toEqual(viaAdapter)
   })
 

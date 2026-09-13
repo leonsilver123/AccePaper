@@ -481,7 +481,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   if (!invocation.ok) {
     throw new Error(`[A1-landscape] literature-search invocation failed: ${invocation.message}`)
   }
-  const artifact = invocation.artifact as ReturnType<typeof runLiteratureSearch>
+  const artifact = invocation.artifact as Awaited<ReturnType<typeof runLiteratureSearch>>
   return {
     'landscape-map': tagArtifact(
       {

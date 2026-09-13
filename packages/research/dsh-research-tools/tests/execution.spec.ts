@@ -80,77 +80,78 @@ const ABLATION_DEFINITION: AblationDefinition = {
 }
 
 describe('executeResearchTool — single dispatch map', () => {
-  it('literature-search matches the direct call (fixture adapter injected by default)', () => {
+  it('literature-search matches the direct call (fixture adapter injected by default)', async () => {
     const input = { topic: 'adaptive traffic signal control' }
-    const viaAdapter = executeResearchTool('literature-search', input, undefined, TS)
-    const direct = runLiteratureSearch(input, mockLiteratureSearchAdapter, TS)
+    const viaAdapter = await executeResearchTool('literature-search', input, undefined, TS)
+    const direct = await runLiteratureSearch(input, mockLiteratureSearchAdapter, TS)
     expect(viaAdapter).toEqual(direct)
     expect(viaAdapter).toHaveProperty('meta.toolId', 'literature-search')
   })
 
-  it('claim-construct matches the direct call', () => {
+  it('claim-construct matches the direct call', async () => {
     const input = { assertion: 'Adaptive control reduces delay.', now: TS }
-    const viaAdapter = executeResearchTool('claim-construct', input, undefined, TS)
+    const viaAdapter = await executeResearchTool('claim-construct', input, undefined, TS)
     const direct = constructClaim(input)
     expect(viaAdapter).toEqual(direct)
   })
 
-  it('figure matches the direct call (pure render)', () => {
-    const viaAdapter = executeResearchTool('figure', FIGURE_SPEC, undefined, TS)
+  it('figure matches the direct call (pure render)', async () => {
+    const viaAdapter = await executeResearchTool('figure', FIGURE_SPEC, undefined, TS)
     const direct = renderFigure(FIGURE_SPEC, TS)
     expect(viaAdapter).toEqual(direct)
     expect(viaAdapter).toHaveProperty('meta.toolId', 'figure')
   })
 
-  it('three-line-table matches the direct call', () => {
+  it('three-line-table matches the direct call', async () => {
     const input = { model: TABLE_MODEL, target: 'markdown' }
-    const viaAdapter = executeResearchTool('three-line-table', input, undefined, TS)
+    const viaAdapter = await executeResearchTool('three-line-table', input, undefined, TS)
     const direct = renderThreeLineTable(TABLE_MODEL, 'markdown', TS)
     expect(viaAdapter).toEqual(direct)
   })
 
-  it('roadmap matches the direct call (mermaid default render)', () => {
+  it('roadmap matches the direct call (mermaid default render)', async () => {
     const input = { graph: ROADMAP_GRAPH }
-    const viaAdapter = executeResearchTool('roadmap', input, undefined, TS)
+    const viaAdapter = await executeResearchTool('roadmap', input, undefined, TS)
     const direct = renderRoadmap(ROADMAP_GRAPH, {}, TS)
     expect(viaAdapter).toEqual(direct)
   })
 
-  it('ablation matches the direct call (fixture executor injected by default)', () => {
+  it('ablation matches the direct call (fixture executor injected by default)', async () => {
     const input = { definition: ABLATION_DEFINITION }
-    const viaAdapter = executeResearchTool('ablation', input, undefined, TS)
+    const viaAdapter = await executeResearchTool('ablation', input, undefined, TS)
     const direct = runAblation(ABLATION_DEFINITION, createMockAblationExecutor(), TS)
     expect(viaAdapter).toEqual(direct)
     expect(viaAdapter).toHaveProperty('meta.toolId', 'ablation')
   })
 
-  it('citation-verify refuses to run without its injected resolver dependency', () => {
+  it('citation-verify refuses to run without its injected resolver dependency', async () => {
     const validInput = { claimId: 'c1', citationId: 'cit1', ref: { title: 'R' }, evidence: { text: 'E' }, options: {} }
-    expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
-      .toThrow(ResearchToolExecutionError)
-    expect(() => executeResearchTool('citation-verify', validInput, undefined, TS))
-      .toThrow(/citationDeps/)
+    // The dispatch is asynchronous, so the refusal surfaces as a rejection.
+    await expect(executeResearchTool('citation-verify', validInput, undefined, TS))
+      .rejects.toThrow(ResearchToolExecutionError)
+    await expect(executeResearchTool('citation-verify', validInput, undefined, TS))
+      .rejects.toThrow(/citationDeps/)
   })
 
-  it('rejects unknown tool ids before touching anything', () => {
-    expect(() => executeResearchTool('no-such-tool', {}, undefined, TS))
-      .toThrow(ResearchToolExecutionError)
-    expect(() => executeResearchTool('no-such-tool', {}, undefined, TS))
-      .toThrow(/unknown research tool/)
+  it('rejects unknown tool ids before touching anything', async () => {
+    await expect(executeResearchTool('no-such-tool', {}, undefined, TS))
+      .rejects.toThrow(ResearchToolExecutionError)
+    await expect(executeResearchTool('no-such-tool', {}, undefined, TS))
+      .rejects.toThrow(/unknown research tool/)
   })
 
-  it('fails structurally invalid business input before the pure function', () => {
-    expect(() => executeResearchTool('literature-search', { topic: '' }, undefined, TS))
-      .toThrow(/topic/)
-    expect(() => executeResearchTool('ablation', {}, undefined, TS))
-      .toThrow(/definition/)
+  it('fails structurally invalid business input before the pure function', async () => {
+    await expect(executeResearchTool('literature-search', { topic: '' }, undefined, TS))
+      .rejects.toThrow(/topic/)
+    await expect(executeResearchTool('ablation', {}, undefined, TS))
+      .rejects.toThrow(/definition/)
     // Figure: strict schema rejects a non-object spec before any render.
-    expect(() => executeResearchTool('figure', null, undefined, TS))
-      .toThrow(/figure/)
+    await expect(executeResearchTool('figure', null, undefined, TS))
+      .rejects.toThrow(/figure/)
   })
 })
 
-it('is TOCTOU-safe: a hostile mutating input cannot change data between validation and business read', () => {
+it('is TOCTOU-safe: a hostile mutating input cannot change data between validation and business read', async () => {
   const input: Record<string, unknown> = {}
   let reads = 0
   Object.defineProperty(input, 'topic', {
@@ -164,14 +165,14 @@ it('is TOCTOU-safe: a hostile mutating input cannot change data between validati
     enumerable: true,
     configurable: true,
   })
-  const artifact = executeResearchTool('literature-search', input, undefined, TS) as {
+  const artifact = await executeResearchTool('literature-search', input, undefined, TS) as {
     query?: { topic?: string }
   }
   // Business saw exactly the snapshotted (first-read) topic.
   expect(artifact.query?.topic).toBe('adaptive traffic signals')
   // Mutating the caller's object afterwards must NOT affect the result.
   Object.defineProperty(input, 'topic', { value: 'corrupted-after-call' })
-  const again = executeResearchTool('literature-search', { topic: 'adaptive traffic signals' }, undefined, TS) as {
+  const again = await executeResearchTool('literature-search', { topic: 'adaptive traffic signals' }, undefined, TS) as {
     query?: { topic?: string }
   }
   expect(again.query?.topic).toBe('adaptive traffic signals')

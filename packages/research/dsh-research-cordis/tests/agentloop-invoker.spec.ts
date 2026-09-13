@@ -110,7 +110,7 @@ describe('AgentLoopResearchToolInvoker', () => {
       expect(loopResult.provenance).toBe('agent-loop-toolruntime')
       expect(loopResult.truthfulness).toBe('cordis_tool_runtime')
       // Same raw adapter path is exercised by the Direct channel too.
-      const raw = executeResearchTool('three-line-table', TABLE_INPUT, undefined, TS)
+      const raw = await executeResearchTool('three-line-table', TABLE_INPUT, undefined, TS)
       expect(stripTime(directResult.artifact)).toEqual(stripTime(raw))
     }
     await ctx.fiber.dispose()

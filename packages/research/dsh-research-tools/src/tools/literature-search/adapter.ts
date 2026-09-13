@@ -92,13 +92,15 @@ export type LiteratureSearchOutcome =
 export type LiteratureSearchStatus = LiteratureSearchOutcome['status']
 
 /**
- * Searches the literature for one query. PURE in this wave (Fixture/Mock);
- * real implementations live outside the pure module and MUST be network-free
- * in tests.
+ * Searches the literature for one query. Implementations live outside the pure
+ * module: a fixture for offline tests, and real network adapters (OpenAlex,
+ * Crossref) for actual retrieval. The asynchronous shape is required — a real
+ * catalogue lookup is a network round trip, so a synchronous seam would have
+ * excluded real implementations by construction.
  *
  * Adapter contract (enforced / documented in ./index.ts):
  *  - the adapter receives a plain, validated snapshot of the query;
- *  - it MUST return a discriminated {@link LiteratureSearchOutcome} — never
+ *  - it MUST resolve to a discriminated {@link LiteratureSearchOutcome} — never
  *    throw to express "no results" (that is an 'ok' outcome with zero hits),
  *    and never report an outage as an empty 'ok';
  *  - it MUST return plain, structured-cloneable data (the tool deep-freezes
@@ -107,8 +109,8 @@ export type LiteratureSearchStatus = LiteratureSearchOutcome['status']
  *    match count in `total`.
  *
  * @param query a plain snapshot of the validated search query.
- * @returns a discriminated {@link LiteratureSearchOutcome}.
+ * @returns a promise of the discriminated {@link LiteratureSearchOutcome}.
  */
 export interface LiteratureSearchAdapter {
-  search(query: LiteratureQuery): LiteratureSearchOutcome
+  search(query: LiteratureQuery): Promise<LiteratureSearchOutcome>
 }
