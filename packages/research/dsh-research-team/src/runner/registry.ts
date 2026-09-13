@@ -1035,29 +1035,70 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 /** A4-venue: fixture shaped as a venue selection + scope match. */
 function a4Executor(ctx: ExecCtx): Record<string, unknown> {
   const { claimRef } = canonicalOf(ctx)
+  const landscape = readInput(ctx, 'landscape-map')
+  const hits = Array.isArray(landscape?.hits) ? (landscape.hits as ReadonlyArray<unknown>) : []
+
+  // WHERE the field publishes is answerable from the corpus A1 actually retrieved:
+  // every record carries the venue it was published in. A4 therefore picks the venue
+  // that appears most often among those records instead of naming one. Ties resolve
+  // to the first venue seen, so the choice does not depend on iteration order, and a
+  // corpus with no usable venue falls back to the declared study venue.
+  const counts = new Map<string, number>()
+  for (const raw of hits) {
+    if (raw === null || typeof raw !== 'object') continue
+    const venue = (raw as { venue?: unknown }).venue
+    if (typeof venue !== 'string' || venue.trim() === '') continue
+    counts.set(venue, (counts.get(venue) ?? 0) + 1)
+  }
+  let chosen: string | undefined
+  let chosenCount = 0
+  for (const [venue, count] of counts) {
+    if (count > chosenCount) {
+      chosen = venue
+      chosenCount = count
+    }
+  }
+  const venueSource: 'retrieved-corpus' | 'declared' = chosen === undefined ? 'declared' : 'retrieved-corpus'
+  const venueName = chosen ?? SCENARIO.venueName
+  const venueId = chosen === undefined ? SCENARIO.venueId : `retrieved:${chosen}`
+
   return {
     venue: tagArtifact(
       {
-        fixture: true,
+        fixture: venueSource === 'declared',
         stepId: 'A4-venue',
         slug: 'venue',
-        venueId: SCENARIO.venueId,
-        name: SCENARIO.venueName,
+        venueId,
+        name: venueName,
         claimRef,
-        note: 'synthetic venue-scope record — NOT a real journal claim',
+        venueSource,
+        // The evidence for the choice, so a reader can check it against the corpus.
+        evidence: {
+          recordsConsidered: hits.length,
+          recordsInChosenVenue: chosenCount,
+          distinctVenues: counts.size,
+          method: 'most frequent `venue` among the records A1 retrieved; ties resolve to the first seen',
+        },
+        note: venueSource === 'retrieved-corpus'
+          ? 'venue DERIVED from the retrieved corpus — the venue where the field publishes, not a claim read from the venue itself'
+          : 'no retrieved record carried a venue, so the declared study venue is used',
       },
       A4_PRODUCER,
-      'fixture_executor',
+      'local_computation',
     ),
     'venue-scope': tagArtifact(
       {
         fixture: true,
         stepId: 'A4-venue',
         slug: 'venue-scope',
-        venueId: SCENARIO.venueId,
+        venueId,
         matches: ['traffic signal control', 'empirical delay comparison', 'falsifiable experiment'],
         rejects: ['no falsifiable experiment'],
-        note: 'synthetic scope-match fixture — venue acceptance patterns are not read for real',
+        // The venue is measured; the scope criteria are not. Venue acceptance
+        // patterns would have to be read from the venue's own author guidelines,
+        // which this study does not retrieve, so the field says so.
+        scopeSource: 'declared',
+        note: 'scope-match criteria are DECLARED, not read from the venue: no author-guideline source is retrieved in this study',
       },
       A4_PRODUCER,
       'fixture_executor',
@@ -2212,8 +2253,10 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'A4-venue',
-    kind: 'fixture_executor',
-    basis: 'no venue scope-matching tool exists; the executor emits a deterministic synthetic venue + scope-match record (NOT a real journal claim)',
+    // The venue is COMPUTED from the retrieved corpus (no tool, no external system);
+    // the scope criteria beside it remain declared.
+    kind: 'local_computation',
+    basis: 'the venue is DERIVED from the records A1 retrieved: the venue they were most often published in, with the counts recorded on the artifact. The scope-match criteria beside it are DECLARED, not read from the venue, because this study retrieves no author guidelines',
     producer: A4_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',

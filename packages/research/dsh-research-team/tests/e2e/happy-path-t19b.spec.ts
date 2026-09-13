@@ -127,7 +127,7 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     const fixtureSteps = run.steps.filter(
       s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit' && s.stepId !== 'B2-data',
     )
-    expect(fixtureSteps.length).toBe(6)
+    expect(fixtureSteps.length).toBe(5)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -286,7 +286,11 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     // …while the selected venue from A4 is carried as submission metadata rather
     // than as body text: the assembled manuscript is what gets submitted, and a
     // venue name is a property of the submission, not of the paper.
-    expect(formatted.venueName).toBe(SCENARIO.venueName)
+    // The venue is now DERIVED from the retrieved corpus, so the assertion is that
+    // the manuscript carries the venue the A4 artifact chose — not a literal.
+    const venue = artifactOf(store, run.runId, 'venue')
+    expect(formatted.venueName).toBe(venue.name)
+    expect((venue.evidence as { recordsConsidered: number }).recordsConsidered).toBeGreaterThan(0)
     // …and the results-table rows rendered by the three-line-table sub-capability.
     expect(manuscript).toContain('Adaptive')
     expect(manuscript).toContain('Fixed-time')
@@ -457,7 +461,10 @@ describe('T19-B happy path — auditable reports', () => {
     // "Real tool functions executed" line counts only this number.
     expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input)
       .toBe(REAL_TOOL_STEPS.length)
-    expect((json.truthfulnessCounts as Record<string, number>).local_computation).toBe(4)
+    // A4-venue joined this level when its venue became a computation over the
+    // retrieved corpus rather than a literal.
+    expect((json.truthfulnessCounts as Record<string, number>).local_computation).toBe(5)
+    expect((json.truthfulnessCounts as Record<string, number>).fixture_executor).toBe(5)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()

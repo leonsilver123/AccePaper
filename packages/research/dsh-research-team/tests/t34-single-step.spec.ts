@@ -107,8 +107,8 @@ describe('T34 — 16 步单步可运行验证', () => {
     // `real_tool_fixture_input` 的含义是"工具函数执行了",报告把它印成
     // "Real tool functions executed" —— 所以本地计算不能挂在这个等级下。
     expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format'])
-    expect(localComputation).toEqual(['B2-data', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop'])
-    expect(fixture).toHaveLength(6)
+    expect(localComputation).toEqual(['A4-venue', 'B2-data', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop'])
+    expect(fixture).toHaveLength(5)
     expect(humanGate).toEqual(['E2-submit'])
   })
 })

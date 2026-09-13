@@ -216,7 +216,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     const local = [...STEP_EXECUTOR_REGISTRY.values()]
       .filter(e => e.kind === 'local_computation')
       .map(e => e.stepId)
-    expect(local).toEqual(['B2-data', ...REAL_RUNTIME_STEPS_WITHOUT_TOOL])
+    expect(local).toEqual(['A4-venue', 'B2-data', ...REAL_RUNTIME_STEPS_WITHOUT_TOOL])
   })
 
   it('brands each real-tool producer with the tool id@version', () => {
@@ -310,7 +310,6 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
     // (traffic-sim); B2-data left it because its level now tracks dataset presence.
     expect(fixtureSteps).toEqual([
       'A3-agenda',
-      'A4-venue',
       'B1-method',
       'D2-framework',
       'D3-writing',

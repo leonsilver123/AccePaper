@@ -47,7 +47,10 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'A4-venue', index: 4, phase: 'A', name: '选刊',
     purpose: '选定目标期刊(如 TRC),匹配 scope/录用模式',
-    inputs: ['claim', 'agenda'],
+    // `landscape-map` carries the venues the retrieved records were published in,
+    // which is the only grounded basis a venue choice has. Without it declared as an
+    // input, A4 could not read the corpus at all and had to emit a literal venue.
+    inputs: ['claim', 'agenda', 'landscape-map'],
     outputs: ['venue', 'venue-scope'],
     gate: ['B'],
     falsifiable: null,
