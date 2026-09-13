@@ -289,3 +289,8 @@ export class ResearchEngine extends Service {
 }
 
 export default ResearchEngine
+
+/** Real literature-retrieval channel (OpenAlex). Lives here, not in the pure tool
+ *  module, so the tool package keeps holding zero network code. */
+export { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
+export type { OpenAlexAdapterOptions } from './openalex-adapter.ts'
