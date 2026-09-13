@@ -5,9 +5,9 @@
 //
 //   A-channel → team `judgeRound` (pure projection of a completed rebuttal round
 //               into a ResearchVerdict via core `adjudicate` component 'A')
-//   C-channel → team `adjudicateClaimSupport` (falsifiable prediction vs an
-//               authorized experiment report from the experiment fixture table,
-//               decided by core `adjudicate` component 'C')
+//   C-channel → team `adjudicateClaimSupport` (falsifiable prediction vs a `live`
+//               experiment report MEASURED by the traffic simulation on the study's
+//               measured demand profile, decided by core `adjudicate` component 'C')
 //   B-channel → the T23 external-anchor fixture (`../anchor`) supplies the claim
 //               stance; the REAL core citation identity chain `verifyCitation`
 //               runs against a SIMULATED resolver (`MockCitationResolverAdapter`)
@@ -188,7 +188,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     source: 'live' as const,
     supportsPrediction: experiment.supportsPrediction,
     detail: experiment.detail,
-    evaluator: 'traffic-sim (Webster delay model, two-phase intersection)',
+    evaluator: 'traffic-sim (Webster delay model, two-phase intersection, measured demand profile)',
     fixtureVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
   }
   const rec = adjudicateClaimSupport({

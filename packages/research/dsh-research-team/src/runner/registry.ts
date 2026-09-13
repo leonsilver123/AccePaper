@@ -111,6 +111,15 @@ import {
   runAdaptivePolicy,
   runFixedTimePolicy,
 } from './traffic-sim.ts'
+import {
+  STUDY_ASSUMPTIONS,
+  STUDY_DEMAND_INTERVALS,
+  STUDY_DERIVATION,
+  STUDY_DESIGN_INPUTS,
+  STUDY_MEASURED_DAYS,
+  STUDY_SERIES_PROVENANCE,
+  STUDY_SERIES_SHA256,
+} from './study-demand.ts'
 
 /** Truthfulness classification of an executor / gate channel (4-level ruling). */
 export type Truthfulness =
@@ -322,22 +331,26 @@ const CANONICAL_CLAIM_REF = 'adaptive signal control reduces peak-hour delay'
  */
 const CANONICAL_PREDICTION = 'peak-hour delay falls by at least 5% under adaptive control'
 
-/** The synthetic scenario's single numeric source of truth (T19-S). Every
- *  downstream executor (B3 baseline row / C1 mvp / D1 figure+table / E1
- *  manuscript table) derives its numbers from here, and `reductionRate` matches
- *  the experiment fixture text "9.1% mean delay reduction" verbatim —
- *  (10.0 − 9.09) / 10.0 = 0.091. */
+/**
+ * The study's identity fields: what is being compared, and under which name.
+ *
+ * This object holds NO numeric result. It used to carry `baselineDelaySeconds`,
+ * `variantDelaySeconds` and `reductionRate` literals (10.0 / 9.09 / 0.091) that
+ * nothing read — the executors had already moved to measuring the experiment —
+ * so the file advertised numbers that did not match any run. Every delay figure a
+ * reader sees is produced by {@link measureOutcome} from an actual experiment, and
+ * the identity fields here are what that experiment is measuring between.
+ */
 export const SCENARIO = {
   baselineIdentity: 'fixed-time',
   variantIdentity: 'adaptive-rl',
   metric: 'delay',
   metricDirection: 'lower_is_better',
-  baselineDelaySeconds: 10.0,
-  variantDelaySeconds: 9.09,
-  reductionRate: 0.091,
   venueId: 'syn-venue-trc-001',
   venueName: 'Synthetic TRC-style Transport Venue',
-  datasetId: 'syn-traffic-v1',
+  // The demand the experiment runs on is derived from THIS measured series, so the
+  // fallback reference names it rather than a synthetic placeholder.
+  datasetId: STUDY_SERIES_PROVENANCE.datasetId,
   title: 'Adaptive Signal Control Reduces Peak-Hour Delay',
 } as const
 
@@ -997,6 +1010,47 @@ function checkDatasetFiles(): ReadonlyArray<FileCheck> {
   })
 }
 
+/**
+ * The provenance of the demand every experiment executor runs against.
+ *
+ * The traffic experiment used to run on a demand array written into the source, so
+ * an artifact reporting a measured reduction said nothing about where the demand
+ * came from. Each experiment artifact now carries this block, which names the
+ * measured series, its hash, and the split between what the series measured and
+ * what the study assumed on top of it. It is the same object in C1, B3 and C3, so
+ * the three cannot describe different inputs.
+ *
+ * @returns the demand evidence block attached to every experiment artifact.
+ */
+function studyDemandEvidence(): Record<string, unknown> {
+  return {
+    source: 'measured-series',
+    datasetId: STUDY_SERIES_PROVENANCE.datasetId,
+    publishedAt: STUDY_SERIES_PROVENANCE.source,
+    licence: STUDY_SERIES_PROVENANCE.licence,
+    file: STUDY_SERIES_PROVENANCE.file,
+    column: STUDY_SERIES_PROVENANCE.column,
+    unit: STUDY_SERIES_PROVENANCE.unit,
+    sha256: STUDY_SERIES_SHA256,
+    measuredDays: STUDY_MEASURED_DAYS,
+    designInputs: STUDY_DESIGN_INPUTS,
+    intervals: STUDY_DEMAND_INTERVALS.map(interval => ({
+      interval: interval.interval,
+      startHour: interval.startHour,
+      endHour: interval.endHour,
+      measuredVehPerHour: interval.measuredVehPerHour,
+      totalVehPerHour: interval.totalVehPerHour,
+      demandPerPhase: interval.demandPerPhase,
+    })),
+    derivation: STUDY_DERIVATION,
+    assumptions: STUDY_ASSUMPTIONS,
+    note:
+      'the demand is derived from the measured series above; the derivation and the '
+      + 'assumptions it makes are both recorded, and neither is fitted to the '
+      + 'experiment outcome',
+  }
+}
+
 function b2Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
   const checks = checkDatasetFiles()
@@ -1089,6 +1143,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           candidateDelaySeconds: candidate.meanDelaySecondsPerVehicle,
           candidateReductionPct: measuredReductionPct,
           source: 'traffic-sim (both policies executed over the study demand profile)',
+          demand: studyDemandEvidence(),
         },
         beatsBaselineWhen: 'candidate delay < baseline delay by >= 5%',
         note: 'baseline MEASURED by running the fixed-time plan; the candidate row is the same run, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
@@ -1150,6 +1205,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         experiment: {
           source: 'traffic-sim (Webster delay model, two-phase intersection)',
           ruleVersion: EXPERIMENT_FIXTURE_RULE_VERSION,
+          demand: studyDemandEvidence(),
         },
         outcome: { supportsPrediction: verdict.supportsPrediction, detail: verdict.detail },
         observed: {
@@ -1293,6 +1349,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         },
         metric: ABLATION_DEFINITION.metric,
         aggregate: artifact.aggregate,
+        demand: studyDemandEvidence(),
         note: 'boundary-map derived from the REAL runAblation execution over simulated arms — an applicability claim for this demand profile only, not a general one',
       },
       C3_PRODUCER,
@@ -1880,7 +1937,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'B3-baseline',
     kind: 'real_tool_fixture_input',
-    basis: 'the baseline is MEASURED: the fixed-time plan is executed over the study demand profile and its delay is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published delay figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
+    basis: 'the baseline is MEASURED: the fixed-time plan is executed over the MEASURED demand profile (see C1-mvp for the series, hash and derivation) and its delay is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published delay figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
     producer: B3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1889,7 +1946,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'C1-mvp',
     kind: 'real_tool_fixture_input',
-    basis: 'the traffic-sim experiment engine RUNS both control policies against the study demand profile and measures the delay reduction; the input (the claim prediction) is still fixture-supplied, so this is "the experiment really ran", not "the claim is proven"',
+    basis: 'the traffic-sim experiment engine RUNS both control policies against the MEASURED demand profile (derived from a real hourly vehicle-count series; series, hash, derivation and assumptions recorded on the artifact) and measures the delay reduction. The claim prediction is still fixture-supplied on the default path, so this is "the experiment really ran on measured demand", not "the claim is proven"',
     producer: C1_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -1907,7 +1964,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'C3-boundary',
     kind: 'real_tool_fixture_input',
-    basis: 'T19-S: boundary probing belongs to C3. The REAL `runAblation` tool function executes (plan → executor seam → per-variant descriptive stats), and its executor MEASURES both arms by running the traffic simulation (fixed-time vs adaptive) rather than reading a mock. Ablation is NOT exercised at B3 anymore',
+    basis: 'T19-S: boundary probing belongs to C3. The REAL `runAblation` tool function executes (plan → executor seam → per-variant descriptive stats), and its executor MEASURES both arms by running the traffic simulation (fixed-time vs adaptive) over the MEASURED demand profile rather than reading a mock. Ablation is NOT exercised at B3 anymore',
     producer: C3_PRODUCER,
     timeoutMs: REAL_TOOL_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -2063,8 +2120,9 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  *    `MockCitationResolverAdapter`, with the claim stance taken from the T23
  *    synthetic anchor fixture → core `adjudicate('B')`. Real adapter logic +
  *    mocked external system.
- *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over
- *    a `mock-fixture` experiment report from the synthetic experiment table.
+ *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over a
+ *    `live` experiment report measured by traffic-sim on the study's measured demand
+ *    profile; the claim and its prediction are the fixture-supplied input.
  */
 export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfulness; basis: string }>> = {
   A: {
@@ -2077,11 +2135,11 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
   },
   C: {
     kind: 'real_tool_fixture_input',
-    // The experiment RUNS (traffic-sim measures both policies; the report carries
-    // source 'live' and grades live-verified). Its INPUT — the claim and its
-    // prediction — is fixture-supplied on the default path, which is what keeps this
-    // short of `live_external`.
-    basis: 'team adjudicateClaimSupport → core adjudicate(\'C\') executes for real over an experiment MEASURED by traffic-sim (both control policies are run; report source is live, evidenceGrade live-verified) — the claim and prediction it adjudicates are still fixture input',
+    // The experiment RUNS (traffic-sim measures both policies over the measured
+    // demand profile; the report carries source 'live' and grades live-verified).
+    // Its INPUT — the claim and its prediction — is fixture-supplied on the default
+    // path, which is what keeps this short of `live_external`.
+    basis: 'team adjudicateClaimSupport → core adjudicate(\'C\') executes for real over an experiment MEASURED by traffic-sim: both control policies are run against a demand profile derived from a real measured vehicle-count series (the artifact records the series, its hash, the derivation and the assumptions). Report source is live, evidenceGrade live-verified. The claim and prediction it adjudicates are still fixture input',
   },
 }
 
