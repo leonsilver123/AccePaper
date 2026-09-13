@@ -2229,8 +2229,13 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         tableMarkdown: artifact.render.text,
         bindingHash: artifact.bindingHash,
         reproduciblePackage: {
+          // `produced: false` is the load-bearing field. The filenames below are a
+          // PROPOSAL for a later wave, and listing them beside a produced manuscript
+          // invites a reader to take them as artifacts of this run. No step writes
+          // any of them.
+          produced: false,
           files: ['manuscript.md', 'experiment-tables.md', 'figures/figure-1.svg', 'roadmap.md', 'run-manifest.json'],
-          note: 'declared reproducible package — synthetic contents; real package export is a later wave',
+          note: 'PROPOSED package layout, NOT produced: no step writes these files. The manuscript text itself IS produced (see `manuscript`); exporting it as a package is a later wave',
         },
         note: 'formatted-manuscript ASSEMBLED by the E1-format executor from the revised draft + venue scope; the results table is rendered by the REAL renderThreeLineTable sub-capability — the tool is E1\'s table capability, not the format step itself',
       },
