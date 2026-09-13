@@ -12,12 +12,8 @@
   - `real_tool_fixture_input`(5 步,工具函数真的执行):A1 / A2 / C3 / D1 / E1;
   - `local_computation`(5 步,无工具、无外部系统,由本包代码算出真实测量):A4 / B2 / B3 / C1 / C2;
   - `fixture_executor`(5 步,默认路径):A3 / B1 / D2 / D3 / D4 —— 这五步在有 `proseWriter` 时走真实模型,该路径记为 `live_external`;
-  - `humanGate`(1 步):E2。
-  该边界由 `tests/t34-single-step.spec.ts` 与 `tests/runner-registry.spec.ts` 以断言锁定。
-  **为什么加这一级**:报告把 `real_tool_fixture_input` 印成 "Real tool functions executed",
-  而 B3/C1/C2 根本不执行任何工具函数 —— 把它们挂在那一级等于让报告说了一句假话。
-- 产物自己声明的等级(artifact 的 `__kind`)在本步所有产物一致时,是 `StepOutcome.kind` 的
-  来源;静态注册表条目无法知道部署事实(A1 只有在配了真实通道时才触达活目录)。
+  - `humanGate`(1 步):E2。该边界由 `tests/t34-single-step.spec.ts` 与 `tests/runner-registry.spec.ts` 以断言锁定。**为什么加这一级**:报告把 `real_tool_fixture_input` 印成 "Real tool functions executed",而 B3/C1/C2 根本不执行任何工具函数 —— 把它们挂在那一级等于让报告说了一句假话。
+- 产物自己声明的等级(artifact 的 `__kind`)在本步所有产物一致时,是 `StepOutcome.kind` 的来源;静态注册表条目无法知道部署事实(A1 只有在配了真实通道时才触达活目录)。
 - **A4-venue 的选刊改由检索语料推导**(2026-09-14):`landscape-map` 加入 A4 的声明输入(`dsh-research-core/src/engine/steps.ts`),executor 取检索记录里出现次数最多的 `venue` 作为目标期刊,计数与选取方法写在产物上。**范围匹配的判据仍是声明**,因为本研究会读期刊的投稿指南 —— 产物用 `scopeSource: 'declared'` 明说这一点。至此 16 步**每一步都有由输入推导的产物**。
 - **实验的需求是测量出来的,不是写死的**:`runner/study-demand.ts` 由 `scripts/derive-demand-profile.mjs` 从真实小时交通量序列(UCI Metro Interstate Traffic Volume,CC BY 4.0)推导,序列哈希、推导步骤与全部建模假设都记录在产物里;`tests/demand-profile.spec.ts` 在数据集存在的机器上重新推导并比对,手改会失败。C1/B3/C3 的产物各带一份相同的 `demand` 证据块。
 - **实验引擎是解析模型,不是微观仿真**:C 通道用 Webster 延误公式,两相位、每相位一条关键进口道、到达均匀、无排队尾部。绝对延误值是模型输出而非实测;两条控制策略在同一模型内比较,所以"比较"是测量,"绝对数值"不是。
