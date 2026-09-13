@@ -46,7 +46,8 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { researchToolsPlugin } from './tools.ts'
+import { buildToolDeps, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
+import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   adjudicate,
   canStart,
@@ -109,6 +110,17 @@ declare module '@deepseek-ai/cordis' {
  *  an unproven one. */
 export interface Config {
   readonly requireResearchTools?: boolean
+  /**
+   * Literature-retrieval channel for the seven research tools. `'fixture'`
+   * (default) keeps the synthetic corpus, so an offline deployment behaves exactly
+   * as before; `'openalex'` assembles the real catalogue adapter, and every
+   * artifact then carries real records.
+   *
+   * Selecting a real channel is a deployment decision recorded in `cordis.yml`,
+   * never a silent default — see the truthfulness vocabulary in the runner, which
+   * separates fixture from live evidence.
+   */
+  readonly literatureSearch?: LiteratureChannel
 }
 
 /**
@@ -124,10 +136,13 @@ export class ResearchEngine extends Service {
   static Config: z<Config> = z.object({})
 
   private readonly requireResearchTools: boolean
+  /** Assembled per deployment from {@link Config.literatureSearch}. */
+  private readonly toolDeps: ResearchToolDeps
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
+    this.toolDeps = buildToolDeps(config.literatureSearch)
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
@@ -159,6 +174,7 @@ export class ResearchEngine extends Service {
     const applied: { value: boolean } = { value: false }
     await this.ctx.plugin(researchToolsPlugin, {
       verify: true,
+      deps: this.toolDeps,
       onReady: () => { applied.value = true },
     })
     // `applied.value` is only flipped by the plugin's onReady callback (which
@@ -179,7 +195,7 @@ export class ResearchEngine extends Service {
    */
   private async mountResearchToolsTolerant(): Promise<void> {
     try {
-      await this.ctx.plugin(researchToolsPlugin, { verify: true })
+      await this.ctx.plugin(researchToolsPlugin, { verify: true, deps: this.toolDeps })
     } catch {
       // No `tools` service: registration skipped, engine stays functional.
     }

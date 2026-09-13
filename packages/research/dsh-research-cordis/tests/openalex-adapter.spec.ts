@@ -130,6 +130,22 @@ describe('OpenAlexLiteratureAdapter', () => {
     expect(outcome.hits.map(hit => hit.id)).toEqual(['W1'])
   })
 
+  it("sends the configured contact address as OpenAlex's mailto parameter", async () => {
+    let seen: URL | undefined
+    const adapter = new OpenAlexLiteratureAdapter({
+      mailto: 'research@example.org',
+      fetchImpl: (async (input: URL | RequestInfo) => {
+        seen = new URL(String(input))
+        return new Response(JSON.stringify({ meta: { count: 0 }, results: [] }), { status: 200 })
+      }) as unknown as typeof fetch,
+    })
+
+    await adapter.search({ topic: 'adaptive traffic signals' })
+
+    expect(seen?.searchParams.get('mailto')).toBe('research@example.org')
+    expect(seen?.searchParams.get('search')).toBe('adaptive traffic signals')
+  })
+
   it('survives a payload with no results array', async () => {
     const adapter = new OpenAlexLiteratureAdapter({ fetchImpl: jsonFetch({ meta: {} }) })
 

@@ -37,6 +37,15 @@
     # service wrapping the hardened dsh-research-core state machine.
     - id: research-cordis
       name: '@deepseek-ai/dsh-research-cordis'
+      config:
+        # Retrieval channel for the seven research tools. `openalex` is the real
+        # catalogue, so A1-landscape retrieves genuine literature and every
+        # downstream artifact carries real records. Set `{ kind: fixture }` to run
+        # fully offline against the synthetic corpus; an omitted channel defaults
+        # to the fixture, so this line is the deployment's explicit opt-in to live
+        # retrieval and should not be removed casually.
+        literatureSearch:
+          kind: openalex
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.

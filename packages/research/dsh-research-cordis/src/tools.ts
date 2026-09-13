@@ -28,6 +28,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MockCitationResolverAdapter } from '@deepseek-ai/dsh-research-core'
+import { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   RESEARCH_TOOL_DIRECTORY,
@@ -143,6 +144,32 @@ const FIXTURE_DEPS: ResearchToolDeps = {
   citationDeps: { resolver: new MockCitationResolverAdapter() },
 }
 
+/** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */
+export type LiteratureChannel =
+  | { readonly kind: 'fixture' }
+  | { readonly kind: 'openalex'; readonly mailto?: string }
+
+/**
+ * Assemble the tool dependency graph for one deployment's retrieval channel.
+ * `'fixture'` (and an absent channel) reproduce the offline graph exactly; a real
+ * channel substitutes the network adapter, so the artifacts downstream carry real
+ * catalogue records instead of synthetic ones.
+ *
+ * @param channel - the configured retrieval channel, or undefined for the fixture.
+ * @returns the dependency graph handed to every tool invocation.
+ */
+export function buildToolDeps(channel: LiteratureChannel | undefined): ResearchToolDeps {
+  if (channel?.kind === 'openalex') {
+    return {
+      ...FIXTURE_DEPS,
+      literatureAdapter: new OpenAlexLiteratureAdapter(
+        channel.mailto !== undefined ? { mailto: channel.mailto } : {},
+      ),
+    }
+  }
+  return FIXTURE_DEPS
+}
+
 /** JSON-safe model-facing projection of a research artifact (drops Buffer bytes). */
 function toJsonSafe(value: unknown): unknown {
   if (Buffer.isBuffer(value)) {
@@ -161,12 +188,21 @@ const jsonTextRender = (_args: unknown, value: unknown) => [
   { type: 'text' as const, text: JSON.stringify(value, null, 2) },
 ]
 
-function handler(toolId: string, toInput: (args: Record<string, unknown>) => unknown) {
-  // Asynchronous: the dispatch is async because externally-backed tools perform a
-  // network round trip. Without the await, `toJsonSafe` would serialize a Promise.
-  return async (args: Record<string, unknown>): Promise<unknown> => {
-    const artifact = await executeResearchTool(toolId, toInput(args), FIXTURE_DEPS, Date.now())
-    return toJsonSafe(artifact)
+/**
+ * Build the model-facing handler bound to one deployment's tool dependencies.
+ * Returning a factory keeps the per-tool call sites below unchanged while letting
+ * the assembled deps (fixture vs. a real retrieval channel) flow from the
+ * plugin's Config down to the single executeResearchTool dispatch.
+ *
+ * Asynchronous: the dispatch is async because externally-backed tools perform a
+ * network round trip. Without the await, `toJsonSafe` would serialize a Promise.
+ */
+function makeHandler(deps: ResearchToolDeps) {
+  return (toolId: string, toInput: (args: Record<string, unknown>) => unknown) => {
+    return async (args: Record<string, unknown>): Promise<unknown> => {
+      const artifact = await executeResearchTool(toolId, toInput(args), deps, Date.now())
+      return toJsonSafe(artifact)
+    }
   }
 }
 
@@ -282,7 +318,11 @@ async function loadDefineTool(): Promise<DefineToolLoader> {
   })
 }
 
-function definitionFor(toolId: string, defineTool: DefineToolLoader): RegisteredTool {
+function definitionFor(
+  toolId: string,
+  defineTool: DefineToolLoader,
+  handler: ReturnType<typeof makeHandler>,
+): RegisteredTool {
   const entry = RESEARCH_TOOL_DIRECTORY.find(row => row.toolId === toolId)
   if (entry === undefined) throw new Error(`[research-tools] unknown catalog tool '${toolId}'`)
   const description = [
@@ -440,16 +480,20 @@ function revocable(def: RegisteredTool, isAlive: () => boolean, meta: Registrati
  * @param ctx - a context whose `tools` service is present.
  * @returns the combined disposer that unregisters every tool and guard.
  */
-export async function registerResearchTools(ctx: Context): Promise<() => void> {
+export async function registerResearchTools(
+  ctx: Context,
+  deps: ResearchToolDeps = FIXTURE_DEPS,
+): Promise<() => void> {
   const tools = ctx as Context & { tools: ToolRegistryFace }
   const defineTool = await loadDefineTool()
+  const handler = makeHandler(deps)
   const disposers: Array<() => void> = []
   let released = false
   const isAlive = () => !released
   try {
     for (const entry of RESEARCH_TOOL_DIRECTORY) {
       const definition = revocable(
-        definitionFor(entry.toolId, defineTool),
+        definitionFor(entry.toolId, defineTool, handler),
         isAlive,
         { toolId: entry.toolId, version: entry.version, modelExposure: entry.modelExposure },
       )
@@ -545,11 +589,11 @@ export const researchToolsPlugin = {
   inject: ['tools'] as const,
   async apply(
     ctx: Context,
-    config: { verify?: boolean; onReady?: () => void } = {},
+    config: { verify?: boolean; onReady?: () => void; deps?: ResearchToolDeps } = {},
   ): Promise<void> {
     // Register (dynamic defineTool loader) before the plugin load settles so
     // callers observe the tools immediately after ctx.plugin(...) resolves.
-    const dispose = await registerResearchTools(ctx)
+    const dispose = await registerResearchTools(ctx, config.deps ?? FIXTURE_DEPS)
     if (config.verify === true) assertResearchToolsReady(ctx)
     config.onReady?.()
     ctx.effect(() => () => {

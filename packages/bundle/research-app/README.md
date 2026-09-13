@@ -32,6 +32,10 @@ The research bundle is added to the profile's `dsh.profile.bundles` so its `cord
 - `cordis.patch.yml` — the bundle patch (transport port + research roster).
 - `src/index.ts` — runtime-inert module marker; all behaviour lives in the mounted research packages.
 
+## Retrieval channel
+
+The `research-cordis` row configures `literatureSearch`. It ships as `openalex`, so the mounted engine retrieves genuine catalogue records through the real adapter; setting `{ kind: fixture }` runs fully offline against the synthetic corpus. An omitted channel defaults to the fixture, so that config line is the deployment's explicit opt-in to live retrieval.
+
 ## Known Limitations and Deferred Work
 
 - The roster mounts three plugin rows. The two pure libraries (`dsh-research-core`, `dsh-research-tools`) are dependencies rather than rows, because they expose no `apply`/`name` and would crash `ctx.registry.plugin`.
