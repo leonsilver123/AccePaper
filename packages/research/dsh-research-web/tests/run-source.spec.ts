@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildSummary } from '../src/loader.ts'
-import { runStatusOf, summaryInputFrom, type WireRunSnapshot } from '../src/run-source.ts'
+import { resolveStepStatus, runStatusOf, summaryInputFrom, type WireRunSnapshot, type WireStepOutcome, type WireStepState } from '../src/run-source.ts'
 
 /** A two-step payload: one passed with gates, one waiting at the human gate. */
 function snapshot(): WireRunSnapshot {
@@ -87,7 +87,47 @@ function snapshot(): WireRunSnapshot {
   }
 }
 
-describe('run snapshot mapping', () => {
+describe('the two facts called `status`', () => {
+  const outcome = (status: string): WireStepOutcome => ({
+    stepId: 'A1-landscape', status, attemptId: 1, kind: 'fixture_executor', producer: 'p',
+    outputSlugs: [], artifacts: [], verdicts: {}, usedRealTool: false,
+  })
+  const state = (status: string): WireStepState => ({ stepId: 'A1-landscape', status, attempt: 1, holdReason: null })
+
+  it('takes the OUTCOME the driver recorded, and says that is where it came from', () => {
+    const resolved = resolveStepStatus(outcome('passed'), state('passed'))
+    expect(resolved).toEqual({ status: 'passed', source: 'outcome', diverged: false })
+  })
+
+  it('falls back to the state the store holds only for a step the driver never reached', () => {
+    expect(resolveStepStatus(undefined, state('gated')))
+      .toEqual({ status: 'gated', source: 'state', diverged: false })
+  })
+
+  it('reports a step with neither record as never reached, not as pending work', () => {
+    // The distinction the view could not make: `pending` from `?? 'pending'` covered both "the
+    // run will get to this" and "the run stopped before this", and they are different answers.
+    expect(resolveStepStatus(undefined, undefined))
+      .toEqual({ status: 'pending', source: 'unreached', diverged: false })
+  })
+
+  it('SURFACES a disagreement between the two instead of resolving it silently', () => {
+    // A rolled-back step, or a resume that re-attempted: the driver recorded how its attempt
+    // ended while the store has moved on. Preferring one without saying so is how a run that
+    // had stopped appeared to still be working.
+    expect(resolveStepStatus(outcome('passed'), state('in_progress')))
+      .toEqual({ status: 'passed', source: 'outcome', diverged: true })
+    expect(resolveStepStatus(outcome('in_progress'), state('passed')))
+      .toEqual({ status: 'in_progress', source: 'outcome', diverged: true })
+  })
+
+  it('does not invent a divergence when the store holds no state for the step', () => {
+    // `diverged` must mean "these two disagreed", not "one of them was missing".
+    expect(resolveStepStatus(outcome('passed'), undefined).diverged).toBe(false)
+  })
+})
+
+describe('runStatusOf', () => {
   it('marks a live run as live, so the badge stops saying MOCK', () => {
     const input = summaryInputFrom(snapshot())
 

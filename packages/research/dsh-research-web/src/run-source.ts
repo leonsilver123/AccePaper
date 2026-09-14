@@ -160,6 +160,68 @@ function asComponent(value: string): TrinityComponent | undefined {
   return COMPONENTS.find(component => component === value)
 }
 
+/** Which of the two `status` fields the view took its answer from. */
+export type StepStatusSource = 'outcome' | 'state' | 'unreached'
+
+/** The status the view shows, which field it came from, and whether the two disagreed. */
+export interface ResolvedStepStatus {
+  readonly status: StepStatus
+  /**
+   * `outcome` — the driver recorded how an attempt on this step ended;
+   * `state`    — only the store has a state for it;
+   * `unreached`— neither does, so the run never got here.
+   */
+  readonly source: StepStatusSource
+  /**
+   * True when both fields were present and named different statuses.
+   *
+   * Surfaced rather than resolved away: the divergence is the interesting fact, and a reader
+   * who is not told about it has to know the rule to notice.
+   */
+  readonly diverged: boolean
+}
+
+/**
+ * Resolve the one status the view shows, from the TWO different facts named `status`.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A `??`. Two unrelated facts travel under that name, and they
+ * are not interchangeable:
+ *   - `WireStepOutcome.status` is how ONE ATTEMPT ended, as the driver recorded it. It exists
+ *     only for a step the driver actually reached, and it is the only one that carries an
+ *     execution error beside it.
+ *   - `WireStepState.status` is what the STORE currently holds for the step. It exists for
+ *     every step the run started, reaches further than the driver's outcomes, and is the one a
+ *     later attempt or a rollback changes.
+ * The view resolved them with `outcome?.status ?? state?.status ?? 'pending'` — a silent
+ * preference for whichever happened to be present. That is how a run which had stopped
+ * mid-execution still appeared to be working, and why nobody could say which status a screen
+ * was showing without reading this file.
+ *
+ * THE RULE, stated so a reader can check a screen against it: the OUTCOME wins where it
+ * exists, because it describes the attempt that ended; the store's state answers for a step
+ * the driver never reached; and a step with neither was never reached at all. A disagreement
+ * is reported through {@link ResolvedStepStatus.diverged} rather than hidden.
+ *
+ * @param outcome - the driver's record for the step, when it produced one.
+ * @param state - the store's record for the step, when the run created one.
+ * @returns the status to show, its source, and whether the two contradicted each other.
+ */
+export function resolveStepStatus(
+  outcome: WireStepOutcome | undefined,
+  state: WireStepState | undefined,
+): ResolvedStepStatus {
+  if (outcome !== undefined) {
+    const status = asStepStatus(outcome.status)
+    return {
+      status,
+      source: 'outcome',
+      diverged: state !== undefined && asStepStatus(state.status) !== status,
+    }
+  }
+  if (state !== undefined) return { status: asStepStatus(state.status), source: 'state', diverged: false }
+  return { status: 'pending', source: 'unreached', diverged: false }
+}
+
 /**
  * The run-level status the header shows.
  *
@@ -206,7 +268,8 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
       index: entry.index,
       phase: asPhase(entry.phase),
       name: entry.name,
-      status: asStepStatus(outcome?.status ?? state?.status ?? 'pending'),
+      // One named rule for the two things called `status`; see `resolveStepStatus`.
+      status: resolveStepStatus(outcome, state).status,
       attempt: state?.attempt ?? outcome?.attemptId ?? 0,
       humanGate: entry.humanGate,
       // The view model only knows the two hold reasons the engine records.
