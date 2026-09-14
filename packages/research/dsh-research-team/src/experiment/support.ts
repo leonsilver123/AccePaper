@@ -27,7 +27,16 @@ import { researchTeamError } from '../types.ts'
  * `local_computation`. The word collides; the level never does, and this is the only reading.
  */
 export type ExperimentSource = 'live' | 'mock-fixture'
-export type EvidenceGrade = 'live-verified' | 'mock-verified' | 'unverified'
+/**
+ * How the report was obtained. NOT a level of verification.
+ *
+ * These were `'live-verified'` / `'mock-verified'`, which read as "externally verified" — and after
+ * `live_external` was narrowed in this repository to mean "a real external system was reached", the
+ * near-homonym promised something the value cannot carry. The grade is `report.source === 'live'`
+ * over a literal the caller writes, so it distinguishes WHICH channel ran and says nothing about
+ * whether the result was checked. It is named for that now.
+ */
+export type EvidenceGrade = 'locally-measured' | 'mock-measured' | 'unverified'
 export type ClaimSupportVerdict = 'supported' | 'refuted' | 'undetermined'
 export type ClaimSupportOutcome = 'passed' | 'failed' | 'blocked' | 'abstained'
 
@@ -134,7 +143,7 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
     timestamp,
   }
   const result: AdjudicationResult = adjudicate(inputA)
-  const grade: EvidenceGrade = report.source === 'live' ? 'live-verified' : 'mock-verified'
+  const grade: EvidenceGrade = report.source === 'live' ? 'locally-measured' : 'mock-measured'
 
   if (result.outcome === 'passed') {
     return {
@@ -144,7 +153,7 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
       outcome: 'passed',
       evidenceGrade: grade,
       reasonCode: result.reasonCode,
-      summary: `experiment (${report.source}) supports the falsifiable prediction`,
+      summary: 'the experiment ran here over the measured demand profile and supports the falsifiable prediction',
       ...(report.fixtureId === undefined ? {} : { fixtureId: report.fixtureId }),
       ...(report.fixtureVersion === undefined ? {} : { fixtureVersion: report.fixtureVersion }),
       evidenceRefs: result.evidenceRefs,
@@ -159,7 +168,7 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
       outcome: 'failed',
       evidenceGrade: grade,
       reasonCode: result.reasonCode,
-      summary: `experiment (${report.source}) refutes the falsifiable prediction`,
+      summary: 'the experiment ran here over the measured demand profile and refutes the falsifiable prediction',
       ...(report.fixtureId === undefined ? {} : { fixtureId: report.fixtureId }),
       ...(report.fixtureVersion === undefined ? {} : { fixtureVersion: report.fixtureVersion }),
       evidenceRefs: result.evidenceRefs,

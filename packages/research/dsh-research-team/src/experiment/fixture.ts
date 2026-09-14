@@ -3,9 +3,9 @@
 // Deterministic mock lookup for the C-channel experiment adjudicator. Real
 // experiments are NOT wired (no code-runtime / no real data) — this table is
 // the ONLY allowed source of `supportsPrediction` on the mock path, and its
-// verdicts are explicitly graded `mock-verified`. They are for internal
+// verdicts are explicitly graded `mock-measured`. They are for internal
 // adversarial self-checks and CI only; they must NEVER be presented as real
-// experimental support (evidenceGrade stays 'mock-verified'; downstream
+// experimental support (evidenceGrade stays 'mock-measured'; downstream
 // adapters must block mock-only passes at the manuscript/finalization face).
 
 export const EXPERIMENT_FIXTURE_RULE_VERSION = 'fixture-mock-v1'

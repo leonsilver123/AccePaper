@@ -2774,10 +2774,11 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
     // The measurement is made by this package's experiment module, not by a tool.
     kind: 'local_computation',
     // The experiment RUNS (traffic-sim measures both policies over the measured
-    // demand profile; the report carries source 'live' and grades live-verified).
+    // demand profile; the report carries source 'live' and grades 'locally-measured' — which
+    // names the channel, not a level of verification).
     // Its INPUT — the claim and its prediction — is fixture-supplied on the default
     // path, which is what keeps this short of `live_external`.
-    basis: 'team adjudicateClaimSupport → core adjudicate(\'C\') executes for real over an experiment MEASURED by traffic-sim: both control policies are run against a demand profile derived from a real measured vehicle-count series (the artifact records the series, its hash, the derivation and the assumptions). Report source is live, evidenceGrade live-verified. The claim and prediction it adjudicates are still fixture input',
+    basis: 'team adjudicateClaimSupport → core adjudicate(`C`) executes for real over an experiment MEASURED by traffic-sim: both control policies are run against a demand profile derived from a real measured vehicle-count series (the artifact records the series, its hash, the derivation and the assumptions). Report source is the literal `live` — the experiment ran HERE, not against an external system — and evidenceGrade is `locally-measured`, derived from that literal by equality: it distinguishes which channel ran and grades nothing. The claim and prediction it adjudicates are still fixture input',
   },
 }
 

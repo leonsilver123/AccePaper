@@ -35,7 +35,7 @@ describe('adjudicateClaimSupport — C-channel (no default pass)', () => {
     expect(r.reasonCode).toBe('NO_EXPERIMENT_REPORT')
   })
 
-  it('is supported (mock-verified) when the mock fixture supports the prediction', () => {
+  it('is supported (mock-measured) when the mock fixture supports the prediction', () => {
     const report: ExperimentReport = {
       source: 'mock-fixture',
       supportsPrediction: true,
@@ -46,11 +46,11 @@ describe('adjudicateClaimSupport — C-channel (no default pass)', () => {
     const r = adjudicateClaimSupport(baseInput({ report }))
     expect(r.verdict).toBe('supported')
     expect(r.outcome).toBe('passed')
-    expect(r.evidenceGrade).toBe('mock-verified')
+    expect(r.evidenceGrade).toBe('mock-measured')
     expect(r.fixtureId).toBe(report.fixtureId)
   })
 
-  it('is refuted (mock-verified) when the mock fixture refutes the prediction', () => {
+  it('is refuted (mock-measured) when the mock fixture refutes the prediction', () => {
     const report: ExperimentReport = {
       source: 'mock-fixture',
       supportsPrediction: false,
@@ -65,10 +65,10 @@ describe('adjudicateClaimSupport — C-channel (no default pass)', () => {
     })
     expect(r.verdict).toBe('refuted')
     expect(r.outcome).toBe('failed')
-    expect(r.evidenceGrade).toBe('mock-verified')
+    expect(r.evidenceGrade).toBe('mock-measured')
   })
 
-  it('is supported (live-verified) on the live path when an evaluator is named', () => {
+  it('is supported (locally-measured) on the live path when an evaluator is named', () => {
     const report: ExperimentReport = {
       source: 'live',
       supportsPrediction: true,
@@ -77,7 +77,7 @@ describe('adjudicateClaimSupport — C-channel (no default pass)', () => {
     }
     const r = adjudicateClaimSupport(baseInput({ report }))
     expect(r.verdict).toBe('supported')
-    expect(r.evidenceGrade).toBe('live-verified')
+    expect(r.evidenceGrade).toBe('locally-measured')
     expect((r as unknown as Record<string, unknown>).evaluator).toBeUndefined()
   })
 
