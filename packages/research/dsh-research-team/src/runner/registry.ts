@@ -639,6 +639,11 @@ function requiredClaimField(claim: Record<string, unknown>, field: string): stri
  */
 function thresholdLabel(commitment: PredictionCommitment | undefined): string {
   if (commitment === undefined) return '(no declared threshold)'
+  // The same message hygiene as the declaration sentence in `evaluatePrediction`: a non-finite
+  // number would otherwise be printed as ">= NaN%" in three artifacts. The value is refused by the
+  // two readers that admit a commitment, so this is not a boundary defence — a value that got past
+  // them would be wrong in the graded comparison, not only in this label.
+  if (!Number.isFinite(commitment.thresholdPct)) return '(no declared threshold)'
   const operator =
     commitment.bound === 'at-least' ? '>=' : commitment.bound === 'at-most' ? '<=' : 'within'
   return `${operator} ${String(commitment.thresholdPct)}%`

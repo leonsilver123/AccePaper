@@ -1251,10 +1251,13 @@ export function evaluatePrediction(
   // would otherwise be described as "a threshold of undefined%" — a sentence about a number the run
   // never had. The parameter type says that cannot happen; this is what the message reads if a value
   // off the durable boundary ever gets past the reader that validates it.
-  // The predicate is the DOORS' own (`typeof === number && Number.isFinite && > 0`), not a weaker
-  // `typeof` alone: NaN and Infinity are exactly "a value off the durable boundary", and a bare
-  // typeof check would render them as "a threshold of NaN%" — the sentence this exists to remove.
-  // A finite non-positive number is printed as itself; it is a number the claim did declare.
+  // A bare `typeof === 'number'` is too weak: NaN and Infinity would render as "a threshold of
+  // NaN%", the sentence this exists to remove. The predicate is the doors' ONE TEST SHORT OF ITS
+  // POSITIVITY CLAUSE — `typeof === number && Number.isFinite`, without `> 0` — because a finite
+  // non-positive number is printed as itself: it is a number the claim did declare, and the doors
+  // are what refuse it. What this guard is, exactly: MESSAGE HYGIENE, not a second line of boundary
+  // defence. A value that got past those readers would be wrong in the graded comparison too, and
+  // not only in this string.
   const declaredThreshold =
     typeof thresholdPct === 'number' && Number.isFinite(thresholdPct)
       ? `${String(thresholdPct)}%`
