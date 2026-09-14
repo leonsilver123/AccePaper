@@ -150,13 +150,26 @@ export class LlmProseWriter {
    */
   async write(request: ProseRequestLike): Promise<ProseResultLike> {
     const host = await this.loadHost()
+    // READ THE SERVICE THROUGH `ctx.get`, NOT THE PROPERTY PROXY. `ctx.agentLoop`
+    // only resolves when the reading context declares `agentLoop` in its `inject`;
+    // this writer is built by the research engine, which does not, so the proxy threw
+    // `cannot get property "agentLoop" without inject` on the FIRST real prose call —
+    // a configured `prose` channel that had never been exercised. `ctx.get` reads the
+    // global service store, which is the documented read for a service this plugin
+    // does not declare. A missing loop is reported as itself, not as a proxy error.
+    const agentLoop = this.ctx.get('agentLoop') as AgentLoopFace | undefined
+    if (agentLoop === undefined) {
+      throw new Error(
+        '[research-prose] the host provides no `agentLoop` service, so the configured prose '
+        + 'channel cannot send a request (failing rather than returning empty text)',
+      )
+    }
     const anyCtx = this.ctx as Context & {
-      agentLoop: AgentLoopFace
       on: (event: string, cb: (payload: { agent: unknown; status: string }) => void) => () => void
     }
 
     const sessionId = host.SessionId(`research-prose-${proseSeq++}`)
-    const agent = anyCtx.agentLoop.create(sessionId, {
+    const agent = agentLoop.create(sessionId, {
       provider: this.config.provider,
       model: this.config.model,
     }) as {

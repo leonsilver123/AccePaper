@@ -159,8 +159,15 @@ export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
     input: unknown,
     timestamp: number,
   ): Promise<unknown> {
+    // Same read as the prose writer: `ctx.get`, never the property proxy, because a
+    // context that does not declare `agentLoop` in its `inject` cannot resolve it.
+    const agentLoop = this.ctx.get('agentLoop') as
+      | { create: (sessionId: unknown, cfg: { provider: string; model: string }) => unknown }
+      | undefined
+    if (agentLoop === undefined) {
+      throw new Error('[research-invoker] the host provides no `agentLoop` service')
+    }
     const anyCtx = this.ctx as Context & {
-      agentLoop: { create: (sessionId: unknown, cfg: { provider: string; model: string }) => unknown }
       on: (event: string, cb: (x: { agent: unknown; status: string }) => void) => () => void
       llm: { registerAdapter: (providers: string[], adapter: unknown) => void }
     }
@@ -188,7 +195,7 @@ export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
     // Unique provider avoids clobbering any pre-registered mock adapter.
     const provider = `research-mock-${adapterSeq++}`
     anyCtx.llm.registerAdapter([provider], adapter)
-    const agent = anyCtx.agentLoop.create(host.SessionId(`res-invoke-${adapterSeq}`), {
+    const agent = agentLoop.create(host.SessionId(`res-invoke-${adapterSeq}`), {
       provider,
       model: 'mock',
     }) as {

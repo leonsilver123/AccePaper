@@ -247,7 +247,15 @@ export async function runT19B(
   const outcomes: StepOutcome[] = []
   for (const step of getStepDefinitions()) {
     if (opts.stopBefore !== undefined && step.id === opts.stopBefore) break
-    outcomes.push(await driveStep(store, runId, step.id, stepOpts))
+    const outcome = await driveStep(store, runId, step.id, stepOpts)
+    outcomes.push(outcome)
+    // STOP AT THE FIRST STEP THAT DID NOT PASS. Driving on would make the NEXT
+    // step's `canStart` guard throw "dependency order violated", which reports the
+    // consequence and hides the cause: a real run stopped at A1 because its retrieval
+    // channel was rate-limited, and the caller was told A2's ordering was wrong.
+    // The failing outcome carries `executeError`, so returning it is what lets a
+    // caller say WHY the run ended.
+    if (outcome.status !== 'passed' && outcome.status !== 'gated') break
   }
   return { runId, steps: outcomes }
 }
