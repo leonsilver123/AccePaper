@@ -44,7 +44,7 @@
  * @module @deepseek-ai/dsh-research-cordis
  */
 
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -184,6 +184,19 @@ export interface Config {
    */
   readonly prose?: ProseChannel
   /**
+   * Directory of the Case Pack this deployment runs against.
+   *
+   * A DEPLOYMENT setting, deliberately not a request parameter: `runPipeline` is exposed
+   * as a Remote method, and letting a client name a filesystem path would hand it the
+   * deployment's disk. Omitted, runs use the pipeline's built-in seeds and no pack.
+   *
+   * Relative paths resolve against {@link Config.workspace}. The engine only CARRIES this
+   * value: the loader lives in `dsh-research-team`, which the runner-side service reads it
+   * with, because this adapter must not depend on the team package (dependencies run
+   * `core` ← `tools` ← {`cordis`, `team`}).
+   */
+  readonly casePackDirectory?: string
+  /**
    * Absolute working directory for every agent session this engine creates (prose
    * writes and model-ready tool invocations). Omitted, it resolves to the
    * deployment's `process.cwd()`.
@@ -205,6 +218,18 @@ export interface Config {
  * unload by [Service.init] (singleton service — module scope ≡ instance scope).
  */
 const runs: ResearchRunStore = new Map()
+
+/**
+ * Resolve the deployment's Case Pack directory against its workspace.
+ *
+ * @param configured - the deployment's `casePackDirectory`, if it named one.
+ * @param workspace - the resolved session working directory.
+ * @returns an absolute path, or undefined when no pack was configured.
+ */
+function resolveCasePackDirectory(configured: string | undefined, workspace: string): string | undefined {
+  if (configured === undefined) return undefined
+  return isAbsolute(configured) ? configured : resolve(workspace, configured)
+}
 
 /**
  * Resolve the deployment's session working directory.
@@ -259,6 +284,13 @@ export class ResearchEngine extends Service {
    */
   readonly sessionCwd: string
   /**
+   * The Case Pack directory this deployment names, resolved to an absolute path, or
+   * undefined when it names none. Public for the same reason {@link ResearchEngine.toolDeps}
+   * is: the runner-side service reads it, so one deployment decision governs which pack a
+   * run is driven by. The engine does not read the pack — only carry where it is.
+   */
+  readonly casePackDirectory: string | undefined
+  /**
    * The real-model prose writer when `config.prose` names a route, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the team service
    * reads it so one deployment-level choice governs every prose step.
@@ -285,6 +317,7 @@ export class ResearchEngine extends Service {
     this.requireResearchTools = config.requireResearchTools ?? false
     this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
     this.sessionCwd = resolveWorkspace(config.workspace)
+    this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
 
     const prose = config.prose
     if (prose?.kind === 'deterministic') {

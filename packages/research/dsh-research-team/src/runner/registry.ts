@@ -74,6 +74,8 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 
+import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
+
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { AblationDefinition, RoadmapGraph } from '@deepseek-ai/dsh-research-tools'
@@ -496,6 +498,28 @@ function readInput(ctx: ExecCtx, slug: string): Record<string, unknown> | undefi
 }
 
 /**
+ * Read a claim field the Case Pack supplied, failing loudly when it is absent.
+ *
+ * A pack that omits one of these is incomplete, and the run must stop rather than
+ * continue with a claim whose falsifiability has a hole in it.
+ *
+ * @param claim - the `case-pack-claim` run input.
+ * @param field - the field name to read.
+ * @returns the field's text.
+ * @throws {Error} when the field is absent or empty.
+ */
+function requiredClaimField(claim: Record<string, unknown>, field: string): string {
+  const value = claim[field]
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(
+      `[A2-claim] the selected Case Pack's claim is missing "${field}" `
+      + '(an incomplete claim cannot be adjudicated — NO DEFAULT PASS)',
+    )
+  }
+  return value
+}
+
+/**
  * The threshold the run's prediction actually commits to, as artifact text.
  *
  * Several artifacts describe the bar the experiment has to clear. They used to
@@ -878,10 +902,27 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let essentialDifference = 'control policy is adaptive (RL) rather than fixed-time'
   let experimentToFalsify = 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.'
   let prediction = CANONICAL_PREDICTION
-  let claimSource: 'model' | 'fixture' = 'fixture'
+  let claimSource: 'model' | 'fixture' | 'case-pack' = 'fixture'
   let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
 
-  if (writer !== undefined) {
+  // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
+  // content, and it is preferred over the model because the pack is what the run was
+  // started with: deriving a different claim from the model would make the run's product
+  // disagree with its own input set. Both paths record which one supplied the claim.
+  const packClaim = readInput(ctx, CASE_PACK_INPUT_SLUGS.claim)
+  if (packClaim !== undefined) {
+    assertion = requiredClaimField(packClaim, 'assertion')
+    essentialDifference = requiredClaimField(packClaim, 'essentialDifference')
+    experimentToFalsify = requiredClaimField(packClaim, 'experimentToFalsify')
+    prediction = requiredClaimField(packClaim, 'prediction')
+    claimSource = 'case-pack'
+    claimRoute = {
+      source: 'case-pack',
+      casePackId: packClaim.casePackId,
+      truthfulness: packClaim.truthfulness,
+      derivedFrom: packClaim.derivedFrom,
+    }
+  } else if (writer !== undefined) {
     const analysis = await writer.write({
       stepId: 'A2-claim',
       instruction: [

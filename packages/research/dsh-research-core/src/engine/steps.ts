@@ -214,7 +214,33 @@ export const TRINITY_LABEL: Readonly<Record<TrinityComponent, string>> = {
  * SEEDABLE_INPUTS may appear in any step's `outputs` (a seed slug cannot also be a
  * produced artifact) — asserted by assertDagAndSeedSeparation at module load.
  */
-export const SEEDABLE_INPUTS: readonly string[] = ['domain-direction']
+/**
+ * Run inputs a Case Pack seeds.
+ *
+ * These live here, next to {@link SEEDABLE_INPUTS}, because they are part of the
+ * pipeline's own input vocabulary — the runner and the Case Pack loader both read them
+ * from this one place, so a slug cannot drift between the allowlist and the loader.
+ *
+ * `scenario` carries the pack's scenario parameters (vehicle parameters, seed, road
+ * grade) so an executor consumes the pack's numbers rather than a compiled-in constant,
+ * which is what makes a change to the pack change the run.
+ */
+export const CASE_PACK_SEED_INPUTS = {
+  claim: 'case-pack-claim',
+  scenario: 'case-pack-scenario',
+  experiment: 'case-pack-experiment',
+  ablation: 'case-pack-ablation',
+  boundary: 'case-pack-boundary',
+  citations: 'case-pack-citations',
+} as const
+
+/** One of {@link CASE_PACK_SEED_INPUTS}'s values. */
+export type CasePackSeedInput = (typeof CASE_PACK_SEED_INPUTS)[keyof typeof CASE_PACK_SEED_INPUTS]
+
+export const SEEDABLE_INPUTS: readonly string[] = [
+  'domain-direction',
+  ...Object.values(CASE_PACK_SEED_INPUTS),
+]
 
 /**
  * Assert the step graph is a DAG (no input references a later-indexed step's output)

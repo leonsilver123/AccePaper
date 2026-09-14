@@ -128,7 +128,7 @@ export async function driveStep(
         stepId: coreCtx.stepId,
         attemptId: coreCtx.attemptId,
         ...(coreCtx.signal !== undefined ? { signal: coreCtx.signal } : {}),
-        getInput: (slug: string) => getArtifact(store, runId, slug),
+        getInput: (slug: string) => resolveStepInput(store, runId, slug),
         runCtx: opts.runCtx,
         ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
         ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
@@ -223,6 +223,29 @@ export async function driveStep(
 }
 
 /**
+ * Resolve one step input.
+ *
+ * A step's inputs come from two places, and the registry names both of them
+ * (`InputSource` = `run-seed` | `upstream-artifact`). This reader consults BOTH: a run
+ * seed set before the run starts, then an upstream step's artifact. Reading only artifacts
+ * made every run-seeded input invisible to its own step — a selected Case Pack reached
+ * `setRunInput` and then nothing downstream could see it.
+ *
+ * Seed-before-artifact precedence is unambiguous because core asserts (DEP-8, at module
+ * load) that no seedable slug appears in any step's outputs, so the two sources can never
+ * name the same input.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read from.
+ * @param slug - the input slug.
+ * @returns the seeded value when one exists, otherwise the recorded artifact.
+ */
+function resolveStepInput(store: ResearchRunStore, runId: string, slug: string): unknown {
+  const seeded: Record<string, unknown> = getRunSnapshot(store, runId).inputs
+  return slug in seeded ? seeded[slug] : getArtifact(store, runId, slug)
+}
+
+/**
  * Drive a full 16-step run. Returns the per-step outcomes. `stopBefore` halts
  * before the named step (used by recovery scenarios to inject faults mid-run).
  *
@@ -236,6 +259,12 @@ export async function runT19B(
   const timestamp = opts.fixedTimestamp ?? FIXED_TS
   const runCtx: RunContext = createRunContext(timestamp)
   const runId = createRun(store)
+  // A selected Case Pack supplies this run's entry inputs. They are seeded BEFORE the
+  // first step because `setRunInput` refuses a run that is already under way
+  // (INV-INPUT-FROZEN), and each value keeps the file and pointer it was derived from.
+  for (const input of opts.casePackInputs ?? []) {
+    setRunInput(store, runId, input.slug, input.value)
+  }
   setRunInput(
     store,
     runId,

@@ -13,6 +13,7 @@ import type {
   TrinityComponent,
 } from '@deepseek-ai/dsh-research-core'
 import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
+import type { CasePackRunInput } from './case-pack.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 
 /** Per-artifact producer evidence for one step. */
@@ -75,6 +76,12 @@ export interface DriveOptions {
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
   readonly toolDeps?: ResearchToolDeps
+  /**
+   * Run inputs derived from a selected Case Pack, seeded before the first step starts.
+   * Inputs freeze once a run is under way, so a pack arriving later cannot be applied to
+   * a run in progress. Each entry carries the file and pointer it was derived from.
+   */
+  readonly casePackInputs?: ReadonlyArray<CasePackRunInput>
 }
 
 /** Options for driving exactly one step. */

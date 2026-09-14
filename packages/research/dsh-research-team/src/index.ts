@@ -65,6 +65,8 @@ import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestr
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
+import type { CasePackRunInput } from './runner/case-pack.ts'
 import { runT19B } from './runner/drive.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
@@ -73,6 +75,23 @@ import type { RunResult } from './runner/types.ts'
 // The package entry re-exports its caller-visible brands, errors, entities,
 // schemas, and request/result shapes so consumers import one specifier.
 
+export {
+  CASE_PACK_FILES,
+  CASE_PACK_INPUT_SLUGS,
+  CASE_PACK_SCHEMA_VERSION,
+  CasePackError,
+  casePackDatum,
+  loadCasePack,
+  planCasePackInputs,
+} from './runner/case-pack.ts'
+export type {
+  CasePack,
+  CasePackEnvelope,
+  CasePackErrorCode,
+  CasePackFile,
+  CasePackFileName,
+  CasePackRunInput,
+} from './runner/case-pack.ts'
 export type * from './types.ts'
 export {
   DSH_RESEARCH_TEAM_ERROR_PREFIX,
@@ -396,11 +415,13 @@ export class ResearchTeamService extends TypertRemoteService {
     const store: ResearchRunStore = new Map()
     const toolDeps = this.hostToolDeps()
     const proseWriter = this.hostProseWriter()
+    const casePackInputs = this.hostCasePackInputs()
     const run = await runT19B(store, {
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
+      ...(casePackInputs !== undefined ? { casePackInputs } : {}),
     })
     return snapshotOf(run, store)
   }
@@ -450,6 +471,26 @@ export class ResearchTeamService extends TypertRemoteService {
   private hostProseWriter(): ResearchProseWriter | undefined {
     const research = this.ctx.get('research') as { proseWriter?: ResearchProseWriter } | undefined
     return research?.proseWriter
+  }
+
+  /**
+   * The run inputs derived from the Case Pack this deployment selected, or undefined when
+   * it selected none.
+   *
+   * The pack directory is a DEPLOYMENT setting carried by the research engine, never a
+   * request field: `runPipeline` is exposed to Remote clients, and a client-supplied path
+   * would let a browser name a filesystem location. The pack is loaded per run from the
+   * directory the deployment named; a run started with no pack keeps the pipeline's own
+   * seeds.
+   *
+   * @returns one entry per seeded slug, each carrying the file and pointer it came from.
+   * @throws {CasePackError} when the deployment named a directory that is not a valid pack.
+   */
+  private hostCasePackInputs(): ReadonlyArray<CasePackRunInput> | undefined {
+    const research = this.ctx.get('research') as { casePackDirectory?: string } | undefined
+    const directory = research?.casePackDirectory
+    if (directory === undefined) return undefined
+    return planCasePackInputs(loadCasePack(directory))
   }
 
   /** Queue one contained recovery pass after publication has unwound. */

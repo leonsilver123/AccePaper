@@ -63,6 +63,12 @@
         # is derived from the request rather than generated. Same request, same text.
         prose:
           kind: deterministic
+        # The Case Pack this deployment runs against: the seven versioned JSON files that
+        # supply the research question, the central claim, the experiment configuration and
+        # its scenario parameters. They are synthetic fixture content and carry that label
+        # through every value derived from them. Relative paths resolve against the
+        # engine's `workspace`. Point this at a different directory to run a different case.
+        casePackDirectory: plan/overnight/2026-09-09/case-pack-traffic
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.
