@@ -181,8 +181,15 @@ describe('the two channels together', () => {
     // rather than to some other field of the run.
     const supporting = await buildStepVerdicts(ctxFor(SUPPORTING))
     const gapped = await buildStepVerdicts(ctxFor(GAPPED_A_ONLY))
+    const opposing = await buildStepVerdicts(ctxFor(OPPOSING))
     expect(supporting.find(v => v.component === 'A')?.outcome).toBe('passed')
-    expect(gapped.find(v => v.component === 'A')?.outcome).toBe('failed')
+    // BLOCKED, not FAILED, and the difference is the calibration doing its job: with
+    // `passThreshold: 1` a refute by any role means the gate cannot pass, but the outcome still
+    // reflects how the deciding votes fell. Here one role refuted, one supported and one
+    // abstained — a disagreement that REWORK resolves — where the all-refute material below is
+    // `failed` outright. Both stop the run; they say different things about what to do next.
+    expect(gapped.find(v => v.component === 'A')?.outcome).toBe('blocked')
+    expect(opposing.find(v => v.component === 'A')?.outcome).toBe('failed')
     expect(gapped.find(v => v.component === 'C')?.outcome)
       .toBe(supporting.find(v => v.component === 'C')?.outcome)
   })

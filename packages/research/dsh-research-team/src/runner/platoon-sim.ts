@@ -283,6 +283,8 @@ export type PredictionAdjudication =
     readonly supportsPrediction: boolean
     readonly improvementPct: number
     readonly thresholdPct: number
+    /** The direction the CLAIM stated, which is the one its threshold was graded in. */
+    readonly direction: PredictionDirection
     readonly detail: string
     /** The claim's own phrasing that binds it to the measured quantity. */
     readonly matchedPhrase: string
@@ -390,6 +392,12 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
     const params = entry.vehicleParams
     const speed = entry.initialSpeed_mps
     if (!Array.isArray(composition) || composition.some(id => id !== 'HV' && id !== 'AV')) return undefined
+    // A platoon needs a leader and at least one follower. Accepting a one-vehicle composition and
+    // letting `runPlatoon` refuse it later turned a pack this loader cannot use into an uncaught
+    // exception thrown from inside the C channel, where every neighbouring refusal (an
+    // incomparable measurement, an unstated metric) is a fail-closed `unbindable` hold. An audit
+    // found it; the contract here is "a pack this loader cannot read is refused", so it is refused.
+    if (composition.length < 2) return undefined
     if (params === null || typeof params !== 'object') return undefined
     if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0) return undefined
 
@@ -483,9 +491,25 @@ function timeToCollision(follower: VehicleState, leader: VehicleState): number {
   return gap / closingSpeed
 }
 
-/** Reaction time left after a vehicle's own prediction of its leader, in seconds. */
-function effectiveLagSeconds(klass: VehicleClass): number {
-  return Math.max(0, klass.reactionDelaySeconds - klass.lookAheadHorizonSeconds)
+/**
+ * Extrapolate one vehicle's state forward by `seconds`.
+ *
+ * This is what a vehicle that PREDICTS its leader does: it takes the state it can see — which,
+ * for a vehicle with a reaction delay, is a state from the past — and projects it forward over
+ * the horizon it looks ahead by. Constant-acceleration extrapolation, the same second-order form
+ * a driver's anticipation is usually modelled with.
+ *
+ * @param state - the state as observed.
+ * @param seconds - how far forward to project it.
+ * @returns the projected state.
+ */
+function extrapolate(state: VehicleState, seconds: number): VehicleState {
+  if (seconds <= 0) return state
+  return {
+    position: state.position + state.speed * seconds + 0.5 * state.acceleration * seconds ** 2,
+    speed: Math.max(0, state.speed + state.acceleration * seconds),
+    acceleration: state.acceleration,
+  }
 }
 
 /** Run one platoon and measure it. Pure: same scenario in, same numbers out. */
@@ -498,7 +522,7 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
     throw new Error(`[platoon-sim] a platoon needs at least a leader and one follower, got ${String(count)}`)
   }
   const classes = scenario.composition.map(id => scenario.vehicleClasses[id])
-  const maxDelay = Math.max(...classes.map(effectiveLagSeconds))
+  const maxDelay = Math.max(...classes.map(klass => klass.reactionDelaySeconds))
   const bufferSteps = Math.max(1, Math.ceil(maxDelay / stepSeconds) + 1)
 
   // Positions increase along the direction of travel, so the leader is the LARGEST x.
@@ -539,11 +563,24 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
     for (let index = 1; index < count; index++) {
       const klass = at(classes, index)
       const me = at(previous, index)
-      // The delayed leader: the state its leader had `effectiveLagSeconds` ago. This is
-      // the delay buffer's whole purpose, and the only mechanism the claim is about.
-      const lagSteps = Math.round(effectiveLagSeconds(klass) / stepSeconds)
+      // TWO INDEPENDENT MECHANISMS, and they are separate on purpose.
+      //
+      // (1) The REACTION DELAY: the leader's state as it was `reactionDelaySeconds` ago, read out
+      //     of the ring buffer. This is the buffer's whole purpose.
+      // (2) The LOOK-AHEAD: that observed state is then extrapolated FORWARD by the vehicle's
+      //     horizon, which is what predicting a leader's motion means.
+      //
+      // They were previously one thing. The horizon was SUBTRACTED from the delay
+      // (`max(0, reactionDelay - horizon)`), so with the AV's declared 0.15 s of each the model
+      // simply had no delay at all — two "separable mechanisms" that were two points on one
+      // scalar. An audit proved it by showing `{reaction: 0.15, horizon: 0.15}` and
+      // `{reaction: 1.2, horizon: 1.2}` producing bit-identical trajectories, which also meant the
+      // Method section's claim that the AV "predicts its leader over a 0.15 s horizon" described
+      // nothing the simulation did.
+      const lagSteps = Math.round(klass.reactionDelaySeconds / stepSeconds)
       const bufferIndex = Math.max(0, history.length - 1 - lagSteps)
-      const lead = at(at(history, bufferIndex), index - 1)
+      const observed = at(at(history, bufferIndex), index - 1)
+      const lead = extrapolate(observed, klass.lookAheadHorizonSeconds)
 
       const gap = lead.position - me.position - vehicleLengthM
       const approachSpeed = me.speed - lead.speed
@@ -644,6 +681,49 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
   }
 }
 
+/** The direction a prediction commits to, as its own words state it. */
+export type PredictionDirection = 'increase' | 'decrease'
+
+const INCREASE_WORDS: ReadonlyArray<string> = [
+  'increase', 'increases', 'increased', 'raise', 'raises', 'raised', 'exceed', 'exceeds', 'exceeding',
+  'higher', 'greater', 'above', 'improve', 'improves', 'improved', 'improvement', 'gain', 'gains', 'rise', 'rises',
+]
+
+const DECREASE_WORDS: ReadonlyArray<string> = [
+  'decrease', 'decreases', 'decreased', 'fall', 'falls', 'falling', 'lower', 'lowers', 'lowered',
+  'reduce', 'reduces', 'reduced', 'reduction', 'drop', 'drops', 'dropping', 'decline', 'declines',
+  'below', 'less', 'shorter', 'smaller',
+]
+
+/**
+ * The direction a prediction commits to.
+ *
+ * WHY THIS IS READ AT ALL. The gate compared the measured change against the threshold with ONE
+ * fixed direction (`improvement >= threshold`) and took the threshold from the first percentage in
+ * the text. So "the minimum time-to-collision shall FALL by at least 20%" was graded as an
+ * INCREASE: a measurement of -38.20%, which satisfies that prediction exactly, was reported as
+ * NEGATING it. Two independent audits found it, and this batch's own `decisive` flag then carried
+ * the wrong conclusion forward as a PASS instead of stopping at a failure — the change made a wrong
+ * judgment worse than it had been.
+ *
+ * A prediction that states no direction, or states both, is AMBIGUOUS and the gate cannot grade it:
+ * there is no reading of "changed by 20%" that decides which way the number has to move. That is a
+ * hold, not a pass — the same fail-closed answer an unstated metric gets.
+ *
+ * A word test cannot establish what a prediction is ABOUT, only which words it used — the same limit
+ * the phrase binding states. It is enough to stop the gate grading a claim backwards.
+ *
+ * @param predictionText - the prediction as written.
+ * @returns the direction, or undefined when the text does not commit to exactly one.
+ */
+export function directionFromPrediction(predictionText: string): PredictionDirection | undefined {
+  const lowered = predictionText.toLowerCase()
+  const saysIncrease = INCREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))
+  const saysDecrease = DECREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))
+  if (saysIncrease === saysDecrease) return undefined
+  return saysIncrease ? 'increase' : 'decrease'
+}
+
 /**
  * Read the numeric threshold a prediction commits to.
  *
@@ -735,18 +815,38 @@ export function evaluatePrediction(
         + 'cannot adjudicate the prediction',
     }
   }
+  // The direction the CLAIM committed to, read from its own words. Without it the threshold has
+  // no reading: "changed by 20%" does not say which way the number has to move, and grading it
+  // either way would invent the half the claim left out.
+  const direction = directionFromPrediction(predictionText)
+  if (direction === undefined) {
+    return {
+      kind: 'unbindable',
+      reason:
+        `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but does not commit to a `
+        + 'DIRECTION, so there is no reading of that threshold that decides whether the measurement '
+        + 'meets it — the claim has to say whether the quantity should rise or fall',
+    }
+  }
+
   const improvementPct = comparison.relativeImprovementPct
-  const supportsPrediction = comparison.meetsThreshold(thresholdPct)
+  // What is graded is the change the CLAIM asked for, stated in the claim's own direction: a
+  // prediction that the margin gets WORSE is met by a negative improvement, and this is the line
+  // whose absence let the gate report a met prediction as a negated one.
+  const inClaimDirection = direction === 'increase' ? improvementPct : -improvementPct
+  const supportsPrediction = inClaimDirection >= thresholdPct
   return {
     kind: 'adjudicated',
     matchedPhrase: matched,
     supportsPrediction,
     improvementPct,
     thresholdPct,
+    direction,
     detail:
-      `the mixed platoon ${supportsPrediction ? 'met' : 'missed'} the stated threshold: `
-      + `measured improvement ${improvementPct.toFixed(2)}% vs required ${String(thresholdPct)}% `
-      + `of ${MEASURED_METRIC_LABEL} `
+      `the study ${supportsPrediction ? 'met' : 'missed'} the stated threshold: the claim predicts the `
+      + `quantity should ${direction}, and the measurement moved ${improvementPct.toFixed(2)}% `
+      + `(i.e. ${inClaimDirection.toFixed(2)}% in the direction the claim asked for) against the required `
+      + `${String(thresholdPct)}% of ${MEASURED_METRIC_LABEL} `
       + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)} -> `
       + `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)})`,
   }

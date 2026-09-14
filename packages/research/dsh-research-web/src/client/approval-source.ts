@@ -52,6 +52,12 @@ export interface ApprovalReceipt {
 /** How an approval attempt ended. */
 export type ApprovalOutcome =
   | { readonly ok: true; readonly receipt: ApprovalReceipt; readonly summary: RunSummary }
+  /**
+   * The decision was applied and is durable, but the backend could not re-project the run, so
+   * there is no refreshed workbench to render. Distinct from a refusal on purpose: the operator's
+   * approval stands, and telling them it failed would be the same confusion one layer up.
+   */
+  | { readonly ok: true; readonly receipt: ApprovalReceipt; readonly summaryUnavailable: true }
   | { readonly ok: false; readonly code: ApprovalFailure; readonly detail: string }
 
 /**
@@ -155,6 +161,13 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
     }
     const decision = readDecision(result)
     if (!decision.ok) return decision
+    if (decision.snapshot === undefined) {
+      // The backend applied the decision and could not re-project the run. Reporting this as a
+      // refusal would tell the operator their approval failed while the run says it passed — the
+      // same confusion the host side was just fixed for, one layer out. The receipt stands; only
+      // the refreshed workbench is missing, and that is what the note says.
+      return { ok: true, receipt: decision.receipt, summaryUnavailable: true }
+    }
     try {
       return {
         ok: true,

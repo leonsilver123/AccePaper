@@ -18,6 +18,7 @@ import {
   DECLARED_VEHICLE_CLASSES,
   MEASURED_METRIC_KEY,
   SIMULATION_INPUTS,
+  directionFromPrediction,
   STUDY_OPERATING_POINT,
   ablationStudy,
   boundaryTest,
@@ -231,6 +232,46 @@ describe('evaluatePrediction', () => {
     expect(verdict.matchedPhrase).toBe('minimum time-to-collision')
   })
 
+  it('GRADES THE DIRECTION THE CLAIM STATED, not one the metric prefers', () => {
+    // The defect two independent audits found, and that this batch's own `decisive` flag then made
+    // worse: the gate compared `improvement >= threshold` with one fixed direction, so a claim
+    // predicting the margin would FALL was graded as if it had to RISE. A measurement of -38.20%
+    // satisfies "falls by at least 20%" exactly, and the gate reported it as NEGATING that claim —
+    // then advanced the step on the strength of the negation.
+    const decrease = 'the HV-AV-HV platoon minimum time-to-collision falls by at least 20% relative to the all-HV platoon'
+    const verdict = evaluatePrediction(decrease, study, MEASURED_METRIC_KEY)
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind !== 'adjudicated') return
+    expect(verdict.direction).toBe('decrease')
+    expect(verdict.supportsPrediction).toBe(true)
+    expect(verdict.improvementPct).toBeLessThan(-20)
+
+    // ...and the same measurement still REFUTES the claim that asks for a rise.
+    const increase = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+    const opposite = evaluatePrediction(increase, study, MEASURED_METRIC_KEY)
+    expect(opposite.kind).toBe('adjudicated')
+    if (opposite.kind !== 'adjudicated') return
+    expect(opposite.direction).toBe('increase')
+    expect(opposite.supportsPrediction).toBe(false)
+  })
+
+  it('HOLDS a prediction that states no direction, or both', () => {
+    // "changed by 20%" does not say which way the number has to move, so there is no reading of
+    // its threshold that decides anything. Grading it either way would invent the half the claim
+    // left out; a hold is the fail-closed answer, the same one an unstated metric gets.
+    for (const text of [
+      'the platoon minimum time-to-collision changes by at least 20%',
+      'the minimum time-to-collision is higher under the AV platoon and lower under the all-HV platoon by at least 20%',
+    ]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY)
+      expect(verdict.kind, text).toBe('unbindable')
+      if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('does not commit to a')
+    }
+    expect(directionFromPrediction('no percentage and no direction at all')).toBeUndefined()
+    expect(directionFromPrediction('the margin rises')).toBe('increase')
+    expect(directionFromPrediction('the margin drops')).toBe('decrease')
+  })
+
   it('supports the prediction when the measurement warrants it', () => {
     // The direction-sensitivity check. On this metric the sign is set by the AV's declared
     // headway: it must hold a LARGER headway than the human vehicle before its faster
@@ -243,7 +284,7 @@ describe('evaluatePrediction', () => {
         ...study.variant,
         vehicleClasses: {
           ...study.variant.vehicleClasses,
-          AV: { ...study.variant.vehicleClasses.AV, desiredHeadwaySeconds: 3.0 },
+          AV: { ...study.variant.vehicleClasses.AV, desiredHeadwaySeconds: 4.0 },
         },
       },
     }

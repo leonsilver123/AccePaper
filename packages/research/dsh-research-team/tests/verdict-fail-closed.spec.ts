@@ -49,7 +49,7 @@ function studyWhereThePredictionHolds(): ReturnType<typeof experimentStudy> {
       ...base.variant,
       vehicleClasses: {
         ...base.variant.vehicleClasses,
-        AV: { ...base.variant.vehicleClasses.AV, desiredHeadwaySeconds: 3.0 },
+        AV: { ...base.variant.vehicleClasses.AV, desiredHeadwaySeconds: 4.0 },
       },
     },
   }

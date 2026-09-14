@@ -87,9 +87,22 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
   // `sameFamilyDownweight` is absent from the calibrated config because no vote declares a
   // family: it was previously set for votes that all claimed distinct families, which made
   // the knob unreachable and the claim false at the same time.
+  //
+  // `passThreshold: 1` — a refute by ANY role fails the gate. It was 0.5, which with three votes
+  // meant two rulebooks had to contradict the material before anything happened; one was
+  // outvoted. An audit demonstrated the consequence: a claim whose declared data source is not
+  // one of the pack's files still passed A, and the C channel passed too because the metric
+  // matched, so the whole step advanced with the provenance assertion unchecked. The material's
+  // own consistency is not a matter of opinion to be outvoted, and the fail-closed reading of a
+  // gate is that every check has to be satisfied.
+  //
+  // An `abstain` still does not decide, which is core's A semantics and is stated rather than
+  // papered over: material with GAPS but no contradiction can still pass. In the shipped path the
+  // gaps are unreachable — A2 reads every field through `requiredClaimField`, which throws rather
+  // than seeding a claim with a hole.
   const config: AdjudicationConfig = useAbstain
     ? {}
-    : { minValidVotes: 2, passThreshold: 0.5 }
+    : { minValidVotes: 2, passThreshold: 1 }
   const rv = judgeRound(round, config, ctx.runCtx.timestamp)
   const tally = reviews.map(review => `${review.role}=${review.position}`).join(', ')
   return {
@@ -220,7 +233,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     report,
     timestamp: ctx.runCtx.timestamp,
   })
-  const negated = report.supportsPrediction === false
+  const negated = !report.supportsPrediction
   return {
     component: 'C',
     outcome: rec.outcome,

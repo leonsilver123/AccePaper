@@ -226,7 +226,11 @@ describe('§8.1 a re-read of the backend still shows the decision', () => {
     expect(result.ok).toBe(true)
 
     // The response carries a projection taken AFTER the decision...
-    const fromResponse = result.ok ? result.value.snapshot.steps.find(step => step.stepId === E2) : undefined
+    // The projection is OPTIONAL on the wire: a decision that was applied but could not be
+    // re-projected still reports success with `projectionError` set, so a caller never hears
+    // "refused" for a decision the run recorded.
+    const fromResponse = result.ok ? result.value.snapshot?.steps.find(step => step.stepId === E2) : undefined
+    expect(result.ok ? result.value.snapshot : undefined).toBeDefined()
     expect(fromResponse?.status).toBe('passed')
     expect(fromResponse?.attempt).toBe(attempt)
 

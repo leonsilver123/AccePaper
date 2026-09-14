@@ -57,8 +57,10 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
         if (result.ok) {
           settle(stepId, { kind: 'decided', receipt: result.receipt }, { kind: 'decided', receipt: result.receipt })
           // The refreshed summary replaces the one on screen, so every other tab shows the
-          // status the backend recorded rather than the one the reader was looking at.
-          onDecided?.(result.summary)
+          // status the backend recorded rather than the one the reader was looking at. The
+          // backend applied the decision but could not re-project the run, so there is nothing
+          // refreshed to show — the decision itself stands and the panel keeps its receipt.
+          if ('summary' in result) onDecided?.(result.summary)
           return
         }
         settle(stepId, { kind: 'refused', code: result.code, detail: result.detail }, { kind: 'refused', code: result.code, detail: result.detail })

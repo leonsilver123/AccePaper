@@ -71,11 +71,12 @@ import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import { createRunPersistence, getArtifact, getRunSnapshot, getStepDefinitions, rollback } from '@deepseek-ai/dsh-research-core'
 import type { RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
-import { loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
+import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
 import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
-import { firstNonTerminalStep } from './runner/resume.ts'
+import { experimentStudy, studyFromPack } from './runner/platoon-sim.ts'
+import { firstNonTerminalStep, needsReleaseBeforeResume } from './runner/resume.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 import {
@@ -463,7 +464,6 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
     })
-    const packageExport = this.exportRunPackage(store, run)
     // READ the stored run, then let `save` REPLACE it under its own version guard. An earlier
     // version deleted the file first and saved with `baseRevision: 0`; that made the guard pass on
     // every run (it compares against an absent file), left a window in which the predecessor was
@@ -475,7 +475,10 @@ export class ResearchTeamService extends TypertRemoteService {
     // rather than the conflict it is. Chaining the two steps removes the window inside this
     // process; a cross-process race is still the store's to refuse, and now has a correct
     // revision to compare against.
-    const persistence = await this.recordRun(run, store)
+    // ONE call writes both, so they cannot disagree and neither result is discarded. This used to
+    // export here AND inside `recordRun`, and the second call's result (which carries an `error`
+    // field when the write fails) was dropped — a package write failure left no trace.
+    const { persistence, packageExport } = await this.recordRun(run, store)
     rememberRun(
       run.runId,
       store,
@@ -483,7 +486,9 @@ export class ResearchTeamService extends TypertRemoteService {
       // The approval handler persists through THIS closure, so a decision is as durable as the
       // run that produced it. Handing the decision only to memory left the snapshot saying E2
       // `gated` after a person had approved it — a restart would have asked them again.
-      () => this.recordRun(run, store),
+      // The approval persists through the same writer the run did, so a decision is as durable
+      // as the run that produced it — and only the persistence half is wanted here.
+      () => this.recordRun(run, store).then(recorded => recorded.persistence),
     )
     return snapshotOf(run, store, packageExport, persistence)
   }
@@ -499,14 +504,16 @@ export class ResearchTeamService extends TypertRemoteService {
    * @param store - the store the run populated, still live.
    * @returns the persisted revision, or the failure, or null when no directory is configured.
    */
-  private async recordRun(run: RunResult, store: ResearchRunStore): Promise<ResearchRunPersistence | null> {
+  private async recordRun(
+    run: RunResult,
+    store: ResearchRunStore,
+  ): Promise<{ persistence: ResearchRunPersistence | null; packageExport: ResearchPackageExport | null }> {
     const persistence = await this.serialized(async () => {
       // The predecessor read here is THIS run's earlier revision, if any — never another run's.
       const stored = await this.readStoredRun(run.runId)
       return this.persistRun(store, run, stored?.revision ?? 0)
     })
-    this.exportRunPackage(store, run)
-    return persistence
+    return { persistence, packageExport: this.exportRunPackage(store, run) }
   }
 
   /**
@@ -683,20 +690,52 @@ export class ResearchTeamService extends TypertRemoteService {
     }
     const runCtx = createRunContext()
     const prediction = getArtifact(restored.store, restored.runId, 'falsifiable-prediction') as
-      | { text?: unknown; ref?: unknown }
+      | { text?: unknown; ref?: unknown; metricKey?: unknown; measuredMetricKey?: unknown }
       | undefined
     const claim = getArtifact(restored.store, restored.runId, 'claim') as
-      | { claimId?: unknown; assertion?: unknown }
+      | { claimId?: unknown; assertion?: unknown; essentialDifference?: unknown; experimentToFalsify?: unknown }
       | undefined
     if (typeof prediction?.text === 'string') runCtx.predictionText = prediction.text
     if (typeof prediction?.ref === 'string') runCtx.claimRef = prediction.ref
     if (typeof claim?.claimId === 'string') runCtx.claimId = claim.claimId
     // The metric key AND the claim's own words, or a resumed C-gated step would abstain for a
     // reason that has nothing to do with the claim: the key would be empty and the text unnamed.
-    const restoredKey = (prediction as { metricKey?: unknown } | undefined)?.metricKey
+    const restoredKey = prediction?.metricKey
     if (typeof restoredKey === 'string') runCtx.metricKey = restoredKey
-    const restoredMetricKey = (prediction as { measuredMetricKey?: unknown } | undefined)?.measuredMetricKey
+    const restoredMetricKey = prediction?.measuredMetricKey
     if (typeof restoredMetricKey === 'string' && runCtx.metricKey === '') runCtx.metricKey = restoredMetricKey
+
+    // The claim MATERIAL the A channel reviews, rebuilt from the artifacts the run already
+    // recorded. It was never restored, so an A-gated step re-driven after A2 would review an
+    // EMPTY material and hold the run for "the claim names no falsifying experiment" — a reason
+    // about the claim that the claim itself contradicts. An audit registered this as a suspect
+    // path; it is closed here rather than left to be discovered by a user whose resumed run
+    // stalls for a reason that is not true.
+    const restoredClaim = claim
+    const restoredPrediction = prediction
+    const restoredWords = typeof restoredPrediction?.text === 'string' ? restoredPrediction.text : ''
+    runCtx.claimMaterial = {
+      assertion: typeof restoredClaim?.assertion === 'string' ? restoredClaim.assertion : '',
+      prediction: restoredWords,
+      experimentToFalsify: typeof restoredClaim?.experimentToFalsify === 'string' ? restoredClaim.experimentToFalsify : '',
+      // The pack's scope and data source are not step artifacts, so they are not on disk to
+      // restore. Restoring the fields that ARE there is what keeps the review from holding a
+      // claim it can actually read; the two it cannot recover stay empty, and `red-method` and
+      // `red-domain` then report a GAP for them, which is what they are.
+      scope: '',
+      dataSource: '',
+      essentialDifference: typeof restoredClaim?.essentialDifference === 'string' ? restoredClaim.essentialDifference : '',
+      metricKey: runCtx.metricKey,
+      truthfulness: typeof (claim as { truthfulness?: unknown } | undefined)?.truthfulness === 'string'
+        ? (claim as { truthfulness: string }).truthfulness
+        : '',
+      measuredMetricKey: typeof restoredMetricKey === 'string' ? restoredMetricKey : '',
+      declaredSources: [],
+    }
+    // The STUDY the experiment runs, likewise rebuilt: without it a resumed C-gated step would
+    // measure the module's default scenarios while the artifacts describe the pack's.
+    const restoredScenario = this.hostCasePackScenario()
+    runCtx.study = studyFromPack(restoredScenario) ?? experimentStudy()
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,
@@ -711,9 +750,11 @@ export class ResearchTeamService extends TypertRemoteService {
       // then NOT rolled back, so `canStart` refused it and the run reported a dependency error —
       // this thread's recurring symptom. The selector already excludes the human gate, so this
       // needs no second opinion about why the step is gated.
-      && (resumeState.status === 'failed'
-        || resumeState.status === 'blocked'
-        || resumeState.status === 'gated')
+      //
+      // The decision itself lives in `resume.ts`, beside the selector it has to agree with, so a
+      // spec can check the two together. It used to be a list written out here: see
+      // `needsReleaseBeforeResume` for what its omission of `in_progress` cost.
+      && needsReleaseBeforeResume(resumeState.status)
     ) {
       // The step stopped without completing, so it goes back to `pending` before it is driven
       // again; `startStep` refuses anything else, and the rollback also invalidates whatever the
@@ -725,7 +766,7 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })
-    const persisted = await this.persistRun(restored.store, run, restored.revision)
+    const { persistence: persisted } = await this.recordRun(run, restored.store)
     // Remembered like a fresh run: a resumed run that reaches E2 must be approvable, and the
     // approval endpoint resolves the run through this registry. Without it the gate would refuse
     // with `research/approval-run-unknown` — a resumed run no person could ever pass.
@@ -733,7 +774,7 @@ export class ResearchTeamService extends TypertRemoteService {
       restored.runId,
       restored.store,
       () => snapshotOf(run, restored.store, null, persisted),
-      () => this.recordRun(run, restored.store),
+      () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
     )
     return snapshotOf(run, restored.store, null, persisted)
   }
@@ -837,6 +878,24 @@ export class ResearchTeamService extends TypertRemoteService {
     const directory = research?.casePackDirectory
     if (directory === undefined) return undefined
     return planCasePackInputs(loadCasePack(directory))
+  }
+
+  /**
+   * The scenario block of the deployment's selected Case Pack, or undefined when it selected none.
+   *
+   * A resumed run needs it for the same reason a fresh one does: the C channel measures the STUDY,
+   * and a resumed run that fell back to the module's own scenarios would adjudicate the claim
+   * against a different experiment from the one its own artifacts describe.
+   *
+   * @returns the pack's `case-pack-scenario` value, or undefined.
+   * @throws {CasePackError} when the deployment named a directory that is not a valid pack.
+   */
+  private hostCasePackScenario(): unknown {
+    const research = this.ctx.get('research') as { casePackDirectory?: string } | undefined
+    const directory = research?.casePackDirectory
+    if (directory === undefined) return undefined
+    const seeded = planCasePackInputs(loadCasePack(directory))
+    return seeded.find(entry => entry.slug === CASE_PACK_INPUT_SLUGS.scenario)?.value
   }
 
   /** Queue one contained recovery pass after publication has unwound. */

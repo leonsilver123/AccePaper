@@ -17,11 +17,12 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
+import { canStart, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore, RestoredRun } from '@deepseek-ai/dsh-research-core'
-import { firstNonTerminalStep } from '../src/runner/resume.ts'
+import { firstNonTerminalStep, needsReleaseBeforeResume } from '../src/runner/resume.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
+import { rollback } from '@deepseek-ai/dsh-research-core'
 
 /** A `RestoredRun` over a real store; only the fields the selector reads carry meaning here. */
 function restored(store: ResearchRunStore, runId: string): RestoredRun {
@@ -104,5 +105,49 @@ describe('firstNonTerminalStep', () => {
 
     expect(() => firstNonTerminalStep(restored(store, run.runId))).toThrow(/no step left to resume/)
     expect(() => firstNonTerminalStep(restored(store, run.runId))).toThrow(/A1-landscape=passed/)
+  })
+})
+
+describe('the selector and the release condition agree', () => {
+  it('releases a step whose EXECUTOR FAILED — the commonest interruption there is', async () => {
+    // The audit's P1. A step whose executor throws is persisted `in_progress` with no verdict. The
+    // selector returns it — it is not `passed` and not a held human gate — but the release
+    // condition listed only `failed`/`blocked`/`gated`, so `startStep` refused it with "its status
+    // is 'in_progress', and only a 'pending' step can start". A model-writer error or a tool
+    // timeout left the run permanently stuck, reporting an engine error rather than a recovery.
+    const store: ResearchRunStore = new Map()
+    const interrupted = await runT19B(store, {
+      executorOverride: stepId => (stepId === 'C1-mvp'
+        ? () => { throw new Error('injected executor failure') }
+        : undefined),
+    })
+    const failedState = getRunSnapshot(store, interrupted.runId).steps['C1-mvp']
+    expect(failedState?.status).toBe('in_progress')
+
+    const from = firstNonTerminalStep(restored(store, interrupted.runId))
+    expect(from).toBe('C1-mvp')
+    // The property, not just this case: whatever the selector returns, the release agrees.
+    expect(needsReleaseBeforeResume(getRunSnapshot(store, interrupted.runId).steps[from]!.status)).toBe(true)
+
+    // And the release actually unblocks it. The assertion is `canStart` rather than a successful
+    // re-drive, because that is precisely what the defect made false: `startStep` — and therefore
+    // `canStart` — accepts only a `pending` step, so `driveRemaining` threw before it reached any
+    // executor. Re-driving would need the run context rebuilt from the artifacts (which
+    // `resumeRunPipeline` does and this spec does not), and would test that instead of this.
+    expect(canStart(store, interrupted.runId, from)).toBe(false)
+    rollback(store, interrupted.runId, from)
+    expect(getRunSnapshot(store, interrupted.runId).steps[from]?.status).toBe('pending')
+    expect(canStart(store, interrupted.runId, from)).toBe(true)
+  })
+
+  it('agrees for EVERY status the selector can return, so the two cannot drift apart again', async () => {
+    // Written as a sweep rather than as a list of cases on purpose: the defect was that the
+    // selector and the release were two hand-maintained lists that overlapped without agreeing.
+    // `pending` is the only status that needs no release, because it is already where `startStep`
+    // wants the step to be.
+    expect(needsReleaseBeforeResume('pending')).toBe(false)
+    for (const status of ['in_progress', 'gated', 'blocked', 'failed'] as const) {
+      expect(needsReleaseBeforeResume(status), status).toBe(true)
+    }
   })
 })

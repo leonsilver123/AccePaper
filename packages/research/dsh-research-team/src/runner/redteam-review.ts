@@ -36,6 +36,8 @@
 
 import type { ResearchRebuttalPosition } from '../types.ts'
 
+import { directionFromPrediction } from './platoon-sim.ts'
+
 /** The claim material the review reads. Every field is what the run states, verbatim. */
 export interface ClaimMaterial {
   /** The claim's assertion, as written. */
@@ -115,11 +117,6 @@ function reviewMethod(material: ClaimMaterial): RoleReview {
   const falsifier = material.experimentToFalsify.trim()
   const difference = material.essentialDifference.trim()
   const scope = material.scope.trim()
-  // An absent scope is a CONTRADICTION only when a claim was actually stated: a claim with no
-  // scope claims everything, which no experiment can support. With no claim at all there is
-  // nothing over-broad to refuse, and the honest finding is the gap, not a contradiction —
-  // otherwise an empty material would report as a refuted claim rather than an unreviewable one.
-  const claimStated = material.assertion.trim().length > 0 || material.prediction.trim().length > 0
   return review('red-method', [
     falsifier.length === 0
       ? {
@@ -143,17 +140,25 @@ function reviewMethod(material: ClaimMaterial): RoleReview {
         found: `stated: ${difference}`,
         position: 'support',
       },
+    // An absent scope is a GAP, not a contradiction. This check first returned `refute` here, on
+    // the argument that a claim with no scope asserts an unbounded result — but that is an
+    // inference about what the absence MEANS, and the vote is supposed to report what the material
+    // says. It also made the pipeline's own fixture claim fail its gate, which is how the
+    // difference showed up.
+    //
+    // WHAT THIS CHECK STILL CANNOT DO, stated rather than implied: an audit demonstrated that a
+    // scope which EXPLICITLY EXCLUDES the condition under test also passes, because deciding
+    // whether a sentence excludes something is a reading, not a word test — the same limit the
+    // phrase binding states. This check is necessary and not sufficient.
     scope.length === 0
       ? {
         check: 'the claim is bounded to the conditions it holds under',
-        found: claimStated
-          ? 'the claim states no scope, so it asserts an unbounded result'
-          : 'no claim is stated, so there is no scope to check',
-        position: claimStated ? 'refute' : 'abstain',
+        found: 'the claim states no scope, so nothing bounds the result it asserts',
+        position: 'abstain',
       }
       : {
         check: 'the claim is bounded to the conditions it holds under',
-        found: `bounded: ${scope}`,
+        found: `bounded: ${scope} (whether this scope EXCLUDES what the experiment tests is not decidable here)`,
         position: 'support',
       },
   ])
@@ -163,6 +168,8 @@ function reviewMethod(material: ClaimMaterial): RoleReview {
 function reviewStatistics(material: ClaimMaterial): RoleReview {
   const prediction = material.prediction.trim()
   const hasThreshold = /\d+(?:\.\d+)?\s*%/.test(prediction)
+  const assertionDirection = directionFromPrediction(material.assertion)
+  const predictionDirection = directionFromPrediction(prediction)
   return review('red-stat', [
     prediction.length === 0
       ? {
@@ -191,6 +198,48 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
           check: 'the prediction commits to a numeric threshold',
           found: 'the prediction states no numeric threshold, so no measurement can decide it',
           position: 'abstain',
+        },
+    // A threshold with no direction is not a testable prediction: "changed by 20%" does not say
+    // which way the number has to move, so the C channel cannot grade it either way and holds.
+    // Reviewing it here as "fine" would leave the reviewer and the gate disagreeing about whether
+    // the claim is testable at all.
+    hasThreshold
+      ? directionFromPrediction(prediction) === undefined
+        ? {
+          check: 'the threshold is committed to in one direction',
+          found: 'the prediction states a percentage but not whether the quantity should rise or fall',
+          position: 'refute',
+        }
+        : {
+          check: 'the threshold is committed to in one direction',
+          found: `the prediction commits to a ${String(directionFromPrediction(prediction))}`,
+          position: 'support',
+        }
+      : {
+        check: 'the threshold is committed to in one direction',
+        found: 'no threshold to have a direction',
+        position: 'abstain',
+      },
+    // The assertion and the prediction are two sentences of the SAME claim, and a claim that
+    // contradicts itself is not a hard claim to test — it is an incoherent one. An audit found
+    // material of exactly this shape passing with three support votes, because every rulebook
+    // checked its own field and none compared them.
+    assertionDirection !== undefined && predictionDirection !== undefined && assertionDirection !== predictionDirection
+      ? {
+        check: 'the assertion and the prediction agree on direction',
+        found: `the assertion says the quantity should ${assertionDirection} while the prediction says it should ${predictionDirection}`,
+        position: 'refute',
+      }
+      : assertionDirection === undefined || predictionDirection === undefined
+        ? {
+          check: 'the assertion and the prediction agree on direction',
+          found: 'at least one of them commits to no direction, so they cannot be compared',
+          position: 'abstain',
+        }
+        : {
+          check: 'the assertion and the prediction agree on direction',
+          found: `both commit to a ${assertionDirection}`,
+          position: 'support',
         },
     // The decisive check: the claim's declared quantity and the study's measured quantity
     // must be the same one. A mismatch is not an evidence gap — the claim is about

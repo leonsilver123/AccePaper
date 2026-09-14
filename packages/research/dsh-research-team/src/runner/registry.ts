@@ -2894,7 +2894,7 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  *    synthetic anchor fixture → core `adjudicate('B')`. Real adapter logic +
  *    mocked external system.
  *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over a
- *    `live` experiment report measured by traffic-sim on the study's measured demand
+ *    `live` experiment report MEASURED by platoon-sim over the study's declared scenario
  *    profile; the claim and its prediction are the fixture-supplied input. The
  *    measurement is this package's own code, hence `local_computation`.
  */
@@ -2912,12 +2912,12 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
   C: {
     // The measurement is made by this package's experiment module, not by a tool.
     kind: 'local_computation',
-    // The experiment RUNS (traffic-sim measures both policies over the measured
+    // The experiment RUNS (platoon-sim simulates both platoons over the declared
     // demand profile; the report carries source 'live' and grades 'locally-measured' — which
     // names the channel, not a level of verification).
     // Its INPUT — the claim and its prediction — is fixture-supplied on the default
     // path, which is what keeps this short of `live_external`.
-    basis: 'team adjudicateClaimSupport → core adjudicate(`C`) executes for real over an experiment MEASURED by traffic-sim: both control policies are run against a demand profile derived from a real measured vehicle-count series (the artifact records the series, its hash, the derivation and the assumptions). Report source is the literal `live` — the experiment ran HERE, not against an external system — and evidenceGrade is `locally-measured`, derived from that literal by equality: it distinguishes which channel ran and grades nothing. The claim and prediction it adjudicates are still fixture input',
+    basis: 'team adjudicateClaimSupport → core adjudicate(`C`) executes for real over an experiment MEASURED by platoon-sim: both platoons are simulated under the Case Pack\'s declared scenario, and every reported number is computed from the simulated trajectories (the artifact records the composition, the vehicle parameters and the disturbance). Report source is the literal `live` — the experiment ran HERE, not against an external system — and evidenceGrade is `locally-measured`, derived from that literal by equality: it distinguishes which channel ran and grades nothing. The claim and prediction it adjudicates come from the selected Case Pack, and the claim is recorded as REFUTED when the measurement negates it',
   },
 }
 

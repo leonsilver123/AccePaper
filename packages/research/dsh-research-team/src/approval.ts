@@ -108,7 +108,15 @@ export interface ApprovalDecision {
   /** Epoch milliseconds at which core recorded the decision. */
   readonly decidedAt: number
   /** The run re-projected after the decision, so a caller renders backend truth, not its own. */
-  readonly snapshot: ResearchRunSnapshot
+  /**
+   * The run re-projected after the decision, so a caller renders backend truth, not its own.
+   *
+   * ABSENT when the projection itself failed. The decision is still applied and still durable —
+   * see `projectionError` — and the caller is told the response cannot carry the run rather than
+   * that the decision was refused. Merging the two told a caller the gate was undecided while the
+   * run said otherwise, and a retry then came back `not-pending`.
+   */
+  readonly snapshot?: ResearchRunSnapshot
   /**
    * Whether the decision reached the durable snapshot, and why not when it did not.
    *
@@ -119,6 +127,15 @@ export interface ApprovalDecision {
    */
   readonly persisted: boolean
   readonly persistenceError?: string
+  /**
+   * Why the run could not be re-projected after a decision that WAS applied.
+   *
+   * Separate from `persistenceError` on purpose: one says "the decision is not on disk yet", the
+   * other says "the response could not carry the run". They are different failures with different
+   * remedies, and merging them told a caller their decision was refused when it had been applied.
+   * `snapshot` is unusable when this is set.
+   */
+  readonly projectionError?: string
 }
 
 /** One logical RPC endpoint result, as the Host Connection carrier carries it. */
@@ -329,6 +346,34 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
     // decision then invalidates. A failure here does NOT un-decide anything — the run has the
     // new status in memory — so it is reported alongside the decision rather than turned into
     // a refusal that would misdescribe what happened.
+    // The decision is now IN the store. From here on nothing may turn it into a refusal: the
+    // caller would be told the gate was not decided while the run says it was, and a retry would
+    // come back `not-pending`. The projection ran inside the `try` below, so a failure to
+    // re-project an already-applied decision was reported as `research/approval-refused` — an
+    // audit reproduced exactly that and found `status: passed` in the store beside the refusal.
+    let snapshot: ResearchRunSnapshot
+    try {
+      snapshot = run.project()
+    } catch (error) {
+      // There is no snapshot to return, but the decision stands and is no longer undecidable. The
+      // caller is told what happened to the projection rather than that the decision failed.
+      return {
+        ok: true,
+        value: {
+          runId,
+          stepId,
+          attempt,
+          status,
+          operator: OPERATOR_PRINCIPAL_ID,
+          approvalEventId,
+          decidedAt: Date.now(),
+          persisted: false,
+          persistenceError: 'the run could not be re-projected, so nothing was written to disk',
+          projectionError: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
+
     let persisted = false
     let persistenceError: string | undefined
     if (run.persist !== undefined) {
@@ -353,7 +398,7 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
         operator: OPERATOR_PRINCIPAL_ID,
         approvalEventId,
         decidedAt: Date.now(),
-        snapshot: run.project(),
+        snapshot,
         persisted,
         ...(persistenceError === undefined ? {} : { persistenceError }),
       },
