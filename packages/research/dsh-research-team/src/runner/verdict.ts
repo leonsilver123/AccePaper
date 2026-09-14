@@ -168,7 +168,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
-  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey, ctx.runCtx.claimText)
   if (experiment.kind === 'unbindable') {
     // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
     // at all, so the gate abstains instead of comparing an unrelated number to a threshold.

@@ -45,7 +45,7 @@ const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
 function freshRunCtx(): RunContext {
   // No metric declared: a bare context cannot bind a claim to the experiment's quantity, so the
   // C channel holds. Tests that want an adjudicated verdict set `metricKey` explicitly.
-  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp: FIXED_TS }
+  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', claimText: '', timestamp: FIXED_TS }
 }
 
 function execCtx(stepId: string, runCtx: RunContext = freshRunCtx()): ExecCtx {
@@ -415,6 +415,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       claimId: 'mock-claim-999',
       claimRef: 'missing row',
       metricKey: MEASURED_METRIC_KEY,
+      claimText: 'demand-weighted mean delay falls under re-planning',
       timestamp: FIXED_TS,
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture

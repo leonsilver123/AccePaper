@@ -228,8 +228,10 @@ function firstNonTerminalStep(restored: RestoredRun): string {
     if (current.status === 'passed') continue
     // A held abstention is resumable; the human gate is not. `humanGate` comes from core, so the
     // distinction is the engine's, not a list of step ids kept here.
-    if (current.status === 'gated' && step.humanGate !== true) return step.id
-    if (current.status === 'gated') continue
+    if (current.status === 'gated') {
+      if (!step.humanGate) return step.id
+      continue
+    }
     return step.id
   }
   throw new Error(
@@ -501,13 +503,18 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
     })
     const packageExport = this.exportRunPackage(store, run)
-    // The snapshot directory holds ONE run, so a NEW run supersedes whatever is stored rather
-    // than writing alongside it — and it says so explicitly, because `save` correctly refuses to
-    // overwrite a snapshot it did not expect. Without this, every run after the first is refused
-    // with SNAPSHOT_CONFLICT and silently persists nothing.
-    const snapshotStore = this.hostRunPersistence()
-    if (snapshotStore !== undefined) await snapshotStore.discard()
+    const superseded = await this.supersedeStoredRun()
     const persistence = await this.persistRun(store, run, 0)
+    if (superseded !== null) {
+      // Visible, not silent. The snapshot directory holds ONE run, so starting a new one discards
+      // whatever was stored — and that could be a run sitting at the human gate, waiting for
+      // someone. `discard()` returns nothing and emits nothing, so without this line an operator
+      // would never learn which run a new one replaced.
+      this.ctx.logger.warn(
+        `research: starting run ${run.runId} discarded the stored run ${superseded.runId} `
+        + `(revision ${String(superseded.revision)}); it can no longer be resumed`,
+      )
+    }
     rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, persistence))
     return snapshotOf(run, store, packageExport, persistence)
   }
@@ -515,10 +522,10 @@ export class ResearchTeamService extends TypertRemoteService {
   /**
    * The run persistence this deployment configured, or undefined when it configured none.
    *
-   * The snapshot DIRECTORY is created here, at the point this option is resolved, because the
-   * store never creates it: a missing directory must surface as a failed save rather than be
-   * papered over, and creating it lazily at the first save would turn a deployment mistake into
-   * a silent first-run success.
+   * The snapshot DIRECTORY is created here, where this option is resolved, and not by the store.
+   * `mkdirSync` runs on every resolution, so the directory genuinely exists before any save: the
+   * store's own contract is that it never creates it, and a deployment that pointed this at an
+   * unwritable path learns so at the first save rather than at boot.
    *
    * @returns the bound persistence, or undefined when no directory is configured.
    */
@@ -528,6 +535,33 @@ export class ResearchTeamService extends TypertRemoteService {
     if (directory === undefined) return undefined
     mkdirSync(directory, { recursive: true })
     return createRunPersistence({ dir: directory })
+  }
+
+  /**
+   * Read and discard whatever run the snapshot directory holds, reporting what it was.
+   *
+   * ONE run per directory is this deployment's choice, and it means a new run supersedes the
+   * stored one. That supersession is a destructive act on data a person may be waiting on, so it
+   * is performed here as a named step that RETURNS what it removed rather than as an inline
+   * `discard()` whose effect nothing can observe.
+   *
+   * @returns the run that was discarded, or null when the directory held nothing.
+   */
+  private async supersedeStoredRun(): Promise<{ readonly runId: string; readonly revision: number } | null> {
+    const persistence = this.hostRunPersistence()
+    if (persistence === undefined) return null
+    let previous: { readonly runId: string; readonly revision: number } | null = null
+    try {
+      const payload = await persistence.read()
+      previous = { runId: payload.run.runId, revision: payload.revision }
+    } catch {
+      // Nothing readable is stored. `tryLoad` documents the same distinction: a corrupt or
+      // version-incompatible snapshot is not "nothing to resume", so it is reported rather than
+      // silently overwritten — `save` will refuse it and the failure surfaces there.
+      return null
+    }
+    await persistence.discard()
+    return previous
   }
 
   /**
@@ -583,10 +617,21 @@ export class ResearchTeamService extends TypertRemoteService {
     const prediction = getArtifact(restored.store, restored.runId, 'falsifiable-prediction') as
       | { text?: unknown; ref?: unknown }
       | undefined
-    const claim = getArtifact(restored.store, restored.runId, 'claim') as { claimId?: unknown } | undefined
+    const claim = getArtifact(restored.store, restored.runId, 'claim') as
+      | { claimId?: unknown; assertion?: unknown }
+      | undefined
     if (typeof prediction?.text === 'string') runCtx.predictionText = prediction.text
     if (typeof prediction?.ref === 'string') runCtx.claimRef = prediction.ref
     if (typeof claim?.claimId === 'string') runCtx.claimId = claim.claimId
+    // The metric key AND the claim's own words, or a resumed C-gated step would abstain for a
+    // reason that has nothing to do with the claim: the key would be empty and the text unnamed.
+    const restoredKey = (prediction as { metricKey?: unknown } | undefined)?.metricKey
+    if (typeof restoredKey === 'string') runCtx.metricKey = restoredKey
+    const restoredMetricKey = (prediction as { measuredMetricKey?: unknown } | undefined)?.measuredMetricKey
+    if (typeof restoredMetricKey === 'string' && runCtx.metricKey === '') runCtx.metricKey = restoredMetricKey
+    if (typeof claim?.assertion === 'string' && typeof prediction?.text === 'string') {
+      runCtx.claimText = `${claim.assertion} ${prediction.text}`
+    }
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,
@@ -611,9 +656,12 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })
-    // The revised revision is this write's base, so a write that raced another process is still
-    // refused rather than clobbering it.
-    return snapshotOf(run, restored.store, null, await this.persistRun(restored.store, run, restored.revision))
+    const persisted = await this.persistRun(restored.store, run, restored.revision)
+    // Remembered like a fresh run: a resumed run that reaches E2 must be approvable, and the
+    // approval endpoint resolves the run through this registry. Without it the gate would refuse
+    // with `research/approval-run-unknown` — a resumed run no person could ever pass.
+    rememberRun(restored.runId, restored.store, () => snapshotOf(run, restored.store, null, persisted))
+    return snapshotOf(run, restored.store, null, persisted)
   }
 
   /**

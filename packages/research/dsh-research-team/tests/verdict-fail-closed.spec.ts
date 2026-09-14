@@ -54,6 +54,10 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     // experiment measures is what makes the comparison a comparison. Without the key the gate
     // holds, which is what the two tests above and below assert.
     runCtx.metricKey = MEASURED_METRIC_KEY
+    // ...and its own words must name that quantity. The key alone is self-attestation: a claim
+    // about collision risk reaches a verdict by declaring the delay key, which an auditor showed
+    // reaching E2 before this check existed.
+    runCtx.claimText = CANONICAL.prediction
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 
     const built = await buildStepVerdicts(ctx)
@@ -64,6 +68,24 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     // `live_external` for reaching a real external system, and this experiment runs locally.
     expect(String(c?.evidence)).toContain('the experiment ran here')
     expect(String(c?.evidence)).toContain(MEASURED_METRIC_KEY.replace('mean-delay-seconds-per-vehicle', 'mean vehicle delay'))
+  })
+
+  it('HOLDS a claim whose DECLARED key disagrees with its own words', () => {
+    // The auditor's residual after the first fix: the key was read verbatim and compared only for
+    // equality with a constant, so a claim about platoon collision risk declaring
+    // `mean-delay-seconds-per-vehicle` passed all sixteen steps. The declaration must agree with
+    // the claim's own text, and this asserts that it is checked rather than trusted.
+    const adjudication = evaluatePrediction(
+      'the all-HV platoon TTC<1.5s rate exceeds the adaptive variant rate by at least 5%',
+      experimentScenario(),
+      MEASURED_METRIC_KEY,
+      'Inserting an AV reduces the platoon aggregate car-following risk (TTC<1.5s rate).',
+    )
+    expect(adjudication.kind).toBe('unbindable')
+    if (adjudication.kind === 'unbindable') {
+      expect(adjudication.reason).toContain('its own words do not name that quantity')
+      expect(adjudication.reason).toContain('unverified')
+    }
   })
 
   it('HOLDS a claim about a quantity this study never measures, however confident it reads', () => {

@@ -413,7 +413,11 @@ export class ResearchEngine extends Service {
    * runtime cannot serve prose at all — so its absence is reported as itself rather than
    * discovered later as a failed write.
    *
-   * @throws {Error} when the deterministic route is configured but no LLM service exists.
+   * A host that provides NO `llm` service leaves `proseRouteReady` false and is not an error
+   * here, for the reason the tool registration beside it is not one: at load time "not up yet" and
+   * "never" are indistinguishable, and this callback simply never runs. The deployment learns the
+   * route is absent from `proseRouteReady`, and a prose write fails loudly rather than falling
+   * back to fixture text. (This JSDoc previously claimed a `@throws` the code does not have.)
    */
   private registerDeterministicProse(llmCtx: Context): void {
     const config = this.deterministicProse

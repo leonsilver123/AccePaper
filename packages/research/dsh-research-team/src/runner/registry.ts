@@ -214,6 +214,13 @@ export interface RunContext {
    * unbindable, and an unbindable claim HOLDS rather than being graded.
    */
   metricKey: string
+  /**
+   * The claim's own words (assertion + prediction), set by the A2-claim executor.
+   *
+   * The C channel checks that the declared metric key agrees with this text. Without it the key
+   * is self-attestation: a claim about one quantity declares the key of another and is graded.
+   */
+  claimText: string
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -1068,6 +1075,8 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
+  ctx.runCtx.claimText = `${assertion}
+${prediction}`
   return {
     claim: tagArtifact({ ...artifact.claim, claimSource, metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
@@ -1635,7 +1644,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey, ctx.runCtx.claimText)
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
     // because there is no measurement that could adjudicate it.
@@ -1986,7 +1995,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'Reply with exactly these two lines and nothing else:',
         'TITLE: <a specific paper title>',
         `SECTIONS: ${OUTLINE_SKELETON.length} headings separated by " | ", in this order: `
-          + `${OUTLINE_SKELETON.map(s => s.id).join(', ')}`,
+          + OUTLINE_SKELETON.map(s => s.id).join(', '),
       ].join('\n'),
       context: {
         claim: claim?.assertion ?? claimRef,
