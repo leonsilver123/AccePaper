@@ -188,15 +188,25 @@ function lastTurnErrorFrom(events: ReadonlyArray<unknown>): string | undefined {
  * empty string, because every caller treats the text as the step's product.
  */
 export class LlmProseWriter {
+  /**
+   * Which channel this writer was configured for.
+   *
+   * The runner labels an artifact with what ran. A deterministic route calls no model, and its
+   * product's own text says so, so the runner has to be able to read the channel rather than
+   * infer `model` from the writer's existence.
+   */
+  readonly channel: 'llm' | 'deterministic'
+
   private readonly ctx: Context
   private readonly config: LlmProseWriterConfig
   /** Resolved lazily: the host services load through the same non-literal dynamic
    *  import seam as the tool adapter, so host type graphs never enter this build. */
   private host: SessionHostFace | undefined
 
-  constructor(ctx: Context, config: LlmProseWriterConfig) {
+  constructor(ctx: Context, config: LlmProseWriterConfig, channel: 'llm' | 'deterministic' = 'llm') {
     this.ctx = ctx
     this.config = config
+    this.channel = channel
   }
 
   private async loadHost(): Promise<SessionHostFace> {

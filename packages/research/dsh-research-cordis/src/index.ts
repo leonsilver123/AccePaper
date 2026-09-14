@@ -364,7 +364,7 @@ export class ResearchEngine extends Service {
         provider: this.deterministicProse.provider,
         model: this.deterministicProse.model,
         cwd: this.sessionCwd,
-      })
+      }, 'deterministic')
     } else if (prose !== undefined) {
       this.proseWriter = new LlmProseWriter(ctx, {
         provider: prose.provider,
@@ -399,7 +399,7 @@ export class ResearchEngine extends Service {
     const injectedTools = this.ctx.inject(['tools'], toolsCtx => this.mountResearchTools(toolsCtx))
     if (this.ctx.get('tools') !== undefined) await injectedTools
     if (this.deterministicProse !== undefined) {
-      const injectedLlm = this.ctx.inject(['llm'], llmCtx => this.registerDeterministicProse(llmCtx))
+      const injectedLlm = this.ctx.inject(['llm'], (llmCtx) => { this.registerDeterministicProse(llmCtx) })
       if (this.ctx.get('llm') !== undefined) await injectedLlm
     }
   }

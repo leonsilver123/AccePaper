@@ -242,8 +242,53 @@ export interface ResearchProseResult {
  * pipeline stays deterministic. The runner depends only on this interface; the Cordis
  * adapter supplies the implementation that reaches a real provider.
  */
+/**
+ * The truthfulness level that goes with one prose source label.
+ *
+ * @param source - a `*Source` field's value.
+ * @returns the level this file's vocabulary assigns to it.
+ */
+function proseKindOf(source: 'model' | 'deterministic' | 'fixture' | 'llm'): Truthfulness {
+  if (source === 'fixture') return 'fixture_executor'
+  // `llm` appears only on a deployment that configured a route reaching a model; the
+  // deterministic offline route is `mock_external` — real adaptation logic over a simulated model.
+  return source === 'llm' || source === 'model' ? 'live_external' : 'mock_external'
+}
+
+/**
+ * How a prose product is labelled, given the channel that produced it.
+ *
+ * One rule, one place. `'model'` is reserved for a route that actually reaches a model; the
+ * deterministic offline route calls none, and saying otherwise would put a claim in the artifact
+ * that the artifact's own text contradicts ("No model was called").
+ *
+ * @param writer - the writer this executor was handed, or undefined.
+ * @returns the source label and the truthfulness level that go with it.
+ */
+export function proseLabelling(writer: ResearchProseWriter | undefined): {
+  readonly source: 'model' | 'deterministic' | 'fixture'
+  readonly kind: Truthfulness
+} {
+  if (writer === undefined) return { source: 'fixture', kind: 'fixture_executor' }
+  if (writer.channel === 'llm') return { source: 'model', kind: 'live_external' }
+  // A deterministic provider is real adaptation logic over a SIMULATED model: the request, the
+  // session and the log are real, the response is computed. That is `mock_external` by this
+  // file's own vocabulary, and it is never `live_external` ("a real external system was reached").
+  return { source: 'deterministic', kind: 'mock_external' }
+}
+
 export interface ResearchProseWriter {
   write(request: ResearchProseRequest): Promise<ResearchProseResult>
+  /**
+   * Which channel produced the text, as the deployment configured it.
+   *
+   * REQUIRED, not optional. The runner labels an artifact with what RAN, not with the fact that a
+   * writer object exists: a deployment whose prose route is a deterministic in-process generator
+   * calls no model, and labelling its products `model` puts a claim in the artifact that the
+   * artifact's own text denies. An optional field would have to guess for a writer that does not
+   * declare one, and the only guess available over-claims — it says a model was reached.
+   */
+  readonly channel: 'llm' | 'deterministic'
 }
 
 /** Context handed to every registry executor (drive layer adapts core's StepExecContext). */
@@ -776,12 +821,15 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // just retrieved. Without a writer it stays the fixture gap so offline runs keep
   // their deterministic output; with one, the model reads the retrieved literature.
   const writer = ctx.proseWriter
+  const labelling = proseLabelling(writer)
   let gaps: ReadonlyArray<string>
-  let gapSource: 'model' | 'fixture'
+  let gapSource: 'model' | 'deterministic' | 'fixture'
+  let gapKind: Truthfulness = labelling.kind
   let gapRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
     gaps = [FIXTURE_GAP_STATEMENT]
     gapSource = 'fixture'
+    gapKind = 'fixture_executor'
   } else {
     const analysis = await writer.write({
       stepId: 'A1-landscape',
@@ -802,7 +850,10 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     if (gaps.length === 0) {
       throw new Error('[A1-landscape] the gap analysis produced no gaps (NO DEFAULT PASS)')
     }
-    gapSource = 'model'
+    // Labelled from the CHANNEL, not from the presence of a writer: the deterministic offline
+    // route calls no model, and this artifact's own gap text says so in its first line.
+    gapSource = labelling.source
+    gapKind = labelling.kind
   }
 
   return {
@@ -829,6 +880,11 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       {
         gaps,
         gapSource,
+        // The level that goes with `gapSource`, recorded beside it because this ONE artifact
+        // combines two producers: the corpus (below) and the prose that wrote the gaps. A single
+        // level on the artifact describes the corpus, so without this a reader had no way to see
+        // that the deterministic offline route produced the text and called no model.
+        gapKind,
         // Two different producers meet in this artifact and the labels keep them
         // apart: `corpusSource` says where the literature came from, `gapSource`
         // says who wrote the gaps. On the default path they DISAGREE — a live
@@ -1050,7 +1106,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let contributions: ReadonlyArray<{ id: string; statement: string }> = [
     { id: 'c1', statement: 'adaptive control beats the fixed-time baseline on peak-hour delay' },
   ]
-  let agendaSource: 'model' | 'fixture' = 'fixture'
+  let agendaSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let agendaRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
@@ -1089,7 +1145,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     phases = parsedPhaseList
     contributions = parsedContributionList.map((statement, index) => ({ id: `c${index + 1}`, statement }))
     plan = parsedPhaseList
-    agendaSource = 'model'
+    agendaSource = proseLabelling(writer).source
     agendaRoute = proseRouteOf(analysis)
   }
 
@@ -1109,7 +1165,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'agenda derived from the claim and its falsifiable prediction',
       },
       A3_PRODUCER,
-      agendaSource === 'fixture' ? 'fixture_executor' : 'live_external',
+      proseKindOf(agendaSource),
     ),
     'contribution-list': tagArtifact(
       {
@@ -1918,7 +1974,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // downstream step depends on.
   let title: string = SCENARIO.title
   const headings: Record<string, string> = { ...DEFAULT_HEADING }
-  let outlineSource: 'model' | 'fixture' = 'fixture'
+  let outlineSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let outlineRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   const writer = ctx.proseWriter
@@ -1957,7 +2013,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     OUTLINE_SKELETON.forEach((section, index) => {
       headings[section.id] = parsedHeadings[index] as string
     })
-    outlineSource = 'model'
+    outlineSource = proseLabelling(writer).source
     outlineRoute = proseRouteOf(analysis)
   }
 
@@ -1988,7 +2044,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'title and headings derived from the claim and the method',
       },
       D2_PRODUCER,
-      outlineSource === 'fixture' ? 'fixture_executor' : 'live_external',
+      proseKindOf(outlineSource),
     ),
   }
 }
@@ -2029,7 +2085,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // injected, which any `{ write() }` object satisfies.
   const writer = ctx.proseWriter
   let sections: ManuscriptSection[]
-  let proseSource: 'fixture' | 'llm'
+  let proseSource: 'fixture' | 'model' | 'deterministic'
   let proseRoute: Record<string, unknown> = proseRouteOf(undefined)
   let producer: string = D3_PRODUCER
   if (writer === undefined) {
@@ -2048,7 +2104,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       ),
     )
     sections = headings.map((h, i) => ({ ...h, bodyText: written[i]?.text ?? '' }))
-    proseSource = 'llm'
+    proseSource = proseLabelling(writer).source
     const first = written[0]
     proseRoute = proseRouteOf(first)
     if (first !== undefined) producer = `llm:${first.provider}/${first.model}`
@@ -2074,7 +2130,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'manuscript draft whose section bodies came from a real model call',
       },
       producer,
-      proseSource === 'fixture' ? 'fixture_executor' : 'live_external',
+      proseKindOf(proseSource),
     ),
   }
 }
@@ -2128,7 +2184,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // design raises, stated with the MEASURED numbers rather than a remembered constant.
   const writer = ctx.proseWriter
   let points: ReadonlyArray<RebuttalPoint>
-  let rebuttalSource: 'model' | 'fixture' = 'fixture'
+  let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
     points = [
@@ -2163,7 +2219,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       )
     }
     points = parsed
-    rebuttalSource = 'model'
+    rebuttalSource = proseLabelling(writer).source
     rebuttalRoute = proseRouteOf(analysis)
   }
 
@@ -2194,7 +2250,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'exchanges written by the model from the measured outcome',
       },
       D4_PRODUCER,
-      rebuttalSource === 'fixture' ? 'fixture_executor' : 'live_external',
+      proseKindOf(rebuttalSource),
     ),
     'revised-draft': tagArtifact(
       {

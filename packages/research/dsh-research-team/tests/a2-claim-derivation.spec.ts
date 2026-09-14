@@ -29,6 +29,9 @@ function writerReturning(text: string): {
   return {
     seen,
     writer: {
+      // This stub stands in for a model-backed route, so it declares that channel: the runner
+      // now labels an artifact from the channel, and a stub that declares none cannot be labelled.
+      channel: 'llm',
       async write(request) {
         seen.push(request)
         return { text, provider: 'test-provider', model: 'test-model' }

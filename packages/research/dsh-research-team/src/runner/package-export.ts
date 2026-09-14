@@ -56,6 +56,18 @@ export interface RunPackageManifest {
   readonly note: string
 }
 
+/**
+ * Where each numeric figure comes from, for the paths E1 produces.
+ *
+ * Kept as data rather than inline in the manifest so that "not produced" can be computed against
+ * what this run actually wrote, instead of being asserted about a name.
+ */
+const NUMBER_SOURCES: Readonly<Record<string, string>> = {
+  'experiment-tables.md': 'mvp-results + baseline-results (same measurement the figures use)',
+  'figures/figure-1.svg': 'mvp-results',
+  'roadmap.md': 'figure-plan',
+}
+
 /** SHA-256 of one string, lower-case hex. */
 function digestOf(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex')
@@ -214,16 +226,20 @@ export function planRunPackage(
     ]),
   })
 
+  const written = new Set(files.map(file => file.path))
   const manifest: RunPackageManifest = {
     runId,
     generatedAt: new Date(0).toISOString(),
     files: [],
     steps: run.steps.map(stepRecord),
-    numberSources: {
-      'experiment-tables.md': 'mvp-results + baseline-results (same measurement the figures use)',
-      'figures/figure-1.svg': 'mvp-results',
-      'roadmap.md': 'figure-plan',
-    },
+    // Only paths that are IN this package. A run that stopped before E1 has no tables, no figure
+    // and no roadmap, and naming their sources anyway is the same defect this exporter replaced in
+    // E1's artifact — a list of files that reads as run output while nothing wrote them. A path
+    // whose producer did not run is reported as not produced, not silently omitted.
+    numberSources: Object.fromEntries(
+      Object.entries(NUMBER_SOURCES).map(([path, source]) =>
+        [path, written.has(path) ? source : 'NOT PRODUCED by this run']),
+    ),
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
       + 'records no absolute directory and no credential.',

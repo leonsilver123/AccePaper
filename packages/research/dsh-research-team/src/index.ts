@@ -202,28 +202,39 @@ declare module '@deepseek-ai/cordis' {
 /**
  * The first step of a restored run that is not in a terminal state.
  *
- * A resumed run picks up here: the steps before it are terminal, and re-driving one would either
+ * A resumed run picks up here: the steps before it are settled, and re-driving one would either
  * be refused by the engine's own guards or repeat work the snapshot already records as done.
+ *
+ * `gated` means two different things and only one of them is settled:
+ *   - E2's HUMAN GATE awaits a person. A resume cannot drive it and must not try.
+ *   - an ABSTAINED HOLD on any other step is not settled at all. Core documents exactly one
+ *     release for it (`DSH_ABSTENTION_REQUIRES_ROLLBACK`: rollback, then a new attempt), so a
+ *     resume is the only way such a run ever moves again — and treating it as done made the
+ *     abstained run, which is this system's most honest outcome, the one run recovery could
+ *     never touch. It reported that as "every step is terminal" while fourteen steps had no
+ *     recorded state at all.
  *
  * @param restored - the restored run and the facts about its interrupted steps.
  * @returns the step id to resume from.
- * @throws {Error} when every step is terminal, which is not a resumable state.
+ * @throws {Error} when every step the run has recorded is settled, naming what it found.
  */
 function firstNonTerminalStep(restored: RestoredRun): string {
-  // `passed` is done and `gated` awaits a human — neither is re-driven by a resume. A `failed`
-  // or `blocked` step is NOT done: it is where the run stopped, and a resume RETRIES it (after a
-  // rollback), which is the recovery path the engine documents. Treating those as terminal would
-  // skip the step and then fail the next one's dependency guard, reporting the consequence
-  // instead of the cause.
-  const done = new Set(['passed', 'gated'])
   const state = getRunSnapshot(restored.store, restored.runId).steps
+  const recorded: string[] = []
   for (const step of getStepDefinitions()) {
     const current = state[step.id]
     if (current === undefined) continue
-    if (!done.has(current.status)) return step.id
+    recorded.push(`${step.id}=${current.status}`)
+    if (current.status === 'passed') continue
+    // A held abstention is resumable; the human gate is not. `humanGate` comes from core, so the
+    // distinction is the engine's, not a list of step ids kept here.
+    if (current.status === 'gated' && step.humanGate !== true) return step.id
+    if (current.status === 'gated') continue
+    return step.id
   }
   throw new Error(
-    `[research] run ${restored.runId} has no step left to resume — every step is terminal`,
+    `[research] run ${restored.runId} has no step left to resume — every recorded step is settled `
+    + `(${recorded.join(', ') || 'no step has a recorded state'})`,
   )
 }
 
@@ -582,10 +593,17 @@ export class ResearchTeamService extends TypertRemoteService {
     // repeat work the snapshot already records as done.
     const from = firstNonTerminalStep(restored)
     const resumeState = getRunSnapshot(restored.store, restored.runId).steps[from]
-    if (resumeState !== undefined && (resumeState.status === 'failed' || resumeState.status === 'blocked')) {
+    if (
+      resumeState !== undefined
+      && (resumeState.status === 'failed'
+        || resumeState.status === 'blocked'
+        // A held abstention is released the same way and by nothing else: core refuses to move it
+        // any other route (`DSH_ABSTENTION_REQUIRES_ROLLBACK`).
+        || (resumeState.status === 'gated' && resumeState.holdReason === 'gate_abstained'))
+    ) {
       // The step stopped without completing, so it goes back to `pending` before it is driven
       // again; `startStep` refuses anything else, and the rollback also invalidates whatever the
-      // failed attempt left registered.
+      // stopped attempt left registered.
       rollback(restored.store, restored.runId, from)
     }
     const run = await driveRemaining(restored.store, restored.runId, runCtx, from, {
@@ -612,8 +630,13 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   private exportRunPackage(store: ResearchRunStore, run: RunResult): ResearchPackageExport | null {
     const research = this.ctx.get('research') as { packageDirectory?: string } | undefined
-    const directory = research?.packageDirectory
-    if (directory === undefined) return null
+    const root = research?.packageDirectory
+    if (root === undefined) return null
+    // One subdirectory per run. Writing every run into the same directory left an earlier run's
+    // files beside the new manifest — a reader saw eleven files where the manifest named six, and
+    // nothing said which run the other five belonged to. A package is one run's, so it gets one
+    // directory.
+    const directory = `${root}/${run.runId}`
     try {
       const manifest = writeRunPackage(planRunPackage(store, run), directory)
       return { files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })) }
