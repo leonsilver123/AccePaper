@@ -924,11 +924,34 @@ const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['’]t/iu
  * a prohibition with no word on any list, and no list enumerates every way English forbids
  * something.
  *
- * So the polarity is not DETECTED, it is REQUIRED. The direction word must come immediately after
- * `shall` — where a requirement states itself, and where a prohibition cannot put it, because a
- * prohibition has to negate and the negation would occupy that position. `shall not fall`, `shall
- * never fall` and `shall refrain from falling` all fail the shape and are HELD. It is a wire
- * format, checkable by string comparison, and it needs no understanding of the sentence.
+ * So the polarity is not DETECTED, it is REQUIRED: the direction word must come immediately after
+ * `shall`. `shall not fall`, `shall never fall` and `shall refrain from falling` fail the shape and
+ * are HELD. It is a wire format, checkable by string comparison, and it needs no understanding of
+ * the sentence.
+ *
+ * THE JUSTIFICATION I FIRST WROTE FOR THIS WAS WRONG, and an auditor refuted it by answering the
+ * question I had set it: I claimed a prohibition "has to negate and the negation would occupy that
+ * position", so no prohibition could satisfy the shape. English can negate the SUBJECT instead, and
+ * then the direction word still follows `shall`:
+ *
+ *   "Neither platoon shall fall short of the baseline minimum time-to-collision by at least 20%."
+ *
+ * That is a prohibition, `fall` follows `shall`, no word on the negation list appears, and the
+ * declared commitment agrees — so a 38.20% fall was graded as MEETING it. A prohibition APPENDED as
+ * a second clause ("…; that outcome is forbidden") evades the shape the same way.
+ *
+ * These two are KNOWN LIMITS, not open work, and the auditor's reasoning is why: this is a check on
+ * the SHAPE of a sentence, not an analysis of its polarity, and extending the word list for
+ * `neither` / `nor` / `none` would repeat the mistake the list was abandoned for. What must be
+ * right is the STATEMENT, not the mechanism — so the two shapes are recorded here, beside the cost,
+ * where the next reader finds them instead of rediscovering them.
+ *
+ * WHY IT IS STILL WORTH HAVING. Every failure of this check produces a HOLD: a missing direction
+ * word, a wrong inflection, an unexpected phrasing, a negated subject — all stop the C channel
+ * without a verdict. It cannot hand out a pass for a sentence it failed to understand; the only
+ * escapes are the two shapes above, which need a claim deliberately written as a prohibition in
+ * one of those two forms. That is a much narrower failure than the reader this batch deleted, whose
+ * errors reached a `supports` value from ordinary phrasing.
  *
  * THE COST, stated: a claim reads "<subject> shall <rise|fall|…> … by <anchor> <n>%". Every claim in
  * this repository is written that way; one that is not holds, which is the safe direction, and the
@@ -958,28 +981,23 @@ const REQUIREMENT_SHAPE = /\bshall\s+([a-z]+)/iu
  * declaration against the claim's own words, and a disagreement holds. It does NOT establish what
  * the sentence means, and it cannot.
  */
-const DIRECTION_TOKENS: ReadonlyArray<{
-  readonly text: string
-  readonly direction: PredictionDirection
-}> = [
+const DIRECTION_TOKENS: ReadonlyArray<{ readonly text: string; readonly direction: PredictionDirection }> = [
+  // BASE FORMS ONLY. `shall` takes the infinitive, so a third-person or participle entry can
+  // never match the word that follows it: the first version of this table held 18 entries of which
+  // 12 (`exceeds`, `rising`, `falls`, `decreases`, …) were unreachable, implying a coverage the
+  // gate does not have. An auditor counted them. What remains is what `shall <word>` can actually
+  // produce, plus three base forms that were MISSING while their inflected forms sat in the table
+  // — `shall reduce`, `shall raise` and `shall drop` all held, and `reduces` was useless.
   { text: 'exceed', direction: 'increase' },
-  { text: 'exceeds', direction: 'increase' },
-  { text: 'rising', direction: 'increase' },
   { text: 'rise', direction: 'increase' },
-  { text: 'rises', direction: 'increase' },
   { text: 'increase', direction: 'increase' },
-  { text: 'increases', direction: 'increase' },
-  { text: 'higher', direction: 'increase' },
-  { text: 'greater', direction: 'increase' },
-  { text: 'raises', direction: 'increase' },
-  { text: 'falling', direction: 'decrease' },
+  { text: 'grow', direction: 'increase' },
+  { text: 'raise', direction: 'increase' },
   { text: 'fall', direction: 'decrease' },
-  { text: 'falls', direction: 'decrease' },
   { text: 'decrease', direction: 'decrease' },
-  { text: 'decreases', direction: 'decrease' },
   { text: 'lower', direction: 'decrease' },
-  { text: 'reduces', direction: 'decrease' },
-  { text: 'drops', direction: 'decrease' },
+  { text: 'reduce', direction: 'decrease' },
+  { text: 'drop', direction: 'decrease' },
 ]
 
 /**

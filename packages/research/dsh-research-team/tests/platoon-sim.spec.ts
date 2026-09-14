@@ -614,13 +614,17 @@ describe('the literals must be ATTACHED to the measured quantity, not merely pre
       seed = (seed * 1103515245 + 12345) % 2147483648
       return list[seed % list.length] as T
     }
+    const MEASURED = 'the platoon minimum time-to-collision'
     let scattered = 0
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 1200; i++) {
       const numbered = pick(subjects)
       const named = pick(subjects)
       const move = pick(moves)
       const threshold = pick(thresholds)
-      if (named === 'the platoon minimum time-to-collision') continue
+      // The shape that has to hold is the one where the number rides with one subject and the
+      // MEASURED PHRASE appears only in the other clause: `numbered` must not be the measured
+      // subject (or the first clause states the requirement legitimately) and `named` must be.
+      if (numbered === MEASURED || named !== MEASURED) continue
       const sentence = `${numbered} ${move} ${threshold} while ${named}.`
       const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: directionOf(move), bound: 'at-least' })
       expect(verdict.kind, sentence).toBe('unbindable')
@@ -628,5 +632,52 @@ describe('the literals must be ATTACHED to the measured quantity, not merely pre
     }
     // The generator has to have actually generated the cases, or the loop proves nothing.
     expect(scattered).toBeGreaterThan(100)
+  })
+})
+
+describe('the shape check KNOWN limits, recorded rather than left to be rediscovered', () => {
+  // The auditor that built these answered the question I had set it — "does a prohibition exist that
+  // satisfies the shape?" — with yes, and its advice was to fix the CLAIM rather than the mechanism:
+  // this is a check on the SHAPE of a sentence, not an analysis of its polarity, and extending the
+  // word list for `neither` / `nor` / `none` would repeat the mistake the list was abandoned for.
+  //
+  // So these two cases pin the escape deliberately. If a future change closes either, this test
+  // fails and the limit gets rewritten — which is the point of writing it down.
+  it('LIMIT: a prohibition that negates its SUBJECT still reaches a verdict', () => {
+    const subjectNegation = 'Neither platoon shall fall short of the baseline minimum time-to-collision by at least 20%'
+    // The direction word follows `shall`, no word on the negation list appears, and the declared
+    // commitment agrees — so a 38.20% fall is graded as MEETING a prohibition it violates.
+    const verdict = evaluatePrediction(subjectNegation, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind === 'adjudicated') expect(verdict.supportsPrediction).toBe(true)
+    expect(requirementDirectionIn(subjectNegation)).toBe('decrease')
+  })
+
+  it('LIMIT: a prohibition APPENDED as a second clause still reaches a verdict', () => {
+    const appended = 'the platoon minimum time-to-collision shall fall by at least 20%; that outcome is forbidden'
+    const verdict = evaluatePrediction(appended, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind === 'adjudicated') expect(verdict.supportsPrediction).toBe(true)
+  })
+
+  it('...and what the check DOES close is still closed', () => {
+    // The property that makes the limits narrow: every ordinary phrasing that is not a requirement
+    // holds, and none of them can produce a verdict.
+    for (const text of [
+      'the platoon minimum time-to-collision shall not fall by at least 20%',
+      'the platoon minimum time-to-collision shall never fall by at least 20%',
+      'the platoon minimum time-to-collision shall refrain from falling by at least 20%',
+      // Inflected forms are not base forms: `shall` takes the infinitive, so `reduces` is not the
+      // word that can follow it, and the table no longer pretends otherwise.
+      'the platoon minimum time-to-collision shall reduces by at least 20%',
+    ]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      expect(verdict.kind, text).toBe('unbindable')
+    }
+    // ...except the three base forms an auditor showed were missing from the table. They grade now,
+    // and each is checked on its own sentence.
+    expect(requirementDirectionIn('the platoon minimum time-to-collision shall reduce by at least 20%')).toBe('decrease')
+    expect(requirementDirectionIn('the platoon minimum time-to-collision shall raise the minimum by at least 20%')).toBe('increase')
+    expect(requirementDirectionIn('the platoon mean jerk shall drop by at least 20%')).toBe('decrease')
   })
 })
