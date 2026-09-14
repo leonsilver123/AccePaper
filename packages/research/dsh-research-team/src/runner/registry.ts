@@ -444,7 +444,7 @@ const CANONICAL_CLAIM_REF = 'inserting one AV into a three-vehicle human platoon
  * refuted claim and carries on from. A real study's threshold comes from its own claim,
  * which is what the model path and the Case Pack both produce.
  */
-const CANONICAL_PREDICTION = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+const CANONICAL_PREDICTION = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
 
 /**
  * The quantity the fixture claim is about.

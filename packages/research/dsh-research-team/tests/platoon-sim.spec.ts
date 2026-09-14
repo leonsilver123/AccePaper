@@ -20,6 +20,7 @@ import {
   SIMULATION_INPUTS,
   anchorBoundNear,
   percentagesIn,
+  requirementDirectionIn,
   STUDY_OPERATING_POINT,
   ablationStudy,
   boundaryTest,
@@ -222,7 +223,7 @@ describe('studyFromPack', () => {
 })
 
 describe('evaluatePrediction', () => {
-  const canonical = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+  const canonical = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
 
   it('adjudicates the bound quantity and reports the measured direction', () => {
     const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
@@ -243,7 +244,7 @@ describe('evaluatePrediction', () => {
     // `normal` held a gradeable prediction; and a year in the sentence became the clause the
     // direction was read from. The auditor's verdict was that it could not be trusted and should be
     // replaced by something narrower. This is the replacement: the claim DECLARES its commitment.
-    const rise = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+    const rise = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
     const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(increase.kind).toBe('adjudicated')
     if (increase.kind !== 'adjudicated') return
@@ -258,7 +259,7 @@ describe('evaluatePrediction', () => {
     expect(declaredFall.kind).toBe('unbindable')
     if (declaredFall.kind === 'unbindable') expect(declaredFall.reason).toContain('the declaration and the sentence contradict each other')
 
-    const fallen = 'the HV-AV-HV platoon minimum time-to-collision falls by at least 20% against the all-HV platoon minimum'
+    const fallen = 'the HV-AV-HV platoon shall fall in minimum time-to-collision by at least 20% against the all-HV platoon'
     const decrease = evaluatePrediction(fallen, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
     expect(decrease.kind).toBe('adjudicated')
     if (decrease.kind !== 'adjudicated') return
@@ -321,7 +322,7 @@ describe('evaluatePrediction', () => {
     expect(comparison.isComparable).toBe(false)
 
     const verdict = evaluatePrediction(
-      'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%',
+      'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%',
       colliding,
       MEASURED_METRIC_KEY,
       { direction: 'increase', bound: 'at-least' },
@@ -390,7 +391,7 @@ describe('evaluatePrediction', () => {
     // establish that a claim is ABOUT a quantity; it can only establish that the claim used
     // the words. The check is a NECESSARY condition and not a sufficient one.
     const verdict = evaluatePrediction(
-      'the platoon string-stability index increases by at least 20%, unlike prior work on '
+      'the platoon string-stability index shall rise by at least 20%, unlike prior work on '
       + 'minimum time-to-collision that assumed uniform arrivals',
       study,
       MEASURED_METRIC_KEY,
@@ -405,7 +406,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
   // audit showed that changing ONE declared field records a claim its own sentence refutes as
   // supported. Its proposed fix is what this tests: the sentence must carry a machine-readable
   // anchor beside the number, and the declared bound is compared to that token by string equality.
-  const rise = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+  const rise = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
 
   it('REFUSES a declaration that contradicts the anchor the sentence states', () => {
     const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
@@ -461,12 +462,12 @@ describe('the declaration is checked against the claim\'s own words', () => {
     const both = 'the platoon minimum time-to-collision rises under the AV and falls under the all-HV platoon by at least 20%'
     const ambiguous = evaluatePrediction(both, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(ambiguous.kind).toBe('unbindable')
-    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('names both')
+    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('required form')
 
     const none = 'the platoon minimum time-to-collision against the all-HV platoon by at least 20%'
     const silent = evaluatePrediction(none, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(silent.kind).toBe('unbindable')
-    if (silent.kind === 'unbindable') expect(silent.reason).toContain('names no direction')
+    if (silent.kind === 'unbindable') expect(silent.reason).toContain('required form')
   })
 
   it('HOLDS a PROHIBITION, which the anchors cannot tell from a requirement', () => {
@@ -478,6 +479,50 @@ describe('the declaration is checked against the claim\'s own words', () => {
     const verdict = evaluatePrediction(prohibition, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
     expect(verdict.kind).toBe('unbindable')
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('requirement or a PROHIBITION')
+  })
+
+  it('HOLDS an emphasis-cased prohibition, which the first guard let through', () => {
+    // An auditor found the negation guard was case-SENSITIVE while the two anchor checks beside it
+    // folded case first, so `shall Not fall` and `shall NOT FALL` walked past it — and it ran the
+    // emphasised form through the whole pipeline to a `supported` verdict on a measurement that
+    // violated the prohibition. The pair below is the finding: same sentence, one case apart.
+    const lower = 'the HV-AV-HV platoon shall not fall in minimum time-to-collision by at least 20%'
+    const upper = 'the HV-AV-HV platoon shall NOT fall in minimum time-to-collision by at least 20%'
+    for (const text of [lower, upper]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      expect(verdict.kind, text).toBe('unbindable')
+    }
+  })
+
+  it('HOLDS a prohibition no negation list could catch, because the SHAPE is required', () => {
+    // The case fix leaves what the auditor then pointed at: "shall refrain from falling" forbids
+    // without using any word on any list. That is why the rule is a required shape rather than a
+    // longer blacklist — the direction word must FOLLOW `shall`, and a prohibition's negation
+    // occupies that position.
+    for (const text of [
+      'the HV-AV-HV platoon shall refrain from falling in minimum time-to-collision by at least 20%',
+      'the HV-AV-HV platoon shall never fall in minimum time-to-collision by at least 20%',
+      'the HV-AV-HV platoon shall, under no circumstances, fall in minimum time-to-collision by at least 20%',
+    ]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      // All three hold. WHICH guard catches them differs and is not the point — `refrain` has no
+      // negation word and is caught by the SHAPE, the other two by the negation guard that runs
+      // first. That both reach the same safe answer from different directions is the point.
+      expect(verdict.kind, text).toBe('unbindable')
+    }
+    const refrain = evaluatePrediction(
+      'the HV-AV-HV platoon shall refrain from falling in minimum time-to-collision by at least 20%',
+      study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' },
+    )
+    expect(refrain.kind === 'unbindable' && refrain.reason).toContain('required form')
+    // The positive form of the same sentence is graded, whatever its case.
+    for (const text of [
+      'the HV-AV-HV platoon shall fall in minimum time-to-collision by at least 20%',
+      'the HV-AV-HV platoon SHALL FALL in minimum time-to-collision by at least 20%',
+    ]) {
+      expect(requirementDirectionIn(text), text).toBe('decrease')
+      expect(evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' }).kind, text).toBe('adjudicated')
+    }
   })
 
   it('HOLDS any negated anchor, and that is a stated consequence rather than an oversight', () => {

@@ -42,7 +42,7 @@
 import type { ResearchRebuttalPosition } from '../types.ts'
 
 import type { PredictionCommitment } from './platoon-sim.ts'
-import { anchorBoundNear, percentagesIn, thresholdFromPrediction } from './platoon-sim.ts'
+import { anchorBoundNear, percentagesIn, requirementDirectionIn, thresholdFromPrediction } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -309,15 +309,15 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
     // requirement share the same number and the same operator and only the sentence's force
     // differs — an auditor graded a violated prohibition as MET. The reviewer reports the gap; the
     // C channel holds on the same condition.
-    /(?:not|no|never|without)|n['’]t/u.test(prediction)
+    requirementDirectionIn(prediction) === undefined
       ? {
         check: 'the prediction states a positive requirement',
-        found: 'the prediction contains a negation, so whether it requires a change or PROHIBITS one cannot be read from it',
+        found: 'the prediction does not state its direction as "shall <rise|fall|…>", so whether it requires a change or PROHIBITS one cannot be read from it',
         position: 'abstain',
       }
       : {
         check: 'the prediction states a positive requirement',
-        found: 'the prediction states a positive requirement',
+        found: `the prediction states a positive requirement: shall ${String(requirementDirectionIn(prediction))}`,
         position: 'support',
       },
     // ONE percentage. `thresholdFromPrediction` takes the first, which is unambiguous as a string

@@ -912,7 +912,30 @@ const ANCHOR_TOKENS: ReadonlyArray<{
  * to be a POSITIVE directional statement — "shall rise by at most 20%", not "shall not exceed
  * 20%" — and this model cannot express a prohibition at all.
  */
-const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['\u2019]t/u
+const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['’]t/iu
+
+/**
+ * The shape a prediction must have for its direction to be gradeable: `shall <direction word>`.
+ *
+ * WHY A SHAPE, NOT A LONGER LIST. The guard above is a BLACKLIST, and an auditor showed it cannot
+ * be complete: it folded no case, so `Not fall` and `NOT FALL` walked past it — an emphasised
+ * prohibition ran the pipeline to a `supported` verdict while the lower-case form was held. Fixing
+ * the case left what that auditor then pointed at: "shall REFRAIN FROM falling by at least 20%" is
+ * a prohibition with no word on any list, and no list enumerates every way English forbids
+ * something.
+ *
+ * So the polarity is not DETECTED, it is REQUIRED. The direction word must come immediately after
+ * `shall` — where a requirement states itself, and where a prohibition cannot put it, because a
+ * prohibition has to negate and the negation would occupy that position. `shall not fall`, `shall
+ * never fall` and `shall refrain from falling` all fail the shape and are HELD. It is a wire
+ * format, checkable by string comparison, and it needs no understanding of the sentence.
+ *
+ * THE COST, stated: a claim reads "<subject> shall <rise|fall|…> … by <anchor> <n>%". Every claim in
+ * this repository is written that way; one that is not holds, which is the safe direction, and the
+ * hold names the required form.
+ */
+const REQUIREMENT_SHAPE = /\bshall\s+([a-z]+)/iu
+
 
 /**
  * The words that commit a prediction to a direction, and which one.
@@ -960,21 +983,21 @@ const DIRECTION_TOKENS: ReadonlyArray<{
 ]
 
 /**
- * The direction the prediction's own words name, when they name exactly one.
+ * The direction the prediction commits to, read from the `shall <word>` position.
+ *
+ * Searching the whole sentence for a direction word was not enough: an auditor's prohibition
+ * ("shall NOT cause the … to FALL by ≥ 20%") contains `fall` and agrees with a `decrease`
+ * declaration, so it was graded as a requirement and passed. Reading the word that FOLLOWS `shall`
+ * is what makes the difference, because a prohibition's negation occupies that position.
  *
  * @param predictionText - the prediction as written.
- * @returns the direction, or undefined when the sentence names none or names both.
+ * @returns the direction, or undefined when the sentence does not state one after `shall`.
  */
-export function directionNamedIn(
-  predictionText: string,
-): PredictionDirection | undefined {
-  const lowered = predictionText.toLowerCase()
-  const found = new Set<PredictionDirection>()
-  for (const token of DIRECTION_TOKENS) {
-    if (new RegExp(`\\b${token.text}\\b`, 'u').test(lowered))
-      found.add(token.direction)
-  }
-  return found.size === 1 ? [...found][0] : undefined
+export function requirementDirectionIn(predictionText: string): PredictionDirection | undefined {
+  const match = REQUIREMENT_SHAPE.exec(predictionText)
+  if (match === null) return undefined
+  const word = match[1]?.toLowerCase()
+  return DIRECTION_TOKENS.find(token => token.text === word)?.direction
 }
 
 /**
@@ -1175,13 +1198,14 @@ export function evaluatePrediction(
   // ...and the DIRECTION must agree with the sentence too. Absent or ambiguous is a gap; a
   // disagreement is the contradiction. Neither can produce a verdict, which is the property that
   // separates this from the reader this batch deleted.
-  const namedDirection = directionNamedIn(predictionText)
+  const namedDirection = requirementDirectionIn(predictionText)
   if (namedDirection === undefined) {
     return {
       kind: 'unbindable',
       reason:
-        'the prediction names no direction, or names both, so nothing in its own words says which ' +
-        'way the quantity should move and the declared direction cannot be checked',
+        'the prediction does not state its direction in the required form ("shall rise", "shall '
+        + 'fall" and the other direction words), so whether it requires a change or PROHIBITS one '
+        + 'cannot be read from it — a claim has to be a positive statement',
     }
   }
   if (namedDirection !== direction) {

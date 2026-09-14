@@ -31,7 +31,7 @@ const C2: StepDefinition | undefined = getStepDefinitionById('C2-trinity-loop')
 /** Material a claim could genuinely produce: complete, bound, and traceable. */
 const SUPPORTING: ClaimMaterial = {
   assertion: 'Inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision.',
-  prediction: 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%',
+  prediction: 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%',
   experimentToFalsify: 'Simulate both platoons under the same declared disturbance and compare their minimum time-to-collision.',
   scope: 'three vehicles, one lane, steady free flow under the declared periodic disturbance',
   dataSource: 'mock-experiment.json',
@@ -48,7 +48,7 @@ const OPPOSING: ClaimMaterial = {
   ...SUPPORTING,
   // The claim is about a quantity this study never measures, and points at a source the pack
   // never shipped, and asserts an unbounded result. Each check has something to refuse.
-  prediction: 'the platoon string-instability index improves by at least 20%',
+  prediction: 'the platoon string-instability index shall rise by at least 20%',
   scope: '',
   dataSource: 'a-paper-we-did-not-ship.json',
   metricKey: 'platoon-string-stability-index',

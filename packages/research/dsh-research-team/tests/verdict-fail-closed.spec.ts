@@ -74,7 +74,7 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
     // claim's prose and compared it to a number the experiment had measured for a DIFFERENT
     // quantity, so an untested claim reached E2 reported as supported.
     const adjudication = evaluatePrediction(
-      'the platoon string-instability index improves by at least 20%',
+      'the platoon string-instability index shall rise by at least 20%',
       experimentStudy(),
       'platoon-string-stability-index',
       { direction: 'increase', bound: 'at-least' },
@@ -91,7 +91,7 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
     // simply declares the key of the quantity this study measures. The declaration must agree
     // with the prediction's own text, and this asserts that it is checked rather than trusted.
     const adjudication = evaluatePrediction(
-      'the platoon string-instability index improves by at least 20%',
+      'the platoon string-instability index shall rise by at least 20%',
       experimentStudy(),
       MEASURED_METRIC_KEY,
       { direction: 'increase', bound: 'at-least' },
@@ -140,7 +140,7 @@ describe('C gate — a decisive negation advances the run', () => {
     // The other direction, so the wording above is known to be CONDITIONAL rather than fixed.
     // The prediction sentence is identical; only the study's AV headway differs, and that is
     // what changes the measurement's sign.
-    const prediction = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+    const prediction = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
     const verdict = evaluatePrediction(prediction, studyWhereThePredictionHolds(), MEASURED_METRIC_KEY,
       { direction: 'increase', bound: 'at-least' })
     expect(verdict.kind).toBe('adjudicated')
