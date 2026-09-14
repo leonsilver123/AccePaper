@@ -1173,12 +1173,14 @@ export function claimTextNamesQuantity(
  * @param predictionText - the claim's falsifiable prediction.
  * @param study - the study to run; defaults to the study's own scenarios.
  * @param metricKey - the quantity the claim declares.
- * @param commitment - the claim's DECLARED commitment. PRECONDITION: it comes from one of the three
- *   writers that validate it (`commitmentFrom` or `requireDeclaredCommitment`), so a present
- *   commitment is a well-formed one. This function trusts that: it checks the declaration against
- *   the sentence but not the declaration against its own shape. A caller that ever reads one
- *   straight off an artifact without going through those readers would be the first to need the
- *   shape checks here — and the first for which the `no usable threshold` message is user-facing.
+ * @param commitment - the claim's DECLARED commitment. PRECONDITION: every write comes from
+ *   `commitmentFrom` (the Case Pack path and the resume path) or from the A2 fixture literal, so a
+ *   present commitment is a well-formed one. `case-pack.ts`'s `requireDeclaredCommitment` refuses a
+ *   malformed pack FILE at load, but it does not write this field — the pack's value still passes
+ *   `commitmentFrom` before it is assigned. This function trusts all of that: it checks the
+ *   declaration against the sentence, not the declaration against its own shape. A caller that ever
+ *   read one straight off an artifact without going through `commitmentFrom` would be the first to
+ *   need the shape checks here — and the first for which `no usable threshold` is user-facing.
  * @returns the verdict, or why the prediction could not be adjudicated.
  */
 export function evaluatePrediction(
