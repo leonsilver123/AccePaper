@@ -68,6 +68,7 @@ function gatedInput(runId = 'run_approval_001'): RunSummaryInput {
     gates: [],
     abstentions: [],
     degradations: [],
+    deliverables: [],
   }
 }
 

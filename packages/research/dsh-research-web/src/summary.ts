@@ -128,6 +128,30 @@ export interface RunSummaryInput {
   readonly gates: ReadonlyArray<GateHistoryEntry>
   readonly abstentions: ReadonlyArray<AbstentionRecord>
   readonly degradations: ReadonlyArray<DegradationNote>
+  /**
+   * What the run left on disk, as the Host reported it.
+   *
+   * A run writes a reproducible package and a durable snapshot; until this existed the view
+   * received both and rendered neither, so a person who asked "where did it put my files" had no
+   * answer in the product. Each entry is data — the label is resolved by the view's locale.
+   */
+  readonly deliverables: ReadonlyArray<DeliverableView>
+}
+
+/** One thing a run produced on disk, or failed to. */
+export interface DeliverableView {
+  /** Which output this describes; the view resolves the label from its locale. */
+  readonly kind: 'package' | 'snapshot'
+  /** Present when the output was written. */
+  readonly files: ReadonlyArray<{ readonly path: string; readonly bytes: number }>
+  /** The revision the snapshot was written at, when there is one. */
+  readonly revision: number | null
+  /** Set when the write was refused or failed; `files` is then empty and `revision` null. */
+  readonly error?: string
+  /** The run this write replaced in its directory, when it replaced one. */
+  readonly supersededRunId?: string
+  /** The directory the output was written to, so the reader can go and look. */
+  readonly directory?: string
 }
 
 /** Derived + raw presentation model handed to the view. */
@@ -139,6 +163,8 @@ export interface RunSummary {
   readonly gates: ReadonlyArray<GateHistoryEntry>
   readonly abstentions: ReadonlyArray<AbstentionRecord>
   readonly degradations: ReadonlyArray<DegradationNote>
+  /** What the run left on disk; see {@link RunSummaryInput.deliverables}. */
+  readonly deliverables: ReadonlyArray<DeliverableView>
   /** Total step count (expected 16 for a full run). */
   readonly totalSteps: number
   /** Step count indexed by status. */
@@ -202,6 +228,7 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     gates: input.gates,
     abstentions: input.abstentions,
     degradations: input.degradations,
+    deliverables: input.deliverables,
     totalSteps: input.steps.length,
     byStatus,
     artifactCount: input.artifacts.length,

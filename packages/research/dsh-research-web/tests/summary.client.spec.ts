@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { RESEARCH_FIXTURE, FIXTURE_RUN_ID } from '../src/fixture.ts'
 import { loadFixtureSummary, buildSummary } from '../src/loader.ts'
 import { toRunSummary, type RunSummaryInput } from '../src/summary.ts'
+import { summaryInputFrom } from '../src/run-source.ts'
 
 describe('toRunSummary — derived counters', () => {
   const summary = loadFixtureSummary()
@@ -101,6 +102,7 @@ describe('buildSummary — adapter entry point', () => {
       gates: [],
       abstentions: [],
       degradations: [],
+      deliverables: [],
     }
     const summary = buildSummary(mapped)
     expect(summary.runId).toBe('run_mapped_xyz')
@@ -115,10 +117,68 @@ describe('buildSummary — adapter entry point', () => {
       steps: [
         { stepId: 'e2', index: 15, phase: 'E', name: 'Human', status: 'pending', attempt: 0, humanGate: true, gateOutcomes: [] },
       ],
-      artifacts: [], gates: [], abstentions: [], degradations: [],
+      artifacts: [], gates: [], abstentions: [], degradations: [], deliverables: [],
     }
     const summary = toRunSummary(input)
     expect(summary.humanPending.map(s => s.stepId)).toEqual(['e2'])
+  })
+})
+
+describe('summaryInputFrom — what the run left on disk', () => {
+  it('maps the package and the snapshot into separate deliverables', () => {
+    // The Host has reported both since the export and the durable snapshot landed; the view
+    // received them and rendered nothing, so a person asking where the files went had no answer in
+    // the product. They stay separate entries because either can succeed while the other fails.
+    const input = summaryInputFrom({
+      run: { runId: 'run-1', steps: [] },
+      catalog: [],
+      gates: [],
+      artifacts: [],
+      steps: [],
+      packageExport: { files: [{ path: 'run-manifest.json', bytes: 12, sha256: 'ab' }] },
+      runPersistence: { runId: 'run-1', revision: 3, interrupted: [] },
+    })
+
+    expect(input.deliverables).toEqual([
+      { kind: 'package', files: [{ path: 'run-manifest.json', bytes: 12 }], revision: null },
+      { kind: 'snapshot', files: [], revision: 3 },
+    ])
+  })
+
+  it('carries a refusal and a supersession through rather than reporting success', () => {
+    const input = summaryInputFrom({
+      run: { runId: 'run-1', steps: [] },
+      catalog: [],
+      gates: [],
+      artifacts: [],
+      steps: [],
+      packageExport: { files: [], error: 'refused: the destination is not writable' },
+      runPersistence: {
+        runId: 'run-1',
+        revision: null,
+        interrupted: [],
+        error: 'EPERM: rename',
+        superseded: { runId: 'run-0', revision: 2 },
+      },
+    })
+
+    expect(input.deliverables[0]?.error).toContain('not writable')
+    expect(input.deliverables[1]?.revision).toBeNull()
+    expect(input.deliverables[1]?.error).toContain('EPERM')
+    // The run it replaced is named, so a reader can tell that a previous run of this directory was
+    // superseded rather than silently gone.
+    expect(input.deliverables[1]?.supersededRunId).toBe('run-0')
+  })
+
+  it('reports nothing when the deployment configured no outputs', () => {
+    const input = summaryInputFrom({
+      run: { runId: 'run-1', steps: [] },
+      catalog: [],
+      gates: [],
+      artifacts: [],
+      steps: [],
+    })
+    expect(input.deliverables).toEqual([])
   })
 })
 

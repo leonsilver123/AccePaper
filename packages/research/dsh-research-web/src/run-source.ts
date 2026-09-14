@@ -23,6 +23,7 @@ import type {
   RunStatus,
   RunSummaryInput,
   StepStatus,
+  DeliverableView,
   StepView,
   TrinityComponent,
 } from './summary.ts'
@@ -88,6 +89,32 @@ export interface WireRunSnapshot {
   readonly gates: ReadonlyArray<WireGateVerdict>
   readonly artifacts: ReadonlyArray<WireArtifactMeta>
   readonly steps: ReadonlyArray<WireStepState>
+  /**
+   * What the run left on disk. OPTIONAL because the twin drifts: the Host added these two fields
+   * when the export and the durable snapshot landed, and this declaration was not updated with
+   * them, so the client received both and could name neither. Declared optional so a Host that
+   * predates them still satisfies the twin — and read explicitly, per field, in
+   * {@link deliverablesOf}.
+   */
+  readonly packageExport?: WirePackageExport | null
+  readonly runPersistence?: WireRunPersistence | null
+}
+
+/** The Host's export result, structurally. */
+export interface WirePackageExport {
+  readonly files: ReadonlyArray<{ readonly path: string; readonly bytes: number; readonly sha256: string }>
+  readonly error?: string
+  readonly directory?: string
+}
+
+/** The Host's durability result, structurally. */
+export interface WireRunPersistence {
+  readonly runId: string
+  readonly revision: number | null
+  readonly interrupted: ReadonlyArray<string>
+  readonly error?: string
+  readonly superseded?: { readonly runId: string; readonly revision: number }
+  readonly directory?: string
 }
 
 const STEP_STATUSES: ReadonlyArray<StepStatus> = ['pending', 'in_progress', 'gated', 'passed', 'blocked', 'failed']
@@ -226,5 +253,42 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     gates,
     abstentions,
     degradations,
+    deliverables: deliverablesOf(snapshot),
   }
+}
+
+/**
+ * What the run left on disk, from the snapshot's own records.
+ *
+ * The package and the snapshot are separate outputs with separate failures, so they are separate
+ * entries: one can be written while the other is refused, and a single "exported" flag would hide
+ * that.
+ *
+ * @param snapshot - the wire snapshot.
+ * @returns one entry per output, in the order they are written.
+ */
+function deliverablesOf(snapshot: WireRunSnapshot): ReadonlyArray<DeliverableView> {
+  const out: DeliverableView[] = []
+  const pkg = snapshot.packageExport
+  if (pkg !== null && pkg !== undefined) {
+    out.push({
+      kind: 'package',
+      files: pkg.files.map(file => ({ path: file.path, bytes: file.bytes })),
+      revision: null,
+      ...(pkg.error === undefined ? {} : { error: pkg.error }),
+      ...(pkg.directory === undefined ? {} : { directory: pkg.directory }),
+    })
+  }
+  const stored = snapshot.runPersistence
+  if (stored !== null && stored !== undefined) {
+    out.push({
+      kind: 'snapshot',
+      files: [],
+      revision: stored.revision,
+      ...(stored.error === undefined ? {} : { error: stored.error }),
+      ...(stored.superseded === undefined ? {} : { supersededRunId: stored.superseded.runId }),
+      ...(stored.directory === undefined ? {} : { directory: stored.directory }),
+    })
+  }
+  return out
 }

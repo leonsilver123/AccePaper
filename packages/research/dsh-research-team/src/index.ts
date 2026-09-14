@@ -36,7 +36,8 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { Context } from '@deepseek-ai/cordis'
 import type {
@@ -475,12 +476,18 @@ export class ResearchTeamService extends TypertRemoteService {
     // process; a cross-process race is still the store's to refuse, and now has a correct
     // revision to compare against.
     const { previous, persistence } = await this.serialized(async () => {
-      const stored = await this.readStoredRun()
+      // The predecessor read here is THIS run's earlier revision, if any — never another run's.
+      const stored = await this.readStoredRun(run.runId)
       return { previous: stored, persistence: await this.persistRun(store, run, stored?.revision ?? 0) }
     })
-    const reported = previous === null
+    // `superseded` is attached only when the write HAPPENED. A refused or failed save returns a
+    // non-null failure object, and naming a predecessor there would say "this run replaced that
+    // one" while that one is still on disk — an operator who reads it will not try to resume a run
+    // that is intact and resumable. Worse than saying nothing.
+    const writeHappened = persistence !== null && persistence.revision !== null
+    const reported = previous === null || !writeHappened
       ? persistence
-      : persistence === null ? null : { ...persistence, superseded: previous }
+      : { ...persistence, superseded: previous }
     rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, reported))
     return snapshotOf(run, store, packageExport, reported)
   }
@@ -495,12 +502,48 @@ export class ResearchTeamService extends TypertRemoteService {
    *
    * @returns the bound persistence, or undefined when no directory is configured.
    */
-  private hostRunPersistence(): RunPersistence | undefined {
+  /**
+   * The directory one run's snapshot lives in.
+   *
+   * @param runId - the run.
+   * @returns the absolute directory, or undefined when the deployment configured none.
+   */
+  private snapshotDirectoryOf(runId: string): string | undefined {
     const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
-    const directory = research?.snapshotDirectory
+    return research?.snapshotDirectory === undefined
+      ? undefined
+      : join(research.snapshotDirectory, runId)
+  }
+
+  private hostRunPersistence(runId: string): RunPersistence | undefined {
+    const directory = this.snapshotDirectoryOf(runId)
     if (directory === undefined) return undefined
+    // ONE DIRECTORY PER RUN. A single shared file meant starting a run replaced whichever run was
+    // stored — including one parked at E2 waiting for a person, which is the state the whole
+    // approval flow exists to reach. Naming the replaced run made that visible; it did not make it
+    // survivable, and "named" is not "preserved". With a directory each, a new run cannot touch
+    // another run's snapshot at all.
     mkdirSync(directory, { recursive: true })
     return createRunPersistence({ dir: directory })
+  }
+
+  /**
+   * The run ids that have a stored snapshot, newest first.
+   *
+   * @returns the run directories under the configured root, or an empty list when none is
+   * configured or the root does not exist yet.
+   */
+  private storedRunIds(): ReadonlyArray<string> {
+    const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
+    const root = research?.snapshotDirectory
+    if (root === undefined) return []
+    try {
+      return readdirSync(root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+    } catch {
+      return []
+    }
   }
 
   /**
@@ -527,8 +570,8 @@ export class ResearchTeamService extends TypertRemoteService {
     return run
   }
 
-  private async readStoredRun(): Promise<{ readonly runId: string; readonly revision: number } | null> {
-    const persistence = this.hostRunPersistence()
+  private async readStoredRun(runId: string): Promise<{ readonly runId: string; readonly revision: number } | null> {
+    const persistence = this.hostRunPersistence(runId)
     if (persistence === undefined) return null
     try {
       const payload = await persistence.read()
@@ -558,11 +601,17 @@ export class ResearchTeamService extends TypertRemoteService {
     run: RunResult,
     baseRevision: number,
   ): Promise<ResearchRunPersistence | null> {
-    const persistence = this.hostRunPersistence()
+    const persistence = this.hostRunPersistence(run.runId)
     if (persistence === undefined) return null
     try {
       const payload = await persistence.save(store, run.runId, { baseRevision })
-      return { runId: run.runId, revision: payload.revision, interrupted: [] }
+      const directory = this.snapshotDirectoryOf(run.runId)
+      return {
+        runId: run.runId,
+        revision: payload.revision,
+        interrupted: [],
+        ...(directory === undefined ? {} : { directory }),
+      }
     } catch (error) {
       return { runId: run.runId, revision: null, interrupted: [], error: errorMessage(error) }
     }
@@ -583,8 +632,22 @@ export class ResearchTeamService extends TypertRemoteService {
    * @returns the resumed run's snapshot.
    * @throws {Error} when no snapshot directory is configured, or nothing is persisted.
    */
-  async resumeRunPipeline(options: { readonly signal?: AbortSignal } = {}): Promise<ResearchRunSnapshot> {
-    const persistence = this.hostRunPersistence()
+  async resumeRunPipeline(options: {
+    readonly runId?: string
+    readonly signal?: AbortSignal
+  } = {}): Promise<ResearchRunSnapshot> {
+    // WHICH run. Each run has its own directory, so a resume must name one — or be unambiguous.
+    const stored = this.storedRunIds()
+    const runId = options.runId ?? (stored.length === 1 ? stored[0] : undefined)
+    if (runId === undefined) {
+      throw new Error(
+        stored.length === 0
+          ? '[research] no run has a stored snapshot, so there is nothing to resume'
+          : `[research] ${String(stored.length)} runs have stored snapshots (${stored.join(', ')}); `
+            + 'name the one to resume',
+      )
+    }
+    const persistence = this.hostRunPersistence(runId)
     if (persistence === undefined) {
       throw new Error('[research] no snapshot directory is configured, so there is no run to resume')
     }
@@ -668,7 +731,10 @@ export class ResearchTeamService extends TypertRemoteService {
     const directory = `${root}/${run.runId}`
     try {
       const manifest = writeRunPackage(planRunPackage(store, run), directory)
-      return { files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })) }
+      return {
+        files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
+        directory,
+      }
     } catch (error) {
       return { files: [], error: errorMessage(error) }
     }

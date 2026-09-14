@@ -157,6 +157,50 @@ export function SummaryPanel({ summary, t }: PanelProps) {
           </ul>
         </section>
       )}
+
+      {/* What the run left on disk. The Host has reported this since the export and the durable
+          snapshot landed; the view received it and rendered nothing, so a person asking where the
+          files went had no answer in the product. */}
+      <section className={css.section}>
+        <h3 className={css.sectionTitle}>{t('section.deliverables')}</h3>
+        <p className={css.note}>{t('deliverables.note')}</p>
+        {summary.deliverables.length === 0 ? (
+          <p className={css.note}>{t('deliverables.none')}</p>
+        ) : (
+          <ul className={css.stepList}>
+            {summary.deliverables.map(deliverable => (
+              <li key={deliverable.kind} className={css.stepRow}>
+                <span className={css.stepName}>{t(`deliverables.${deliverable.kind}`)}</span>
+                <span className={css.stepMeta}>
+                  {deliverable.error !== undefined && (
+                    <span className={`${css.tag} ${css['s-failed']}`}>
+                      {t('deliverables.failed', { message: deliverable.error })}
+                    </span>
+                  )}
+                  {deliverable.revision !== null && (
+                    <span className={css.tag}>{t('deliverables.revision', { revision: String(deliverable.revision) })}</span>
+                  )}
+                  {deliverable.supersededRunId !== undefined && (
+                    <span className={css.tag}>{t('deliverables.superseded', { runId: deliverable.supersededRunId })}</span>
+                  )}
+                </span>
+                {deliverable.directory !== undefined && (
+                  <div className={css.summary}>
+                    {t('deliverables.directory', { directory: deliverable.directory })}
+                  </div>
+                )}
+                {deliverable.files.length > 0 && (
+                  <div className={css.summary}>
+                    {deliverable.files
+                      .map(file => `${file.path} (${String(file.bytes)} B)`)
+                      .join(', ')}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   )
 }

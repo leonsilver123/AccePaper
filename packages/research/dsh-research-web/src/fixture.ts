@@ -180,4 +180,5 @@ export const RESEARCH_FIXTURE: RunSummaryInput = {
       message: 'Step s08 adversarial convergence could not be certified; downstream confidence margin narrowed.',
     },
   ],
+  deliverables: [],
 }

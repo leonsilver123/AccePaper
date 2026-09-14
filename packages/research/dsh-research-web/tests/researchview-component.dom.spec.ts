@@ -67,6 +67,7 @@ function fixtureInput(): RunSummaryInput {
     gates: fixture.gates,
     abstentions: fixture.abstentions,
     degradations: fixture.degradations,
+    deliverables: [],
   }
 }
 
@@ -331,6 +332,7 @@ function emptyRun(
     gates: [],
     abstentions: [],
     degradations: [],
+    deliverables: [],
   }
 }
 
@@ -399,6 +401,7 @@ function buildStatusFixture(): RunSummaryInput {
     degradations: [
       { kind: 'quality', message: 'Mock degradation note for DOM test.' },
     ],
+    deliverables: [],
   }
 }
 

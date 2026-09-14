@@ -443,6 +443,8 @@ export interface ResearchRunPersistence {
    * profile attaches no exporter to, so a warning written there is not visibility.
    */
   readonly superseded?: { readonly runId: string; readonly revision: number }
+  /** The directory this snapshot was written to; see {@link ResearchPackageExport.directory}. */
+  readonly directory?: string
 }
 
 /** What a run's package export produced, or why it produced nothing. */
@@ -451,4 +453,13 @@ export interface ResearchPackageExport {
   readonly files: ReadonlyArray<{ readonly path: string; readonly bytes: number; readonly sha256: string }>
   /** Set when the export failed; `files` is then empty. */
   readonly error?: string
+  /**
+   * The directory the package was written to.
+   *
+   * Reported so the person who asked the run to produce files can find them: a list of names with
+   * nowhere to look is half an answer. It is the directory the DEPLOYMENT configured, told back to
+   * the operator who configured it — not a machine path leaking out of an export, which is what
+   * the package files themselves must never contain.
+   */
+  readonly directory?: string
 }
