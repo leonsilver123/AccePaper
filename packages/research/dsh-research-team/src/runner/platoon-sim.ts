@@ -38,11 +38,17 @@
  *    measurement; the absolute numbers are not field data and are labelled accordingly.
  *
  * A LIMIT THIS MODULE MEASURES AND REPORTS RATHER THAN HIDES. At the headways and forcings
- * this Case Pack declares, the `TTC < 1.5 s` band is not entered. That is a MEASUREMENT, not
- * an argument: across disturbance amplitudes from 5 m/s to 24 m/s — the last a near-total
- * stop from a 25 m/s cruise, harsher than anything the pack declares — and across desired
- * headways from 2.0 s down to 0.3 s, the rate is 0.00% in every case and the platoon's
- * minimum time-to-collision never falls below 2.08 s.
+ * this Case Pack declares, the `TTC < 1.5 s` band is not entered, and the numbers below say so
+ * WITH THE GRID THEY CAME FROM — an earlier version of this paragraph quoted a floor of 2.08 s
+ * that came from a 0.3 s headway, which is not a value the pack declares, and an independent
+ * auditor could not reproduce it on three wider grids. The floor is a property of a stated sweep:
+ *
+ *   declared headways, free flow                      12.10 s (variant), 19.58 s (baseline)
+ *   declared headways, the pack's own stop-and-go      4.158 s
+ *   declared headways, a near-total stop (24 of 25 m/s) 2.847 s — harsher than the pack declares
+ *
+ * The rate is 0.00% at every one of those, and an auditor's 3366-configuration sweep never
+ * entered the band either.
  *
  * The limiting factor is the model's own deceleration behaviour, and the arithmetic that
  * first suggested otherwise was wrong: `(s0 + v·T)/v` is what the TTC would be if the
@@ -285,6 +291,8 @@ export type PredictionAdjudication =
     readonly thresholdPct: number
     /** The direction the CLAIM stated, which is the one its threshold was graded in. */
     readonly direction: PredictionDirection
+    /** True when the claim CAPPED the change rather than requiring it to clear a bar. */
+    readonly bounded: boolean
     readonly detail: string
     /** The claim's own phrasing that binds it to the measured quantity. */
     readonly matchedPhrase: string
@@ -684,6 +692,26 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
 /** The direction a prediction commits to, as its own words state it. */
 export type PredictionDirection = 'increase' | 'decrease'
 
+/**
+ * What a prediction commits the study to, read out of its own words.
+ *
+ * `bounded` is the half that was missing. A prediction can ask for a change to CLEAR a bar
+ * ("by at least 20%") or to STAY UNDER one ("by no more than 20%"), and grading the second as if
+ * it were the first reports a violated prediction as a met one. That is the worst direction a
+ * gate can be wrong in, and an audit produced it: "the minimum time-to-collision shall NOT FALL
+ * BY MORE THAN 20%" was read as `decrease, at least 20`, the measured -38.20% cleared it, and the
+ * step advanced recording the prediction as SUPPORTED — while a 38.20% fall plainly violates a
+ * 20% cap.
+ */
+export interface PredictionCommitment {
+  /** Which way the prediction says the quantity moves. */
+  readonly direction: PredictionDirection
+  /** True when the prediction CAPS the change rather than requiring it to clear a bar. */
+  readonly bounded: boolean
+  /** The percentage the prediction states. */
+  readonly thresholdPct: number
+}
+
 const INCREASE_WORDS: ReadonlyArray<string> = [
   'increase', 'increases', 'increased', 'raise', 'raises', 'raised', 'exceed', 'exceeds', 'exceeding',
   'higher', 'greater', 'above', 'improve', 'improves', 'improved', 'improvement', 'gain', 'gains', 'rise', 'rises',
@@ -696,45 +724,132 @@ const DECREASE_WORDS: ReadonlyArray<string> = [
 ]
 
 /**
- * The direction a prediction commits to.
+ * The phrasings that turn a prediction into a CAP on the change rather than a bar to clear.
  *
- * WHY THIS IS READ AT ALL. The gate compared the measured change against the threshold with ONE
- * fixed direction (`improvement >= threshold`) and took the threshold from the first percentage in
- * the text. So "the minimum time-to-collision shall FALL by at least 20%" was graded as an
- * INCREASE: a measurement of -38.20%, which satisfies that prediction exactly, was reported as
- * NEGATING it. Two independent audits found it, and this batch's own `decisive` flag then carried
- * the wrong conclusion forward as a PASS instead of stopping at a failure — the change made a wrong
- * judgment worse than it had been.
+ * Tested against {@link boundWindow} — the words immediately before the percentage — and NOT
+ * against the whole sentence, because `under` and `within` are ordinary English everywhere else.
+ */
+const BOUND_PHRASES: ReadonlyArray<RegExp> = [
+  /\bat\s+most\b/u,
+  /\bno\s+more\s+than\b/u,
+  /\bnot\s+(?:\w+\s+){0,3}more\s+than\b/u,
+  /\bwithin\b/u,
+  /\bnot\s+exceed(?:s|ing)?\b/u,
+  /\bdoes\s+not\s+exceed\b/u,
+  /\bless\s+than\b/u,
+  /\bunder\b/u,
+]
+
+/** The words that NEGATE a direction word, which this reader cannot see through. */
+const NEGATION_WORDS: ReadonlyArray<string> = ['not', "n't", 'no', 'never', 'without']
+
+/** Where a percentage sits in the text. */
+const PERCENT_MATCH = /(\d+(?:\.\d+)?)\s*%/u
+
+/**
+ * The words immediately BEFORE the first percentage.
  *
- * A prediction that states no direction, or states both, is AMBIGUOUS and the gate cannot grade it:
- * there is no reading of "changed by 20%" that decides which way the number has to move. That is a
- * hold, not a pass — the same fail-closed answer an unstated metric gets.
+ * A cap is a phrase that modifies the number — "by no more than 20%", "under 20%" — so it has to
+ * be adjacent to it. Testing the whole sentence instead made "at least 20% lower under the AV"
+ * read as CAPPED, because the word `under` appears in it: a satisfied prediction was then graded
+ * as a cap it had missed.
+ */
+function boundWindow(text: string): string {
+  const match = PERCENT_MATCH.exec(text)
+  if (match === null) return ''
+  return text.slice(Math.max(0, match.index - 60), match.index).toLowerCase().split(/\s+/u).slice(-8).join(' ')
+}
+
+/**
+ * Clause-like segments, so a direction can be read from the one carrying the threshold.
  *
- * A word test cannot establish what a prediction is ABOUT, only which words it used — the same limit
- * the phrase binding states. It is enough to stop the gate grading a claim backwards.
+ * Commas are boundaries too. Without them a subordinate clause and its main clause were one
+ * segment, so a direction word in the subordinate clause made the prediction ambiguous and HELD
+ * it — a regression against material that previously passed.
+ */
+function segmentsOf(text: string): ReadonlyArray<string> {
+  return text.split(/[.;:,\n]/u).map(part => part.trim()).filter(part => part.length > 0)
+}
+
+/** The directions a piece of text names. Empty means it names none; two means it names both. */
+function directionsIn(text: string): ReadonlySet<PredictionDirection> {
+  const lowered = text.toLowerCase()
+  const found = new Set<PredictionDirection>()
+  if (INCREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))) found.add('increase')
+  if (DECREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))) found.add('decrease')
+  return found
+}
+
+/**
+ * The direction a prediction commits to, or why it could not be read.
+ *
+ * READ FROM THE SEGMENT CARRYING THE THRESHOLD, not from the whole text. Reading the whole text
+ * meant a direction word in a subordinate clause made the prediction ambiguous and HELD it — and,
+ * once the A channel's `red-stat` required an unambiguous direction, also made it REFUSE material
+ * that was previously accepted. An audit demonstrated exactly that:
+ * "Whereas the all-HV platoon min TTC falls below 5 s, the HV-AV-HV platoon min TTC shall exceed
+ * the baseline by at least 20%" reads as ambiguous across the whole sentence and as `increase`
+ * from the clause that carries the 20%.
+ *
+ * A prediction that states no direction, or states both in the segment that carries its
+ * threshold, is AMBIGUOUS and cannot be graded: there is no reading of "changed by 20%" that
+ * decides which way the number has to move. A HOLD, not a pass — the same fail-closed answer an
+ * unstated metric gets.
+ *
+ * A WORD TEST STILL CANNOT SEE NEGATION, and this is the stated limit: "does not increase by more
+ * than 20%" carries both a negation and `increase`, and the reader takes the direction word. That
+ * case is graded wrong, and it is recorded rather than papered over, exactly as the phrase binding
+ * records that it can only see which words a claim used.
  *
  * @param predictionText - the prediction as written.
  * @returns the direction, or undefined when the text does not commit to exactly one.
  */
 export function directionFromPrediction(predictionText: string): PredictionDirection | undefined {
-  const lowered = predictionText.toLowerCase()
-  const saysIncrease = INCREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))
-  const saysDecrease = DECREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))
-  if (saysIncrease === saysDecrease) return undefined
-  return saysIncrease ? 'increase' : 'decrease'
+  // A NEGATION is refused UNLESS it is part of a cap. "shall not fall by more than 20%" carries a
+  // negation and is perfectly gradeable — the negation IS the cap — while "does not increase by
+  // 20%" negates the direction word itself and the reader cannot see through it. Reading the cap
+  // first is what separates the two; without it the check killed its own bound phrasings.
+  const bounded = BOUND_PHRASES.some(pattern => pattern.test(boundWindow(predictionText)))
+  const negated = (text: string): boolean =>
+    NEGATION_WORDS.some(word => text.toLowerCase().includes(word))
+
+  const threshold = thresholdFromPrediction(predictionText)
+  if (threshold !== undefined) {
+    const carrier = segmentsOf(predictionText).find(segment => segment.includes(String(threshold)))
+    if (carrier !== undefined) {
+      if (!bounded && negated(carrier)) return undefined
+      const inCarrier = directionsIn(carrier)
+      if (inCarrier.size === 1) return [...inCarrier][0]
+      // Two directions in the carrier segment is genuinely ambiguous; none means read the whole.
+      if (inCarrier.size > 1) return undefined
+    }
+  }
+  const overall = directionsIn(predictionText)
+  if (overall.size !== 1) return undefined
+  if (!bounded && negated(predictionText)) return undefined
+  return [...overall][0]
 }
 
 /**
- * Read the numeric threshold a prediction commits to.
- *
- * The prediction is prose, but a falsifiable one names a quantity, so the first percentage
- * in the text is the commitment. A prediction with no percentage is not falsifiable in this
- * study's terms and yields undefined, which callers must treat as "cannot adjudicate"
- * rather than as a pass.
+ * Read what a prediction commits the study to: a direction, whether the change is CAPPED, and the
+ * percentage it states.
  *
  * @param predictionText - the prediction as written.
- * @returns the threshold in percent, or undefined when none is stated.
+ * @returns the commitment, or undefined when the text does not state a gradeable threshold.
  */
+export function commitmentFromPrediction(predictionText: string): PredictionCommitment | undefined {
+  const thresholdPct = thresholdFromPrediction(predictionText)
+  if (thresholdPct === undefined) return undefined
+  const direction = directionFromPrediction(predictionText)
+  if (direction === undefined) return undefined
+  return {
+    direction,
+    // The cap has to MODIFY the number. See `boundWindow` for what testing the whole sentence did.
+    bounded: BOUND_PHRASES.some(pattern => pattern.test(boundWindow(predictionText))),
+    thresholdPct,
+  }
+}
+
 export function thresholdFromPrediction(predictionText: string): number | undefined {
   const match = predictionText.match(/(\d+(?:\.\d+)?)\s*%/)
   if (match === null) return undefined
@@ -815,36 +930,43 @@ export function evaluatePrediction(
         + 'cannot adjudicate the prediction',
     }
   }
-  // The direction the CLAIM committed to, read from its own words. Without it the threshold has
+  // What the claim committed to, read from its own words. Without a direction the threshold has
   // no reading: "changed by 20%" does not say which way the number has to move, and grading it
   // either way would invent the half the claim left out.
-  const direction = directionFromPrediction(predictionText)
-  if (direction === undefined) {
+  const commitment = commitmentFromPrediction(predictionText)
+  if (commitment === undefined) {
     return {
       kind: 'unbindable',
       reason:
         `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but does not commit to a `
-        + 'DIRECTION, so there is no reading of that threshold that decides whether the measurement '
-        + 'meets it — the claim has to say whether the quantity should rise or fall',
+        + 'single gradeable DIRECTION, so there is no reading of that threshold that decides whether '
+        + 'the measurement meets it — the claim has to say, unambiguously, whether the quantity should '
+        + 'rise or fall',
     }
   }
+  const { direction, bounded, thresholdPct: stated } = commitment
 
   const improvementPct = comparison.relativeImprovementPct
-  // What is graded is the change the CLAIM asked for, stated in the claim's own direction: a
-  // prediction that the margin gets WORSE is met by a negative improvement, and this is the line
-  // whose absence let the gate report a met prediction as a negated one.
+  // What is graded is the change the CLAIM asked for, in the claim's own direction: a prediction
+  // that the margin gets WORSE is met by a negative improvement. This is the line whose absence let
+  // the gate report a met prediction as a negated one.
   const inClaimDirection = direction === 'increase' ? improvementPct : -improvementPct
-  const supportsPrediction = inClaimDirection >= thresholdPct
+  // A CAPPED prediction is met by staying under the cap, not by clearing it. Grading both the same
+  // way reported a prediction that a 38.20% fall plainly violates as SUPPORTED.
+  const supportsPrediction = bounded
+    ? inClaimDirection <= stated
+    : inClaimDirection >= stated
   return {
     kind: 'adjudicated',
     matchedPhrase: matched,
     supportsPrediction,
     improvementPct,
-    thresholdPct,
+    thresholdPct: stated,
     direction,
+    bounded,
     detail:
       `the study ${supportsPrediction ? 'met' : 'missed'} the stated threshold: the claim predicts the `
-      + `quantity should ${direction}, and the measurement moved ${improvementPct.toFixed(2)}% `
+      + `quantity should ${direction}${bounded ? ' by no more than' : ' by at least'}, and the measurement moved ${improvementPct.toFixed(2)}% `
       + `(i.e. ${inClaimDirection.toFixed(2)}% in the direction the claim asked for) against the required `
       + `${String(thresholdPct)}% of ${MEASURED_METRIC_LABEL} `
       + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)} -> `

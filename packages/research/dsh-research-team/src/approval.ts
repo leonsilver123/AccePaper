@@ -351,27 +351,16 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
     // come back `not-pending`. The projection ran inside the `try` below, so a failure to
     // re-project an already-applied decision was reported as `research/approval-refused` — an
     // audit reproduced exactly that and found `status: passed` in the store beside the refusal.
-    let snapshot: ResearchRunSnapshot
+    // The projection and the persistence are INDEPENDENT, and a first version of this fix conflated
+    // them: it returned early when the projection threw, so the persist closure was never called
+    // and an applied decision was not written to disk at all. It reported that honestly, and the
+    // report was the only correct thing about it — an audit counted zero calls to the closure.
+    let snapshot: ResearchRunSnapshot | undefined
+    let projectionError: string | undefined
     try {
       snapshot = run.project()
     } catch (error) {
-      // There is no snapshot to return, but the decision stands and is no longer undecidable. The
-      // caller is told what happened to the projection rather than that the decision failed.
-      return {
-        ok: true,
-        value: {
-          runId,
-          stepId,
-          attempt,
-          status,
-          operator: OPERATOR_PRINCIPAL_ID,
-          approvalEventId,
-          decidedAt: Date.now(),
-          persisted: false,
-          persistenceError: 'the run could not be re-projected, so nothing was written to disk',
-          projectionError: error instanceof Error ? error.message : String(error),
-        },
-      }
+      projectionError = error instanceof Error ? error.message : String(error)
     }
 
     let persisted = false
@@ -388,6 +377,9 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
     } else {
       persistenceError = 'no snapshot directory is configured for this deployment'
     }
+    // Report BOTH failures when both happened. They have different remedies and neither hides the
+    // other: one says the decision is not on disk, the other says the response cannot carry the run.
+
     return {
       ok: true,
       value: {
@@ -398,9 +390,10 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
         operator: OPERATOR_PRINCIPAL_ID,
         approvalEventId,
         decidedAt: Date.now(),
-        snapshot,
+        ...(snapshot === undefined ? {} : { snapshot }),
         persisted,
         ...(persistenceError === undefined ? {} : { persistenceError }),
+        ...(projectionError === undefined ? {} : { projectionError }),
       },
     }
   } catch (error) {

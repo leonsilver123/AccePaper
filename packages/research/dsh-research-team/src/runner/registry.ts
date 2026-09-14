@@ -789,7 +789,7 @@ function bodyTextFor(
     case 'introduction':
       return `This work targets the claim: ${CANONICAL_CLAIM_REF}. The falsifiable prediction is: ${CANONICAL_PREDICTION}.`
     case 'method':
-      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. Each class carries the Case Pack's declared parameters: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s, wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway, and predicts its leader over a ${av.lookAheadHorizonSeconds.toFixed(2)} s horizon. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was its effective reaction time earlier. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
+      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
     case 'experiments':
       return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baselineMinTtcSeconds.toFixed(2)} s for the homogeneous platoon and ${measured.variantMinTtcSeconds.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${measured.baselineTtcRatePct.toFixed(2)}% and ${measured.variantTtcRatePct.toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
     case 'results':
@@ -1115,8 +1115,11 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     assertion,
     prediction,
     experimentToFalsify,
-    scope: packClaim !== undefined ? String(packClaim.scope ?? '') : '',
-    dataSource: packClaim !== undefined ? String(packClaim.dataSource ?? '') : '',
+    // `String(...)` on an `unknown` would stringify an object as '[object Object]' and quietly
+    // put that in the material a reviewer reads. A non-string is not a value this field carries,
+    // so it is a gap — which is what an empty string means here.
+    scope: typeof packClaim?.scope === 'string' ? packClaim.scope : '',
+    dataSource: typeof packClaim?.dataSource === 'string' ? packClaim.dataSource : '',
     essentialDifference,
     metricKey,
     truthfulness: typeof claimRoute.truthfulness === 'string' ? claimRoute.truthfulness : '',
@@ -1523,6 +1526,13 @@ function studyEvidence(study: PlatoonStudy = experimentStudy()): Record<string, 
       leader: study.variant.leader,
     },
     designInputs: SIMULATION_INPUTS,
+    // WHICH PARAMETERS CAME FROM THE PACK AND WHICH THIS STUDY DERIVED. The pack's vehicle rows
+    // carry a reaction delay, a desired headway and a deceleration limit; they carry NO look-ahead
+    // horizon, so `studyFromPack` derives one as the vehicle's own reaction delay. Saying "each
+    // class carries the pack's declared parameters" over that derivation attributed a
+    // loader-invented number to the pack — and once the horizon became a real mechanism rather
+    // than a subtraction, it was worth 0.72 s of the measured effect. An audit found the wording.
+    derivedParameters: ['lookAheadHorizonSeconds (the vehicle\'s own reaction delay; the pack declares no horizon)'],
     ruleVersion: EXPERIMENT_RULE_VERSION,
     // What this measurement is and what it is NOT. An artifact that states only "an
     // experiment ran" invites the reader to assume it tested the claim; naming both is what
@@ -1779,7 +1789,9 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   if (mvpOutcome?.decisive === true) observed.push({ component: 'C', outcome: 'passed' })
   else if (typeof mvpOutcome?.supportsPrediction === 'boolean') observed.push({ component: 'C', outcome: 'failed' })
   if (typeof baselineMeasured?.baselineMinTtcSeconds === 'number') observed.push({ component: 'B', outcome: 'passed' })
-  const convergence = evaluateConvergence(observed)
+  // A is not among this step's declared inputs, so this step cannot observe it — said as its own
+  // answer rather than folded into `pending`, which is what the run's own status means.
+  const convergence = evaluateConvergence(observed, { unobservable: ['A'] })
 
   return {
     'converged-verdict': tagArtifact(

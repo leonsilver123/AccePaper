@@ -690,10 +690,10 @@ export class ResearchTeamService extends TypertRemoteService {
     }
     const runCtx = createRunContext()
     const prediction = getArtifact(restored.store, restored.runId, 'falsifiable-prediction') as
-      | { text?: unknown; ref?: unknown; metricKey?: unknown; measuredMetricKey?: unknown }
+      | { text?: unknown; ref?: unknown; metricKey?: unknown; measuredMetricKey?: unknown; claimRoute?: unknown }
       | undefined
     const claim = getArtifact(restored.store, restored.runId, 'claim') as
-      | { claimId?: unknown; assertion?: unknown; essentialDifference?: unknown; experimentToFalsify?: unknown }
+      | { claimId?: unknown; assertion?: unknown; falsifiability?: unknown }
       | undefined
     if (typeof prediction?.text === 'string') runCtx.predictionText = prediction.text
     if (typeof prediction?.ref === 'string') runCtx.claimRef = prediction.ref
@@ -711,31 +711,53 @@ export class ResearchTeamService extends TypertRemoteService {
     // about the claim that the claim itself contradicts. An audit registered this as a suspect
     // path; it is closed here rather than left to be discovered by a user whose resumed run
     // stalls for a reason that is not true.
+    // READ FROM WHERE THE VALUES ARE. A first version read `essentialDifference`,
+    // `experimentToFalsify` and `truthfulness` off the `claim` artifact at paths it does not have —
+    // they live under `claim.falsifiability` and on the prediction's `claimRoute` — so those three
+    // were permanently empty and the resumed review reported five things about the claim that were
+    // false ("no falsifying experiment is stated" among them). An audit measured it. Every field
+    // below names the artifact and the path it comes from.
     const restoredClaim = claim
     const restoredPrediction = prediction
-    const restoredWords = typeof restoredPrediction?.text === 'string' ? restoredPrediction.text : ''
+    const restoredFalsifiability = typeof restoredClaim?.falsifiability === 'object' && restoredClaim.falsifiability !== null
+      ? restoredClaim.falsifiability as { essentialDifference?: unknown; experimentToFalsify?: unknown }
+      : undefined
+    const restoredRoute = typeof restoredPrediction?.claimRoute === 'object' && restoredPrediction.claimRoute !== null
+      ? restoredPrediction.claimRoute as { truthfulness?: unknown }
+      : undefined
     runCtx.claimMaterial = {
       assertion: typeof restoredClaim?.assertion === 'string' ? restoredClaim.assertion : '',
-      prediction: restoredWords,
-      experimentToFalsify: typeof restoredClaim?.experimentToFalsify === 'string' ? restoredClaim.experimentToFalsify : '',
+      prediction: typeof restoredPrediction?.text === 'string' ? restoredPrediction.text : '',
+      experimentToFalsify: typeof restoredFalsifiability?.experimentToFalsify === 'string'
+        ? restoredFalsifiability.experimentToFalsify
+        : '',
       // The pack's scope and data source are not step artifacts, so they are not on disk to
-      // restore. Restoring the fields that ARE there is what keeps the review from holding a
-      // claim it can actually read; the two it cannot recover stay empty, and `red-method` and
-      // `red-domain` then report a GAP for them, which is what they are.
+      // restore. The two that are unrecoverable stay empty, and `red-method` and `red-domain`
+      // report a GAP for them — which is what an unrestorable field is, not a verdict about the
+      // claim. The difference matters: a gap makes the review abstain, and the review's silence is
+      // not evidence about the material.
       scope: '',
       dataSource: '',
-      essentialDifference: typeof restoredClaim?.essentialDifference === 'string' ? restoredClaim.essentialDifference : '',
-      metricKey: runCtx.metricKey,
-      truthfulness: typeof (claim as { truthfulness?: unknown } | undefined)?.truthfulness === 'string'
-        ? (claim as { truthfulness: string }).truthfulness
+      essentialDifference: typeof restoredFalsifiability?.essentialDifference === 'string'
+        ? restoredFalsifiability.essentialDifference
         : '',
+      metricKey: runCtx.metricKey,
+      truthfulness: typeof restoredRoute?.truthfulness === 'string' ? restoredRoute.truthfulness : '',
       measuredMetricKey: typeof restoredMetricKey === 'string' ? restoredMetricKey : '',
+      // Not restorable either: the pack's file list is not a step artifact.
       declaredSources: [],
     }
-    // The STUDY the experiment runs, likewise rebuilt: without it a resumed C-gated step would
-    // measure the module's default scenarios while the artifacts describe the pack's.
-    const restoredScenario = this.hostCasePackScenario()
-    runCtx.study = studyFromPack(restoredScenario) ?? experimentStudy()
+    // The STUDY the experiment runs, rebuilt FROM THE RUN'S OWN PERSISTED INPUT.
+    //
+    // Not from the deployment's current `casePackDirectory`, which is what this did first and what
+    // makes a resumed run measure a different study from the one its artifacts describe: this batch
+    // itself moved that directory from `case-pack-traffic` to `case-pack-traffic-v2`, and a run
+    // persisted against one would be re-measured against the other. It also made a resume FAIL
+    // outright when the directory had become unreadable. The scenario block is in the snapshot, so
+    // it is read from there; the deployment's directory is only the fallback for a run that
+    // persisted none.
+    const persistedScenario = getRunSnapshot(restored.store, restored.runId).inputs[CASE_PACK_INPUT_SLUGS.scenario]
+    runCtx.study = studyFromPack(persistedScenario) ?? studyFromPack(this.hostCasePackScenario()) ?? experimentStudy()
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,

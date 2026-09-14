@@ -23,8 +23,11 @@
 //   1. any channel `abstained` → `held`     (an abstention is a withheld pass,
 //                                            never a pass)
 //   2. any channel `failed`    → `refuted`
-//   3. any channel `blocked`, or any of
-//      A/B/C without a verdict → `pending`  (an absent verdict is not a pass)
+//   3. any channel `blocked`, or a verdict absent for a channel the CALLER could have
+//      observed                    → `pending`  (an absent verdict is not a pass)
+//   3a. verdicts absent ONLY for channels the caller declared it cannot observe, with nothing
+//      blocked                    → `unobservable`  (a distinct answer: this step's declared
+//      inputs cannot carry the question, which is not a statement about the run)
 //   4. all three `passed`      → `converged`
 //
 // That order is the invariant: `converged` is reachable only through rule 4, so
@@ -57,6 +60,22 @@ export type ConvergenceState =
    * all; a blocked channel has a verdict and is named in `basis` instead.
    */
   | { readonly kind: 'pending'; readonly missing: ReadonlyArray<string>; readonly basis: string }
+  /**
+   * The channels this caller CANNOT observe, absent for that reason and no other.
+   *
+   * `pending` used to cover both this and "the channels I can see have not converged", which are
+   * different facts with different readers: one says the run is still moving, the other says the
+   * question is not this step's to answer. The C2 dossier is the case that forced the split — its
+   * declared inputs are the mvp results and the baseline, so the adversarial channel is
+   * structurally invisible to it, and reporting that as `pending` invited a reader to take
+   * "not yet converged" from a step that never could have said otherwise. An audit named this as
+   * the same defect as the two `status` fields fixed in bf5c5a0a: one name carrying two facts.
+   */
+  | {
+    readonly kind: 'unobservable'
+    readonly missing: ReadonlyArray<string>
+    readonly basis: string
+  }
   /** A channel refuted the claim; it cannot converge as stated. */
   | { readonly kind: 'refuted'; readonly component: 'A' | 'B' | 'C'; readonly basis: string }
   /** A channel withheld its verdict; the claim is held, not passed. */
@@ -74,7 +93,10 @@ export type ConvergenceState =
  * @returns the convergence state, with a `basis` string naming the deciding
  *   channels and the rule that fired.
  */
-export function evaluateConvergence(verdicts: ReadonlyArray<ChannelVerdict>): ConvergenceState {
+export function evaluateConvergence(
+  verdicts: ReadonlyArray<ChannelVerdict>,
+  options: { readonly unobservable?: ReadonlyArray<ChannelVerdict['component']> } = {},
+): ConvergenceState {
   const has = (component: ChannelVerdict['component'], outcome: ChannelVerdict['outcome']): boolean =>
     verdicts.some(v => v.component === component && v.outcome === outcome)
 
@@ -98,6 +120,18 @@ export function evaluateConvergence(verdicts: ReadonlyArray<ChannelVerdict>): Co
 
   const blocked = COMPONENTS.filter(component => has(component, 'blocked'))
   const missing = COMPONENTS.filter(component => !verdicts.some(v => v.component === component))
+  // Absent because the caller cannot see them is its own answer, and only when there is nothing
+  // else to report: a blocked channel still means rework regardless of what is unobservable.
+  const unobservable = (options.unobservable ?? []).filter(component => missing.includes(component))
+  if (blocked.length === 0 && unobservable.length === missing.length && missing.length > 0) {
+    return {
+      kind: 'unobservable',
+      missing,
+      basis:
+        `no verdict for channel(s) ${missing.join(', ')}, which this step's declared inputs cannot `
+        + 'carry — the question is not answerable here, and that is not a statement about the run',
+    }
+  }
   if (blocked.length > 0 || missing.length > 0) {
     const reasons: string[] = []
     if (blocked.length > 0) reasons.push(`channel(s) ${blocked.join(', ')} blocked (rework required)`)
@@ -125,6 +159,8 @@ export function summarizeConvergence(state: ConvergenceState): string {
       return `converged: ${state.basis}`
     case 'pending':
       return `pending: ${state.basis}`
+    case 'unobservable':
+      return `unobservable: ${state.basis}`
     case 'refuted':
       return `refuted: ${state.basis}`
     case 'held':

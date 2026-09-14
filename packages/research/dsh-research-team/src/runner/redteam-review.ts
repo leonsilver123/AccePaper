@@ -38,6 +38,31 @@ import type { ResearchRebuttalPosition } from '../types.ts'
 
 import { directionFromPrediction } from './platoon-sim.ts'
 
+/**
+ * The truthfulness levels this field can legitimately carry.
+ *
+ * TWO VOCABULARIES REACH IT, and both are grounded in this repository rather than assumed:
+ *   - a Case Pack declares its own, and the shipped pack uses exactly `fixture` and `mock`
+ *     (every envelope in `plan/overnight/2026-09-09/case-pack-traffic-v2` carries one of them);
+ *   - a deployment that wires a channel instead declares the report's five levels, which are the
+ *     vocabulary `registry.ts` prints.
+ *
+ * The check exists because ACCEPTING ANY NON-EMPTY STRING let material declare
+ * `peer-reviewed empirical finding` and pass — a provenance claim in a vocabulary nothing
+ * interprets. An audit found it. A first version of this list held only the five channel levels,
+ * which would have refused the shipped pack's own `fixture` and stopped the run: the list is
+ * grounded in the pack's bytes for that reason.
+ */
+export const KNOWN_TRUTHFULNESS: ReadonlyArray<string> = [
+  'fixture',
+  'mock',
+  'real_tool_fixture_input',
+  'local_computation',
+  'fixture_executor',
+  'mock_external',
+  'live_external',
+]
+
 /** The claim material the review reads. Every field is what the run states, verbatim. */
 export interface ClaimMaterial {
   /** The claim's assertion, as written. */
@@ -206,9 +231,15 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
     hasThreshold
       ? directionFromPrediction(prediction) === undefined
         ? {
+          // A GAP, not a contradiction. This returned `refute` first, which made a word test
+          // decisive: a direction word in a subordinate clause made a perfectly ordinary
+          // prediction "ambiguous" and the gate then REFUSED material it had previously accepted.
+          // An audit caught that. The reader's failure to parse a sentence is not the material's
+          // inconsistency — so the reviewer abstains, and the C channel holds the same prediction
+          // for the same reason. Neither invents a verdict from a parse failure.
           check: 'the threshold is committed to in one direction',
-          found: 'the prediction states a percentage but not whether the quantity should rise or fall',
-          position: 'refute',
+          found: 'this review could not read one direction out of the prediction (no direction word, both, or a negation it cannot see through)',
+          position: 'abstain',
         }
         : {
           check: 'the threshold is committed to in one direction',
@@ -292,11 +323,20 @@ function reviewDomain(material: ClaimMaterial): RoleReview {
         found: 'no truthfulness level is declared, so a reader cannot tell a fixture from a measurement',
         position: 'abstain',
       }
-      : {
-        check: 'the material declares its own truthfulness',
-        found: `declared as "${truthfulness}"`,
-        position: 'support',
-      },
+      : KNOWN_TRUTHFULNESS.includes(truthfulness)
+        // The level has to be one this deployment DEFINES. Accepting any non-empty string let
+        // material declare `peer-reviewed empirical finding` and pass — a claim about where the
+        // data came from, in a vocabulary nothing checks. An audit found it.
+        ? {
+          check: 'the material declares its own truthfulness',
+          found: `declared as "${truthfulness}"`,
+          position: 'support',
+        }
+        : {
+          check: 'the material declares its own truthfulness',
+          found: `declared as "${truthfulness}", which is not a level this deployment defines (${KNOWN_TRUTHFULNESS.join(', ')})`,
+          position: 'refute',
+        },
   ])
 }
 

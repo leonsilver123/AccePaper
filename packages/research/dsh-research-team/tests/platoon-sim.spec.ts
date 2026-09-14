@@ -73,9 +73,10 @@ describe('runPlatoon', () => {
     }
     const stopped = runPlatoon(harsh)
     expect(stopped.ttcLt1_5RatePct).toBe(0)
-    // ...and the floor the sweep found, so the "never below 2.08 s" claim in the module header is
-    // checked rather than remembered.
-    expect(stopped.minTtcSeconds).toBeGreaterThan(2.0)
+    // ...and the floor, so the numbers in the module header are checked rather than remembered.
+    // `stopped` is a near-total stop at the DECLARED headways; the pack's own stop-and-go forcing
+    // is milder and measures 4.158 s, which `boundaryTest` covers.
+    expect(stopped.minTtcSeconds).toBeGreaterThan(2.8)
   })
 
   it('reports a minimum time-to-collision that is a finite, positive number', () => {
