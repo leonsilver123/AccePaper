@@ -249,7 +249,7 @@ export interface ExecCtx {
    * Optional ResearchToolInvoker injected by the runner (T19 calibration R1).
    * When present, capability steps route tool execution through the invoker;
    * when absent, executors fall back to a default DirectResearchToolInvoker
-   * (direct_fixture). The pipeline thus depends only on the Invoker interface.
+   * (direct_call). The pipeline thus depends only on the Invoker interface.
    */
   readonly invoker?: ResearchToolInvoker
   /**
@@ -308,7 +308,7 @@ export interface StepExecutorEntry {
 export interface ArtifactChannelMeta {
   /** Which invoker actually executed the capability (direct|agent-loop-toolruntime). */
   readonly provenance: string
-  /** Channel truthfulness carried by the invoker (direct_fixture|cordis_tool_runtime). */
+  /** Channel truthfulness carried by the invoker (direct_call|host_tool_runtime). */
   readonly invokerTruthfulness: string
 }
 
@@ -2720,7 +2720,7 @@ export function perStepInvocationChannels(
       toolRuntimeExecutionId: undefined,
       truthfulness,
       fallbackReason: planned !== actual
-        ? 'no AgentLoop invoker injected into the T19 drive path; default DirectResearchToolInvoker (direct_fixture)'
+        ? 'no AgentLoop invoker injected into the T19 drive path; default DirectResearchToolInvoker (direct_call)'
         : undefined,
     }
   })

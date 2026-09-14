@@ -5,15 +5,33 @@
  * implementations directly. Two implementations exist:
  *
  *  - DirectResearchToolInvoker  : routes to the single executeResearchTool pure
- *    adapter. Used for fixtures, unit tests and the offline internal pipeline.
- *    truthfulness = 'direct_fixture' and provenance = 'direct' — it is NOT a
- *    ToolRuntime execution and never counts toward Runtime-verified gates.
+ *    adapter — the research layer calls the tool function itself. Used for
+ *    fixtures, unit tests and the offline internal pipeline. truthfulness =
+ *    'direct_call' and provenance = 'direct'.
  *
- *  - (future) AgentLoopResearchToolInvoker : model_ready tools ONLY, through a
- *    real agent-loop minted ToolRuntime execution (truthfulness
- *    'cordis_tool_runtime'). pipeline_only passed to it is rejected. Its
- *    implementation lands with the deterministic agent-loop harness; nothing
- *    misnamed "CordisResearchToolInvoker" will be created.
+ *  - AgentLoopResearchToolInvoker (dsh-research-cordis) : model_ready tools ONLY,
+ *    through a real agent-loop minted ToolRuntime execution (truthfulness
+ *    'host_tool_runtime'). pipeline_only passed to it is rejected.
+ *
+ * ── TWO INDEPENDENT FACTS, AND WHY THE NAMES SAY ONLY ONE ─────────────────────
+ * 'direct_call' describes the CALL PATH. It says NOTHING about the data: a direct
+ * call is not a fixture. The four `pipeline_only` tools are ALWAYS called directly
+ * today, and they may return real records (the retrieval channel is configured
+ * from cordis.yml and reaches a live catalogue where one is set). The reverse
+ * holds too: a channel that runs through the host runtime may still be handed
+ * fixture input.
+ *
+ * So neither label, alone or together, means "this conclusion is verified". What
+ * the data actually was is recorded where the data enters — on the adapter and on
+ * the artifact's own `corpus`/`source`/`*Source` fields — and a tool result is
+ * never evidence that the claim it feeds is true.
+ *
+ * The four `pipeline_only` tools are called by the research layer DIRECTLY: they do
+ * not enter the host's tool runtime and are not covered by its permission checks,
+ * sandbox, or audit records. The research layer keeps its own input/output
+ * correlation and error records; that is not the same as host-unified management,
+ * and it must not be described as such. This is an ACCEPTED architecture boundary,
+ * not a defect awaiting a fix (see plan/MASTER-PLAN.md § D5).
  */
 import { executeResearchTool } from './execution.ts'
 import { validateResearchToolInput } from './input-schema.ts'
@@ -28,8 +46,11 @@ export type ResearchToolId =
   | 'three-line-table'
   | 'roadmap'
 
-/** Execution truthfulness of an invocation channel. */
-export type ResearchToolTruthfulness = 'direct_fixture' | 'cordis_tool_runtime'
+/**
+ * How an invocation reached the tool: called directly by the research layer, or
+ * through the host's tool runtime. It says nothing about the data or the conclusion.
+ */
+export type ResearchToolTruthfulness = 'direct_call' | 'host_tool_runtime'
 
 /** Provenance of an invocation channel (execution pathway identity). */
 export type ResearchToolProvenance = 'direct' | 'agent-loop-toolruntime'
@@ -88,7 +109,7 @@ function failure(
  * pipeline. See the module header for what it is NOT.
  */
 export class DirectResearchToolInvoker implements ResearchToolInvoker {
-  readonly truthfulness = 'direct_fixture' as const
+  readonly truthfulness = 'direct_call' as const
   readonly provenance = 'direct' as const
 
   constructor(private readonly channelLabel = 'direct-fixture') {

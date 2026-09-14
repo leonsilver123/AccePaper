@@ -4,7 +4,7 @@
  * `ExecCtx.invoker` 自 T19-R1 起就是执行器的注入点(`a1Executor` 写成
  * `ctx.invoker ?? new DirectResearchToolInvoker(...)`),但 `DriveOptions` /
  * `DriveStepOptions` 此前没有该字段,驱动器无法传递,于是 capability 执行器
- * 永远走 direct_fixture 回退。
+ * 永远走 direct_call 回退。
  *
  * 本 spec 锁定接线本身:注入的 invoker 必须被 capability 执行器调用,且
  * 未注入时回退路径不受影响。它不验证 LLM 通道——那是 Cordis 适配器层的事。
@@ -28,7 +28,7 @@ function trackingInvoker(): { readonly invoker: ResearchToolInvoker; readonly in
   return {
     invoked,
     invoker: {
-      truthfulness: 'cordis_tool_runtime',
+      truthfulness: 'host_tool_runtime',
       provenance: 'agent-loop-toolruntime',
       invoke: (toolId: ResearchToolId, input: unknown, context: ResearchToolInvocationContext) => {
         invoked.push(toolId)
@@ -51,7 +51,7 @@ describe('DriveOptions.invoker 注入面(T34)', () => {
     expect(invoked).toContain('claim-construct')
   })
 
-  it('未注入 invoker 时,capability 步骤走 direct_fixture 回退', async () => {
+  it('未注入 invoker 时,capability 步骤走 direct_call 回退', async () => {
     const { invoked } = trackingInvoker()
     const store: ResearchRunStore = new Map()
 

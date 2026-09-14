@@ -60,7 +60,7 @@ export interface DriveOptions {
   readonly stopBefore?: string
   /**
    * Tool invoker handed to every capability executor. When absent, executors fall
-   * back to `DirectResearchToolInvoker` (truthfulness `direct_fixture`); when present,
+   * back to `DirectResearchToolInvoker` (truthfulness `direct_call`); when present,
    * the caller chooses the channel — e.g. an agent-loop-backed invoker registered by
    * the Cordis adapter — and each artifact records that channel's provenance.
    */

@@ -1,7 +1,7 @@
 // DirectResearchToolInvoker (Phase 2) — vitest spec.
 //
 // Proves the direct channel: routes to the single adapter, produces the same
-// business artifact as the adapter (equivalence), carries direct_fixture
+// business artifact as the adapter (equivalence), carries direct_call
 // truthfulness + direct provenance, maps failures to stable ok:false results
 // (never throws to the caller), and never invokes a business function on a
 // schema violation.
@@ -31,8 +31,8 @@ const FIGURE_SPEC = {
 }
 
 describe('DirectResearchToolInvoker', () => {
-  it('declares direct_fixture truthfulness and direct provenance', () => {
-    expect(invoker.truthfulness).toBe('direct_fixture')
+  it('declares direct_call truthfulness and direct provenance', () => {
+    expect(invoker.truthfulness).toBe('direct_call')
     expect(invoker.provenance).toBe('direct')
   })
 
@@ -48,7 +48,7 @@ describe('DirectResearchToolInvoker', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.code).toContain('RESEARCH_TOOL')
-      expect(result.truthfulness).toBe('direct_fixture')
+      expect(result.truthfulness).toBe('direct_call')
     }
   })
 

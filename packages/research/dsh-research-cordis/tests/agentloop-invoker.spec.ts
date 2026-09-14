@@ -67,7 +67,7 @@ describe('AgentLoopResearchToolInvoker', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.code).toBe('RESEARCH_TOOL_NOT_MODEL_READY')
-      expect(result.truthfulness).toBe('cordis_tool_runtime')
+      expect(result.truthfulness).toBe('host_tool_runtime')
       expect(result.message).toContain('pipeline_only')
     }
     await ctx.fiber.dispose()
@@ -106,9 +106,9 @@ describe('AgentLoopResearchToolInvoker', () => {
       }
       expect(stripTime(loopResult.artifact)).toEqual(stripTime(directResult.artifact))
       expect(directResult.provenance).toBe('direct')
-      expect(directResult.truthfulness).toBe('direct_fixture')
+      expect(directResult.truthfulness).toBe('direct_call')
       expect(loopResult.provenance).toBe('agent-loop-toolruntime')
-      expect(loopResult.truthfulness).toBe('cordis_tool_runtime')
+      expect(loopResult.truthfulness).toBe('host_tool_runtime')
       // Same raw adapter path is exercised by the Direct channel too.
       const raw = await executeResearchTool('three-line-table', TABLE_INPUT, undefined, TS)
       expect(stripTime(directResult.artifact)).toEqual(stripTime(raw))

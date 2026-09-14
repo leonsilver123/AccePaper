@@ -11,3 +11,5 @@
 - 外部数据源(Crossref / OpenAlex / 分区表)一律经 adapter 接缝,仓库内不附带真实凭据或未确认许可的数据集。
 
 No invariant companion is published: the tool contracts are frozen by the directory entries and covered by the package's own specs, so no `./invariant` entry is published alongside it.
+
+- **调用方式与数据来源是两个独立的事实,标签只描述前者**(2026-09-14)。`ResearchToolTruthfulness` 只有两个值:`direct_call`(研究层直接调用工具函数)与 `host_tool_runtime`(经宿主 agent-loop 铸造的工具运行时执行)。**`direct_call` 不说明数据是什么** —— 直调的不是 fixture;同理,走宿主运行时的通道也可能拿到 fixture 输入。数据是什么记录在适配器配置与产物自身的 `corpus` / `source` / `*Source` 字段上。**两个标签合起来也不等于"结论已验证"。** 四个 `pipeline_only` 工具的直调是**已接受的架构边界**,详见 `dsh-research-cordis` README。

@@ -84,6 +84,6 @@ export * from './execution.ts'
 export * from './input-schema.ts'
 
 // ── Unified invocation surface (Phase 2) ────────────────────────────────────
-// ResearchToolInvoker interface + DirectResearchToolInvoker (direct_fixture).
+// ResearchToolInvoker interface + DirectResearchToolInvoker (direct_call).
 // T19-B executors depend on the interface only.
 export * from './invoker.ts'

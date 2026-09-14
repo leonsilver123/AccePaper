@@ -10,7 +10,7 @@
  *
  *  - pipeline_only tool ids are rejected BEFORE any loop work (stable code
  *    RESEARCH_TOOL_NOT_MODEL_READY) — never executed, never routed.
- *  - truthfulness = 'cordis_tool_runtime', provenance = 'agent-loop-toolruntime'.
+ *  - truthfulness = 'host_tool_runtime', provenance = 'agent-loop-toolruntime'.
  *  - ToolRuntime errors/cancellation/timeouts surface as the loop's own
  *    tool/result payloads; this invoker maps failures to ok:false without
  *    swallowing them.
@@ -103,7 +103,7 @@ let adapterSeq = 0
 
 /** Invoker bound to a live context whose agentLoop/tools/llm are present. */
 export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
-  readonly truthfulness: ResearchToolTruthfulness = 'cordis_tool_runtime'
+  readonly truthfulness: ResearchToolTruthfulness = 'host_tool_runtime'
   readonly provenance: ResearchToolProvenance = 'agent-loop-toolruntime'
 
   private readonly ctx: Context
@@ -123,7 +123,7 @@ export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
         code: 'RESEARCH_TOOL_NOT_MODEL_READY',
         message: `[${toolId}] is not model_ready; AgentLoopResearchToolInvoker only carries `
           + 'the three model-ready renders (figure/three-line-table/roadmap). '
-          + 'pipeline_only tools stay on the Direct channel (direct_fixture).',
+          + 'pipeline_only tools stay on the Direct channel (direct_call).',
         truthfulness: this.truthfulness,
         provenance: this.provenance,
       }

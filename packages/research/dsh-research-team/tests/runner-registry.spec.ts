@@ -452,11 +452,11 @@ describe('T19 calibration R1 — executor depends on ResearchToolInvoker', () =>
   it('a1 routes literature-search through an INJECTED invoker and fails closed', async () => {
     const calls: string[] = []
     const failingInvoker = {
-      truthfulness: 'direct_fixture' as const,
+      truthfulness: 'direct_call' as const,
       provenance: 'direct' as const,
       invoke: async (toolId: string) => {
         calls.push(toolId)
-        return { ok: false as const, code: 'X', message: 'boom', truthfulness: 'direct_fixture' as const, provenance: 'direct' as const }
+        return { ok: false as const, code: 'X', message: 'boom', truthfulness: 'direct_call' as const, provenance: 'direct' as const }
       },
     }
     // Widened view of the registry: this spec drives the executor with a partial
@@ -509,7 +509,7 @@ describe('T19-B registry — STEP_CAPABILITIES ⊆ RESEARCH_TOOL_DIRECTORY (Task
 })
 
 describe('F1 audit fix — invoker provenance propagates onto real-tool artifacts', () => {
-  it('A1 landscape-map carries __provenance=direct and __invokerTruthfulness=direct_fixture', async () => {
+  it('A1 landscape-map carries __provenance=direct and __invokerTruthfulness=direct_call', async () => {
     const entry = (STEP_EXECUTOR_REGISTRY as ReadonlyMap<string, { executor: (c: ExecCtx) => unknown }>).get('A1-landscape')
     expect(entry).toBeDefined()
     const ctx = execCtx('A1-landscape', freshRunCtx())
@@ -517,6 +517,6 @@ describe('F1 audit fix — invoker provenance propagates onto real-tool artifact
     const map = output['landscape-map']!
     expect(map.__kind).toBe('real_tool_fixture_input')
     expect(map.__provenance).toBe('direct')
-    expect(map.__invokerTruthfulness).toBe('direct_fixture')
+    expect(map.__invokerTruthfulness).toBe('direct_call')
   })
 })
