@@ -169,6 +169,22 @@ describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
     expect(live.map(e => e.stepId)).toEqual([])
   })
 
+  it('never lets a producer brand contradict the level it is stamped on', () => {
+    // Found by an independent audit that compared each entry's brand against its own artifact:
+    // A4 and B2 were branded `fixture:*` while their kind said `local_computation` and their
+    // artifacts said `fixture: false` — the same defect this registry's own comment records having
+    // fixed for B3/C1/C2. The audit did this by hand, once; this is the check that keeps it true.
+    const offenders: string[] = []
+    for (const entry of STEP_EXECUTOR_REGISTRY.values()) {
+      const branded = entry.producer.startsWith('fixture:')
+      // A `fixture_executor` step IS the fixture, so it must say so; a step at any other level
+      // performs something real and must not claim to be one.
+      if (entry.kind === 'fixture_executor' && !branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
+      if (entry.kind !== 'fixture_executor' && branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
+    }
+    expect(offenders).toEqual([])
+  })
+
   it('declares the truthfulness of each trinity gate channel with a basis', () => {
     for (const comp of ['A', 'B', 'C'] as const) {
       expect(TRUTHFULNESS_LEVELS).toContain(VERDICT_CHANNELS[comp].kind)

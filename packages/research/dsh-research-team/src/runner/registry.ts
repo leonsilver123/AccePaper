@@ -484,9 +484,15 @@ const A1_PRODUCER = `${LITERATURE_SEARCH_TOOL_ID}@${LITERATURE_SEARCH_TOOL_VERSI
 const FIXTURE_GAP_STATEMENT = 'SOTA delay-reduction gap under adaptive control is unverified'
 const A2_PRODUCER = `${CLAIM_CONSTRUCT_TOOL_ID}@${CLAIM_CONSTRUCT_TOOL_VERSION}`
 const A3_PRODUCER = 'fixture:agenda'
-const A4_PRODUCER = 'fixture:venue'
+// A4 matches the venue against A1's retrieved records and B2 verifies the dataset's bytes on
+// disk; both are computations THIS package performs over its inputs, not fixture tables. They
+// carried `fixture:*` brands while their registry kind said `local_computation` and their own
+// artifacts said `fixture: false` — the defect the B3/C1/C2 comment below describes, in the two
+// entries it was not applied to. An independent audit found them by comparing the brand against
+// the artifact it was stamped on.
+const A4_PRODUCER = 'venue-match:most-frequent'
 const B1_PRODUCER = 'fixture:method'
-const B2_PRODUCER = 'fixture:data'
+const B2_PRODUCER = 'dataset:on-disk-verification'
 // The baseline, the MVP measurement and the convergence dossier are computed by
 // THIS package's experiment and convergence modules, not by a registered tool and
 // not by a fixture table. Naming them `fixture:*` understated what ran and made the
