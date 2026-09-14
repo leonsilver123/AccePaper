@@ -47,8 +47,14 @@
  *   declared headways, the pack's own stop-and-go      4.158 s
  *   declared headways, a near-total stop (24 of 25 m/s) 2.847 s — harsher than the pack declares
  *
- * The rate is 0.00% at every one of those, and an auditor's 3366-configuration sweep never
- * entered the band either.
+ * The rate is 0.00% at every one of those, and an auditor's 3366-configuration sweep found the same
+ * over the DECLARED headways and forcings.
+ *
+ * THAT QUALIFIER IS LOAD-BEARING, and this paragraph previously lacked it: it claimed the band was
+ * never entered at all, which an auditor then refuted using knobs the pack can reach — a 0.15 s
+ * headway with a 0.2 m/s² deceleration limit enters it at 16.62%, and the same auditor's sweep
+ * separately found 6.18% and 7.39%. The band is reachable; what is true is that the DECLARED
+ * configuration does not reach it. Those are different claims and only the second is supported.
  *
  * The limiting factor is the model's own deceleration behaviour, and the arithmetic that
  * first suggested otherwise was wrong: `(s0 + v·T)/v` is what the TTC would be if the
@@ -289,8 +295,8 @@ export type PredictionAdjudication =
     readonly supportsPrediction: boolean
     readonly improvementPct: number
     readonly thresholdPct: number
-    /** The direction the CLAIM stated, which is the one its threshold was graded in. */
-    readonly direction: PredictionDirection
+    /** The direction the claim DECLARED, which is the one its threshold was graded in. */
+    readonly direction: PredictionCommitment['direction']
     /** True when the claim CAPPED the change rather than requiring it to clear a bar. */
     readonly bounded: boolean
     readonly detail: string
@@ -419,14 +425,19 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
       const decel = row.maxDecel_mps2
       if (typeof reactionMs !== 'number' || typeof headway !== 'number' || typeof decel !== 'number') return undefined
       const reactionDelaySeconds = reactionMs / 1000
+      const declaredHorizonMs = row.predictiveHorizon_ms
       classes[id] = {
         reactionDelaySeconds,
         desiredHeadwaySeconds: headway,
         maxDecelerationMps2: decel,
-        // The pack states a fast reaction, not a prediction horizon. The horizon is the
-        // vehicle's own reaction delay — it predicts over exactly the interval it would
-        // otherwise lag by — and is derived here rather than invented as a second constant.
-        lookAheadHorizonSeconds: id === 'AV' ? reactionDelaySeconds : 0,
+        // The pack DECLARES the horizon when it carries one. A pack that does not gets the
+        // vehicle's own reaction delay instead, and that derivation is recorded on the artifact
+        // (`studyEvidence.derivedParameters`): once the horizon became a real mechanism worth
+        // 0.72 s of the measured effect, a result resting on it must not rest on a number no input
+        // states. An audit raised exactly that, and the fix is for the pack to carry the field.
+        lookAheadHorizonSeconds: typeof declaredHorizonMs === 'number' && Number.isFinite(declaredHorizonMs) && declaredHorizonMs >= 0
+          ? declaredHorizonMs / 1000
+          : id === 'AV' ? reactionDelaySeconds : 0,
       }
     }
     if (classes.HV === undefined) return undefined
@@ -675,7 +686,15 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
   // leader has no measurable minimum, and dividing by it would turn "nothing to compare"
   // into "no improvement" — two different facts. `isComparable` keeps them apart and the
   // C channel refuses to grade an incomparable measurement.
-  const isComparable = Number.isFinite(base) && base > 0 && Number.isFinite(variant.minTtcSeconds)
+  // A COLLISION IS NOT A SMALL NUMBER, IT IS A BROKEN PREMISE. When two vehicles occupy the same
+  // space the platoon stopped following, and every quantity read off those trajectories — the
+  // min-TTC, the headway, the comparison itself — describes a failed run rather than a risky one.
+  // Reporting it as a comparison produced `improvementPct: -100.00` and `isComparable: true`, so a
+  // step C gate could pass on 5138 vehicle-seconds of collision. `collisions` was computed and read
+  // by NOTHING in the tree; an audit found that. It refuses the comparison instead.
+  const collided = baseline.collisions > 0 || variant.collisions > 0
+  const isComparable =
+    !collided && Number.isFinite(base) && base > 0 && Number.isFinite(variant.minTtcSeconds)
   const forward = MEASURED_METRIC_DIRECTION === 'higher-is-better' ? 1 : -1
   const relativeImprovementPct = isComparable
     ? (forward * (variant.minTtcSeconds - base) / base) * 100
@@ -689,165 +708,49 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
   }
 }
 
-/** The direction a prediction commits to, as its own words state it. */
-export type PredictionDirection = 'increase' | 'decrease'
-
 /**
- * What a prediction commits the study to, read out of its own words.
+ * What a claim commits the study to — DECLARED, not read out of prose.
  *
- * `bounded` is the half that was missing. A prediction can ask for a change to CLEAR a bar
- * ("by at least 20%") or to STAY UNDER one ("by no more than 20%"), and grading the second as if
- * it were the first reports a violated prediction as a met one. That is the worst direction a
- * gate can be wrong in, and an audit produced it: "the minimum time-to-collision shall NOT FALL
- * BY MORE THAN 20%" was read as `decrease, at least 20`, the measured -38.20% cleared it, and the
- * step advanced recording the prediction as SUPPORTED — while a 38.20% fall plainly violates a
- * 20% cap.
+ * WHY THIS IS A DECLARED FIELD. It was inferred from the prediction's words, and three rounds of
+ * independent audit dismantled that reader one mechanism at a time, each time on the shipped study:
+ *
+ *   - a fixed comparison direction graded "shall FALL by 20%" backwards, so a measurement that
+ *     satisfied the prediction was recorded as negating it, and this batch's `decisive` flag then
+ *     advanced the step on that wrong conclusion;
+ *   - the fix introduced a false POSITIVE — "shall NOT FALL BY MORE THAN 20%" was read as a floor,
+ *     and a 38.20% fall "cleared" a 20% cap it plainly violates;
+ *   - the cap was located by a character window, so `under` as an ordinary preposition ("shall
+ *     increase under steady free flow by at least 20%") turned a floor into a cap and flipped the
+ *     verdict — and adding "the same" to that sentence pushed the word out of the window and flipped
+ *     it back;
+ *   - cap phrasings outside the list ("by up to N%", "capped at") were read as floors;
+ *   - the negation check matched substrings, so `no` inside `normal` or `nonlinear` held a perfectly
+ *     gradeable prediction;
+ *   - the clause carrying the threshold was located by digit substring, so a year in the sentence
+ *     ("reported in 2020") became the carrier and the direction was read from the wrong clause.
+ *
+ * Every one of those is a way for a WORD TEST to decide a scientific verdict, and the auditor's
+ * conclusion was that the reader could not be trusted and should be replaced by something narrower.
+ * This is it: the claim DECLARES which way its quantity should move, and the gate grades that
+ * declaration. Nothing about the verdict depends on parsing prose.
+ *
+ * WHAT THE PROSE IS STILL USED FOR, and the limits of each: it must NAME the measured quantity (a
+ * keyword check, necessary and not sufficient — a claim can still name a quantity in passing), and
+ * it must STATE the threshold (the first `\d+%` in it, which is unambiguous). Neither decides a
+ * direction.
+ *
+ * A claim that declares no commitment HOLDS. That is the same fail-closed answer an unstated metric
+ * key gets, and it is the same demand: a study has to say what it is testing.
  */
 export interface PredictionCommitment {
-  /** Which way the prediction says the quantity moves. */
-  readonly direction: PredictionDirection
-  /** True when the prediction CAPS the change rather than requiring it to clear a bar. */
+  /** Which way the claim says the measured quantity should move. */
+  readonly direction: 'increase' | 'decrease'
+  /**
+   * True when the claim CAPS the change ("no more than 20%") rather than requiring it to clear a
+   * bar ("at least 20%"). Graded `<=` and `>=` respectively, which is the distinction the prose
+   * reader kept getting backwards.
+   */
   readonly bounded: boolean
-  /** The percentage the prediction states. */
-  readonly thresholdPct: number
-}
-
-const INCREASE_WORDS: ReadonlyArray<string> = [
-  'increase', 'increases', 'increased', 'raise', 'raises', 'raised', 'exceed', 'exceeds', 'exceeding',
-  'higher', 'greater', 'above', 'improve', 'improves', 'improved', 'improvement', 'gain', 'gains', 'rise', 'rises',
-]
-
-const DECREASE_WORDS: ReadonlyArray<string> = [
-  'decrease', 'decreases', 'decreased', 'fall', 'falls', 'falling', 'lower', 'lowers', 'lowered',
-  'reduce', 'reduces', 'reduced', 'reduction', 'drop', 'drops', 'dropping', 'decline', 'declines',
-  'below', 'less', 'shorter', 'smaller',
-]
-
-/**
- * The phrasings that turn a prediction into a CAP on the change rather than a bar to clear.
- *
- * Tested against {@link boundWindow} — the words immediately before the percentage — and NOT
- * against the whole sentence, because `under` and `within` are ordinary English everywhere else.
- */
-const BOUND_PHRASES: ReadonlyArray<RegExp> = [
-  /\bat\s+most\b/u,
-  /\bno\s+more\s+than\b/u,
-  /\bnot\s+(?:\w+\s+){0,3}more\s+than\b/u,
-  /\bwithin\b/u,
-  /\bnot\s+exceed(?:s|ing)?\b/u,
-  /\bdoes\s+not\s+exceed\b/u,
-  /\bless\s+than\b/u,
-  /\bunder\b/u,
-]
-
-/** The words that NEGATE a direction word, which this reader cannot see through. */
-const NEGATION_WORDS: ReadonlyArray<string> = ['not', "n't", 'no', 'never', 'without']
-
-/** Where a percentage sits in the text. */
-const PERCENT_MATCH = /(\d+(?:\.\d+)?)\s*%/u
-
-/**
- * The words immediately BEFORE the first percentage.
- *
- * A cap is a phrase that modifies the number — "by no more than 20%", "under 20%" — so it has to
- * be adjacent to it. Testing the whole sentence instead made "at least 20% lower under the AV"
- * read as CAPPED, because the word `under` appears in it: a satisfied prediction was then graded
- * as a cap it had missed.
- */
-function boundWindow(text: string): string {
-  const match = PERCENT_MATCH.exec(text)
-  if (match === null) return ''
-  return text.slice(Math.max(0, match.index - 60), match.index).toLowerCase().split(/\s+/u).slice(-8).join(' ')
-}
-
-/**
- * Clause-like segments, so a direction can be read from the one carrying the threshold.
- *
- * Commas are boundaries too. Without them a subordinate clause and its main clause were one
- * segment, so a direction word in the subordinate clause made the prediction ambiguous and HELD
- * it — a regression against material that previously passed.
- */
-function segmentsOf(text: string): ReadonlyArray<string> {
-  return text.split(/[.;:,\n]/u).map(part => part.trim()).filter(part => part.length > 0)
-}
-
-/** The directions a piece of text names. Empty means it names none; two means it names both. */
-function directionsIn(text: string): ReadonlySet<PredictionDirection> {
-  const lowered = text.toLowerCase()
-  const found = new Set<PredictionDirection>()
-  if (INCREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))) found.add('increase')
-  if (DECREASE_WORDS.some(word => new RegExp(`\\b${word}\\b`, 'u').test(lowered))) found.add('decrease')
-  return found
-}
-
-/**
- * The direction a prediction commits to, or why it could not be read.
- *
- * READ FROM THE SEGMENT CARRYING THE THRESHOLD, not from the whole text. Reading the whole text
- * meant a direction word in a subordinate clause made the prediction ambiguous and HELD it — and,
- * once the A channel's `red-stat` required an unambiguous direction, also made it REFUSE material
- * that was previously accepted. An audit demonstrated exactly that:
- * "Whereas the all-HV platoon min TTC falls below 5 s, the HV-AV-HV platoon min TTC shall exceed
- * the baseline by at least 20%" reads as ambiguous across the whole sentence and as `increase`
- * from the clause that carries the 20%.
- *
- * A prediction that states no direction, or states both in the segment that carries its
- * threshold, is AMBIGUOUS and cannot be graded: there is no reading of "changed by 20%" that
- * decides which way the number has to move. A HOLD, not a pass — the same fail-closed answer an
- * unstated metric gets.
- *
- * A WORD TEST STILL CANNOT SEE NEGATION, and this is the stated limit: "does not increase by more
- * than 20%" carries both a negation and `increase`, and the reader takes the direction word. That
- * case is graded wrong, and it is recorded rather than papered over, exactly as the phrase binding
- * records that it can only see which words a claim used.
- *
- * @param predictionText - the prediction as written.
- * @returns the direction, or undefined when the text does not commit to exactly one.
- */
-export function directionFromPrediction(predictionText: string): PredictionDirection | undefined {
-  // A NEGATION is refused UNLESS it is part of a cap. "shall not fall by more than 20%" carries a
-  // negation and is perfectly gradeable — the negation IS the cap — while "does not increase by
-  // 20%" negates the direction word itself and the reader cannot see through it. Reading the cap
-  // first is what separates the two; without it the check killed its own bound phrasings.
-  const bounded = BOUND_PHRASES.some(pattern => pattern.test(boundWindow(predictionText)))
-  const negated = (text: string): boolean =>
-    NEGATION_WORDS.some(word => text.toLowerCase().includes(word))
-
-  const threshold = thresholdFromPrediction(predictionText)
-  if (threshold !== undefined) {
-    const carrier = segmentsOf(predictionText).find(segment => segment.includes(String(threshold)))
-    if (carrier !== undefined) {
-      if (!bounded && negated(carrier)) return undefined
-      const inCarrier = directionsIn(carrier)
-      if (inCarrier.size === 1) return [...inCarrier][0]
-      // Two directions in the carrier segment is genuinely ambiguous; none means read the whole.
-      if (inCarrier.size > 1) return undefined
-    }
-  }
-  const overall = directionsIn(predictionText)
-  if (overall.size !== 1) return undefined
-  if (!bounded && negated(predictionText)) return undefined
-  return [...overall][0]
-}
-
-/**
- * Read what a prediction commits the study to: a direction, whether the change is CAPPED, and the
- * percentage it states.
- *
- * @param predictionText - the prediction as written.
- * @returns the commitment, or undefined when the text does not state a gradeable threshold.
- */
-export function commitmentFromPrediction(predictionText: string): PredictionCommitment | undefined {
-  const thresholdPct = thresholdFromPrediction(predictionText)
-  if (thresholdPct === undefined) return undefined
-  const direction = directionFromPrediction(predictionText)
-  if (direction === undefined) return undefined
-  return {
-    direction,
-    // The cap has to MODIFY the number. See `boundWindow` for what testing the whole sentence did.
-    bounded: BOUND_PHRASES.some(pattern => pattern.test(boundWindow(predictionText))),
-    thresholdPct,
-  }
 }
 
 export function thresholdFromPrediction(predictionText: string): number | undefined {
@@ -886,6 +789,7 @@ export function evaluatePrediction(
   predictionText: string,
   study: PlatoonStudy = experimentStudy(),
   metricKey?: string,
+  commitment?: PredictionCommitment,
 ): PredictionAdjudication {
   // The binding is checked FIRST. A prediction about a quantity this study does not measure
   // cannot be adjudicated however many percentages it states, and grading it would report an
@@ -921,30 +825,32 @@ export function evaluatePrediction(
     // Fail-closed: a platoon that never closed on its leader has no minimum
     // time-to-collision, so there is no ratio to test the threshold against. Grading it
     // would report "the prediction was refuted" for a measurement that never happened.
+    const collisionCount = comparison.baseline.collisions + comparison.variant.collisions
     return {
       kind: 'unbindable',
-      reason:
-        'the simulation produced no comparable minimum time-to-collision '
-        + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, `
-        + `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement `
-        + 'cannot adjudicate the prediction',
+      reason: collisionCount > 0
+        ? `the simulation produced ${String(collisionCount)} vehicle-time samples in which two `
+          + 'vehicles occupied the same space, so the platoons did not follow and the trajectories '
+          + 'describe a failed run rather than a risky one — the measurement cannot adjudicate the '
+          + 'prediction'
+        : 'the simulation produced no comparable minimum time-to-collision '
+          + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, `
+          + `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement `
+          + 'cannot adjudicate the prediction',
     }
   }
-  // What the claim committed to, read from its own words. Without a direction the threshold has
-  // no reading: "changed by 20%" does not say which way the number has to move, and grading it
-  // either way would invent the half the claim left out.
-  const commitment = commitmentFromPrediction(predictionText)
+  // The commitment is DECLARED, not inferred. See `PredictionCommitment` for why the inference was
+  // removed rather than narrowed again.
   if (commitment === undefined) {
     return {
       kind: 'unbindable',
       reason:
-        `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but does not commit to a `
-        + 'single gradeable DIRECTION, so there is no reading of that threshold that decides whether '
-        + 'the measurement meets it — the claim has to say, unambiguously, whether the quantity should '
-        + 'rise or fall',
+        `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but declares no `
+        + 'commitment, so nothing says which way the quantity is supposed to move — a study has to '
+        + 'state what it is testing, exactly as it has to declare the quantity itself',
     }
   }
-  const { direction, bounded, thresholdPct: stated } = commitment
+  const { direction, bounded } = commitment
 
   const improvementPct = comparison.relativeImprovementPct
   // What is graded is the change the CLAIM asked for, in the claim's own direction: a prediction
@@ -954,14 +860,14 @@ export function evaluatePrediction(
   // A CAPPED prediction is met by staying under the cap, not by clearing it. Grading both the same
   // way reported a prediction that a 38.20% fall plainly violates as SUPPORTED.
   const supportsPrediction = bounded
-    ? inClaimDirection <= stated
-    : inClaimDirection >= stated
+    ? inClaimDirection <= thresholdPct
+    : inClaimDirection >= thresholdPct
   return {
     kind: 'adjudicated',
     matchedPhrase: matched,
     supportsPrediction,
     improvementPct,
-    thresholdPct: stated,
+    thresholdPct,
     direction,
     bounded,
     detail:

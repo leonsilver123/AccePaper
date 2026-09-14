@@ -693,7 +693,7 @@ export class ResearchTeamService extends TypertRemoteService {
       | { text?: unknown; ref?: unknown; metricKey?: unknown; measuredMetricKey?: unknown; claimRoute?: unknown }
       | undefined
     const claim = getArtifact(restored.store, restored.runId, 'claim') as
-      | { claimId?: unknown; assertion?: unknown; falsifiability?: unknown }
+      | { claimId?: unknown; assertion?: unknown; falsifiability?: unknown; commitment?: unknown }
       | undefined
     if (typeof prediction?.text === 'string') runCtx.predictionText = prediction.text
     if (typeof prediction?.ref === 'string') runCtx.claimRef = prediction.ref
@@ -746,6 +746,19 @@ export class ResearchTeamService extends TypertRemoteService {
       measuredMetricKey: typeof restoredMetricKey === 'string' ? restoredMetricKey : '',
       // Not restorable either: the pack's file list is not a step artifact.
       declaredSources: [],
+    }
+    // The commitment travels on the claim artifact, so a resumed run grades the same declaration
+    // the original did — rather than falling back to "the claim declares none" and holding a claim
+    // whose own artifact says which way it moves.
+    const restoredCommitment = restoredClaim?.commitment as
+      | { direction?: unknown; bounded?: unknown }
+      | undefined
+    if (
+      restoredCommitment !== undefined
+      && (restoredCommitment.direction === 'increase' || restoredCommitment.direction === 'decrease')
+      && typeof restoredCommitment.bounded === 'boolean'
+    ) {
+      runCtx.commitment = { direction: restoredCommitment.direction, bounded: restoredCommitment.bounded }
     }
     // The STUDY the experiment runs, rebuilt FROM THE RUN'S OWN PERSISTED INPUT.
     //

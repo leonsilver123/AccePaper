@@ -36,7 +36,7 @@
 
 import type { ResearchRebuttalPosition } from '../types.ts'
 
-import { directionFromPrediction } from './platoon-sim.ts'
+import type { PredictionCommitment } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -85,6 +85,15 @@ export interface ClaimMaterial {
   readonly measuredMetricKey: string
   /** Every source the Case Pack declares, so a claimed source can be traced to one. */
   readonly declaredSources: ReadonlyArray<string>
+  /**
+   * Which way the claim DECLARES its quantity should move, and whether it caps the change.
+   *
+   * Declared rather than inferred. The reviewer used to read a direction out of the prediction's
+   * prose, and three rounds of audit dismantled that reader — see `PredictionCommitment` in
+   * `./platoon-sim.ts` for the six independent ways it reached a wrong verdict on the shipped
+   * study. Absent means the claim declared none, which is a gap the reviewer reports.
+   */
+  readonly commitment?: PredictionCommitment
 }
 
 /** An empty material, for a run that has not yet produced a claim. */
@@ -193,8 +202,7 @@ function reviewMethod(material: ClaimMaterial): RoleReview {
 function reviewStatistics(material: ClaimMaterial): RoleReview {
   const prediction = material.prediction.trim()
   const hasThreshold = /\d+(?:\.\d+)?\s*%/.test(prediction)
-  const assertionDirection = directionFromPrediction(material.assertion)
-  const predictionDirection = directionFromPrediction(prediction)
+
   return review('red-stat', [
     prediction.length === 0
       ? {
@@ -224,54 +232,42 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
           found: 'the prediction states no numeric threshold, so no measurement can decide it',
           position: 'abstain',
         },
-    // A threshold with no direction is not a testable prediction: "changed by 20%" does not say
-    // which way the number has to move, so the C channel cannot grade it either way and holds.
-    // Reviewing it here as "fine" would leave the reviewer and the gate disagreeing about whether
-    // the claim is testable at all.
+    // A threshold with no DECLARED commitment is not a testable prediction: "changed by 20%" does
+    // not say which way the number has to move, so the C channel cannot grade it and holds.
+    // Reviewing it as "fine" would leave the reviewer and the gate disagreeing about whether the
+    // claim is testable at all.
+    //
+    // THIS CHECK READS A DECLARATION, NOT A SENTENCE, and that is the whole point. Its predecessor
+    // tried to infer the direction from the prediction's prose, and an audit dismantled that reader
+    // across three rounds: it graded a satisfied prediction backwards, then reported a violated cap
+    // as met, then flipped on a preposition inside a character window. Its replacement by a
+    // declared field is what an auditor asked for after concluding the reader could not be trusted.
+    //
+    // WHAT WAS LOST WITH THE PARSER, stated rather than implied: a claim whose ASSERTION and
+    // PREDICTION contradict each other was previously caught by comparing two parsed directions.
+    // No word test can do that soundly — it is a reading, like deciding whether a scope excludes a
+    // condition — so the check is gone and the limit is recorded here instead of being replaced by
+    // a different guess. The remaining checks are all declarations or exact matches: the falsifier,
+    // the difference, the scope, the threshold, the quantity key, the data source and the
+    // truthfulness level.
     hasThreshold
-      ? directionFromPrediction(prediction) === undefined
+      ? material.commitment === undefined
         ? {
-          // A GAP, not a contradiction. This returned `refute` first, which made a word test
-          // decisive: a direction word in a subordinate clause made a perfectly ordinary
-          // prediction "ambiguous" and the gate then REFUSED material it had previously accepted.
-          // An audit caught that. The reader's failure to parse a sentence is not the material's
-          // inconsistency — so the reviewer abstains, and the C channel holds the same prediction
-          // for the same reason. Neither invents a verdict from a parse failure.
-          check: 'the threshold is committed to in one direction',
-          found: 'this review could not read one direction out of the prediction (no direction word, both, or a negation it cannot see through)',
+          check: 'the claim declares which way its quantity should move',
+          found: 'the claim declares no commitment, so nothing says whether the quantity should rise or fall',
           position: 'abstain',
         }
         : {
-          check: 'the threshold is committed to in one direction',
-          found: `the prediction commits to a ${String(directionFromPrediction(prediction))}`,
+          check: 'the claim declares which way its quantity should move',
+          found: `declared: the quantity should ${material.commitment.direction}`
+            + (material.commitment.bounded ? ', bounded by the stated threshold' : ', clearing the stated threshold'),
           position: 'support',
         }
       : {
-        check: 'the threshold is committed to in one direction',
-        found: 'no threshold to have a direction',
+        check: 'the claim declares which way its quantity should move',
+        found: 'no threshold to be bound to',
         position: 'abstain',
       },
-    // The assertion and the prediction are two sentences of the SAME claim, and a claim that
-    // contradicts itself is not a hard claim to test — it is an incoherent one. An audit found
-    // material of exactly this shape passing with three support votes, because every rulebook
-    // checked its own field and none compared them.
-    assertionDirection !== undefined && predictionDirection !== undefined && assertionDirection !== predictionDirection
-      ? {
-        check: 'the assertion and the prediction agree on direction',
-        found: `the assertion says the quantity should ${assertionDirection} while the prediction says it should ${predictionDirection}`,
-        position: 'refute',
-      }
-      : assertionDirection === undefined || predictionDirection === undefined
-        ? {
-          check: 'the assertion and the prediction agree on direction',
-          found: 'at least one of them commits to no direction, so they cannot be compared',
-          position: 'abstain',
-        }
-        : {
-          check: 'the assertion and the prediction agree on direction',
-          found: `both commit to a ${assertionDirection}`,
-          position: 'support',
-        },
     // The decisive check: the claim's declared quantity and the study's measured quantity
     // must be the same one. A mismatch is not an evidence gap — the claim is about
     // something this study will never measure, and no amount of running fixes it.

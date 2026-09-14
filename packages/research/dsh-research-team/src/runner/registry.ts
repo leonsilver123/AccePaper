@@ -76,7 +76,7 @@ import { readFileSync, statSync } from 'node:fs'
 
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
-import type { PlatoonStudy } from './platoon-sim.ts'
+import type { PlatoonStudy, PredictionCommitment } from './platoon-sim.ts'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
@@ -229,6 +229,14 @@ export interface RunContext {
    * a paper's table disagree with the verdict that approved it.
    */
   study: PlatoonStudy
+  /**
+   * Which way the claim declares its quantity should move, and whether it caps the change.
+   *
+   * Declared by the selected Case Pack (set by the A2-claim executor). Absent means the claim
+   * declared none, and the C channel then HOLDS rather than inferring a direction from the
+   * prediction's prose — an inference three audit rounds showed cannot be trusted.
+   */
+  commitment?: PredictionCommitment
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -1015,6 +1023,12 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // What the claim is ABOUT. Only a claim that declares the quantity this study measures can be
   // adjudicated by it; the fixture claim declares it because its own prediction text names it.
   let metricKey = CANONICAL_METRIC_KEY
+  // The fixture claim's own declared commitment, matching the sentence it writes. A claim that
+  // declares none is ungradeable, and the fixture is the pipeline's default claim.
+  // `increase`, because the fixture claim's sentence says the quantity RISES ("raises the platoon
+  // minimum time-to-collision"). A declared commitment that disagreed with the fixture's own words
+  // would be worse than none at all.
+  let commitment: PredictionCommitment | undefined = { direction: 'increase', bounded: false }
 
   // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
   // content, and it is preferred over the model because the pack is what the run was
@@ -1030,6 +1044,14 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     // A pack that declares no metric leaves the claim unbindable, and the C channel then HOLDS
     // rather than grading it. That is the honest outcome for a claim this study cannot test.
     metricKey = typeof packClaim.metricKey === 'string' ? packClaim.metricKey : ''
+    // Read from the pack's declared block, validated by shape. Anything else is the claim
+    // declining to say which way its quantity should move, which the C channel holds on.
+    const declared = packClaim.commitment as { direction?: unknown; bounded?: unknown } | undefined
+    commitment = declared !== undefined
+      && (declared.direction === 'increase' || declared.direction === 'decrease')
+      && typeof declared.bounded === 'boolean'
+      ? { direction: declared.direction, bounded: declared.bounded }
+      : undefined
     claimSource = 'case-pack'
     claimRoute = {
       source: 'case-pack',
@@ -1103,6 +1125,8 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
+  if (commitment === undefined) delete ctx.runCtx.commitment
+  else ctx.runCtx.commitment = commitment
   // The study the experiment will run. The Case Pack's declared scenarios are the run's
   // selected input, so they take precedence; the module's own scenarios are the fallback for a
   // run with no pack. A pack whose scenarios this study cannot read falls back too, and the
@@ -1124,6 +1148,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     metricKey,
     truthfulness: typeof claimRoute.truthfulness === 'string' ? claimRoute.truthfulness : '',
     measuredMetricKey: MEASURED_METRIC_KEY,
+    ...(commitment === undefined ? {} : { commitment }),
     declaredSources: packClaim !== undefined && Array.isArray(packClaim.declaredSources)
       ? (packClaim.declaredSources as ReadonlyArray<string>)
       : [],
@@ -1707,7 +1732,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey)
+  const verdict = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey, ctx.runCtx.commitment)
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
     // because there is no measurement that could adjudicate it.

@@ -331,6 +331,12 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
   const falsificationExperiment = casePackDatum(pack, 'claim.json', 'falsification.experiment')
   const scope = casePackDatum(pack, 'claim.json', 'falsification.scope')
   const dataSource = casePackDatum(pack, 'claim.json', 'falsification.dataSource')
+  // The claim's DECLARED commitment: which way its quantity should move, and whether it caps the
+  // change. Required, like the metric key is not — a pack that declares no commitment leaves the
+  // claim ungradeable, and the C channel then HOLDS rather than inferring a direction from prose.
+  const commitment = pack.files.get('claim.json')?.content.commitment as
+    | { direction?: unknown; bounded?: unknown }
+    | undefined
   const claimId = casePackDatum(pack, 'claim.json', 'id')
   // The pack's own list of its source files. The A channel's domain check traces the claim's
   // declared data source to one of these, so a claim pointing at a file the pack never
@@ -361,6 +367,8 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
         scope,
         dataSource,
         declaredSources,
+        // Present only when the pack declares one. A pack without it leaves the claim ungradeable.
+        ...(commitment === undefined ? {} : { commitment }),
         // Present only when the pack declares it. Absent means the claim states no quantity, and
         // the C channel then HOLDS instead of grading it against whatever the experiment measured.
         ...(typeof pack.files.get('claim.json')?.content.metricKey === 'string'

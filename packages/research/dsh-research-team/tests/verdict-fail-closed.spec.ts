@@ -37,6 +37,9 @@ function ctxWith(
   runCtx.predictionText = predictionText
   runCtx.metricKey = metricKey
   runCtx.study = study
+  // The claim's DECLARED commitment. The gate grades this rather than reading a direction out of
+  // the prediction's prose; a run that declares none holds.
+  runCtx.commitment = { direction: 'increase', bounded: false }
   return { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 }
 
@@ -74,6 +77,7 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
       'the platoon string-instability index improves by at least 20%',
       experimentStudy(),
       'platoon-string-stability-index',
+      { direction: 'increase', bounded: false },
     )
     expect(adjudication.kind).toBe('unbindable')
     if (adjudication.kind === 'unbindable') {
@@ -90,6 +94,7 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
       'the platoon string-instability index improves by at least 20%',
       experimentStudy(),
       MEASURED_METRIC_KEY,
+      { direction: 'increase', bounded: false },
     )
     expect(adjudication.kind).toBe('unbindable')
     if (adjudication.kind === 'unbindable') {
@@ -114,7 +119,8 @@ describe('C gate — a decisive negation advances the run', () => {
   it('PASSES the step and records the claim as refuted when the experiment negates it', async () => {
     // The shipped configuration: the AV's declared 1.2 s headway costs more margin than its
     // 150 ms reaction buys, so the canonical prediction is refuted. That is a RESULT.
-    const verdict = evaluatePrediction(CANONICAL.prediction, experimentStudy(), MEASURED_METRIC_KEY)
+    const verdict = evaluatePrediction(CANONICAL.prediction, experimentStudy(), MEASURED_METRIC_KEY,
+      { direction: 'increase', bounded: false })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(false)
@@ -135,7 +141,8 @@ describe('C gate — a decisive negation advances the run', () => {
     // The prediction sentence is identical; only the study's AV headway differs, and that is
     // what changes the measurement's sign.
     const prediction = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
-    const verdict = evaluatePrediction(prediction, studyWhereThePredictionHolds(), MEASURED_METRIC_KEY)
+    const verdict = evaluatePrediction(prediction, studyWhereThePredictionHolds(), MEASURED_METRIC_KEY,
+      { direction: 'increase', bounded: false })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(true)

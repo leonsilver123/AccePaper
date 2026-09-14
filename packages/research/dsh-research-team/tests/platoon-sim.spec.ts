@@ -18,7 +18,6 @@ import {
   DECLARED_VEHICLE_CLASSES,
   MEASURED_METRIC_KEY,
   SIMULATION_INPUTS,
-  directionFromPrediction,
   STUDY_OPERATING_POINT,
   ablationStudy,
   boundaryTest,
@@ -224,7 +223,7 @@ describe('evaluatePrediction', () => {
   const canonical = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
 
   it('adjudicates the bound quantity and reports the measured direction', () => {
-    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY)
+    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(false)
@@ -233,44 +232,83 @@ describe('evaluatePrediction', () => {
     expect(verdict.matchedPhrase).toBe('minimum time-to-collision')
   })
 
-  it('GRADES THE DIRECTION THE CLAIM STATED, not one the metric prefers', () => {
-    // The defect two independent audits found, and that this batch's own `decisive` flag then made
-    // worse: the gate compared `improvement >= threshold` with one fixed direction, so a claim
-    // predicting the margin would FALL was graded as if it had to RISE. A measurement of -38.20%
-    // satisfies "falls by at least 20%" exactly, and the gate reported it as NEGATING that claim —
-    // then advanced the step on the strength of the negation.
-    const decrease = 'the HV-AV-HV platoon minimum time-to-collision falls by at least 20% relative to the all-HV platoon'
-    const verdict = evaluatePrediction(decrease, study, MEASURED_METRIC_KEY)
-    expect(verdict.kind).toBe('adjudicated')
-    if (verdict.kind !== 'adjudicated') return
-    expect(verdict.direction).toBe('decrease')
-    expect(verdict.supportsPrediction).toBe(true)
-    expect(verdict.improvementPct).toBeLessThan(-20)
+  it('GRADES THE DECLARED COMMITMENT, and nothing else about the sentence', () => {
+    // What this replaced: the gate inferred a direction and a cap from the prediction's prose, and
+    // three audit rounds dismantled that reader — a fixed comparison graded a satisfied prediction
+    // backwards; the fix reported a 38.20% fall as meeting a 20% cap; the cap was located by a
+    // character window, so `under` as an ordinary preposition flipped the verdict, and adding "the
+    // same" to the sentence flipped it back; `by up to N%` was read as a floor; `no` inside
+    // `normal` held a gradeable prediction; and a year in the sentence became the clause the
+    // direction was read from. The auditor's verdict was that it could not be trusted and should be
+    // replaced by something narrower. This is the replacement: the claim DECLARES its commitment.
+    const rise = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+    const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
+    expect(increase.kind).toBe('adjudicated')
+    if (increase.kind !== 'adjudicated') return
+    expect(increase.direction).toBe('increase')
+    expect(increase.supportsPrediction).toBe(false)
 
-    // ...and the same measurement still REFUTES the claim that asks for a rise.
-    const increase = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
-    const opposite = evaluatePrediction(increase, study, MEASURED_METRIC_KEY)
-    expect(opposite.kind).toBe('adjudicated')
-    if (opposite.kind !== 'adjudicated') return
-    expect(opposite.direction).toBe('increase')
-    expect(opposite.supportsPrediction).toBe(false)
+    // The SAME sentence, declared as a fall: the measurement fell 38.20%, so the claim is met.
+    // The prose is not consulted for this, which is the point.
+    const decrease = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bounded: false })
+    expect(decrease.kind).toBe('adjudicated')
+    if (decrease.kind !== 'adjudicated') return
+    expect(decrease.direction).toBe('decrease')
+    expect(decrease.supportsPrediction).toBe(true)
+
+    // A CAPPED commitment is met by staying under the cap. The same sentence, capped, is missed.
+    const capped = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bounded: true })
+    expect(capped.kind).toBe('adjudicated')
+    if (capped.kind !== 'adjudicated') return
+    expect(capped.bounded).toBe(true)
+    expect(capped.supportsPrediction).toBe(false)
   })
 
-  it('HOLDS a prediction that states no direction, or both', () => {
-    // "changed by 20%" does not say which way the number has to move, so there is no reading of
-    // its threshold that decides anything. Grading it either way would invent the half the claim
-    // left out; a hold is the fail-closed answer, the same one an unstated metric gets.
-    for (const text of [
-      'the platoon minimum time-to-collision changes by at least 20%',
-      'the minimum time-to-collision is higher under the AV platoon and lower under the all-HV platoon by at least 20%',
-    ]) {
-      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY)
-      expect(verdict.kind, text).toBe('unbindable')
-      if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('does not commit to a')
+  it('HOLDS a claim that declares no commitment, rather than guessing one', () => {
+    // The fail-closed answer, and the same one an undeclared metric gets: a study has to say what
+    // it is testing. The sentence here is unambiguous to a reader and still holds, because a
+    // reader is not what grades it.
+    const verdict = evaluatePrediction(
+      'the platoon minimum time-to-collision falls by at least 20%',
+      study,
+      MEASURED_METRIC_KEY,
+    )
+    expect(verdict.kind).toBe('unbindable')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('declares no commitment')
+  })
+
+  it('REFUSES to compare platoons that COLLIDED, instead of grading a failed run', () => {
+    // `collisions` was computed and read by nothing: a configuration with 5138 vehicle-time
+    // samples of overlap still produced `improvementPct: -100.00`, `isComparable: true`, and a C
+    // verdict. Two vehicles in one place means the platoon stopped following, so every number read
+    // off those trajectories describes a failed run. An audit found the field had no consumer.
+    // A platoon asked to hold a 0.15 s headway by vehicles that can only decelerate at 0.2 m/s²:
+    // they follow far closer than they can stop from. The reviewer's own probe found this
+    // configuration and measured 5138 overlapping vehicle-time samples in it.
+    const weakBrakes = { desiredHeadwaySeconds: 0.15, maxDecelerationMps2: 0.2 }
+    const colliding: typeof study = {
+      baseline: study.baseline,
+      variant: {
+        ...study.variant,
+        vehicleClasses: {
+          HV: { ...study.variant.vehicleClasses.HV, ...weakBrakes },
+          AV: { ...study.variant.vehicleClasses.AV, ...weakBrakes },
+        },
+      },
     }
-    expect(directionFromPrediction('no percentage and no direction at all')).toBeUndefined()
-    expect(directionFromPrediction('the margin rises')).toBe('increase')
-    expect(directionFromPrediction('the margin drops')).toBe('decrease')
+    const measured = runPlatoon(colliding.variant)
+    expect(measured.collisions).toBeGreaterThan(0)
+    const comparison = comparePlatoons(colliding)
+    expect(comparison.isComparable).toBe(false)
+
+    const verdict = evaluatePrediction(
+      'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%',
+      colliding,
+      MEASURED_METRIC_KEY,
+      { direction: 'increase', bounded: false },
+    )
+    expect(verdict.kind).toBe('unbindable')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('occupied the same space')
   })
 
   it('supports the prediction when the measurement warrants it', () => {
@@ -289,7 +327,7 @@ describe('evaluatePrediction', () => {
         },
       },
     }
-    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY)
+    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(true)
@@ -337,6 +375,7 @@ describe('evaluatePrediction', () => {
       + 'minimum time-to-collision that assumed uniform arrivals',
       study,
       MEASURED_METRIC_KEY,
+      { direction: 'increase', bounded: false },
     )
     expect(verdict.kind).toBe('adjudicated')
   })
