@@ -80,6 +80,14 @@ export function SummaryPanel({ summary, t }: PanelProps) {
                 <span className={`${css.tag} ${css[`s-${step.status}`]}`}>
                   {t(`status.${step.status}`)}
                 </span>
+                {/* A step that failed mid-execution stays `in_progress` in the engine — it is
+                    rollback-able — while its outcome records the error. Showing only the status
+                    told a person the run was still working, and named no cause. */}
+                {step.executeError !== undefined && (
+                  <span className={`${css.tag} ${css['s-failed']}`}>
+                    {t('step.executeError', { message: step.executeError })}
+                  </span>
+                )}
               </span>
             </li>
           ))}

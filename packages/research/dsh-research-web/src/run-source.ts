@@ -72,6 +72,17 @@ export interface WireStepOutcome {
   readonly artifacts: ReadonlyArray<{ readonly slug: string; readonly producedBy: string }>
   readonly verdicts: Readonly<Record<string, string>>
   readonly usedRealTool: boolean
+  /**
+   * How the step's EXECUTION ended, and why when it did not succeed.
+   *
+   * The Host has carried both since the driver distinguished an execute failure from a gate
+   * verdict. The twin did not, so a step that failed mid-execution reached the view as
+   * `in_progress` with no cause: the user saw "running" indefinitely on a run that had already
+   * stopped, which is the failure the P2 criterion "the failure reason is shown" is about. An
+   * independent audit found it by feeding a real response through this mapping.
+   */
+  readonly executeStatus?: string
+  readonly executeError?: string
 }
 
 /** One step's catalogue entry as the wire carries it. */
@@ -196,6 +207,10 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
       humanGate: entry.humanGate,
       // The view model only knows the two hold reasons the engine records.
       ...(holdReason === 'gate_abstained' || holdReason === 'human_gate' ? { holdReason } : {}),
+      // Execution outcome and its cause, so a step that stopped mid-flight is not shown as
+      // still working.
+      ...(outcome?.executeStatus === undefined ? {} : { executeStatus: outcome.executeStatus }),
+      ...(outcome?.executeError === undefined ? {} : { executeError: outcome.executeError }),
       gateOutcomes: (gatesByStep.get(entry.id) ?? [])
         .map(gate => ({ component: asComponent(gate.component), outcome: gate.outcome }))
         .filter((row): row is { component: TrinityComponent; outcome: GateHistoryEntry['outcome'] } =>

@@ -58,6 +58,15 @@ export interface StepView {
   readonly humanGate: boolean
   /** Present only when `status === 'gated'`. */
   readonly holdReason?: HoldReason
+  /**
+   * The step's execution outcome, and the reason when it did not succeed.
+   *
+   * A step that failed mid-execution stays `in_progress` in the state machine — it is
+   * rollback-able — while the outcome records that it errored. Without this the view reported the
+   * run as still working and named no cause, which is the one thing a person waiting on it needs.
+   */
+  readonly executeStatus?: string
+  readonly executeError?: string
   /** Per-component gate outcomes recorded for this step. */
   readonly gateOutcomes: ReadonlyArray<{
     readonly component: TrinityComponent

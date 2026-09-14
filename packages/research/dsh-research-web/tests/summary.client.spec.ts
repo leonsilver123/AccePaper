@@ -178,6 +178,42 @@ describe('summaryInputFrom — what the run left on disk', () => {
   })
 })
 
+describe('summaryInputFrom — a step that failed mid-execution', () => {
+  it('carries the execution error, so the view can name the cause', () => {
+    // An independent audit fed a real response through this mapping and found the step reaching
+    // the view as `in_progress` with no field carrying the cause: the engine keeps a
+    // failed-execution step `in_progress` because it is rollback-able, so status alone reads as
+    // "still working". The user saw a run that had already stopped, with nothing saying why.
+    const input = summaryInputFrom({
+      run: {
+        runId: 'run-1',
+        steps: [{
+          stepId: 'A2-claim',
+          status: 'in_progress',
+          attemptId: 1,
+          kind: 'real_tool_fixture_input',
+          producer: 'claim-construct@1.0.0',
+          outputSlugs: [],
+          artifacts: [],
+          verdicts: {},
+          usedRealTool: true,
+          executeStatus: 'error',
+          executeError: '[A2-claim] the model response did not carry ASSERTION/DIFFERENCE/EXPERIMENT/PREDICTION',
+        }],
+      },
+      catalog: [{ id: 'A2-claim', index: 2, phase: 'A', name: 'claim', humanGate: false, gate: ['A', 'C'] }],
+      gates: [],
+      artifacts: [],
+      steps: [{ stepId: 'A2-claim', status: 'in_progress', attempt: 1, holdReason: null }],
+    })
+
+    const step = input.steps.find(candidate => candidate.stepId === 'A2-claim')
+    expect(step?.status).toBe('in_progress')
+    expect(step?.executeStatus).toBe('error')
+    expect(step?.executeError).toContain('did not carry ASSERTION')
+  })
+})
+
 describe('loadFixtureSummary — determinism', () => {
   it('returns an equal model on repeated calls (pure)', () => {
     expect(loadFixtureSummary()).toEqual(loadFixtureSummary())

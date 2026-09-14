@@ -14,7 +14,7 @@
 //   - the truthfulness claim is falsifiable: a `real_tool_fixture_input` step's
 //     artifact must actually carry the real tool's `__producer` brand.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { getStepDefinitionById, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { StepDefinition } from '@deepseek-ai/dsh-research-core'
 import {
@@ -38,6 +38,8 @@ import {
   tagArtifact,
 } from '../src/runner/registry.ts'
 import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.ts'
+import type { ResearchRunSnapshot } from '../src/types.ts'
+import type { RunResult } from '../src/runner/types.ts'
 import { MEASURED_METRIC_KEY } from '../src/runner/traffic-sim.ts'
 
 const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
@@ -79,6 +81,27 @@ describe('T19-B registry — 16-step coverage derived from core', () => {
     for (const def of CORE_STEPS) {
       expect(STEP_OUTPUT_MAP[def.id]).toEqual(def.outputs)
     }
+  })
+})
+
+describe('the Remote snapshot shape is frozen', () => {
+  // A TRIPWIRE, and its ceiling stated. The client face re-declares this snapshot as a structural
+  // twin because `dsh-research-web` depends on none of the research packages, so nothing in this
+  // package can see whether the view reads a field. What this CAN do is make any shape change fail
+  // until a person updates one line and answers "does the view need this?" — which is worth having
+  // because the failure it guards is invisible by construction: every test passes while the
+  // product shows nothing. It happened once (the twin missed `packageExport` and
+  // `runPersistence`, and exported files were invisible), and an audit found a second one
+  // (`executeStatus`/`executeError` were missing, so a step that failed mid-execution rendered as
+  // still running with no cause).
+  it('names every field the Remote boundary carries', () => {
+    expectTypeOf<keyof ResearchRunSnapshot>().toEqualTypeOf<
+      'run' | 'catalog' | 'gates' | 'artifacts' | 'steps' | 'packageExport' | 'runPersistence'
+    >()
+    expectTypeOf<keyof RunResult['steps'][number]>().toEqualTypeOf<
+      'stepId' | 'status' | 'attemptId' | 'kind' | 'producer' | 'outputSlugs'
+      | 'artifacts' | 'verdicts' | 'usedRealTool' | 'executeStatus' | 'executeError'
+    >()
   })
 })
 
