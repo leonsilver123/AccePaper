@@ -39,7 +39,7 @@ The `research-cordis` row configures `literatureSearch`. It ships as `openalex`,
 ## Known Limitations and Deferred Work
 
 - The roster mounts three plugin rows. The two pure libraries (`dsh-research-core`, `dsh-research-tools`) are dependencies rather than rows, because they expose no `apply`/`name` and would crash `ctx.registry.plugin`.
-- The `research-cordis` row does not set `requireResearchTools`, so tool registration degrades tolerantly instead of failing the boot. Closing that needs a `config` entry on the row plus a re-verified 1120 boot.
+- The `research-cordis` row sets `requireResearchTools: true` and configures the three live channels (`literatureSearch`/`citationResolver`: `openalex`; `prose`: `deepseek-official`/`deepseek-v4-pro`). Verified on a real 1120 boot. Note what the flag does NOT mean: it cannot refuse to boot when the `tools` service is merely late — the loader starts rows concurrently and that is not distinguishable from absent at load time — so it makes a registration FAILURE loud rather than making registration a startup gate.
 - Port 1120 is a fallback only; an explicit `--port` flag still wins, so an operator can move the research server without editing the patch.
 
 No invariant companion is published: this package carries no runtime behaviour of its own because its `src/index.ts` is an inert marker, so no `./invariant` entry is published alongside it.

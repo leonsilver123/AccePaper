@@ -6,10 +6,10 @@
 
 ## Known Limitations and Deferred Work
 
-- **没有真实数据通路**:工作台渲染 `fixture.ts` 中的演示 run,MOCK 徽章如实标注这一点。`loader.ts` 写明将来由 snapshot adapter 替换,而该 adapter 目前不存在。
-- 组件**没有注入缝**:`ResearchWorkbench` 在组件体内直接调用 `loadFixtureSummary()`,而下一层的 `ResearchView` 是接受 `summary` prop 的。接真实数据必须改组件源码,而不是配置一个 adapter。
+- **真实数据通路已接**(2026-09-14):工作台可经 `ctx.remote.research.run({})` 启动一次真实运行并渲染它,徽标跟随数据来源。默认(未点运行、或运行失败)仍是 `fixture.ts` 的演示 run —— 失败会如实报错,不会把 fixture 留在屏幕上冒充结果。
+- 组件**已有注入缝**:`ResearchWorkbench` 接受 `summary` 与 `onRun` 两个 prop(前者注入摘要、后者启动运行),只有在两者都缺席时才回落到 `loadFixtureSummary()`。
 - 审批与恢复两个面板是**显示用占位**:审批按钮只改本地 state(文件内注明不会到达任何网关),恢复按钮重新加载同一份 fixture。真实的人工审批通道 `createHostApprovalChannel` 没有生产调用方。
-- 测试覆盖不均衡:9 个标签页的 DOM 测试只点击了 3 个,`panels.ts` 的多数 selector 未被任何测试 import,`src/index.ts` 的 host 半边不被任何测试引用。
+- **测试覆盖已补齐**(B5):9 个标签页全部被点击,`panels.ts` 的 selector 全部被 import;`src/index.ts` 的 host 半边是刻意的空体(视图由 client 半边挂载),因此无测试引用它。
 
 No invariant companion is published because the package publishes no runtime invariant entry: its host half is intentionally inert, leaving no companion to publish.
 
