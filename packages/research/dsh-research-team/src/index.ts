@@ -68,12 +68,13 @@ import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
 import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import { createRunPersistence, getArtifact, getRunSnapshot, getStepDefinitions, rollback } from '@deepseek-ai/dsh-research-core'
-import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
+import type { RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
 import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
+import { firstNonTerminalStep } from './runner/resume.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 import {
@@ -199,47 +200,6 @@ declare module '@deepseek-ai/cordis' {
  * @param store - the store the run populated.
  * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
  */
-/**
- * The first step of a restored run that is not in a terminal state.
- *
- * A resumed run picks up here: the steps before it are settled, and re-driving one would either
- * be refused by the engine's own guards or repeat work the snapshot already records as done.
- *
- * `gated` means two different things and only one of them is settled:
- *   - E2's HUMAN GATE awaits a person. A resume cannot drive it and must not try.
- *   - an ABSTAINED HOLD on any other step is not settled at all. Core documents exactly one
- *     release for it (`DSH_ABSTENTION_REQUIRES_ROLLBACK`: rollback, then a new attempt), so a
- *     resume is the only way such a run ever moves again — and treating it as done made the
- *     abstained run, which is this system's most honest outcome, the one run recovery could
- *     never touch. It reported that as "every step is terminal" while fourteen steps had no
- *     recorded state at all.
- *
- * @param restored - the restored run and the facts about its interrupted steps.
- * @returns the step id to resume from.
- * @throws {Error} when every step the run has recorded is settled, naming what it found.
- */
-function firstNonTerminalStep(restored: RestoredRun): string {
-  const state = getRunSnapshot(restored.store, restored.runId).steps
-  const recorded: string[] = []
-  for (const step of getStepDefinitions()) {
-    const current = state[step.id]
-    if (current === undefined) continue
-    recorded.push(`${step.id}=${current.status}`)
-    if (current.status === 'passed') continue
-    // A held abstention is resumable; the human gate is not. `humanGate` comes from core, so the
-    // distinction is the engine's, not a list of step ids kept here.
-    if (current.status === 'gated') {
-      if (!step.humanGate) return step.id
-      continue
-    }
-    return step.id
-  }
-  throw new Error(
-    `[research] run ${restored.runId} has no step left to resume — every recorded step is settled `
-    + `(${recorded.join(', ') || 'no step has a recorded state'})`,
-  )
-}
-
 function snapshotOf(
   run: RunResult,
   store: ResearchRunStore,
@@ -640,11 +600,15 @@ export class ResearchTeamService extends TypertRemoteService {
     const resumeState = getRunSnapshot(restored.store, restored.runId).steps[from]
     if (
       resumeState !== undefined
+      // Every non-humanGate step the selector returns is released the same way. Keying this on
+      // `holdReason` instead made the two conditions coincide only for the states core happens to
+      // produce: a persisted `gated` step without that field was selected as the resume point and
+      // then NOT rolled back, so `canStart` refused it and the run reported a dependency error —
+      // this thread's recurring symptom. The selector already excludes the human gate, so this
+      // needs no second opinion about why the step is gated.
       && (resumeState.status === 'failed'
         || resumeState.status === 'blocked'
-        // A held abstention is released the same way and by nothing else: core refuses to move it
-        // any other route (`DSH_ABSTENTION_REQUIRES_ROLLBACK`).
-        || (resumeState.status === 'gated' && resumeState.holdReason === 'gate_abstained'))
+        || resumeState.status === 'gated')
     ) {
       // The step stopped without completing, so it goes back to `pending` before it is driven
       // again; `startStep` refuses anything else, and the rollback also invalidates whatever the

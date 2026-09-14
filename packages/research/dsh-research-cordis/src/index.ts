@@ -371,7 +371,7 @@ export class ResearchEngine extends Service {
         model: prose.model,
         ...prose.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: prose.idleTimeoutMs },
         cwd: this.sessionCwd,
-      })
+      }, 'llm')
     } else {
       this.proseWriter = undefined
     }

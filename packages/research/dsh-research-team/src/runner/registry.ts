@@ -255,19 +255,19 @@ export interface ResearchProseResult {
  * @param source - a `*Source` field's value.
  * @returns the level this file's vocabulary assigns to it.
  */
-function proseKindOf(source: 'model' | 'deterministic' | 'fixture' | 'llm'): Truthfulness {
+function proseKindOf(source: 'model' | 'deterministic' | 'fixture'): Truthfulness {
   if (source === 'fixture') return 'fixture_executor'
-  // `llm` appears only on a deployment that configured a route reaching a model; the
-  // deterministic offline route is `mock_external` — real adaptation logic over a simulated model.
-  return source === 'llm' || source === 'model' ? 'live_external' : 'mock_external'
+  // `model` is a deployment's configured model route; the deterministic offline route is
+  // `mock_external` — real adaptation logic over a simulated model.
+  return source === 'model' ? 'live_external' : 'mock_external'
 }
 
 /**
  * How a prose product is labelled, given the channel that produced it.
  *
- * One rule, one place. `'model'` is reserved for a route that actually reaches a model; the
- * deterministic offline route calls none, and saying otherwise would put a claim in the artifact
- * that the artifact's own text contradicts ("No model was called").
+ * One rule, one place. `'model'` means the deployment's configured model route produced the text;
+ * the deterministic offline route calls no model at all, and saying otherwise would put a claim in
+ * the artifact that the artifact's own text contradicts ("No model was called").
  *
  * @param writer - the writer this executor was handed, or undefined.
  * @returns the source label and the truthfulness level that go with it.
@@ -277,6 +277,9 @@ export function proseLabelling(writer: ResearchProseWriter | undefined): {
   readonly kind: Truthfulness
 } {
   if (writer === undefined) return { source: 'fixture', kind: 'fixture_executor' }
+  // `model` states that the deployment CONFIGURED a model route and that route produced this
+  // text — not that a real external system was reached, which the writer cannot know and which
+  // the artifact's own provider/model fields are there to let a reader check.
   if (writer.channel === 'llm') return { source: 'model', kind: 'live_external' }
   // A deterministic provider is real adaptation logic over a SIMULATED model: the request, the
   // session and the log are real, the response is computed. That is `mock_external` by this
@@ -984,7 +987,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let essentialDifference = 'control policy is adaptive (RL) rather than fixed-time'
   let experimentToFalsify = 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.'
   let prediction = CANONICAL_PREDICTION
-  let claimSource: 'model' | 'fixture' | 'case-pack' = 'fixture'
+  let claimSource: 'model' | 'deterministic' | 'fixture' | 'case-pack' = 'fixture'
   let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
   // What the claim is ABOUT. Only a claim that declares the quantity this study measures can be
   // adjudicated by it; the fixture claim declares it because its own prediction text names it.
@@ -1048,7 +1051,8 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     essentialDifference = parsed.essentialDifference
     experimentToFalsify = parsed.experimentToFalsify
     prediction = parsed.prediction
-    claimSource = 'model'
+    // From the CHANNEL, not from the writer's existence — same rule as A1.
+    claimSource = proseLabelling(writer).source
     // The response format asks for four labelled fields and no metric, so a model-derived claim
     // is unbindable by construction. Widening the format is a separate change; until then the
     // C channel holds rather than grading a claim whose quantity nobody stated.
@@ -1193,7 +1197,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'contribution list derived from the claim; still claim-level, not literature-supported',
       },
       A3_PRODUCER,
-      agendaSource === 'fixture' ? 'fixture_executor' : 'live_external',
+      proseKindOf(agendaSource),
     ),
   }
 }
@@ -1285,7 +1289,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let steps: ReadonlyArray<string> = ['observe intersection state', 'select phase plan', 'optimise delay']
   let metricName: string = SCENARIO.metric
   let metricDirection: string = SCENARIO.metricDirection
-  let methodSource: 'model' | 'fixture' = 'fixture'
+  let methodSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let methodRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
@@ -1328,7 +1332,8 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     steps = parsedStepList
     metricName = parsedMetric
     metricDirection = parsedDirection
-    methodSource = 'model'
+    // From the CHANNEL, like A1/A2/A3: a deterministic route calls no model.
+    methodSource = proseLabelling(writer).source
     methodRoute = proseRouteOf(analysis)
   }
 
@@ -1351,7 +1356,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           : 'method spec derived from the claim and its falsifiable prediction',
       },
       B1_PRODUCER,
-      'fixture_executor',
+      proseKindOf(methodSource),
     ),
     'method-predictions': tagArtifact(
       {
@@ -1363,7 +1368,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         note: 'measurable-prediction set — must be adjudicable by the C1 experiment',
       },
       B1_PRODUCER,
-      'fixture_executor',
+      proseKindOf(methodSource),
     ),
   }
 }
@@ -2116,7 +2121,10 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     proseSource = proseLabelling(writer).source
     const first = written[0]
     proseRoute = proseRouteOf(first)
-    if (first !== undefined) producer = `llm:${first.provider}/${first.model}`
+    // The prefix names the channel, not an assumption about it: the deterministic route is not an
+    // LLM call, and a producer string reading `llm:` beside `proseSource: 'deterministic'` is two
+    // fields of one artifact contradicting each other.
+    if (first !== undefined) producer = `${proseSource === 'model' ? 'llm' : 'deterministic'}:${first.provider}/${first.model}`
   }
 
   return {

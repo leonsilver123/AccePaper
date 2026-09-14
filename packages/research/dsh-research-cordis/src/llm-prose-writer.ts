@@ -203,7 +203,14 @@ export class LlmProseWriter {
    *  import seam as the tool adapter, so host type graphs never enter this build. */
   private host: SessionHostFace | undefined
 
-  constructor(ctx: Context, config: LlmProseWriterConfig, channel: 'llm' | 'deterministic' = 'llm') {
+  /**
+   * @param ctx - the owning context.
+   * @param config - the route this writer sends on.
+   * @param channel - which channel the deployment configured. REQUIRED, with no default: a default
+   *   here would be the same guess an optional interface field would force, and the only value it
+   *   could pick is the over-claiming one.
+   */
+  constructor(ctx: Context, config: LlmProseWriterConfig, channel: 'llm' | 'deterministic') {
     this.ctx = ctx
     this.config = config
     this.channel = channel

@@ -135,7 +135,7 @@ function writerFor(ctx: Context, overrides: Partial<{ idleTimeoutMs: number }> =
     model: 'spec-model',
     cwd: CWD,
     ...overrides,
-  })
+  }, 'llm')
 }
 
 describe('assistantTextOf', () => {
@@ -205,7 +205,7 @@ describe('LlmProseWriter host resolution', () => {
   it('rejects a write when the host services are unreachable instead of returning empty text', async () => {
     // A context with no agentLoop: the write must fail loudly rather than resolve ''
     // (an empty product would be treated by every caller as a valid step result).
-    const writer = new LlmProseWriter({} as never, { provider: 'p', model: 'm', cwd: CWD })
+    const writer = new LlmProseWriter({} as never, { provider: 'p', model: 'm', cwd: CWD }, 'llm')
 
     await expect(writer.write({ stepId: STEP, instruction: 'x', context: {} }))
       .rejects.toThrow()
