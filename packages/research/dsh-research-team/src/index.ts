@@ -475,21 +475,13 @@ export class ResearchTeamService extends TypertRemoteService {
     // rather than the conflict it is. Chaining the two steps removes the window inside this
     // process; a cross-process race is still the store's to refuse, and now has a correct
     // revision to compare against.
-    const { previous, persistence } = await this.serialized(async () => {
+    const persistence = await this.serialized(async () => {
       // The predecessor read here is THIS run's earlier revision, if any — never another run's.
       const stored = await this.readStoredRun(run.runId)
-      return { previous: stored, persistence: await this.persistRun(store, run, stored?.revision ?? 0) }
+      return this.persistRun(store, run, stored?.revision ?? 0)
     })
-    // `superseded` is attached only when the write HAPPENED. A refused or failed save returns a
-    // non-null failure object, and naming a predecessor there would say "this run replaced that
-    // one" while that one is still on disk — an operator who reads it will not try to resume a run
-    // that is intact and resumable. Worse than saying nothing.
-    const writeHappened = persistence !== null && persistence.revision !== null
-    const reported = previous === null || !writeHappened
-      ? persistence
-      : { ...persistence, superseded: previous }
-    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, reported))
-    return snapshotOf(run, store, packageExport, reported)
+    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, persistence))
+    return snapshotOf(run, store, packageExport, persistence)
   }
 
   /**
@@ -541,8 +533,16 @@ export class ResearchTeamService extends TypertRemoteService {
       return readdirSync(root, { withFileTypes: true })
         .filter(entry => entry.isDirectory())
         .map(entry => entry.name)
-    } catch {
-      return []
+    } catch (error) {
+      // ABSENT means nothing is stored; UNREADABLE means the deployment cannot be told. Returning
+      // an empty list for both reported a neutral "no run has a stored snapshot" about a root that
+      // may hold several — the same error-degraded-to-a-neutral-statement pattern `tryLoad`
+      // documents and refuses (it catches only SnapshotNotFoundError for this reason).
+      if ((error as { code?: unknown }).code === 'ENOENT') return []
+      throw new Error(
+        '[research] the snapshot root cannot be read, so the stored runs cannot be listed: '
+        + errorMessage(error),
+      )
     }
   }
 
@@ -728,7 +728,9 @@ export class ResearchTeamService extends TypertRemoteService {
     // files beside the new manifest — a reader saw eleven files where the manifest named six, and
     // nothing said which run the other five belonged to. A package is one run's, so it gets one
     // directory.
-    const directory = `${root}/${run.runId}`
+    // `join`, not concatenation: this path is shown to the operator, and a mixed-separator path
+    // reads as a bug in something they may copy.
+    const directory = join(root, run.runId)
     try {
       const manifest = writeRunPackage(planRunPackage(store, run), directory)
       return {

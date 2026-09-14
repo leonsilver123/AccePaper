@@ -442,7 +442,6 @@ export interface ResearchRunPersistence {
    * where a reader actually looks — the service's own logger goes to a sink that the shipped
    * profile attaches no exporter to, so a warning written there is not visibility.
    */
-  readonly superseded?: { readonly runId: string; readonly revision: number }
   /** The directory this snapshot was written to; see {@link ResearchPackageExport.directory}. */
   readonly directory?: string
 }

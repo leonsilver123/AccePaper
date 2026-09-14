@@ -9,6 +9,19 @@
  * Host side: `dsh-research-team` exports the same field names and its integration spec
  * asserts them, so a rename there fails a test rather than silently blanking the view.
  *
+ * WHY IT IS STILL HAND-DECLARED, and what that costs. The generated declaration for this namespace
+ * already names the Host's type (`dsh-research-team/lib/typert.remote-client.d.ts`, "do not edit",
+ * and it imports the snapshot from the Host's `./types` subpath). Using it here would make the
+ * compiler the drift check. Two things stop that today:
+ *   1. this package deliberately depends on NONE of the research packages, so the subpath does not
+ *      resolve for this program and a project reference alone does not change that; and
+ *   2. the dependency link it would need cannot be created on this host (the package manager will
+ *      not run — see `plan/ENGINEERING-CONTRACT.md` §6).
+ * So the twin stays, and the cost is real: the Host added `packageExport` and `runPersistence` and
+ * this file was not updated with them, which left a run's exported files invisible in the product
+ * while every test passed. A twin is a copy, and a copy drifts; a Host-side spec that fails when
+ * the snapshot gains a field is the guard this shape needs and does not have.
+ *
  * WHAT IS NOT INVENTED. Every field comes from the snapshot. The gate evidence and the
  * artifact metadata are the run's OWN recorded values — they are the reason the Host
  * projects a snapshot rather than shipping the summary counts, which carry no evidence
@@ -113,7 +126,6 @@ export interface WireRunPersistence {
   readonly revision: number | null
   readonly interrupted: ReadonlyArray<string>
   readonly error?: string
-  readonly superseded?: { readonly runId: string; readonly revision: number }
   readonly directory?: string
 }
 
@@ -286,7 +298,6 @@ function deliverablesOf(snapshot: WireRunSnapshot): ReadonlyArray<DeliverableVie
       files: [],
       revision: stored.revision,
       ...(stored.error === undefined ? {} : { error: stored.error }),
-      ...(stored.superseded === undefined ? {} : { supersededRunId: stored.superseded.runId }),
       ...(stored.directory === undefined ? {} : { directory: stored.directory }),
     })
   }

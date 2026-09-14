@@ -158,16 +158,12 @@ describe('summaryInputFrom — what the run left on disk', () => {
         revision: null,
         interrupted: [],
         error: 'EPERM: rename',
-        superseded: { runId: 'run-0', revision: 2 },
       },
     })
 
     expect(input.deliverables[0]?.error).toContain('not writable')
     expect(input.deliverables[1]?.revision).toBeNull()
     expect(input.deliverables[1]?.error).toContain('EPERM')
-    // The run it replaced is named, so a reader can tell that a previous run of this directory was
-    // superseded rather than silently gone.
-    expect(input.deliverables[1]?.supersededRunId).toBe('run-0')
   })
 
   it('reports nothing when the deployment configured no outputs', () => {

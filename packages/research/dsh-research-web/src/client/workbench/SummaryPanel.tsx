@@ -180,9 +180,6 @@ export function SummaryPanel({ summary, t }: PanelProps) {
                   {deliverable.revision !== null && (
                     <span className={css.tag}>{t('deliverables.revision', { revision: String(deliverable.revision) })}</span>
                   )}
-                  {deliverable.supersededRunId !== undefined && (
-                    <span className={css.tag}>{t('deliverables.superseded', { runId: deliverable.supersededRunId })}</span>
-                  )}
                 </span>
                 {deliverable.directory !== undefined && (
                   <div className={css.summary}>

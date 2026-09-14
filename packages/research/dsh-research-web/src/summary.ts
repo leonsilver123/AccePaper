@@ -148,8 +148,6 @@ export interface DeliverableView {
   readonly revision: number | null
   /** Set when the write was refused or failed; `files` is then empty and `revision` null. */
   readonly error?: string
-  /** The run this write replaced in its directory, when it replaced one. */
-  readonly supersededRunId?: string
   /** The directory the output was written to, so the reader can go and look. */
   readonly directory?: string
 }
