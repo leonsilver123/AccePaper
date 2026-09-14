@@ -76,7 +76,7 @@ import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
 import { experimentStudy, studyFromPack } from './runner/platoon-sim.ts'
-import { firstNonTerminalStep, needsReleaseBeforeResume } from './runner/resume.ts'
+import { firstNonTerminalStep, materialWithCommitment, needsReleaseBeforeResume } from './runner/resume.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 import {
@@ -711,55 +711,17 @@ export class ResearchTeamService extends TypertRemoteService {
     // about the claim that the claim itself contradicts. An audit registered this as a suspect
     // path; it is closed here rather than left to be discovered by a user whose resumed run
     // stalls for a reason that is not true.
-    // READ FROM WHERE THE VALUES ARE. A first version read `essentialDifference`,
-    // `experimentToFalsify` and `truthfulness` off the `claim` artifact at paths it does not have —
-    // they live under `claim.falsifiability` and on the prediction's `claimRoute` — so those three
-    // were permanently empty and the resumed review reported five things about the claim that were
-    // false ("no falsifying experiment is stated" among them). An audit measured it. Every field
-    // below names the artifact and the path it comes from.
-    const restoredClaim = claim
-    const restoredPrediction = prediction
-    const restoredFalsifiability = typeof restoredClaim?.falsifiability === 'object' && restoredClaim.falsifiability !== null
-      ? restoredClaim.falsifiability as { essentialDifference?: unknown; experimentToFalsify?: unknown }
-      : undefined
-    const restoredRoute = typeof restoredPrediction?.claimRoute === 'object' && restoredPrediction.claimRoute !== null
-      ? restoredPrediction.claimRoute as { truthfulness?: unknown }
-      : undefined
-    runCtx.claimMaterial = {
-      assertion: typeof restoredClaim?.assertion === 'string' ? restoredClaim.assertion : '',
-      prediction: typeof restoredPrediction?.text === 'string' ? restoredPrediction.text : '',
-      experimentToFalsify: typeof restoredFalsifiability?.experimentToFalsify === 'string'
-        ? restoredFalsifiability.experimentToFalsify
-        : '',
-      // The pack's scope and data source are not step artifacts, so they are not on disk to
-      // restore. The two that are unrecoverable stay empty, and `red-method` and `red-domain`
-      // report a GAP for them — which is what an unrestorable field is, not a verdict about the
-      // claim. The difference matters: a gap makes the review abstain, and the review's silence is
-      // not evidence about the material.
-      scope: '',
-      dataSource: '',
-      essentialDifference: typeof restoredFalsifiability?.essentialDifference === 'string'
-        ? restoredFalsifiability.essentialDifference
-        : '',
-      metricKey: runCtx.metricKey,
-      truthfulness: typeof restoredRoute?.truthfulness === 'string' ? restoredRoute.truthfulness : '',
-      measuredMetricKey: typeof restoredMetricKey === 'string' ? restoredMetricKey : '',
-      // Not restorable either: the pack's file list is not a step artifact.
-      declaredSources: [],
-    }
-    // The commitment travels on the claim artifact, so a resumed run grades the same declaration
-    // the original did — rather than falling back to "the claim declares none" and holding a claim
-    // whose own artifact says which way it moves.
-    const restoredCommitment = restoredClaim?.commitment as
-      | { direction?: unknown; bounded?: unknown }
-      | undefined
-    if (
-      restoredCommitment !== undefined
-      && (restoredCommitment.direction === 'increase' || restoredCommitment.direction === 'decrease')
-      && typeof restoredCommitment.bounded === 'boolean'
-    ) {
-      runCtx.commitment = { direction: restoredCommitment.direction, bounded: restoredCommitment.bounded }
-    }
+    // Rebuilt by `materialFromRun`, beside the selector it has to agree with, so a spec can drive
+    // it against the material a real run records. See that function for the two field-path defects
+    // this replaced and why they were invisible by inspection.
+    const restoredMaterial = materialWithCommitment(
+      getRunSnapshot(restored.store, restored.runId).inputs,
+      claim,
+      prediction,
+      runCtx.metricKey,
+    )
+    runCtx.claimMaterial = restoredMaterial.material
+    if (restoredMaterial.commitment !== undefined) runCtx.commitment = restoredMaterial.commitment
     // The STUDY the experiment runs, rebuilt FROM THE RUN'S OWN PERSISTED INPUT.
     //
     // Not from the deployment's current `casePackDirectory`, which is what this did first and what

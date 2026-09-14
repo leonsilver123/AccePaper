@@ -100,6 +100,48 @@ export class CasePackError extends Error {
 
 const ENVELOPE_FIELDS = ['schemaVersion', 'sourceKind', 'truthfulness', 'provenance', 'generatedAt'] as const
 
+/**
+ * The truthfulness levels each `sourceKind` admits.
+ *
+ * CHECKED AT LOAD, as a PAIR, and both halves matter. Checking only that the level is in a
+ * vocabulary accepts any level the vocabulary holds: an audit copied the shipped pack, changed one
+ * file's `truthfulness` to `live_external` while its own `sourceKind` still said `fixture`, and the
+ * whole pipeline ran to sixteen steps carrying that label into the artifacts and the manuscript —
+ * a provenance claim contradicted by the field right beside it that nothing compared.
+ *
+ * A `fixture` source kind is synthetic content and may say so (`fixture`) or say it is mock data
+ * (`mock`). The channel levels (`local_computation`, `fixture_executor`, `mock_external`,
+ * `live_external`, `real_tool_fixture_input`) are NOT claimable here: they describe what an
+ * EXECUTOR did at run time, and an input file cannot know that.
+ *
+ * A `sourceKind` absent from this table is refused rather than defaulted: an unrecognised kind is
+ * a source this build cannot interpret, and guessing its levels is how a label becomes decorative.
+ */
+export const TRUTHFULNESS_BY_SOURCE_KIND: Readonly<Record<string, ReadonlyArray<string>>> = {
+  fixture: ['fixture', 'mock'],
+  mock: ['mock'],
+}
+
+/** Validate one envelope's `sourceKind`/`truthfulness` pair. */
+function envelopePair(file: string, sourceKind: string, truthfulness: string): void {
+  const admitted = TRUTHFULNESS_BY_SOURCE_KIND[sourceKind]
+  if (admitted === undefined) {
+    throw new CasePackError(
+      'CASE_PACK_ENVELOPE_INVALID',
+      `[case-pack] ${file}: sourceKind "${sourceKind}" is not one this loader defines `
+      + `(${Object.keys(TRUTHFULNESS_BY_SOURCE_KIND).join(', ')}), so nothing says which truthfulness `
+      + 'levels it may claim',
+    )
+  }
+  if (!admitted.includes(truthfulness)) {
+    throw new CasePackError(
+      'CASE_PACK_ENVELOPE_INVALID',
+      `[case-pack] ${file}: truthfulness "${truthfulness}" is not a level a "${sourceKind}" source `
+      + `may claim (${admitted.join(', ')}) — the two fields describe the same material and must agree`,
+    )
+  }
+}
+
 /** Read one envelope field as a non-empty string, or refuse the file. */
 function envelopeField(file: string, content: Record<string, unknown>, field: string): string {
   const value = content[field]
@@ -228,6 +270,7 @@ export function loadCasePack(directory: string): CasePack {
       provenance: envelopeField(file, content, ENVELOPE_FIELDS[3]),
       generatedAt: envelopeField(file, content, ENVELOPE_FIELDS[4]),
     }
+    envelopePair(file, envelope.sourceKind, envelope.truthfulness)
     if (envelope.schemaVersion !== CASE_PACK_SCHEMA_VERSION) {
       throw new CasePackError(
         'CASE_PACK_VERSION_UNSUPPORTED',

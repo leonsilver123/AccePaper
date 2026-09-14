@@ -7,6 +7,9 @@
 import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { RestoredRun, StepStatus } from '@deepseek-ai/dsh-research-core'
 
+import type { ClaimMaterial } from './redteam-review.ts'
+import type { PredictionCommitment } from './platoon-sim.ts'
+
 /**
  * The first step of a restored run that is not in a terminal state.
  *
@@ -79,4 +82,100 @@ export function firstNonTerminalStep(restored: RestoredRun): string {
  */
 export function needsReleaseBeforeResume(status: StepStatus): boolean {
   return status !== 'pending'
+}
+
+/**
+ * Rebuild the claim material a resumed run reviews, from the run's OWN records.
+ *
+ * THE RULE, and it is the same one the study is restored by: read the run's PERSISTED INPUTS and
+ * its own ARTIFACTS, never the deployment's current configuration and never a path the value does
+ * not live at. Both halves of that rule were broken here and both were found by audit rather than
+ * by reading:
+ *   - `essentialDifference`, `experimentToFalsify` and `truthfulness` were read off the `claim`
+ *     artifact at paths it does not have (they are under `claim.falsifiability` and the
+ *     prediction's `claimRoute`), so they were permanently empty and the resumed review reported
+ *     five things about a claim that were false;
+ *   - `scope`, `dataSource` and `declaredSources` were left empty under a comment claiming they
+ *     were "not on disk to restore", which was false — they are in
+ *     `inputs['case-pack-claim']`, beside the scenario.
+ * Neither was visible by inspection. This function exists so a spec can compare the rebuild against
+ * the material the run was actually given, which is what would have caught both immediately.
+ *
+ * Every field names where it comes from. A field that is genuinely absent stays empty and the
+ * review then reports a GAP — and a gap is not evidence about the claim.
+ *
+ * @param inputs - the run's persisted inputs, as `getRunSnapshot(store, runId).inputs`.
+ * @param claim - the run's `claim` artifact.
+ * @param prediction - the run's `falsifiable-prediction` artifact.
+ * @param metricKey - the quantity the run's claim declared.
+ * @returns the material, field for field.
+ */
+export function materialFromRun(
+  inputs: Readonly<Record<string, unknown>>,
+  claim: unknown,
+  prediction: unknown,
+  metricKey: string,
+): ClaimMaterial {
+  const pack = asRecord(inputs['case-pack-claim'])
+  const claimRecord = asRecord(claim)
+  const predictionRecord = asRecord(prediction)
+  const falsifiability = asRecord(claimRecord?.['falsifiability'])
+  const route = asRecord(predictionRecord?.['claimRoute'])
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+  return {
+    // From the pack's claim block, which is a run INPUT.
+    assertion: text(claimRecord?.['assertion']),
+    scope: text(pack?.['scope']),
+    dataSource: text(pack?.['dataSource']),
+    declaredSources: Array.isArray(pack?.['declaredSources'])
+      ? (pack['declaredSources'] as ReadonlyArray<string>)
+      : [],
+    // From the artifacts the run wrote.
+    prediction: text(predictionRecord?.['text']),
+    experimentToFalsify: text(falsifiability?.['experimentToFalsify']),
+    essentialDifference: text(falsifiability?.['essentialDifference']),
+    metricKey,
+    truthfulness: text(route?.['truthfulness']),
+    measuredMetricKey: text(predictionRecord?.['measuredMetricKey']),
+  }
+}
+
+/** The material with its declared commitment, when the claim artifact carries a valid one. */
+export function materialWithCommitment(
+  inputs: Readonly<Record<string, unknown>>,
+  claim: unknown,
+  prediction: unknown,
+  metricKey: string,
+): { readonly material: ClaimMaterial; readonly commitment: PredictionCommitment | undefined } {
+  const material = materialFromRun(inputs, claim, prediction, metricKey)
+  const commitment = commitmentFrom(asRecord(claim)?.['commitment'])
+  return {
+    material: commitment === undefined ? material : { ...material, commitment },
+    commitment,
+  }
+}
+
+/** Read a plain record, or undefined for anything else. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+/**
+ * Read a declared commitment out of an artifact, validating its shape.
+ *
+ * Anything else is the claim declining to say which way its quantity should move — which the C
+ * channel holds on — rather than a partially-read commitment this function would have to guess at.
+ *
+ * @param value - the value found on the claim artifact.
+ * @returns the commitment, or undefined when the value is not one.
+ */
+export function commitmentFrom(value: unknown): PredictionCommitment | undefined {
+  const record = asRecord(value)
+  if (record === undefined) return undefined
+  const direction = record['direction']
+  const bounded = record['bounded']
+  if ((direction !== 'increase' && direction !== 'decrease') || typeof bounded !== 'boolean') return undefined
+  return { direction, bounded }
 }

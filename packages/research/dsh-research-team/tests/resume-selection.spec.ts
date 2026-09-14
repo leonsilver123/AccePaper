@@ -17,9 +17,9 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { canStart, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
+import { canStart, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore, RestoredRun } from '@deepseek-ai/dsh-research-core'
-import { firstNonTerminalStep, needsReleaseBeforeResume } from '../src/runner/resume.ts'
+import { firstNonTerminalStep, materialWithCommitment, needsReleaseBeforeResume } from '../src/runner/resume.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
 import { rollback } from '@deepseek-ai/dsh-research-core'
@@ -37,9 +37,14 @@ function restored(store: ResearchRunStore, runId: string): RestoredRun {
   }
 }
 
-/** The shipped Case Pack's inputs, which is what makes the C gate hold at A2. */
+/** The v1 pack's inputs, which is what makes the C gate hold at A2 (it declares no metric). */
 function shippedPackInputs(): ReturnType<typeof planCasePackInputs> {
   return planCasePackInputs(loadCasePack('plan/overnight/2026-09-09/case-pack-traffic'))
+}
+
+/** The pack this fork SHIPS — v2, the one that binds a metric and declares a commitment. */
+function currentPackInputs(): ReturnType<typeof planCasePackInputs> {
+  return planCasePackInputs(loadCasePack('plan/overnight/2026-09-09/case-pack-traffic-v2'))
 }
 
 describe('firstNonTerminalStep', () => {
@@ -149,5 +154,64 @@ describe('the selector and the release condition agree', () => {
     for (const status of ['in_progress', 'gated', 'blocked', 'failed'] as const) {
       expect(needsReleaseBeforeResume(status), status).toBe(true)
     }
+  })
+})
+
+describe('the resumed claim material is the material the run was GIVEN', () => {
+  it('matches field for field, so a field read at a path it does not live at cannot hide', async () => {
+    // The class this catches, twice now: `essentialDifference` / `experimentToFalsify` were read off
+    // the `claim` artifact at paths it does not have (they are under `claim.falsifiability`), and
+    // `scope` / `dataSource` / `declaredSources` were left empty under a comment claiming they were
+    // "not on disk to restore" when they are in `inputs['case-pack-claim']`. Both were permanently
+    // empty, both made the resumed review report gaps the material does not have, and NEITHER was
+    // visible by reading the code — an audit found them by comparing the two. So the comparison is a
+    // test now.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { casePackInputs: currentPackInputs() })
+    const inputs = getRunSnapshot(store, run.runId).inputs
+    const packClaim = inputs['case-pack-claim'] as Record<string, unknown>
+    // The material the run was GIVEN: every field the pack supplies is present and non-empty.
+    for (const field of ['assertion', 'prediction', 'experimentToFalsify', 'scope', 'dataSource', 'essentialDifference', 'metricKey'] as const) {
+      expect(typeof packClaim[field] === 'string' && packClaim[field].length > 0, field).toBe(true)
+    }
+    expect((packClaim['declaredSources'] as ReadonlyArray<string>).length).toBeGreaterThan(0)
+
+    const resumed = materialWithCommitment(
+      inputs,
+      getArtifact(store, run.runId, 'claim'),
+      getArtifact(store, run.runId, 'falsifiable-prediction'),
+      String(packClaim['metricKey']),
+    )
+    const material = resumed.material
+    expect(material.assertion).toBe(packClaim['assertion'])
+    expect(material.prediction).toBe(packClaim['prediction'])
+    expect(material.experimentToFalsify).toBe(packClaim['experimentToFalsify'])
+    expect(material.essentialDifference).toBe(packClaim['essentialDifference'])
+    expect(material.scope).toBe(packClaim['scope'])
+    expect(material.dataSource).toBe(packClaim['dataSource'])
+    expect(material.declaredSources).toEqual(packClaim['declaredSources'])
+    expect(material.metricKey).toBe(String(packClaim['metricKey']))
+    expect(material.truthfulness).toBe('fixture')
+    // ...and the declared commitment comes through the same reader.
+    expect(resumed.commitment).toEqual({ direction: 'increase', bounded: false })
+  })
+
+  it('reports a GAP for a field the run itself does not have, rather than inventing one', async () => {
+    // A pack that omits a field leaves it empty and the review reports a gap. That is what an
+    // unrestorable field is — not a verdict about the claim.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {})
+    const material = materialWithCommitment(
+      getRunSnapshot(store, run.runId).inputs,
+      getArtifact(store, run.runId, 'claim'),
+      getArtifact(store, run.runId, 'falsifiable-prediction'),
+      'min-ttc-seconds',
+    ).material
+    // The fixture path seeds no pack, so the pack-supplied fields are absent and stay absent.
+    expect(material.scope).toBe('')
+    expect(material.dataSource).toBe('')
+    // ...while the artifact-supplied ones are still restored.
+    expect(material.assertion.length).toBeGreaterThan(0)
+    expect(material.experimentToFalsify.length).toBeGreaterThan(0)
   })
 })

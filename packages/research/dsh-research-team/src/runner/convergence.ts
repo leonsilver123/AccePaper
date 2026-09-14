@@ -136,6 +136,13 @@ export function evaluateConvergence(
     const reasons: string[] = []
     if (blocked.length > 0) reasons.push(`channel(s) ${blocked.join(', ')} blocked (rework required)`)
     if (missing.length > 0) reasons.push(`no verdict for channel(s) ${missing.join(', ')} (absent is not a pass)`)
+    // Say WHICH of the absent channels this step cannot see, even when that is only some of them.
+    // Dropping the distinction here re-created the misreading `unobservable` exists to remove: a
+    // reader of "no verdict for A (absent is not a pass)" is told the run is missing something,
+    // when for A the truth is that this step's declared inputs could never carry it.
+    if (unobservable.length > 0) {
+      reasons.push(`of those, ${unobservable.join(', ')} cannot be observed from this step's declared inputs at all`)
+    }
     return { kind: 'pending', missing, basis: reasons.join('; ') }
   }
 

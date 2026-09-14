@@ -10,7 +10,7 @@
  * directory, so a test can damage one file without touching the tracked pack.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -245,5 +245,39 @@ describe('planCasePackInputs', () => {
       inputs.find(input => input.slug === CASE_PACK_INPUT_SLUGS.direction)?.value
     expect(directionOf(edited)).not.toBe(directionOf(base))
     expect(directionOf(edited)).toContain('A DIFFERENT question')
+  })
+})
+
+describe('the envelope pair', () => {
+  /** Copy the source pack, apply one edit, and try to load it. */
+  function loadingWith(file: string, mutate: (content: Record<string, unknown>) => void): () => unknown {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-case-pack-pair-'))
+    cpSync(SOURCE_PACK, dir, { recursive: true })
+    const path = join(dir, file)
+    const content = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    mutate(content)
+    writeFileSync(path, JSON.stringify(content, null, 2), 'utf8')
+    return () => loadCasePack(dir)
+  }
+
+  it('REFUSES a fixture pack that claims a live-external level', () => {
+    // An audit copied the shipped pack and changed one file's truthfulness to `live_external`
+    // while its own `sourceKind` still said `fixture`; the whole pipeline ran to sixteen steps
+    // carrying that label into the artifacts and the manuscript. The two fields describe the same
+    // material, and nothing had compared them.
+    for (const file of CASE_PACK_FILES) {
+      const load = loadingWith(file, (content) => { content['truthfulness'] = 'live_external' })
+      expect(load, file).toThrow(/not a level a "fixture" source may claim/)
+    }
+  })
+
+  it('REFUSES a sourceKind this loader does not define, rather than guessing its levels', () => {
+    const load = loadingWith('claim.json', (content) => { content['sourceKind'] = 'peer-reviewed' })
+    expect(load).toThrow(/sourceKind "peer-reviewed" is not one this loader defines/)
+  })
+
+  it('still loads the SHIPPED pack, whose pair is honest', () => {
+    // `fixture` (16 occurrences) and `mock` (3) are the only levels the shipped pack declares.
+    expect(loadCasePack(SOURCE_PACK).id).toBe('case-pack-traffic-2026-09-09')
   })
 })

@@ -1154,7 +1154,21 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       : [],
   }
   return {
-    claim: tagArtifact({ ...artifact.claim, claimSource, claimKind: proseKindOf(claimSource), metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
+    claim: tagArtifact(
+      {
+        ...artifact.claim,
+        claimSource,
+        claimKind: proseKindOf(claimSource),
+        metricKey: metricKey === '' ? null : metricKey,
+        // The DECLARED commitment rides on the claim, which is what a resume reads it back from.
+        // Without it here the artifact would carry the quantity but not the direction, and a
+        // resumed run would hold a claim whose own record says which way it moves.
+        ...(commitment === undefined ? {} : { commitment }),
+      },
+      A2_PRODUCER,
+      'real_tool_fixture_input',
+      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
+    ),
     'falsifiable-prediction': tagArtifact(
       {
         text: prediction,

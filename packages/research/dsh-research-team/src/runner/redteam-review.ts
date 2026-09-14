@@ -41,26 +41,20 @@ import type { PredictionCommitment } from './platoon-sim.ts'
 /**
  * The truthfulness levels this field can legitimately carry.
  *
- * TWO VOCABULARIES REACH IT, and both are grounded in this repository rather than assumed:
- *   - a Case Pack declares its own, and the shipped pack uses exactly `fixture` and `mock`
- *     (every envelope in `plan/overnight/2026-09-09/case-pack-traffic-v2` carries one of them);
- *   - a deployment that wires a channel instead declares the report's five levels, which are the
- *     vocabulary `registry.ts` prints.
+ * ONLY THE LEVELS A PACK ENVELOPE MAY DECLARE, which is what this field carries: it comes from
+ * the pack's own envelope, and every envelope in the shipped pack says `fixture` or `mock`. The
+ * channel levels (`local_computation`, `fixture_executor`, `mock_external`, `live_external`,
+ * `real_tool_fixture_input`) are NOT here: they describe what an executor did at run time and are
+ * produced on artifacts, not declared by an input file. The loader now enforces the same pair rule
+ * (`TRUTHFULNESS_BY_SOURCE_KIND`), so this check and the load-time check agree.
  *
  * The check exists because ACCEPTING ANY NON-EMPTY STRING let material declare
- * `peer-reviewed empirical finding` and pass — a provenance claim in a vocabulary nothing
- * interprets. An audit found it. A first version of this list held only the five channel levels,
- * which would have refused the shipped pack's own `fixture` and stopped the run: the list is
- * grounded in the pack's bytes for that reason.
+ * `peer-reviewed empirical finding` and pass. A first version of this list held only the five
+ * channel levels, which would have refused the shipped pack's own `fixture` and stopped the run.
  */
 export const KNOWN_TRUTHFULNESS: ReadonlyArray<string> = [
   'fixture',
   'mock',
-  'real_tool_fixture_input',
-  'local_computation',
-  'fixture_executor',
-  'mock_external',
-  'live_external',
 ]
 
 /** The claim material the review reads. Every field is what the run states, verbatim. */
