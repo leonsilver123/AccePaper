@@ -192,20 +192,44 @@ describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
     expect(live.map(e => e.stepId)).toEqual([])
   })
 
+  /**
+   * Producer brands that contradict the level they are stamped on.
+   *
+   * TWO-SIDED on purpose. A `fixture_executor` step IS the fixture and must say so; a step at any
+   * other level performs something real and must not claim to be one. An auditor pointed out that a
+   * one-sided rule would let a future step quietly shed its fixture label while still passing.
+   *
+   * @param entries - the registry entries to check.
+   * @returns one description per contradiction.
+   */
+  function brandOffences(entries: Iterable<{ stepId: string; kind: string; producer: string }>): string[] {
+    const offenders: string[] = []
+    for (const entry of entries) {
+      const branded = entry.producer.startsWith('fixture:')
+      if (entry.kind === 'fixture_executor' && !branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
+      if (entry.kind !== 'fixture_executor' && branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
+    }
+    return offenders
+  }
+
   it('never lets a producer brand contradict the level it is stamped on', () => {
     // Found by an independent audit that compared each entry's brand against its own artifact:
     // A4 and B2 were branded `fixture:*` while their kind said `local_computation` and their
     // artifacts said `fixture: false` — the same defect this registry's own comment records having
     // fixed for B3/C1/C2. The audit did this by hand, once; this is the check that keeps it true.
-    const offenders: string[] = []
-    for (const entry of STEP_EXECUTOR_REGISTRY.values()) {
-      const branded = entry.producer.startsWith('fixture:')
-      // A `fixture_executor` step IS the fixture, so it must say so; a step at any other level
-      // performs something real and must not claim to be one.
-      if (entry.kind === 'fixture_executor' && !branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
-      if (entry.kind !== 'fixture_executor' && branded) offenders.push(`${entry.stepId}: ${entry.producer} at ${entry.kind}`)
-    }
-    expect(offenders).toEqual([])
+    expect(brandOffences(STEP_EXECUTOR_REGISTRY.values())).toEqual([])
+  })
+
+  it('detects BOTH directions of that contradiction, not just the one that occurred', () => {
+    // The rule's two-sidedness is asserted here rather than left to whoever reads it: a check that
+    // only fired on the shape that happened to occur would let the opposite one through, and the
+    // opposite one is how a real step would go on to under-report itself.
+    expect(brandOffences([{ stepId: 'x', kind: 'local_computation', producer: 'fixture:x' }]))
+      .toEqual(['x: fixture:x at local_computation'])
+    expect(brandOffences([{ stepId: 'y', kind: 'fixture_executor', producer: 'compute:y' }]))
+      .toEqual(['y: compute:y at fixture_executor'])
+    expect(brandOffences([{ stepId: 'z', kind: 'real_tool_fixture_input', producer: 'tool@1' }]))
+      .toEqual([])
   })
 
   it('declares the truthfulness of each trinity gate channel with a basis', () => {
