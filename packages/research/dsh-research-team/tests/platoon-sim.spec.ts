@@ -17,15 +17,18 @@ import {
   ABLATION_MODULES,
   DECLARED_VEHICLE_CLASSES,
   MEASURED_METRIC_KEY,
+  MEASURED_METRIC_PHRASES,
   SIMULATION_INPUTS,
   percentagesIn,
   requirementDirectionIn,
   STUDY_OPERATING_POINT,
   ablationStudy,
   boundaryTest,
+  claimTextNamesQuantity,
   comparePlatoons,
   evaluatePrediction,
   experimentStudy,
+  measuringClause,
   runPlatoon,
   studyFromPack,
 } from '../src/runner/platoon-sim.ts'
@@ -412,6 +415,27 @@ describe('evaluatePrediction', () => {
       { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
     )
     expect(verdict.kind).toBe('unbindable')
+  })
+})
+
+describe('the clause a prediction is read in', () => {
+  // `evaluatePrediction` holds when `measuringClause` finds no clause naming the measured quantity,
+  // and the check just above it has already matched a phrase from the SAME closed table. The two can
+  // only disagree if a phrase contains a CLAUSE_BOUNDARY match, because then the split cuts the
+  // phrase in two and no single part carries it. This pins the table that branch's reachability
+  // depends on, so a phrase that ever gains a boundary word fails HERE rather than throwing inside
+  // the gate.
+  it('keeps every metric phrase intact when the prediction is split into clauses', () => {
+    expect(MEASURED_METRIC_PHRASES.length).toBeGreaterThan(0)
+    for (const phrase of MEASURED_METRIC_PHRASES) {
+      const prediction = `the platoon ${phrase} shall rise by at least 20%, and the headway stays within its band`
+      expect(claimTextNamesQuantity(prediction, MEASURED_METRIC_KEY)).toBeDefined()
+      const clause = measuringClause(prediction, MEASURED_METRIC_KEY)
+      expect(clause).toBeDefined()
+      // Whole, not a fragment: a boundary word inside the phrase would leave the clause carrying
+      // only the part before it.
+      expect(clause?.includes(phrase)).toBe(true)
+    }
   })
 })
 

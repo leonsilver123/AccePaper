@@ -1186,6 +1186,13 @@ export function evaluatePrediction(
   // number the prose attached elsewhere no longer reaches it.
   const clause = measuringClause(predictionText, metricKey)
   if (clause === undefined) {
+    // UNREACHABLE AS THE TWO TABLES STAND, and kept for when that stops being true. The check
+    // above matched a phrase from the same closed table this call searches, and no phrase contains
+    // a CLAUSE_BOUNDARY match, so the split cannot cut the matched phrase in two — measured: 0 of 9
+    // phrases are splittable, and a 66-text sweep found no text where the two disagree. It stays
+    // because the phrase table and the boundary table are edited independently: a phrase that ever
+    // gains a boundary word makes this call return undefined, and without the branch the caller
+    // would throw on `percentagesIn(undefined)` instead of HOLDING. The spec pins the table.
     return {
       kind: 'unbindable',
       reason:
@@ -1193,27 +1200,6 @@ export function evaluatePrediction(
     }
   }
 
-  const comparison = comparePlatoons(study)
-  if (!comparison.isComparable) {
-    // Fail-closed: a platoon that never closed on its leader has no minimum
-    // time-to-collision, so there is no ratio to test the threshold against. Grading it
-    // would report "the prediction was refuted" for a measurement that never happened.
-    const collisionCount =
-      comparison.baseline.collisions + comparison.variant.collisions
-    return {
-      kind: 'unbindable',
-      reason:
-        collisionCount > 0
-          ? `the simulation produced ${String(collisionCount)} vehicle-time samples in which two ` +
-            'vehicles occupied the same space, so the platoons did not follow and the trajectories ' +
-            'describe a failed run rather than a risky one — the measurement cannot adjudicate the ' +
-            'prediction'
-          : 'the simulation produced no comparable minimum time-to-collision ' +
-            `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, ` +
-            `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement ` +
-            'cannot adjudicate the prediction',
-    }
-  }
   // The commitment is DECLARED, not inferred. See `PredictionCommitment` for why the inference was
   // removed rather than narrowed again.
   if (commitment === undefined) {
@@ -1306,6 +1292,34 @@ export function evaluatePrediction(
     }
   }
 
+  // THE MEASUREMENT IS COMPARED LAST, AFTER EVERY CLAIM-LEVEL CHECK. Two reasons, and the second
+  // is the one that matters: it costs two full IDM runs, and it is the only check here whose defect
+  // is not the claim's. A sentence that declares no commitment, or contradicts its own declaration,
+  // is ungradeable whatever the experiment did — the same principle the metric-binding check states
+  // at the top of this function ("cannot be adjudicated however many percentages it states").
+  // Running the comparison first let a collision MASK those defects: measured against the colliding
+  // fixture in the specs, all three wording defects reported the collision instead.
+  const comparison = comparePlatoons(study)
+  if (!comparison.isComparable) {
+    // Fail-closed: a platoon that never closed on its leader has no minimum
+    // time-to-collision, so there is no ratio to test the threshold against. Grading it
+    // would report "the prediction was refuted" for a measurement that never happened.
+    const collisionCount =
+      comparison.baseline.collisions + comparison.variant.collisions
+    return {
+      kind: 'unbindable',
+      reason:
+        collisionCount > 0
+          ? `the simulation produced ${String(collisionCount)} vehicle-time samples in which two ` +
+            'vehicles occupied the same space, so the platoons did not follow and the trajectories ' +
+            'describe a failed run rather than a risky one — the measurement cannot adjudicate the ' +
+            'prediction'
+          : 'the simulation produced no comparable minimum time-to-collision ' +
+            `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, ` +
+            `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement ` +
+            'cannot adjudicate the prediction',
+    }
+  }
   const improvementPct = comparison.relativeImprovementPct
   // What is graded is the change the CLAIM asked for, in the claim's own direction: a prediction
   // that the margin gets WORSE is met by a negative improvement. This is the line whose absence let
