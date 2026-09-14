@@ -45,6 +45,15 @@ export interface ExperimentReport {
   readonly source: ExperimentSource
   readonly supportsPrediction: boolean
   readonly detail: string
+  /**
+   * Whether the experiment produced a DECISIVE verdict on the prediction — it ran, it
+   * measured the quantity the prediction names, and it either supported or negated it.
+   *
+   * A decisive negation is a completed test: the claim is recorded as `refuted` and the
+   * step advances. Without this the run hard-fails on a negated hypothesis, which would
+   * let the pipeline run only studies that were going to succeed.
+   */
+  readonly decisive?: boolean
   readonly fixtureId?: string
   readonly fixtureVersion?: string
   readonly evaluator?: string
@@ -133,7 +142,11 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
 
   const falsifiable: FalsifiablePrediction = {
     prediction: prediction.text,
-    experimentResult: { supportsPrediction: report.supportsPrediction, detail: report.detail },
+    experimentResult: {
+      supportsPrediction: report.supportsPrediction,
+      detail: report.detail,
+      ...(report.decisive === undefined ? {} : { decisive: report.decisive }),
+    },
   }
   const inputA: AdjudicationInput = {
     claimId: claimRef as AdjudicationInput['claimId'],
@@ -146,14 +159,21 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
   const grade: EvidenceGrade = report.source === 'live' ? 'locally-measured' : 'mock-measured'
 
   if (result.outcome === 'passed') {
+    // A `passed` C outcome no longer implies the prediction was SUPPORTED: a decisive
+    // negation is also `passed`, because the step's question is whether the claim met a
+    // falsifiable test this study could run. The verdict is read from the REPORT, not from
+    // the outcome, so a refuted prediction can never be published as a supported one.
+    const negated = report.supportsPrediction === false
     return {
       claimRef,
       ...(prediction.ref === undefined ? {} : { predictionRef: prediction.ref }),
-      verdict: 'supported',
+      verdict: negated ? 'refuted' : 'supported',
       outcome: 'passed',
       evidenceGrade: grade,
       reasonCode: result.reasonCode,
-      summary: 'the experiment ran here over the measured demand profile and supports the falsifiable prediction',
+      summary: negated
+        ? 'the experiment ran here and NEGATED the falsifiable prediction — the claim is recorded as refuted and the step advances on a decisive test'
+        : 'the experiment ran here and supports the falsifiable prediction',
       ...(report.fixtureId === undefined ? {} : { fixtureId: report.fixtureId }),
       ...(report.fixtureVersion === undefined ? {} : { fixtureVersion: report.fixtureVersion }),
       evidenceRefs: result.evidenceRefs,
@@ -168,7 +188,9 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
       outcome: 'failed',
       evidenceGrade: grade,
       reasonCode: result.reasonCode,
-      summary: 'the experiment ran here over the measured demand profile and refutes the falsifiable prediction',
+      summary:
+        'the experiment ran here and refutes the falsifiable prediction, and the caller did not '
+        + 'assert the test was decisive — the step does not advance',
       ...(report.fixtureId === undefined ? {} : { fixtureId: report.fixtureId }),
       ...(report.fixtureVersion === undefined ? {} : { fixtureVersion: report.fixtureVersion }),
       evidenceRefs: result.evidenceRefs,

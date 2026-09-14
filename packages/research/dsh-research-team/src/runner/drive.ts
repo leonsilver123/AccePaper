@@ -45,6 +45,8 @@ import {
 } from '@deepseek-ai/dsh-research-core'
 
 import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
+import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
+import { experimentStudy } from './platoon-sim.ts'
 import type {
   DriveOptions,
   DriveStepOptions,
@@ -338,8 +340,18 @@ export async function runT19B(
 /** Build a fresh cross-step context (claim / prediction wiring) for a run. */
 export function createRunContext(timestamp: number = FIXED_TS): RunContext {
   // `metricKey` starts empty: nothing has declared what the claim is about yet, and the C channel
-  // treats an empty key as unbindable rather than assuming a quantity.
-  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp }
+  // treats an empty key as unbindable rather than assuming a quantity. `claimMaterial` starts
+  // empty for the same reason: A2 fills it, and until then the A channel reviews an empty claim
+  // and reports every check as unmet rather than inventing material.
+  return {
+    predictionText: '',
+    claimId: '',
+    claimRef: '',
+    metricKey: '',
+    claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
+    study: experimentStudy(),
+    timestamp,
+  }
 }
 
 /** Drive every step from `fromStepId` (inclusive) through E2. */

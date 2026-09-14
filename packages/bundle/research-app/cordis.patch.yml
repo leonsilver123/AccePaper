@@ -68,7 +68,7 @@
         # its scenario parameters. They are synthetic fixture content and carry that label
         # through every value derived from them. Relative paths resolve against the
         # engine's `workspace`. Point this at a different directory to run a different case.
-        casePackDirectory: plan/overnight/2026-09-09/case-pack-traffic
+        casePackDirectory: plan/overnight/2026-09-09/case-pack-traffic-v2
         # Where a finished run's reproducible package is written. Every file the manifest
         # names is really written, with its byte count and content digest. This default is
         # the repository's gitignored scratch area, so a demo run leaves the tree clean;

@@ -40,14 +40,23 @@ import {
 import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.ts'
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import type { RunResult } from '../src/runner/types.ts'
-import { MEASURED_METRIC_KEY } from '../src/runner/traffic-sim.ts'
+import { MEASURED_METRIC_KEY, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 
 const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
 
 function freshRunCtx(): RunContext {
   // No metric declared: a bare context cannot bind a claim to the experiment's quantity, so the
   // C channel holds. Tests that want an adjudicated verdict set `metricKey` explicitly.
-  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp: FIXED_TS }
+  return {
+    predictionText: '',
+    claimId: '',
+    claimRef: '',
+    metricKey: '',
+    claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
+    study: experimentStudy(),
+    timestamp: FIXED_TS,
+  }
 }
 
 function execCtx(stepId: string, runCtx: RunContext = freshRunCtx()): ExecCtx {
@@ -332,7 +341,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(String(dataFigure.svg)).toContain('<svg')
     expect(String(dataFigure.svg).length).toBe(dataFigure.svgByteLength)
     const table = figures[1]!
-    expect(String(table.tableMarkdown)).toContain('Adaptive')
+    expect(String(table.tableMarkdown)).toContain('HV-AV-HV')
     const roadmap = figures[2]!
     expect(roadmap.validationOk).toBe(true)
     // Full content, for the same reason as the svg: it ends up in the manuscript.
@@ -347,8 +356,8 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     // the table is a sub-capability embedded inside a longer assembled manuscript.
     expect(String(doc.manuscript)).toContain('## Results')
     expect(String(doc.manuscript).length).toBeGreaterThan(String(doc.tableMarkdown).length)
-    expect(String(doc.tableMarkdown)).toContain('Delay')
-    expect(String(doc.tableMarkdown)).toContain('Adaptive')
+    expect(String(doc.tableMarkdown)).toContain('Minimum TTC')
+    expect(String(doc.tableMarkdown)).toContain('HV-AV-HV')
     expect(typeof doc.bindingHash).toBe('string')
     expect(String(doc.bindingHash).length).toBeGreaterThan(0)
     // `packageFiles` holds CONTENT, not a list of names. The earlier field listed five
@@ -451,10 +460,10 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
     const out = (await entry?.executor(execCtx('B3-baseline'))) as Record<string, Record<string, unknown>>
     const res = out['baseline-results']!
     // Canonical B3 = establish baseline + compare against SOTA.
-    expect((res.baseline as { identity?: unknown }).identity).toBe('fixed-time')
-    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('peak-hour delay')
-    // The reference row is MEASURED by running the plan, not a pre-registered constant.
-    expect((res.measured as { baselineDelaySeconds?: unknown }).baselineDelaySeconds).toBeGreaterThan(0)
+    expect((res.baseline as { identity?: unknown }).identity).toBe('homogeneous-HV-HV-HV')
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('min-ttc-seconds')
+    // The reference row is MEASURED by simulating the platoon, not a pre-registered constant.
+    expect((res.measured as { baselineMinTtcSeconds?: unknown }).baselineMinTtcSeconds).toBeGreaterThan(0)
     // Regression guard: ablation must NOT appear inside the baseline step.
     expect(res.ranRuns).toBeUndefined()
     expect(res.counts).toBeUndefined()
@@ -466,7 +475,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
   it('B3-baseline producer is the honest fixture brand (ablation producer moved to C3)', async () => {
     const b3 = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
     const c3 = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
-    expect(String(b3?.producer).startsWith('traffic-sim:baseline')).toBe(true)
+    expect(String(b3?.producer).startsWith('platoon-sim:baseline')).toBe(true)
     expect(String(c3?.producer).startsWith(`${ABLATION_TOOL_ID}@`)).toBe(true)
   })
 
@@ -478,6 +487,8 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       claimId: 'mock-claim-999',
       claimRef: 'missing row',
       metricKey: MEASURED_METRIC_KEY,
+      claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
+      study: experimentStudy(),
       timestamp: FIXED_TS,
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture

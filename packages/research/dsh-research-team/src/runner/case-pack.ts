@@ -125,6 +125,32 @@ export function casePackDatum(pack: CasePack, file: CasePackFileName, pointer: s
   return datumFrom(pack.files, file, pointer)
 }
 
+/**
+ * Read a required array of strings out of one loaded file.
+ *
+ * @param pack - the loaded pack.
+ * @param file - the file to read from.
+ * @param pointer - the dotted path to the array.
+ * @returns the strings, in the file's order.
+ * @throws {CasePackError} `CASE_PACK_DATUM_MISSING` when the path is absent, is not an array,
+ *   or holds a non-string entry.
+ */
+function stringListFrom(pack: CasePack, file: CasePackFileName, pointer: string): ReadonlyArray<string> {
+  const entry = pack.files.get(file)
+  let cursor: unknown = entry?.content
+  for (const segment of pointer.split('.')) {
+    if (cursor === null || typeof cursor !== 'object') cursor = undefined
+    else cursor = (cursor as Record<string, unknown>)[segment]
+  }
+  if (!Array.isArray(cursor) || cursor.some(item => typeof item !== 'string')) {
+    throw new CasePackError(
+      'CASE_PACK_DATUM_MISSING',
+      `[case-pack] ${file}#${pointer} is required and must be an array of strings`,
+    )
+  }
+  return cursor as ReadonlyArray<string>
+}
+
 /** Read a required nested string out of one loaded file. */
 function datumFrom(
   files: ReadonlyMap<CasePackFileName, CasePackFile>,
@@ -304,7 +330,12 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
   const falsificationCondition = casePackDatum(pack, 'claim.json', 'falsification.condition')
   const falsificationExperiment = casePackDatum(pack, 'claim.json', 'falsification.experiment')
   const scope = casePackDatum(pack, 'claim.json', 'falsification.scope')
+  const dataSource = casePackDatum(pack, 'claim.json', 'falsification.dataSource')
   const claimId = casePackDatum(pack, 'claim.json', 'id')
+  // The pack's own list of its source files. The A channel's domain check traces the claim's
+  // declared data source to one of these, so a claim pointing at a file the pack never
+  // shipped refutes instead of passing unexamined.
+  const declaredSources = stringListFrom(pack, 'reproducibility-manifest.json', 'inputFiles')
 
   // The claim's essential difference is RESTATED from the pack's own configuration of the
   // two variants it compares. The pack carries no free-standing difference statement, and
@@ -328,6 +359,8 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
         prediction,
         falsificationExperiment,
         scope,
+        dataSource,
+        declaredSources,
         // Present only when the pack declares it. Absent means the claim states no quantity, and
         // the C channel then HOLDS instead of grading it against whatever the experiment measured.
         ...(typeof pack.files.get('claim.json')?.content.metricKey === 'string'

@@ -455,6 +455,26 @@ function adjudicateB(input: AdjudicationInput): AdjudicationResult {
     return buildResult(base, 'blocked', `${GATE_ERROR_PREFIX}RED_LINE_BLOCKED`, redLineIds)
   }
 
+  // External evidence that CONTRADICTS the claim. A source was read with original-text
+  // access and its content does not support the claim: `unsupported`. That is not an
+  // evidence gap, and folding it into "no anchor → abstain" reported a contradicted claim
+  // exactly as a claim with no literature at all. It is a reworkable block — the claim has
+  // to change — and it takes precedence over an anchor, because a claim some sources
+  // support and others contradict must not pass on the supportive ones alone.
+  //
+  // Deliberately NOT included here: `retracted` (the citation chain raises the #4 red line
+  // for an unmarked retraction, which blocks above) and `identity_mismatch` (a resolution
+  // failure about which record this is, not evidence about the claim).
+  const contradictedIds: string[] = []
+  for (const v of verifs) {
+    if (v.redLineTriggered) continue
+    if (!v.evidence.originalTextAccessed || v.evidence.method === 'none') continue
+    if (v.conclusion === 'unsupported') contradictedIds.push(v.citationId)
+  }
+  if (contradictedIds.length > 0) {
+    return buildResult(base, 'blocked', `${GATE_ERROR_PREFIX}EXTERNAL_CONTRADICTION`, contradictedIds)
+  }
+
   if (anchorIds.length >= 1) {
     return buildResult(base, 'passed', `${GATE_ERROR_PREFIX}EXTERNAL_ANCHOR_PASSED`, anchorIds)
   }
@@ -512,6 +532,23 @@ function adjudicateC(input: AdjudicationInput): AdjudicationResult {
     ])
   }
   if (exp.supportsPrediction === false) {
+    // A DECISIVE negation is a completed experiment, not a broken step. The C gate's
+    // condition is that the claim met a falsifiable test the study could actually run —
+    // it is not that the hypothesis won. A study whose hypothesis is refuted has produced
+    // its result, and blocking it here would make the pipeline able to run only studies
+    // that were going to succeed, which is the opposite of what it is for.
+    //
+    // `decisive` is what separates that from the failures that must still stop a run:
+    // an experiment that never ran, a quantity nothing measured, a threshold never parsed.
+    // Those never reach this branch — they abstain or block above. A caller that cannot
+    // assert decisiveness gets the old `failed`.
+    if (exp.decisive === true) {
+      return buildResult(base, 'passed', `${GATE_ERROR_PREFIX}FALSIFIABLE_NEGATED`, [
+        'falsifiable-prediction',
+        'experiment-result',
+        'prediction-negated',
+      ])
+    }
     return buildResult(base, 'failed', `${GATE_ERROR_PREFIX}FALSIFIABLE_FAILED`, [
       'falsifiable-prediction',
       'experiment-result',

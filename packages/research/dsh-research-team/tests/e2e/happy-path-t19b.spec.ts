@@ -188,14 +188,14 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(p.ref).toBe(CANONICAL.claimId)
   })
 
-  it('B3 baseline-results is a baseline protocol against fixed-time (NO ablation fields)', async () => {
+  it('B3 baseline-results is a baseline protocol against the homogeneous platoon (NO ablation fields)', async () => {
     const { store, run } = await happyRun()
     const res = artifactOf(store, run.runId, 'baseline-results')
     expect((res.baseline as { identity?: unknown }).identity).toBe(SCENARIO.baselineIdentity)
-    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('peak-hour delay')
-    // The reference row is MEASURED by running the fixed-time plan over the study's
-    // demand profile, so it is a positive number this study produced.
-    expect((res.measured as { baselineDelaySeconds?: unknown }).baselineDelaySeconds)
+    expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('min-ttc-seconds')
+    // The reference row is MEASURED by simulating the homogeneous platoon, so it is a positive
+    // number this study produced.
+    expect((res.measured as { baselineMinTtcSeconds?: unknown }).baselineMinTtcSeconds)
       .toBeGreaterThan(0)
     // Regression: ablation measurement belongs to C3, never to B3.
     expect(res.aggregate).toBeUndefined()
@@ -204,25 +204,31 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(sota.anchoring).toBe('none')
   })
 
-  it('C1 mvp-results reports the MEASURED reduction, not a fixture constant', async () => {
+  it('C1 mvp-results reports the MEASURED change, and the SIGN it actually measured', async () => {
     const { store, run } = await happyRun()
     const mvp = artifactOf(store, run.runId, 'mvp-results')
     expect(mvp.claimId).toBe(CANONICAL.claimId)
-    // The experiment ran, so support is a measurement against the stated threshold
-    // rather than a table lookup; the observed block carries the actual numbers.
-    expect((mvp.outcome as { supportsPrediction?: unknown }).supportsPrediction).toBe(true)
+    // The experiment ran, so the outcome is a measurement against the stated threshold rather
+    // than a table lookup; the observed block carries the actual numbers.
     const observed = mvp.observed as {
-      reductionPct?: unknown
+      improvementPct?: unknown
       thresholdPct?: unknown
-      baselineDelaySeconds?: unknown
-      variantDelaySeconds?: unknown
+      baselineMinTtcSeconds?: unknown
+      variantMinTtcSeconds?: unknown
     }
-    expect(observed.thresholdPct).toBe(5)
-    expect(typeof observed.reductionPct).toBe('number')
-    expect(observed.reductionPct as number).toBeGreaterThanOrEqual(5)
-    // Both policies were actually run, so both numbers are present and the variant
-    // is the lower one.
-    expect(observed.baselineDelaySeconds as number).toBeGreaterThan(observed.variantDelaySeconds as number)
+    expect(observed.thresholdPct).toBe(20)
+    expect(typeof observed.improvementPct).toBe('number')
+    // The measured change is NEGATIVE under the shipped configuration, and the artifact must
+    // carry the sign it measured rather than the sign the claim hoped for. This case pins the
+    // honest negative: asserting a positive change here would make the suite pass only if the
+    // experiment were tuned to agree with its own hypothesis.
+    expect(observed.improvementPct as number).toBeLessThan(0)
+    expect((mvp.outcome as { supportsPrediction?: unknown }).supportsPrediction).toBe(false)
+    expect((mvp.outcome as { decisive?: unknown }).decisive).toBe(true)
+    expect((mvp.outcome as { verdict?: unknown }).verdict).toBe('refuted')
+    // Both platoons were actually simulated, so both numbers are present.
+    expect(observed.baselineMinTtcSeconds as number).toBeGreaterThan(0)
+    expect(observed.variantMinTtcSeconds as number).toBeGreaterThan(0)
     expect(String((mvp.outcome as { detail?: unknown }).detail)).toContain('%')
   })
 
@@ -242,7 +248,7 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     const figures = plan.figures as ReadonlyArray<Record<string, unknown>>
     expect(figures.map(f => f.kind)).toEqual(['data-figure', 'three-line-table', 'roadmap'])
     expect((figures[0] as { svgByteLength?: unknown }).svgByteLength as number).toBeGreaterThan(0)
-    expect(String((figures[1] as { tableMarkdown?: unknown }).tableMarkdown)).toContain('Adaptive')
+    expect(String((figures[1] as { tableMarkdown?: unknown }).tableMarkdown)).toContain('HV-AV-HV')
     expect((figures[2] as { validationOk?: unknown }).validationOk).toBe(true)
   })
 
@@ -306,8 +312,8 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(formatted.venueName).toBe(venue.name)
     expect((venue.evidence as { recordsConsidered: number }).recordsConsidered).toBeGreaterThan(0)
     // …and the results-table rows rendered by the three-line-table sub-capability.
-    expect(manuscript).toContain('Adaptive')
-    expect(manuscript).toContain('Fixed-time')
+    expect(manuscript).toContain('HV-AV-HV')
+    expect(manuscript).toContain('HV-HV-HV')
     // E1 is the FORMAT STEP, not the table tool: the manuscript is strictly
     // longer than the bare table render and produces the package's own files as
     // CONTENT — a list of filenames nothing wrote would read as run output.

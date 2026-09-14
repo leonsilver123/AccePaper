@@ -250,6 +250,22 @@ export interface FalsifiablePrediction {
   readonly experimentResult?: {
     readonly supportsPrediction: boolean
     readonly detail: string
+    /**
+     * Whether the experiment produced a DECISIVE verdict on the prediction: it ran, it
+     * measured the quantity the prediction names, and it either supported the prediction
+     * or negated it.
+     *
+     * A decisive negation is a COMPLETED TEST, not a broken one, and the gate distinguishes
+     * the two. A refuted hypothesis is a result a study reports; the run continues with the
+     * finding recorded, because the alternative — that a study may only advance when its
+     * hypothesis won — makes the pipeline unusable for the science it exists to do.
+     *
+     * Omitted or false means the caller is not asserting decisiveness, and a negating
+     * result is then treated as `failed` exactly as before. The callers that can state it
+     * are the ones that ran a measurement and read the prediction's own quantity out of it;
+     * a caller that merely holds a boolean cannot, and must not, claim it.
+     */
+    readonly decisive?: boolean
   }
 }
 
@@ -310,10 +326,17 @@ export interface AdjudicationResult {
 //   |-------------|---------------------------------------------------------|
 //   | passed      | gate condition satisfied (step may proceed)              |
 //   | blocked     | evidence / quality gate not passed — REWORKABLE          |
-//   | failed      | falsifiable claim negated by experiment, or an           |
-//   |             | unrecoverable execution error                            |
+//   | failed      | falsifiable claim negated by an experiment that did NOT   |
+//   |             | assert decisiveness, or an unrecoverable execution error |
 //   | abstained   | MUST NOT pass; stay gated or enter the explicit           |
 //   |             | human-adjudication path                                  |
+//
+// A decisive NEGATION is `passed` with reasonCode `DSH_GATE_FALSIFIABLE_NEGATED`, not
+// `failed`: the C gate asks whether the claim met a falsifiable test this study could run,
+// not whether the hypothesis won. `passed` is not a truth claim about the claim — the
+// contract already says so above — and the negation is carried in the reasonCode and the
+// `prediction-negated` evidence ref so no consumer can read it as support. Only a caller
+// that ran a measurement and read the prediction's own quantity out of it may assert it.
 //
 // FORBIDDEN by this table:
 //   - abstained → passed (never upgradable downstream);

@@ -30,47 +30,50 @@ import type {
 } from '@deepseek-ai/dsh-research-core'
 import { adjudicate } from '@deepseek-ai/dsh-research-core'
 
-import type { ResearchRebuttal, SessionId } from '../types.ts'
+import type { ResearchRebuttal } from '../types.ts'
+import { sessionId } from '../types.ts'
 import type { RebuttalRound } from '../redteam/rebuttal.ts'
 import { judgeRound } from '../redteam/judge.ts'
 import { adjudicateClaimSupport } from '../experiment/support.ts'
 
-import { B_CHANNEL_CONTRADICT_REF, buildBChannelAnchors } from './anchor-fixture.ts'
-import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC_LABEL, evaluatePrediction, experimentScenario } from './traffic-sim.ts'
+import { B_CHANNEL_INCONCLUSIVE_REF, buildBChannelAnchors } from './anchor-fixture.ts'
+import { REVIEW_ROLES, reviewClaim } from './redteam-review.ts'
+import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC_LABEL, evaluatePrediction } from './platoon-sim.ts'
 import { CANONICAL } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
 export type { VerdictBuildCtx } from './types.ts'
 
-const A_CHANNEL_ROLES = ['red-method', 'red-stats', 'red-ethics'] as const
+/** The A channel's roles, taken from the review module so the two cannot drift apart. */
+const A_CHANNEL_ROLES: ReadonlyArray<string> = REVIEW_ROLES.map(entry => entry.role)
 
-function supportVote(
-  role: string,
-  index: number,
-  roundId: string,
-  claimRef: string,
-  gate: string,
-): ResearchRebuttal {
-  return {
-    roundId,
-    claimRef,
-    gate,
-    voterRole: role,
-    voterId: `s-${role}` as unknown as SessionId,
-    position: 'support',
-    rationale: `red-team ${role} converges on support`,
-    modelFamily: `family-${index + 1}`,
-  }
-}
-
-/** Build the A-channel verdict via team `judgeRound` → core `adjudicate('A')`. */
+/**
+ * Build the A-channel verdict via the rule-based review → team `judgeRound` →
+ * core `adjudicate('A')`.
+ *
+ * The votes are DERIVED from the run's claim material. They used to be three `support`
+ * literals with a constant rationale, which made the gate a constant: it reported the same
+ * verdict whatever the run contained, so every step it gated advanced for a reason
+ * unrelated to the work. See `./redteam-review.ts` for what each role checks and for the
+ * limit that these are rulebooks rather than model reviewers.
+ */
 function verdictA(ctx: VerdictBuildCtx): GateVerdict {
   const useAbstain = ctx.abstain.has('A')
   const roundId = `t19b-round-${ctx.step.id}`
   const claimRef = ctx.runCtx.claimRef || CANONICAL.claimRef
-  const votes: ResearchRebuttal[] = A_CHANNEL_ROLES.map((role, i) =>
-    supportVote(role, i, roundId, claimRef, ctx.step.id),
-  )
+  const reviews = reviewClaim(ctx.runCtx.claimMaterial)
+  const votes: ResearchRebuttal[] = reviews.map(review => ({
+    roundId,
+    claimRef,
+    gate: ctx.step.id,
+    voterRole: review.role,
+    voterId: sessionId(`rulebook-${review.role}`),
+    position: review.position,
+    rationale: review.rationale,
+    // No `modelFamily`: no model was called, so there is no family to declare. The field
+    // is what core's correlation detector keys on, and writing one here would claim a
+    // heterogeneity these votes do not have. The gate evidence states that limit instead.
+  }))
   const round: RebuttalRound = {
     roundId,
     claimRef,
@@ -81,17 +84,24 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
   }
   // An uncalibrated config makes core abstain (NO DEFAULT PASS) — used to drive
   // the recovery `gate_abstained` hold faithfully through the real adjudicator.
+  // `sameFamilyDownweight` is absent from the calibrated config because no vote declares a
+  // family: it was previously set for votes that all claimed distinct families, which made
+  // the knob unreachable and the claim false at the same time.
   const config: AdjudicationConfig = useAbstain
     ? {}
-    : { minValidVotes: 2, passThreshold: 0.5, sameFamilyDownweight: 0.5 }
+    : { minValidVotes: 2, passThreshold: 0.5 }
   const rv = judgeRound(round, config, ctx.runCtx.timestamp)
+  const tally = reviews.map(review => `${review.role}=${review.position}`).join(', ')
   return {
     component: 'A',
     outcome: rv.outcome,
     passed: rv.outcome === 'passed',
     evidence:
-      `team:judgeRound → core adjudicate('A') outcome=${rv.outcome}` +
-      (useAbstain ? ' (injected abstention: uncalibrated config → abstain)' : ''),
+      `team:judgeRound → core adjudicate('A') outcome=${rv.outcome}; `
+      + `rule-based offline review by ${String(reviews.length)} declared checklists (${tally}); `
+      + 'one deterministic implementation, NO model called, so these votes are not '
+      + 'independent review opinions and a pass here is not three reviewers agreeing'
+      + (useAbstain ? ' (injected abstention: uncalibrated config → abstain)' : ''),
     rationale: rv.summary,
     timestamp: ctx.runCtx.timestamp,
   }
@@ -101,9 +111,11 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
  * Build the B-channel verdict: T23 anchor fixture (stance) + core `verifyCitation`
  * over `MockCitationResolverAdapter` (anchoring evidence) → core `adjudicate('B')`.
  *
- * The abstention scenario is driven by DATA, not by a bypass: it points the T23
- * lookup at the `contradict` fixture row, so the fail-closed path produces no
- * anchoring verification and the real core gate abstains on its own.
+ * The abstention scenario is driven by DATA, not by a bypass: it points the T23 lookup at
+ * the INCONCLUSIVE fixture row — material that takes no stance — so no anchoring verification
+ * is requested and the real core gate abstains on its own. It used to point at the contradict
+ * row, which was interchangeable with this one only while a contradiction and a gap both
+ * abstained; the contradict row now blocks, and a scenario named "abstain" must not block.
  */
 async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
   const useAbstain = ctx.abstain.has('B')
@@ -112,7 +124,7 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
     claimId,
     stepId: ctx.step.id,
     timestamp: ctx.runCtx.timestamp,
-    ...(useAbstain ? { anchorRef: B_CHANNEL_CONTRADICT_REF } : {}),
+    ...(useAbstain ? { anchorRef: B_CHANNEL_INCONCLUSIVE_REF } : {}),
   })
   const verifications: ReadonlyArray<VerificationResult> = anchors.verifications
 
@@ -168,7 +180,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
-  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  const experiment = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey)
   if (experiment.kind === 'unbindable') {
     // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
     // at all, so the gate abstains instead of comparing an unrelated number to a threshold.
@@ -194,7 +206,12 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     source: 'live' as const,
     supportsPrediction: experiment.supportsPrediction,
     detail: experiment.detail,
-    evaluator: 'traffic-sim (Webster delay model, two-phase intersection, measured demand profile)',
+    // The experiment RAN and read the graded number out of the prediction's own sentence,
+    // so it can state decisiveness. A decisive negation is a completed test: the claim is
+    // recorded as refuted and the step advances. Without this the run hard-fails whenever
+    // the hypothesis loses, which is a pipeline that can only run studies that succeed.
+    decisive: true,
+    evaluator: 'platoon-sim (Intelligent Driver Model, three-vehicle platoon, declared disturbance)',
     ruleVersion: EXPERIMENT_RULE_VERSION,
   }
   const rec = adjudicateClaimSupport({
@@ -203,15 +220,19 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     report,
     timestamp: ctx.runCtx.timestamp,
   })
+  const negated = report.supportsPrediction === false
   return {
     component: 'C',
     outcome: rec.outcome,
     passed: rec.outcome === 'passed',
     evidence:
       `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
-      + '(the experiment ran here over the measured demand profile: '
-      + `measured ${experiment.reductionPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
-      + `of ${MEASURED_METRIC_LABEL}, which the claim names as "${experiment.matchedPhrase}")`,
+      + `verdict=${rec.verdict} (the experiment ran here: `
+      + `measured ${experiment.improvementPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
+      + `of ${MEASURED_METRIC_LABEL}, which the claim names as "${experiment.matchedPhrase}"; `
+      + (negated
+        ? 'the measurement NEGATED the prediction — recorded as refuted, and the step advances on a decisive test rather than failing)'
+        : 'the measurement supports the prediction)'),
     rationale: rec.summary,
     timestamp: ctx.runCtx.timestamp,
   }

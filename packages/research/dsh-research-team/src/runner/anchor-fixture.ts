@@ -16,9 +16,13 @@
 //      (`MockCitationResolverAdapter`). The full chain executes for real —
 //      red line #6, resolver triage (#1 fabricated / outage / ambiguous),
 //      retraction #4, identity mismatch #2, causation #5, content support #3.
-//   4. That anchoring verification is only requested when the T23 stance is
-//      `support`. A non-support stance yields the audit bridge ALONE, so core
-//      `adjudicate('B')` abstains (NO DEFAULT PASS).
+//   4. That anchoring verification is requested with the STANCE the T23 anchor
+//      material holds, so the three stances reach three different gate outcomes:
+//        support       → conclusion `supported` → core `adjudicate('B')` passes;
+//        contradict    → conclusion `unsupported` → core blocks (EXTERNAL_CONTRADICTION);
+//        inconclusive  → no anchoring verification requested → core abstains.
+//      A `contradict` row previously produced no anchoring verification, so it and
+//      `inconclusive` were indistinguishable at the gate.
 //
 // This is a simulated resolver over a synthetic corpus. It is NEVER real
 // literature verification and must never be reported as such.
@@ -45,8 +49,16 @@ export const ANCHOR_FIXTURE_RULE_VERSION = 't19b-anchor-mock-v1'
 
 /** T23 L0 fixture row with tier1 + `support` stance (the happy-path anchor). */
 export const B_CHANNEL_ANCHOR_REF = 'syn-l0-001'
-/** T23 L0 fixture row with tier2 + `contradict` stance (fail-closed scenario). */
+/** T23 L0 fixture row with tier2 + `contradict` stance: external evidence AGAINST the claim. */
 export const B_CHANNEL_CONTRADICT_REF = 'syn-l0-002'
+/**
+ * T23 L0 fixture row with tier3: the anchor material states no stance.
+ *
+ * This is the row that produces an ABSTENTION. The contradict row used to be used for that,
+ * back when a contradiction and a gap were the same outcome at the gate; now a contradiction
+ * blocks, so an abstention scenario needs material that genuinely takes no position.
+ */
+export const B_CHANNEL_INCONCLUSIVE_REF = 'syn-l0-003'
 
 const SYNTHETIC_TITLE = 'Synthetic Adaptive Signal Control Study (mock corpus)'
 const SYNTHETIC_AUTHORS: ReadonlyArray<string> = ['Fixture, A.', 'Fixture, B.']
@@ -91,8 +103,22 @@ export interface BChannelAnchors {
  * Run the REAL core citation identity chain against the SIMULATED resolver to
  * obtain an anchoring {@link VerificationResult}. The outcome is whatever the
  * chain decides — this function does not post-process or override it.
+ *
+ * The STANCE is an input. It used to be hardcoded to `claimedConclusion: 'supported'` with
+ * `contentSupportsClaim: true`, so the chain returned a supportive conclusion whatever the
+ * anchor material said: the B channel's outcome could not change with its input, and the
+ * `contradict` fixture row could only reach the "no anchoring requested" path, never a real
+ * contradiction. The claimed conclusion is now the anchor signal's own stance, read from
+ * the T23 fixture, and the chain decides from there.
+ *
+ * @param spec - which step and which anchor row to verify.
+ * @param stance - the stance the anchor material holds toward the claim.
+ * @returns the chain's own result.
  */
-async function verifyAgainstMockResolver(spec: AnchorVerificationSpec): Promise<VerificationResult> {
+async function verifyAgainstMockResolver(
+  spec: AnchorVerificationSpec,
+  stance: 'support' | 'contradict',
+): Promise<VerificationResult> {
   const ref: CitationRef = {
     kind: 'doi',
     id: SYNTHETIC_DOI,
@@ -117,7 +143,12 @@ async function verifyAgainstMockResolver(spec: AnchorVerificationSpec): Promise<
     evidence,
     anchorResolver,
     spec.timestamp,
-    { claimedConclusion: 'supported', contentSupportsClaim: true },
+    stance === 'support'
+      ? { claimedConclusion: 'supported', contentSupportsClaim: true }
+      // A contradiction is expressed the way the chain reads one: the paper does not say
+      // what the claim needs it to say. The chain then returns `unsupported` with
+      // original-text access, which core's B gate blocks on.
+      : { claimedConclusion: 'unsupported', contentSupportsClaim: false },
   )
 }
 
@@ -141,18 +172,20 @@ export async function buildBChannelAnchors(spec: AnchorVerificationSpec): Promis
   // core `isExternalAnchor` rejects it. It can never anchor on its own.
   const bridged = anchorToVerification(signal)
 
-  if (signal.verdict !== 'support') {
+  if (signal.verdict === 'inconclusive') {
+    // No stance at all: the anchor material does not address the claim, so there is nothing
+    // to verify against and no contradiction to raise. Fail-closed — core's B gate abstains.
     return {
       verifications: [bridged],
       anchorSignal: signal,
       anchoring: false,
       basis:
-        `T23 anchor '${key}' verdict=${signal.verdict} → no anchoring verification requested ` +
+        `T23 anchor '${key}' verdict=inconclusive → no anchoring verification requested ` +
         '(fail-closed; core adjudicate(\'B\') abstains — NO DEFAULT PASS)',
     }
   }
 
-  const verified = await verifyAgainstMockResolver(spec)
+  const verified = await verifyAgainstMockResolver(spec, signal.verdict)
   const anchoring =
     verified.evidence.originalTextAccessed &&
     verified.evidence.method !== 'none' &&
@@ -163,8 +196,9 @@ export async function buildBChannelAnchors(spec: AnchorVerificationSpec): Promis
     anchoring,
     anchorSignal: signal,
     basis:
-      `T23 anchor '${key}' verdict=support → core verifyCitation over MockCitationResolverAdapter ` +
-      `returned conclusion=${verified.conclusion} (reasonCode=${verified.reasonCode}); ` +
-      'real identity chain, simulated external resolver (mock_external)',
+      `T23 anchor '${key}' verdict=${signal.verdict} → core verifyCitation over ` +
+      `MockCitationResolverAdapter returned conclusion=${verified.conclusion} ` +
+      `(reasonCode=${verified.reasonCode}); real identity chain, simulated external ` +
+      'resolver (mock_external) — core adjudicate(\'B\') decides the gate from that conclusion',
   }
 }

@@ -75,6 +75,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
+import type { ClaimMaterial } from './redteam-review.ts'
+import type { PlatoonStudy } from './platoon-sim.ts'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
@@ -118,26 +120,19 @@ import type {
   AblationRunResult,
 } from '@deepseek-ai/dsh-research-tools'
 import {
-  DEFAULT_POLICY_BOUNDS,
-  comparePolicies,
-  designInterval,
-  evaluatePrediction,
-  experimentScenario,
-  runAdaptivePolicy,
-  runFixedTimePolicy,
-  thresholdFromPrediction,
+  ABLATION_MODULES,
   EXPERIMENT_RULE_VERSION,
   MEASURED_METRIC_KEY,
-} from './traffic-sim.ts'
-import {
-  STUDY_ASSUMPTIONS,
-  STUDY_DEMAND_INTERVALS,
-  STUDY_DERIVATION,
-  STUDY_DESIGN_INPUTS,
-  STUDY_MEASURED_DAYS,
-  STUDY_SERIES_PROVENANCE,
-  STUDY_SERIES_SHA256,
-} from './study-demand.ts'
+  SIMULATION_INPUTS,
+  ablationStudy,
+  boundaryTest,
+  comparePlatoons,
+  evaluatePrediction,
+  experimentStudy,
+  runPlatoon,
+  studyFromPack,
+  thresholdFromPrediction,
+} from './platoon-sim.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
 export type Truthfulness =
@@ -214,6 +209,26 @@ export interface RunContext {
    * unbindable, and an unbindable claim HOLDS rather than being graded.
    */
   metricKey: string
+  /**
+   * The claim material the A channel reviews, verbatim as the run states it (set by the
+   * A2-claim executor).
+   *
+   * The A channel's votes must be DERIVED from this. They used to be three `support`
+   * literals with a constant rationale, so the gate returned the same verdict whatever the
+   * run contained — a constant wearing a judgment's name. Fields the claim does not state
+   * stay empty strings, and the review reports the absence rather than filling it in.
+   */
+  claimMaterial: ClaimMaterial
+  /**
+   * The study the experiment runs, taken from the selected Case Pack's declared scenarios
+   * when it carries them (set by the A2-claim executor).
+   *
+   * Every executor that measures reads it from here rather than building its own, so the
+   * baseline artifact, the MVP artifact, the figures and the C gate are all the same
+   * measurement of the same study. Two executors constructing their own scenario would let
+   * a paper's table disagree with the verdict that approved it.
+   */
+  study: PlatoonStudy
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -405,22 +420,22 @@ export interface StepCapability {
 /** Canonical (claim, prediction) constants — match a KEEP-path row in the team's
  *  experiment fixture table (`experiment/fixture.ts`) so the C-channel adjudicates
  *  to `passed` on the happy path. */
-const CANONICAL_CLAIM_ID = 'mock-claim-001'
+const CANONICAL_CLAIM_ID = 'claim-mixed-platoon-following-risk'
 // The claim names the quantity the experiment actually measures. It said "peak-hour
 // delay" while the measurement is the DEMAND-WEIGHTED MEAN over every control
 // interval, and the C gate adjudicates the prediction's threshold against that mean.
-const CANONICAL_CLAIM_REF = 're-planning the signal plan each interval reduces demand-weighted mean delay below a fixed-time plan'
+const CANONICAL_CLAIM_REF = 'inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision'
 /**
  * The fixture claim's falsifiable prediction.
  *
  * This threshold is DEMONSTRATION DATA, not a research finding: its job is to let the
- * offline pipeline exercise a claim that the study's experiment can adjudicate. It
- * was 8%, which the real experiment refutes (the measured reduction is ~7%), so the
- * fixture chain failed at the C gate — the correct verdict, but not a useful default
- * for a pipeline whose whole point is to be run. A real study's threshold comes from
- * its own claim, which is what the model path produces.
+ * offline pipeline exercise a claim that the study's experiment can adjudicate. The
+ * measurement is whatever the simulation produces, and the C gate's verdict follows from it
+ * — including when the simulation NEGATES the prediction, which the run records as a
+ * refuted claim and carries on from. A real study's threshold comes from its own claim,
+ * which is what the model path and the Case Pack both produce.
  */
-const CANONICAL_PREDICTION = 'demand-weighted mean delay falls by at least 5% under per-interval re-planning'
+const CANONICAL_PREDICTION = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
 
 /**
  * The quantity the fixture claim is about.
@@ -442,16 +457,16 @@ const CANONICAL_METRIC_KEY = MEASURED_METRIC_KEY
  * the identity fields here are what that experiment is measuring between.
  */
 export const SCENARIO = {
-  baselineIdentity: 'fixed-time',
-  variantIdentity: 'adaptive-rl',
-  metric: 'delay',
-  metricDirection: 'lower_is_better',
+  baselineIdentity: 'homogeneous-HV-HV-HV',
+  variantIdentity: 'mixed-HV-AV-HV',
+  metric: MEASURED_METRIC_KEY,
+  metricDirection: 'higher_is_better',
   venueId: 'syn-venue-trc-001',
   venueName: 'Synthetic TRC-style Transport Venue',
-  // The demand the experiment runs on is derived from THIS measured series, so the
-  // fallback reference names it rather than a synthetic placeholder.
-  datasetId: STUDY_SERIES_PROVENANCE.datasetId,
-  title: 'Per-Interval Signal Re-Planning Reduces Mean Vehicle Delay',
+  // The study's own scenario file, so the fallback reference names the study's dataset
+  // rather than a synthetic placeholder.
+  datasetId: 'case-pack-traffic/claim.json',
+  title: 'Inserting One Autonomous Vehicle Changes a Platoon Minimum Time-to-Collision',
 } as const
 
 /** Writer-section model shared by D2/D3/D4/E1 (paper-outline → draft →
@@ -481,7 +496,7 @@ const A1_PRODUCER = `${LITERATURE_SEARCH_TOOL_ID}@${LITERATURE_SEARCH_TOOL_VERSI
 
 /** A1's offline gap statement, emitted only when no model writer is injected.
  *  It is a fixture constant, never a finding — the artifact labels it `fixture`. */
-const FIXTURE_GAP_STATEMENT = 'SOTA delay-reduction gap under adaptive control is unverified'
+const FIXTURE_GAP_STATEMENT = 'SOTA minimum-time-to-collision gap for mixed platoons is unverified'
 const A2_PRODUCER = `${CLAIM_CONSTRUCT_TOOL_ID}@${CLAIM_CONSTRUCT_TOOL_VERSION}`
 const A3_PRODUCER = 'fixture:agenda'
 // A4 matches the venue against A1's retrieved records and B2 verifies the dataset's bytes on
@@ -497,8 +512,8 @@ const B2_PRODUCER = 'dataset:on-disk-verification'
 // THIS package's experiment and convergence modules, not by a registered tool and
 // not by a fixture table. Naming them `fixture:*` understated what ran and made the
 // artifact brand contradict the artifact's own `fixture: false`.
-const B3_PRODUCER = 'traffic-sim:baseline'
-const C1_PRODUCER = 'traffic-sim:mvp'
+const B3_PRODUCER = 'platoon-sim:baseline'
+const C1_PRODUCER = 'platoon-sim:mvp'
 const C2_PRODUCER = 'convergence:trinity-loop'
 const C3_PRODUCER = `${ABLATION_TOOL_ID}@${ABLATION_TOOL_VERSION}`
 const D1_PRODUCER = `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`
@@ -712,21 +727,26 @@ function sectionsOf(input: Record<string, unknown> | undefined): ReadonlyArray<M
  * paper can never state a number its own exhibit contradicts. It is the same
  * measurement the C gate adjudicates.
  *
- * @returns the baseline and candidate delays plus the relative reduction.
+ * @returns both platoons' minimum time-to-collision plus the change between them.
  */
 function measureOutcome(): {
-  readonly baselineDelaySeconds: number
-  readonly variantDelaySeconds: number
-  readonly reductionPct: number
+  readonly baselineMinTtcSeconds: number
+  readonly variantMinTtcSeconds: number
+  /** Change in the variant relative to the baseline, %. Positive means the AV helped. */
+  readonly improvementPct: number
+  readonly baselineTtcRatePct: number
+  readonly variantTtcRatePct: number
+  readonly stringStabilityIndex: number
 } {
-  const scenario = experimentScenario()
   const round2 = (value: number): number => Math.round(value * 100) / 100
-  const baseline = runFixedTimePolicy(scenario).meanDelaySecondsPerVehicle
-  const variant = runAdaptivePolicy(scenario).meanDelaySecondsPerVehicle
+  const comparison = comparePlatoons(experimentStudy())
   return {
-    baselineDelaySeconds: round2(baseline),
-    variantDelaySeconds: round2(variant),
-    reductionPct: baseline > 0 ? ((baseline - variant) / baseline) * 100 : 0,
+    baselineMinTtcSeconds: round2(comparison.baseline.minTtcSeconds),
+    variantMinTtcSeconds: round2(comparison.variant.minTtcSeconds),
+    improvementPct: round2(comparison.relativeImprovementPct),
+    baselineTtcRatePct: round2(comparison.baseline.ttcLt1_5RatePct),
+    variantTtcRatePct: round2(comparison.variant.ttcLt1_5RatePct),
+    stringStabilityIndex: round2(comparison.variant.stringStabilityIndex),
   }
 }
 
@@ -758,24 +778,24 @@ function bodyTextFor(
   measured: ReturnType<typeof measureOutcome>,
   referenceCount: number,
 ): string {
-  const scenario = experimentScenario()
-  const design = designInterval(scenario)
-  const designDemand = scenario.demandPerPhase[design] ?? [0, 0]
-  const peakTotal = (designDemand[0] + designDemand[1]).toFixed(0)
-  const bounds = DEFAULT_POLICY_BOUNDS
+  const study = experimentStudy()
+  const hv = study.variant.vehicleClasses.HV
+  const av = study.variant.vehicleClasses.AV
+  const inputs = SIMULATION_INPUTS
+  const direction = measured.improvementPct >= 0 ? 'raises' : 'lowers'
   switch (id) {
     case 'abstract':
-      return `We test whether re-planning the signal plan each control interval reduces mean vehicle delay below a fixed-time plan at one isolated two-phase intersection. Demand is a ${String(scenario.intervals)}-interval profile derived from ${STUDY_SERIES_PROVENANCE.file} (${STUDY_SERIES_PROVENANCE.licence}), scaled so the busiest interval carries the study's design volume; delay is estimated with Webster's formula.`
+      return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency.'
     case 'introduction':
       return `This work targets the claim: ${CANONICAL_CLAIM_REF}. The falsifiable prediction is: ${CANONICAL_PREDICTION}.`
     case 'method':
-      return `Both policies are the SAME plan-selection rule: Webster's optimum cycle for the demand in hand, clamped to ${String(scenario.minCycleSeconds)}-${String(scenario.maxCycleSeconds)} s, with the green split proportional to that demand between a ${bounds.minShare.toFixed(2)} floor and a ${bounds.maxShare.toFixed(2)} ceiling and ${String(scenario.lostTimeSeconds)} s of lost time per cycle. The fixed-time baseline applies the rule once, to the design interval (interval ${String(design)}, ${peakTotal} veh/h), and holds the result for the whole run; the adaptive policy re-applies it in every interval. The comparison is therefore between a frozen plan and a re-planned one, not between two different algorithms.`
+      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. Each class carries the Case Pack's declared parameters: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s, wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway, and predicts its leader over a ${av.lookAheadHorizonSeconds.toFixed(2)} s horizon. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was its effective reaction time earlier. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
     case 'experiments':
-      return `Both policies were run against the same profile. Demand-weighted mean delay was ${measured.baselineDelaySeconds.toFixed(2)} s/veh under the frozen plan and ${measured.variantDelaySeconds.toFixed(2)} s/veh under re-planning, a relative reduction of ${measured.reductionPct.toFixed(2)}%. The profile, its derivation from ${STUDY_SERIES_PROVENANCE.file} and the assumptions made on top of it are recorded on the mvp-results artifact.`
+      return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baselineMinTtcSeconds.toFixed(2)} s for the homogeneous platoon and ${measured.variantMinTtcSeconds.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${measured.baselineTtcRatePct.toFixed(2)}% and ${measured.variantTtcRatePct.toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
     case 'results':
-      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The claim is bounded to one isolated two-phase intersection under the scaled measured profile; boundary probing (ablation) is reported separately, and no published-SOTA comparison is asserted.'
+      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.'
     case 'conclusion':
-      return `On this demand profile the frozen plan is worse than re-planning by ${measured.reductionPct.toFixed(2)}%, measured inside the study's own delay model. The scope is one isolated two-phase intersection under a scaled measured series; submission remains a human act at E2.`
+      return `Under the declared configuration the autonomous vehicle ${direction} the platoon's minimum time-to-collision by ${Math.abs(measured.improvementPct).toFixed(2)}%, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
     case 'references':
       // The body states what the draft actually carries. It used to assert that
       // references were drawn from the landscape scan above an empty list.
@@ -986,9 +1006,9 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? (gapsArtifact.gaps as ReadonlyArray<unknown>).filter((g): g is string => typeof g === 'string')
     : []
 
-  let assertion = 'Adaptive signal control reduces peak-hour delay beyond the 5% SOTA gap.'
+  let assertion = 'Inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision.'
   let essentialDifference = 'control policy is adaptive (RL) rather than fixed-time'
-  let experimentToFalsify = 'Measure peak-hour delay under adaptive control vs a fixed-time baseline.'
+  let experimentToFalsify = 'Simulate the homogeneous and the mixed platoon under the same declared disturbance and compare their minimum time-to-collision.'
   let prediction = CANONICAL_PREDICTION
   let claimSource: 'model' | 'deterministic' | 'fixture' | 'case-pack' = 'fixture'
   let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
@@ -1000,6 +1020,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // content, and it is preferred over the model because the pack is what the run was
   // started with: deriving a different claim from the model would make the run's product
   // disagree with its own input set. Both paths record which one supplied the claim.
+  const packScenario = ctx.getInput(CASE_PACK_INPUT_SLUGS.scenario)
   const packClaim = readInput(ctx, CASE_PACK_INPUT_SLUGS.claim)
   if (packClaim !== undefined) {
     assertion = requiredClaimField(packClaim, 'assertion')
@@ -1082,6 +1103,28 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
+  // The study the experiment will run. The Case Pack's declared scenarios are the run's
+  // selected input, so they take precedence; the module's own scenarios are the fallback for a
+  // run with no pack. A pack whose scenarios this study cannot read falls back too, and the
+  // artifacts then record the module's scenarios rather than pretending the pack was used.
+  ctx.runCtx.study = studyFromPack(packScenario) ?? experimentStudy()
+  // The A channel reviews THIS material, so it is populated here, before A2's own gate runs.
+  // Every field is what the claim actually states: a field the pack omits stays empty and the
+  // review reports the gap rather than smoothing it over.
+  ctx.runCtx.claimMaterial = {
+    assertion,
+    prediction,
+    experimentToFalsify,
+    scope: packClaim !== undefined ? String(packClaim.scope ?? '') : '',
+    dataSource: packClaim !== undefined ? String(packClaim.dataSource ?? '') : '',
+    essentialDifference,
+    metricKey,
+    truthfulness: typeof claimRoute.truthfulness === 'string' ? claimRoute.truthfulness : '',
+    measuredMetricKey: MEASURED_METRIC_KEY,
+    declaredSources: packClaim !== undefined && Array.isArray(packClaim.declaredSources)
+      ? (packClaim.declaredSources as ReadonlyArray<string>)
+      : [],
+  }
   return {
     claim: tagArtifact({ ...artifact.claim, claimSource, claimKind: proseKindOf(claimSource), metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
@@ -1118,7 +1161,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'claim → method → data → baseline → mvp → trinity → boundary → figures → outline → writing → format → submit',
   ]
   let contributions: ReadonlyArray<{ id: string; statement: string }> = [
-    { id: 'c1', statement: 'adaptive control beats the fixed-time baseline on peak-hour delay' },
+    { id: 'c1', statement: 'the mixed platoon changes the platoon minimum time-to-collision relative to the homogeneous platoon' },
   ]
   let agendaSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let agendaRoute: Record<string, unknown> = proseRouteOf(undefined)
@@ -1190,7 +1233,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           id: contribution.id,
           claimRef,
           claim: contribution.statement,
-          expectedEvidence: `delay reduction >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
+          expectedEvidence: `platoon minimum-TTC gain >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
         })),
         agendaSource,
         note: agendaSource === 'fixture'
@@ -1263,7 +1306,7 @@ function a4Executor(ctx: ExecCtx): Record<string, unknown> {
         stepId: 'A4-venue',
         slug: 'venue-scope',
         venueId,
-        matches: ['traffic signal control', 'empirical delay comparison', 'falsifiable experiment'],
+        matches: ['car-following simulation', 'mixed-platoon safety comparison', 'falsifiable experiment'],
         rejects: ['no falsifiable experiment'],
         // The venue is measured; the scope criteria are not. Venue acceptance
         // patterns would have to be read from the venue's own author guidelines,
@@ -1287,7 +1330,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // offline pipeline deterministic.
   const writer = ctx.proseWriter
   let family = 'reinforcement-learning phase-plan policy (synthetic spec)'
-  let steps: ReadonlyArray<string> = ['observe intersection state', 'select phase plan', 'optimise delay']
+  let steps: ReadonlyArray<string> = ['build both platoons', 'integrate the car-following model', 'read the minimum time-to-collision']
   let metricName: string = SCENARIO.metric
   let metricDirection: string = SCENARIO.metricDirection
   let methodSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
@@ -1467,32 +1510,31 @@ function checkDatasetFiles(): ReadonlyArray<FileCheck> {
  *
  * @returns the demand evidence block attached to every experiment artifact.
  */
-function studyDemandEvidence(): Record<string, unknown> {
+function studyEvidence(study: PlatoonStudy = experimentStudy()): Record<string, unknown> {
   return {
-    source: 'measured-series',
-    datasetId: STUDY_SERIES_PROVENANCE.datasetId,
-    publishedAt: STUDY_SERIES_PROVENANCE.source,
-    licence: STUDY_SERIES_PROVENANCE.licence,
-    file: STUDY_SERIES_PROVENANCE.file,
-    column: STUDY_SERIES_PROVENANCE.column,
-    unit: STUDY_SERIES_PROVENANCE.unit,
-    sha256: STUDY_SERIES_SHA256,
-    measuredDays: STUDY_MEASURED_DAYS,
-    designInputs: STUDY_DESIGN_INPUTS,
-    intervals: STUDY_DEMAND_INTERVALS.map(interval => ({
-      interval: interval.interval,
-      startHour: interval.startHour,
-      endHour: interval.endHour,
-      measuredVehPerHour: interval.measuredVehPerHour,
-      totalVehPerHour: interval.totalVehPerHour,
-      demandPerPhase: interval.demandPerPhase,
-    })),
-    derivation: STUDY_DERIVATION,
-    assumptions: STUDY_ASSUMPTIONS,
+    source: 'declared-scenario',
+    study: {
+      baselineComposition: study.baseline.composition,
+      variantComposition: study.variant.composition,
+      initialSpeedMps: study.variant.initialSpeedMps,
+      desiredSpeedMps: study.variant.desiredSpeedMps,
+      initialGapM: study.variant.initialGapM,
+      vehicleClasses: study.variant.vehicleClasses,
+      leader: study.variant.leader,
+    },
+    designInputs: SIMULATION_INPUTS,
+    ruleVersion: EXPERIMENT_RULE_VERSION,
+    // What this measurement is and what it is NOT. An artifact that states only "an
+    // experiment ran" invites the reader to assume it tested the claim; naming both is what
+    // lets them check, and the previous study's artifact had to say its measurement was
+    // about an intersection while its claim was about a platoon.
+    measures: MEASURED_METRIC_KEY,
+    alsoMeasured: ['ttc-lt-1.5s-rate-pct', 'mean-time-headway-seconds', 'mean-jerk-mps3', 'string-stability-index'],
+    doesNotMeasure: 'field crash frequency, any external SOTA, or any quantity outside the declared simulation',
     note:
-      'the demand is derived from the measured series above; the derivation and the '
-      + 'assumptions it makes are both recorded, and neither is fitted to the '
-      + 'experiment outcome',
+      'the scenario is DECLARED by the Case Pack and the simulation inputs are declared '
+      + 'constants; there is no measured dataset behind these numbers, and no parameter '
+      + 'was fitted to the experiment outcome',
   }
 }
 
@@ -1521,8 +1563,16 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
         acquisition: acquired
           ? 'acquired — every declared file is present, size-matched and hash-matched against the record in data/README.md'
           : 'not acquired on this host — the dataset is named but its recorded bytes were not verified here',
+        // What this dataset has to do with THIS run. The platoon study's experiment consumes
+        // the Case Pack's declared scenario, not these bytes: the SUMO run is a signal-control
+        // trace, so it carries no mixed-platoon trajectory the study could measure against.
+        // Recording the descriptor without that sentence invites a reader to take "the study's
+        // dataset" for an input the experiment used, which it is not.
+        consumedBy: 'no step of this run — this run\'s experiment reads the Case Pack\'s declared '
+          + 'scenario. The trace is a signal-control run, so it holds no platoon trajectory to '
+          + 'measure against, and no artifact of this run is derived from its bytes.',
         note: acquired
-          ? 'dataset descriptor for the real SUMO signal-control run recorded in data/README.md'
+          ? 'dataset descriptor for the real SUMO signal-control run recorded in data/README.md; its bytes were verified on this host, and the verification is the whole of this step\'s claim about it'
           : 'dataset descriptor names a real, openly-licensed dataset; its bytes are not present on this host',
       },
       B2_PRODUCER,
@@ -1574,15 +1624,11 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
   const { predictionText } = canonicalOf(ctx)
   const method = readInput(ctx, 'method-spec')
   const dataset = readInput(ctx, 'dataset')
-  // The baseline is MEASURED, not declared: the fixed-time plan is run against the
-  // study's demand profile, so the reference row is a number this study produced.
-  const scenario = experimentScenario()
-  const baseline = runFixedTimePolicy(scenario)
-  const candidate = runAdaptivePolicy(scenario)
-  const measuredReductionPct = baseline.meanDelaySecondsPerVehicle > 0
-    ? ((baseline.meanDelaySecondsPerVehicle - candidate.meanDelaySecondsPerVehicle)
-      / baseline.meanDelaySecondsPerVehicle) * 100
-    : 0
+  const study = ctx.runCtx.study
+  // The baseline is MEASURED, not declared: the homogeneous platoon is simulated under the
+  // study's own declared conditions, so the reference row is a number this study produced.
+  const comparison = comparePlatoons(study)
+  const measuredImprovementPct = comparison.relativeImprovementPct
 
   return {
     'baseline-results': tagArtifact(
@@ -1591,27 +1637,28 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         stepId: 'B3-baseline',
         slug: 'baseline-results',
         baseline: {
-          identity: 'fixed-time',
-          protocol: 'measure demand-weighted delay under a fixed-time plan over the study demand profile',
-          metric: { name: 'peak-hour delay', direction: 'lower is better' },
-          // The dataset this NUMBER came from, which is not the dataset B2
-          // registered. The baseline is measured on the demand profile derived from
-          // the study series; B2's descriptor names a SUMO run that no arithmetic in
-          // this step touches. Naming the wrong one attributed the measurement to a
-          // dataset it never read.
-          datasetRef: STUDY_SERIES_PROVENANCE.datasetId,
+          identity: SCENARIO.baselineIdentity,
+          protocol: 'simulate the homogeneous platoon under the study’s declared disturbance and read its minimum time-to-collision',
+          metric: { name: MEASURED_METRIC_KEY, direction: 'higher is better' },
+          // The input this NUMBER came from. The baseline is measured by running the
+          // simulation over the Case Pack's declared scenario, which is not the dataset B2
+          // registered; naming B2's descriptor here would attribute the measurement to a
+          // dataset no arithmetic in this step touches.
+          datasetRef: SCENARIO.datasetId,
           registeredDatasetRef: (dataset?.datasetId as string | undefined) ?? null,
-          methodRef: (method?.methodId as string | undefined) ?? SCENARIO.variantIdentity,
+          methodRef: (method?.methodId as string | undefined) ?? SCENARIO.baselineIdentity,
         },
         measured: {
-          baselineDelaySeconds: baseline.meanDelaySecondsPerVehicle,
-          candidateDelaySeconds: candidate.meanDelaySecondsPerVehicle,
-          candidateReductionPct: measuredReductionPct,
-          source: 'traffic-sim (both policies executed over the study demand profile)',
-          demand: studyDemandEvidence(),
+          baselineMinTtcSeconds: comparison.baseline.minTtcSeconds,
+          variantMinTtcSeconds: comparison.variant.minTtcSeconds,
+          variantImprovementPct: measuredImprovementPct,
+          baselineTtcLt1_5RatePct: comparison.baseline.ttcLt1_5RatePct,
+          variantTtcLt1_5RatePct: comparison.variant.ttcLt1_5RatePct,
+          source: 'platoon-sim (both platoons simulated under the declared disturbance)',
+          study: studyEvidence(study),
         },
-        beatsBaselineWhen: `candidate delay < baseline delay by >= ${thresholdLabel(predictionText)}`,
-        note: 'baseline MEASURED by running the fixed-time plan; the candidate row is the same run, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
+        beatsBaselineWhen: `variant minimum time-to-collision exceeds the baseline's by >= ${thresholdLabel(predictionText)}`,
+        note: 'baseline MEASURED by simulating the homogeneous platoon; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
       'local_computation',
@@ -1621,19 +1668,19 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         fixture: false,
         stepId: 'B3-baseline',
         slug: 'sota-comparison',
-        targetMetric: 'peak-hour delay',
+        targetMetric: MEASURED_METRIC_KEY,
         rows: [
-          { method: 'fixed-time (this study baseline)', delaySeconds: baseline.meanDelaySecondsPerVehicle, source: 'measured by traffic-sim' },
-          { method: 'adaptive (this study candidate)', delaySeconds: candidate.meanDelaySecondsPerVehicle, measuredReductionPct, source: 'measured by traffic-sim' },
+          { method: 'HV-HV-HV (this study baseline)', minTtcSeconds: comparison.baseline.minTtcSeconds, source: 'measured by platoon-sim' },
+          { method: 'HV-AV-HV (this study variant)', minTtcSeconds: comparison.variant.minTtcSeconds, measuredImprovementPct, source: 'measured by platoon-sim' },
         ],
         // No external SOTA row is recorded, and THAT is stated rather than filled in.
-        // Published delay figures are prose in papers, not machine-readable fields, so
+        // Published minimum-TTC figures are prose in papers, not machine-readable fields, so
         // a retrieved record cannot supply one without someone reading the number out
         // of the text. Recording a guess here would manufacture the comparison this
         // step exists to ground.
         anchoring: 'none',
-        sotaGapClaim: "the candidate beats this study's own fixed-time baseline; a claim against PUBLISHED SOTA remains unanchored",
-        note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a delay figure has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
+        sotaGapClaim: "the variant's margin is compared against this study's own homogeneous platoon; a claim against PUBLISHED SOTA remains unanchored",
+        note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a minimum-TTC figure has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
       },
       B3_PRODUCER,
       'local_computation',
@@ -1650,7 +1697,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  const verdict = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey)
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
     // because there is no measurement that could adjudicate it.
@@ -1659,7 +1706,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
       + '(fail-closed: no adjudicable prediction ⇒ no pass)',
     )
   }
-  const comparison = comparePolicies(experimentScenario())
+  const comparison = comparePlatoons(ctx.runCtx.study)
   return {
     'mvp-results': tagArtifact(
       {
@@ -1670,23 +1717,36 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         claimId,
         predictionText,
         experiment: {
-          source: 'traffic-sim (Webster delay model, two-phase intersection)',
+          source: 'platoon-sim (Intelligent Driver Model, three-vehicle platoon)',
           // What this experiment measures and what it does NOT. An artifact that states only
           // "an experiment ran" invites the reader to assume it tested the claim; naming the
           // quantity is what lets them check.
           measures: MEASURED_METRIC_KEY,
-          doesNotMeasure: 'platoon car-following risk (TTC<1.5s rate), string stability, or any external SOTA',
+          doesNotMeasure: 'field crash frequency, any external SOTA, or any road layout beyond one lane',
           ruleVersion: EXPERIMENT_RULE_VERSION,
-          demand: studyDemandEvidence(),
+          study: studyEvidence(ctx.runCtx.study),
         },
-        outcome: { supportsPrediction: verdict.supportsPrediction, detail: verdict.detail },
+        outcome: {
+          supportsPrediction: verdict.supportsPrediction,
+          // The direction, stated as its own field. `supportsPrediction: false` reads as "the
+          // experiment failed"; it here means the experiment RAN and NEGATED the prediction,
+          // and every downstream reader has to be able to tell those apart.
+          decisive: true,
+          verdict: verdict.supportsPrediction ? 'supported' : 'refuted',
+          detail: verdict.detail,
+        },
         observed: {
-          baselineDelaySeconds: comparison.baseline.meanDelaySecondsPerVehicle,
-          variantDelaySeconds: comparison.variant.meanDelaySecondsPerVehicle,
-          reductionPct: verdict.reductionPct,
+          baselineMinTtcSeconds: comparison.baseline.minTtcSeconds,
+          variantMinTtcSeconds: comparison.variant.minTtcSeconds,
+          improvementPct: verdict.improvementPct,
           thresholdPct: verdict.thresholdPct,
+          baselineTtcLt1_5RatePct: comparison.baseline.ttcLt1_5RatePct,
+          variantTtcLt1_5RatePct: comparison.variant.ttcLt1_5RatePct,
+          meanTimeHeadwaySeconds: comparison.variant.meanTimeHeadwaySeconds,
+          meanJerkMps3: comparison.variant.meanJerkMps3,
+          stringStabilityIndex: comparison.variant.stringStabilityIndex,
         },
-        note: 'mvp-results measured by running both control policies against the study demand profile',
+        note: 'mvp-results measured by simulating both platoons under the same declared disturbance; a refuted prediction is recorded as refuted and does not stop the run',
       },
       C1_PRODUCER,
       'local_computation',
@@ -1701,9 +1761,9 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   const { claimRef, predictionText } = canonicalOf(ctx)
   const mvp = readInput(ctx, 'mvp-results')
   const baseline = readInput(ctx, 'baseline-results')
-  const mvpOutcome = mvp?.outcome as { supportsPrediction?: unknown } | undefined
+  const mvpOutcome = mvp?.outcome as { supportsPrediction?: unknown; decisive?: unknown } | undefined
   const baselineRec = baseline?.baseline as { identity?: unknown } | undefined
-  const baselineMeasured = baseline?.measured as { baselineDelaySeconds?: unknown } | undefined
+  const baselineMeasured = baseline?.measured as { baselineMinTtcSeconds?: unknown } | undefined
 
   // Report the channels THIS step's declared inputs let it see, and let the
   // convergence rule speak for the rest. The executor receives mvp-results and
@@ -1712,9 +1772,13 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   // rather than assumed. Assuming it would be the optimistic default that
   // `?? true` used to encode.
   const observed: ChannelVerdict[] = []
-  if (mvpOutcome?.supportsPrediction === true) observed.push({ component: 'C', outcome: 'passed' })
-  else if (mvpOutcome?.supportsPrediction === false) observed.push({ component: 'C', outcome: 'failed' })
-  if (typeof baselineMeasured?.baselineDelaySeconds === 'number') observed.push({ component: 'B', outcome: 'passed' })
+  // A decisive experiment is a PASSED C channel whichever way it went: the channel's question
+  // is whether the claim met a falsifiable test this study could run. Reporting a decisive
+  // negation as C=failed made the dossier describe a broken experiment when the experiment had
+  // in fact answered the question the study asked.
+  if (mvpOutcome?.decisive === true) observed.push({ component: 'C', outcome: 'passed' })
+  else if (typeof mvpOutcome?.supportsPrediction === 'boolean') observed.push({ component: 'C', outcome: 'failed' })
+  if (typeof baselineMeasured?.baselineMinTtcSeconds === 'number') observed.push({ component: 'B', outcome: 'passed' })
   const convergence = evaluateConvergence(observed)
 
   return {
@@ -1727,6 +1791,7 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
         predictionText,
         baselineRef: baselineRec?.identity ?? null,
         experimentRef: mvpOutcome?.supportsPrediction ?? null,
+        experimentDecisive: mvpOutcome?.decisive ?? null,
         convergence: convergence.kind,
         convergenceBasis: summarizeConvergence(convergence),
         channelsObserved: observed,
@@ -1740,43 +1805,99 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   }
 }
 
-/** The C3-boundary ablation definition: adaptive-rl variant vs fixed-time
- *  baseline, delay metric, 4 repetitions (real tool over a synthetic executor). */
+/**
+ * The measured effect of removing each of the AV's two mechanisms, one at a time.
+ *
+ * The Case Pack names both ablations; this runs them. Each row removes exactly one mechanism
+ * and keeps the rest, so the difference against the full variant is attributable to that
+ * mechanism. The numbers are measured, and the Case Pack's own mock ablation figures are
+ * NOT cited here — they belong to no run.
+ *
+ * @param study - the study to ablate.
+ * @returns one row per declared module, plus the full variant for comparison.
+ */
+function moduleAblations(study: PlatoonStudy): Record<string, unknown> {
+  const full = runPlatoon(study.variant)
+  const rows = ABLATION_MODULES.map((moduleRemoved) => {
+    const ablated = ablationStudy(study, moduleRemoved)
+    const measured = ablated === undefined ? undefined : runPlatoon(ablated.variant)
+    return {
+      moduleRemoved,
+      measured: measured !== undefined,
+      minTtcSeconds: measured?.minTtcSeconds ?? null,
+      // Positive means removing the module RAISED the safety margin, i.e. the module was
+      // costing margin. A reader must be able to see the sign without doing arithmetic.
+      changeVsFullVariantSeconds: measured === undefined ? null : measured.minTtcSeconds - full.minTtcSeconds,
+      stringStabilityIndex: measured?.stringStabilityIndex ?? null,
+    }
+  })
+  return {
+    fullVariantMinTtcSeconds: full.minTtcSeconds,
+    rows,
+    note: 'each row removes ONE mechanism from the variant platoon and re-simulates; the baseline platoon is untouched by an ablation',
+  }
+}
+
+/**
+ * The scope test the Case Pack's boundary file states, measured rather than quoted.
+ *
+ * The pack asserts that the claim is limited to steady free flow and that stop-and-go breaks
+ * it. That is a falsifiable statement about the study, so it is checked by re-running the
+ * variant under stop-and-go forcing and comparing the two margins. The result is whatever it
+ * is, and the artifact reports both numbers and the ratio so a reader can see the arithmetic.
+ *
+ * @param study - the study whose variant is re-run.
+ * @returns the free-flow and stop-and-go margins, their ratio, and whether the scope binds.
+ */
+function boundaryProbe(study: PlatoonStudy): Record<string, unknown> {
+  const probe = boundaryTest(study)
+  return {
+    freeFlowMinTtcSeconds: probe.freeFlow.minTtcSeconds,
+    stopAndGoMinTtcSeconds: probe.stopAndGo.minTtcSeconds,
+    marginRatio: probe.marginRatio,
+    scopeLimited: probe.scopeLimited,
+    rule: `scope is limited to steady free flow when the stop-and-go margin falls below ${SIMULATION_INPUTS.boundaryMarginRatio.toFixed(2)}x the free-flow margin`,
+    note: 'both margins are MEASURED by the same simulator under two declared forcings; the ratio is arithmetic on them and neither number is quoted from the pack',
+  }
+}
+
+/** The C3-boundary ablation definition: the mixed platoon vs the homogeneous one,
+ *  minimum time-to-collision, 4 repetitions (real tool over a deterministic executor). */
 const ABLATION_DEFINITION: AblationDefinition = {
-  baselineIdentity: 'fixed-time',
-  variantIdentity: 'adaptive-rl',
+  baselineIdentity: SCENARIO.baselineIdentity,
+  variantIdentity: SCENARIO.variantIdentity,
   removedOrReplacedComponents: [
-    { component: 'phase-plan', action: 'replaced', replacement: 'adaptive-rl' },
+    { component: 'platoon-composition', action: 'replaced', replacement: SCENARIO.variantIdentity },
   ],
-  dataset: { version: 'v1', split: 'train', seed: 7 },
-  metric: { name: 'delay', direction: 'lower_is_better' },
+  dataset: { version: 'case-pack-traffic.v2', split: 'declared-scenario', seed: 20260909 },
+  metric: { name: MEASURED_METRIC_KEY, direction: 'higher_is_better' },
   repetitions: 4,
 }
 
 /**
  * The ablation's execution seam, implemented for real.
  *
- * Both arms are MEASURED by running the traffic simulation: the baseline arm is the
- * fixed-time plan, the variant arm is the adaptive policy the definition names. The
- * measurement is therefore the same delay model the C channel adjudicates against,
- * so a boundary claim and an experiment claim come from one source rather than two.
+ * Both arms are MEASURED by simulating the two platoons: the baseline arm is the homogeneous
+ * platoon, the variant arm the mixed one. The measurement is therefore the same car-following
+ * model the C channel adjudicates against, so a boundary claim and an experiment claim come
+ * from one source rather than two.
  *
+ * @param study - the study whose two platoons the arms run.
  * @returns an executor that runs both arms for every declared repetition.
  */
-function trafficAblationExecutor(): AblationExecutor {
+function platoonAblationExecutor(study: PlatoonStudy): AblationExecutor {
   return {
     execute(request: AblationRunRequest): ReadonlyArray<AblationRunResult> {
-      const scenario = experimentScenario()
       const results: AblationRunResult[] = []
       for (let repetition = 0; repetition < request.definition.repetitions; repetition++) {
         for (const arm of ABLATION_VARIANT_KINDS) {
           const measured = arm === 'baseline'
-            ? runFixedTimePolicy(scenario)
-            : runAdaptivePolicy(scenario)
+            ? runPlatoon(study.baseline)
+            : runPlatoon(study.variant)
           results.push({
             runKey: ablationRunKey(arm, repetition),
             status: 'executed',
-            measurement: measured.meanDelaySecondsPerVehicle,
+            measurement: measured.minTtcSeconds,
           })
         }
       }
@@ -1793,7 +1914,7 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invocation = await invoker.invoke(
     'ablation',
     { definition: ABLATION_DEFINITION },
-    { timestamp: FIXED_TS, deps: { ablationExecutor: trafficAblationExecutor() } },
+    { timestamp: FIXED_TS, deps: { ablationExecutor: platoonAblationExecutor(ctx.runCtx.study) } },
   )
   if (!invocation.ok) {
     throw new Error(`[C3-boundary] ablation invocation failed: ${invocation.message}`)
@@ -1820,7 +1941,13 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // the dossier it cites said "pending" — two constants pointing opposite
         // ways. A missing input is now reported as absent, never as converged.
         convergedRef: (verdict?.convergence as string | undefined) ?? 'not-observed',
-        note: 'ablation-results produced by a REAL runAblation execution whose arms were MEASURED by the traffic simulation (fixed-time vs adaptive) — boundary probing belongs to C3, not B3',
+        // The scope test the Case Pack's boundary file states, MEASURED here rather than
+        // quoted from it: the variant is re-run under stop-and-go forcing and its margin is
+        // compared with the free-flow one.
+        boundary: boundaryProbe(ctx.runCtx.study),
+        // What each of the AV's two declared mechanisms is worth, measured one at a time.
+        moduleAblations: moduleAblations(ctx.runCtx.study),
+        note: 'ablation-results produced by a REAL runAblation execution whose arms were MEASURED by the platoon simulation (homogeneous vs mixed platoon) — boundary probing belongs to C3, not B3',
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
@@ -1835,8 +1962,9 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         },
         metric: ABLATION_DEFINITION.metric,
         aggregate: artifact.aggregate,
-        demand: studyDemandEvidence(),
-        note: 'boundary-map derived from the REAL runAblation execution over simulated arms — an applicability claim for this demand profile only, not a general one',
+        study: studyEvidence(ctx.runCtx.study),
+        boundary: boundaryProbe(ctx.runCtx.study),
+        note: 'boundary-map derived from the REAL runAblation execution over simulated platoons, plus the measured stop-and-go scope test — an applicability claim for this declared scenario only, not a general one',
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
@@ -1853,44 +1981,44 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
   // The figures plot the SAME measurements the experiment produced, so a chart can
   // never disagree with the verdict it illustrates.
-  const scenario = experimentScenario()
+  const comparison = comparePlatoons(ctx.runCtx.study)
   // Rounded to the precision the table column declares: the tool refuses a value
   // carrying more decimals than its column, and that guard is right to.
   const round2 = (value: number): number => Math.round(value * 100) / 100
-  const measuredBaseline = round2(runFixedTimePolicy(scenario).meanDelaySecondsPerVehicle)
-  const measuredVariant = round2(runAdaptivePolicy(scenario).meanDelaySecondsPerVehicle)
+  const measuredBaseline = round2(comparison.baseline.minTtcSeconds)
+  const measuredVariant = round2(comparison.variant.minTtcSeconds)
   const figureSpec = {
     kind: 'bar',
-    title: 'Peak-hour Delay by Control Policy',
+    title: 'Platoon Minimum Time-to-Collision by Composition',
     width: 320,
     height: 240,
-    series: [{ name: 'delay (s)', values: [measuredVariant, measuredBaseline] }],
+    series: [{ name: 'minimum TTC (s)', values: [measuredVariant, measuredBaseline] }],
     tokens: { palette: ['#1f77b4'] },
     seed: 7,
   }
   const tableModel = {
-    title: 'Peak-hour Delay Comparison',
+    title: 'Platoon Minimum Time-to-Collision Comparison',
     columns: [
       { header: 'Method', decimals: 0 },
-      { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
+      { header: 'Minimum TTC (s)', decimals: 2, metricDirection: 'higher-is-better' },
     ],
     rows: [
       [
-        { kind: 'text', text: 'Adaptive' },
+        { kind: 'text', text: 'HV-AV-HV' },
         { kind: 'number', value: measuredVariant },
       ],
       [
-        { kind: 'text', text: 'Fixed-time' },
+        { kind: 'text', text: 'HV-HV-HV' },
         { kind: 'number', value: measuredBaseline },
       ],
     ],
   }
   const roadmapGraph: RoadmapGraph = {
     nodes: [
-      { id: 'baseline-input', label: 'Fixed-time baseline', kind: 'input' },
-      { id: 'adaptive-policy', label: 'Adaptive RL policy', kind: 'process' },
-      { id: 'delay-experiment', label: 'Delay experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: `Delay reduction >= ${thresholdLabel(predictionText)}`, kind: 'output' },
+      { id: 'baseline-input', label: 'Homogeneous platoon (HV-HV-HV)', kind: 'input' },
+      { id: 'adaptive-policy', label: 'Mixed platoon (HV-AV-HV)', kind: 'process' },
+      { id: 'delay-experiment', label: 'Platoon experiment (C1)', kind: 'gate' },
+      { id: 'reduction-outcome', label: `Minimum TTC gain >= ${thresholdLabel(predictionText)}`, kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },
@@ -2207,13 +2335,13 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   if (writer === undefined) {
     points = [
       {
-        concern: `Is the ${measured.reductionPct.toFixed(2)}% delay reduction robust at the boundary?`,
-        response: 'Boundary probing at C3 runs the same simulation with the adaptive response narrowed, which delimits the applicability domain.',
+        concern: `Is the ${measured.improvementPct.toFixed(2)}% minimum-TTC change robust at the boundary?`,
+        response: 'Boundary probing at C3 re-runs the same simulation under stop-and-go forcing and reports the measured margin ratio, which delimits the applicability domain.',
         requiresRevision: false,
       },
       {
         concern: 'Are the SOTA anchors real?',
-        response: 'No published-SOTA row is recorded: a delay figure must be read out of a paper, so the comparison is against this study\'s own measured baseline and says so.',
+        response: 'No published-SOTA row is recorded: a minimum-TTC figure must be read out of a paper, so the comparison is against this study\'s own measured baseline and says so.',
         requiresRevision: true,
       },
     ]
@@ -2310,26 +2438,26 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // Real three-line-table sub-capability: the manuscript results table, built from
   // the SAME measurements the experiment produced.
   const round2 = (value: number): number => Math.round(value * 100) / 100
-  const e1Scenario = experimentScenario()
-  const measuredBaseline = round2(runFixedTimePolicy(e1Scenario).meanDelaySecondsPerVehicle)
-  const measuredVariant = round2(runAdaptivePolicy(e1Scenario).meanDelaySecondsPerVehicle)
+  const e1Comparison = comparePlatoons(ctx.runCtx.study)
+  const measuredBaseline = round2(e1Comparison.baseline.minTtcSeconds)
+  const measuredVariant = round2(e1Comparison.variant.minTtcSeconds)
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
   const invocation = await invoker.invoke(
     'three-line-table',
     {
       model: {
-        title: 'Peak-hour Delay Comparison',
+        title: 'Platoon Minimum Time-to-Collision Comparison',
         columns: [
           { header: 'Method', decimals: 0 },
-          { header: 'Delay (s)', decimals: 2, metricDirection: 'lower-is-better' },
+          { header: 'Minimum TTC (s)', decimals: 2, metricDirection: 'higher-is-better' },
         ],
         rows: [
           [
-            { kind: 'text', text: 'Adaptive' },
+            { kind: 'text', text: 'HV-AV-HV' },
             { kind: 'number', value: measuredVariant },
           ],
           [
-            { kind: 'text', text: 'Fixed-time' },
+            { kind: 'text', text: 'HV-HV-HV' },
             { kind: 'number', value: measuredBaseline },
           ],
         ],
@@ -2576,7 +2704,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
     // `real_tool_fixture_input` made the report print it among the "real tool
     // functions executed", which it is not.
     kind: 'local_computation',
-    basis: 'the baseline is MEASURED: the fixed-time plan is executed over the MEASURED demand profile (see C1-mvp for the series, hash and derivation) and its delay is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published delay figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
+    basis: 'the baseline is MEASURED: the homogeneous platoon is simulated under the study\'s declared scenario (see C1-mvp for the full study declaration) and its minimum time-to-collision is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published minimum-TTC figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
     producer: B3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -2585,7 +2713,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'C1-mvp',
     kind: 'local_computation',
-    basis: 'the traffic-sim experiment engine RUNS both control policies against the MEASURED demand profile (derived from a real hourly vehicle-count series; series, hash, derivation and assumptions recorded on the artifact) and measures the delay reduction. The claim prediction is still fixture-supplied on the default path, so this is "the experiment really ran on measured demand", not "the claim is proven"',
+    basis: 'the platoon-sim experiment engine RUNS both platoons under the study\'s declared scenario (composition, vehicle parameters and disturbance all recorded on the artifact) and measures each one\'s minimum time-to-collision. No model was called and no measured dataset stands behind the numbers, so this is "the experiment really ran on the declared scenario", not "the claim is proven"',
     producer: C1_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',

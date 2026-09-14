@@ -272,14 +272,17 @@ describe('Gate B — external anchoring (consumes VerificationResult[])', () => 
   })
 
   it('abstains (MISSING_EXTERNAL_ANCHOR) when requireExternalAnchor=true and no anchor present', () => {
-    const r = adjudicate(bInput([vref('cit-1', 'unsupported')], { requireExternalAnchor: true }))
+    // `unverified` is the value that means "no usable evidence": the chain could not decide.
+    // `unsupported` is NOT interchangeable with it — with original-text access it is an
+    // external source that contradicts the claim, which blocks (see the contradiction tests).
+    const r = adjudicate(bInput([vref('cit-1', 'unverified')], { requireExternalAnchor: true }))
     expect(r.outcome).toBe('abstained')
     expect(r.reasonCode).toMatch(/DSH_GATE_MISSING_EXTERNAL_ANCHOR/)
     expect(r.abstentionReason).toMatch(/requireExternalAnchor/)
   })
 
   it('abstains (INSUFFICIENT_EVIDENCE) when not required and no anchor present', () => {
-    const r = adjudicate(bInput([vref('cit-1', 'unsupported')], { requireExternalAnchor: false }))
+    const r = adjudicate(bInput([vref('cit-1', 'unverified')], { requireExternalAnchor: false }))
     expect(r.outcome).toBe('abstained')
     expect(r.reasonCode).toMatch(/DSH_GATE_INSUFFICIENT_EVIDENCE/)
   })
@@ -290,12 +293,43 @@ describe('Gate B — external anchoring (consumes VerificationResult[])', () => 
     expect(r.reasonCode).toMatch(/DSH_GATE_INSUFFICIENT_EVIDENCE/)
   })
 
-  it('does NOT treat retracted / unsupported / identity_mismatch as anchors', () => {
-    for (const conclusion of ['retracted', 'unsupported', 'identity_mismatch'] as VerificationConclusion[]) {
+  it('does NOT treat retracted / identity_mismatch / unverified as anchors', () => {
+    // `unsupported` is deliberately absent from this list: an unsupported source WITH
+    // original-text access is evidence AGAINST the claim, and it blocks rather than abstains.
+    for (const conclusion of ['retracted', 'identity_mismatch', 'unverified'] as VerificationConclusion[]) {
       const r = adjudicate(bInput([vref('cit-1', conclusion)], { requireExternalAnchor: true }))
       expect(r.outcome).toBe('abstained')
       expect(r.reasonCode).toMatch(/DSH_GATE_MISSING_EXTERNAL_ANCHOR/)
     }
+  })
+
+  it('BLOCKS when an external source with original-text access contradicts the claim', () => {
+    // A source was read and its content does not support the claim. That is not an evidence
+    // gap: folding it into "no anchor -> abstain" reported a contradicted claim exactly as a
+    // claim with no literature at all, so the B channel could not report "the literature
+    // disagrees with you" — a different, and actionable, finding.
+    const r = adjudicate(bInput([vref('cit-1', 'unsupported')], { requireExternalAnchor: true }))
+    expect(r.outcome).toBe('blocked')
+    expect(r.reasonCode).toMatch(/DSH_GATE_EXTERNAL_CONTRADICTION/)
+    expect(r.evidenceRefs).toEqual(['cit-1'])
+  })
+
+  it('lets a contradiction outrank a supporting anchor', () => {
+    // One source supports the claim and another contradicts it. The gate must not pass on the
+    // supportive one alone: the disagreement is the finding, and it is reworkable.
+    const r = adjudicate(bInput(
+      [vref('cit-1', 'supported'), vref('cit-2', 'unsupported')],
+      { requireExternalAnchor: true },
+    ))
+    expect(r.outcome).toBe('blocked')
+    expect(r.reasonCode).toMatch(/DSH_GATE_EXTERNAL_CONTRADICTION/)
+  })
+
+  it('does NOT read an unaccessed `unsupported` as a contradiction', () => {
+    // Without original-text access nothing was read, so nothing can contradict: the #6 red
+    // line is the finding, and it blocks for its own reason.
+    const r = adjudicate(bInput([vref('cit-1', 'unsupported', { accessed: false, method: 'none' })], { requireExternalAnchor: true }))
+    expect(r.reasonCode).toMatch(/DSH_GATE_MISSING_EXTERNAL_ANCHOR/)
   })
 
   it('does NOT treat a supported-but-unaccessed verification as an anchor', () => {

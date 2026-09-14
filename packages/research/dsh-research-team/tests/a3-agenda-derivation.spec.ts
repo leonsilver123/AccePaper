@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest'
 
 import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 import type { ExecCtx, ResearchProseRequest, ResearchProseWriter } from '../src/runner/registry.ts'
+import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
+import { experimentStudy } from '../src/runner/platoon-sim.ts'
 
 interface AgendaShape {
   readonly phases: ReadonlyArray<string>
@@ -59,7 +61,15 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
     attemptId: 1,
     getInput: (slug: string) =>
       slug === 'claim' ? { claimRef: 'claim-1', assertion: 'adaptive control cuts delay' } : undefined,
-    runCtx: { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp: 1_700_000_000_000 },
+    runCtx: {
+      predictionText: '',
+      claimId: '',
+      claimRef: '',
+      metricKey: '',
+      claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
+      study: experimentStudy(),
+      timestamp: 1_700_000_000_000,
+    },
     ...(writer !== undefined ? { proseWriter: writer } : {}),
   }
 }
