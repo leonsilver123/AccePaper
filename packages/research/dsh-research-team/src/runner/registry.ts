@@ -111,6 +111,7 @@ import {
 import { assembleManuscript } from './manuscript.ts'
 import {
   figureBlock,
+  formatReference,
   markdownPipeTable,
   numberedReferences,
   tableBlock,
@@ -2576,15 +2577,22 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // manuscript reported zero references while its own references section described
   // a landscape scan — the document contradicted itself.
   const rawRefs = (revised?.references as ReadonlyArray<unknown> | undefined) ?? []
+  // Built from the FIELDS, not by joining whatever happened to be present. The previous version
+  // omitted an absent field silently: a record with no authors began with its title, which reads as
+  // a complete citation, and a record with no venue ran two sentences together. `formatReference`
+  // states what is missing instead, and `numberedReferences` at the assembler gives each entry the
+  // number an in-text marker would use.
   const referenceEntries = rawRefs.map((raw) => {
-    const ref = raw as { title?: unknown; venue?: unknown; identifier?: unknown; authors?: unknown }
-    const authors = Array.isArray(ref.authors)
-      ? (ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string')
-      : []
-    const identifier = typeof ref.identifier === 'string' ? ` ${ref.identifier}` : ''
-    const byline = authors.length > 0 ? `${authors.join(', ')}. ` : ''
-    const venue = typeof ref.venue === 'string' ? ` ${ref.venue}.` : ''
-    return `${byline}${String(ref.title)}.${venue}${identifier}`.trim()
+    const ref = raw as { title?: unknown; venue?: unknown; identifier?: unknown; authors?: unknown; year?: unknown }
+    return formatReference({
+      ...(Array.isArray(ref.authors)
+        ? { authors: (ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string') }
+        : {}),
+      ...(typeof ref.title === 'string' ? { title: ref.title } : {}),
+      ...(typeof ref.venue === 'string' ? { venue: ref.venue } : {}),
+      ...(typeof ref.year === 'number' || typeof ref.year === 'string' ? { year: ref.year } : {}),
+      ...(typeof ref.identifier === 'string' ? { identifier: ref.identifier } : {}),
+    })
   })
   // Assembly is a real step of its own now: the module refuses a titleless or
   // section-less manuscript, so an empty shell cannot be assembled here.
