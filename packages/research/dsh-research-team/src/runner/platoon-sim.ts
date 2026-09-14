@@ -1251,8 +1251,14 @@ export function evaluatePrediction(
   // would otherwise be described as "a threshold of undefined%" — a sentence about a number the run
   // never had. The parameter type says that cannot happen; this is what the message reads if a value
   // off the durable boundary ever gets past the reader that validates it.
+  // The predicate is the DOORS' own (`typeof === number && Number.isFinite && > 0`), not a weaker
+  // `typeof` alone: NaN and Infinity are exactly "a value off the durable boundary", and a bare
+  // typeof check would render them as "a threshold of NaN%" — the sentence this exists to remove.
+  // A finite non-positive number is printed as itself; it is a number the claim did declare.
   const declaredThreshold =
-    typeof thresholdPct === 'number' ? `${String(thresholdPct)}%` : 'no usable threshold'
+    typeof thresholdPct === 'number' && Number.isFinite(thresholdPct)
+      ? `${String(thresholdPct)}%`
+      : 'no usable threshold'
   if (statedPercentages.length !== 1 || statedPercentages[0] !== thresholdPct) {
     return {
       kind: 'unbindable',
