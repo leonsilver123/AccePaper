@@ -97,16 +97,43 @@ import {
   ROADMAP_TOOL_VERSION,
   THREE_LINE_TABLE_TOOL_ID,
   THREE_LINE_TABLE_TOOL_VERSION,
+  THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN,
   constructClaim,
   mockLiteratureSearchAdapter,
   renderFigure,
   renderRoadmap,
   renderThreeLineTable,
+  threeLineTableCellText,
   runAblation,
   runLiteratureSearch,
 } from '@deepseek-ai/dsh-research-tools'
 
 import { assembleManuscript } from './manuscript.ts'
+import {
+  figureBlock,
+  markdownPipeTable,
+  numberedReferences,
+  tableBlock,
+} from './paper-format.ts'
+
+/**
+ * The caption a rendered figure already carries in its own content.
+ *
+ * The figure plan's entries hold the rendering, not a caption field, so the title is read from where
+ * the renderer put it: the SVG's `<title>`, or a mermaid leading `%%` comment. A figure whose
+ * content states no title gets the caller's fallback rather than an empty caption.
+ *
+ * @param content - the rendered SVG or mermaid source.
+ * @param fallback - the caption to use when the content names itself nowhere.
+ * @returns the caption text.
+ */
+function figureCaptionFrom(content: string, fallback: string): string {
+  const svgTitle = /<title>([^<]+)<\/title>/u.exec(content)
+  if (svgTitle !== null && (svgTitle[1] ?? '').trim().length > 0) return (svgTitle[1] ?? '').trim()
+  const mermaidTitle = /^%%\s*(.+)$/mu.exec(content)
+  if (mermaidTitle !== null && (mermaidTitle[1] ?? '').trim().length > 0) return (mermaidTitle[1] ?? '').trim()
+  return fallback
+}
 import { evaluateConvergence, summarizeConvergence } from './convergence.ts'
 import type { ChannelVerdict } from './convergence.ts'
 import { buildRevisionRecord } from './rebuttal.ts'
@@ -2581,22 +2608,76 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // own source, so the figure's provenance never stands in for the table's or the roadmap's.
   let figureSvg = ''
   let roadmapMermaid = ''
+  // NUMBERED, CAPTIONED, AND LINKED — the paper shapes. Before this the data figure was pushed as
+  // raw inline SVG with no number and no caption, and the roadmap as an unlabelled mermaid block, so
+  // nothing in the prose could refer to either. A figure is a file or an inline diagram, never both;
+  // `figureBlock` refuses the other cases rather than rendering a broken image.
+  let figureNumber = 0
+  // Tables number independently of figures: a paper's Table 1 does not become Table 3 because two
+  // figures came first.
+  let tableNumber = 0
   for (const entry of rendered) {
     if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
       figureSvg = entry.svg
-      figureBlocks.push(entry.svg)
+      figureNumber += 1
+      figureBlocks.push(figureBlock(figureNumber, {
+        title: figureCaptionFrom(entry.svg, 'Measured comparison'),
+        path: 'figures/figure-1.svg',
+        note: 'Rendered by the figure tool from the measurements this run produced.',
+      }))
     }
     if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
       roadmapMermaid = entry.content.trim()
-      figureBlocks.push(['```mermaid', roadmapMermaid, '```'].join('\n'))
+      figureNumber += 1
+      figureBlocks.push(figureBlock(figureNumber, {
+        title: figureCaptionFrom(roadmapMermaid, 'Research roadmap'),
+        mermaid: roadmapMermaid,
+      }))
     }
   }
-  figureBlocks.push(artifact.render.text)
+  // THE TABLE, AS A TABLE. The tool's own "markdown" rendering draws box-drawing rules, which a
+  // Markdown reader shows as a code block; a paper needs a pipe table. Built from the structured
+  // model the tool returned, not by re-parsing its text.
+  const tableModel = artifact.table
+  const tableHeader = tableModel.columns.map(
+    column => column.unit === undefined ? column.header : `${column.header} (${column.unit})`,
+  )
+  const tableRows = tableModel.rows.map((row) => {
+    const cells: string[] = []
+    row.forEach((cell, index) => {
+      const column = tableModel.columns[Math.min(index, tableModel.columns.length - 1)]
+      if (column === undefined) return
+      const renderedCell = threeLineTableCellText(cell, column, THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN)
+      cells.push(renderedCell)
+      // A pipe table cannot merge cells, so a colSpan cell is followed by empty cells to keep every
+      // row the same width — `markdownPipeTable` refuses a row that disagrees with its header.
+      for (let extra = 1; extra < (cell.colSpan ?? 1); extra += 1) cells.push('')
+    })
+    return cells
+  })
+  const tableMarkdown = tableHeader.length > 0 && tableRows.every(row => row.length === tableHeader.length)
+    ? markdownPipeTable(tableHeader, tableRows)
+    : undefined
+  if (tableMarkdown === undefined) {
+    // A table whose rows do not cover its columns is one this renderer cannot lay out, so the tool's
+    // own rendering is used. Stated here rather than passed over, because the reader would otherwise
+    // see a code block where the paper should have a table.
+    figureBlocks.push(artifact.render.text)
+  } else {
+    tableNumber += 1
+    figureBlocks.push(tableBlock(tableNumber, {
+      title: tableModel.title === undefined || tableModel.title.length === 0
+        ? 'Measured results'
+        : tableModel.title,
+      markdown: tableMarkdown,
+      note: 'Measured by simulating both platoons under the same declared disturbance.',
+    }))
+  }
   const assembled = assembleManuscript({
     title,
     sections: sectionsForAssembly,
     figures: figureBlocks,
-    references: referenceEntries,
+    references: numberedReferences(referenceEntries),
   })
   // The package's OWN files, as CONTENT. E1 produces these; the run exporter adds the
   // run-level files (summary, step record, claim-evidence, citations, experiment,

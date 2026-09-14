@@ -16,12 +16,20 @@
  * @module @deepseek-ai/dsh-research-team/runner/paper-format
  */
 
-/** A figure the manuscript embeds: the file the package exports, and its caption. */
+/**
+ * A figure the manuscript embeds, and its caption.
+ *
+ * A figure is EITHER a file the package exports OR an inline diagram, never both: the data figure is
+ * an SVG the package writes to `figures/`, while the roadmap is a mermaid block that has no image
+ * file at all. Passing both, or neither, is refused rather than guessed at.
+ */
 export interface PaperFigure {
   /** Caption text, rendered as `**Figure N.** <title>`. */
   readonly title: string
-  /** Package-relative path to the exported file, e.g. `figures/figure-1.svg`. */
-  readonly path: string
+  /** Package-relative path to the exported image, e.g. `figures/figure-1.svg`. */
+  readonly path?: string
+  /** Inline diagram source, rendered as a fenced `mermaid` block. */
+  readonly mermaid?: string
   /** Optional second sentence: what the figure does not establish. */
   readonly note?: string
 }
@@ -95,9 +103,20 @@ export function markdownPipeTable(
  * @returns the figure block, without a trailing newline.
  */
 export function figureBlock(number: number, figure: PaperFigure): string {
+  const hasPath = figure.path !== undefined && figure.path.length > 0
+  const hasMermaid =
+    figure.mermaid !== undefined && figure.mermaid.trim().length > 0
+  if (hasPath === hasMermaid) {
+    throw new Error(
+      `figureBlock: figure ${String(number)} must carry exactly one of \`path\` or \`mermaid\``,
+    )
+  }
   const label = `Figure ${String(number)}`
   const caption = `**${label}.** ${figure.title}${figure.note === undefined ? '' : ` ${figure.note}`}`
-  return `![${label}: ${figure.title}](${figure.path})\n\n${caption}`
+  const body = hasPath
+    ? `![${label}: ${figure.title}](${figure.path})`
+    : ['```mermaid', figure.mermaid?.trim(), '```'].join('\n')
+  return `${body}\n\n${caption}`
 }
 
 /**

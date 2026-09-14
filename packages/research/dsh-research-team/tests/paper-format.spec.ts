@@ -62,6 +62,21 @@ describe('the paper formatting layer', () => {
     )
   })
 
+  it('renders an inline diagram as a mermaid figure, and refuses a figure that is both or neither', () => {
+    const roadmap = figureBlock(2, {
+      title: 'Research roadmap',
+      mermaid: 'flowchart LR\n  a --> b',
+    })
+    expect(roadmap).toContain('```mermaid\nflowchart LR\n  a --> b\n```')
+    expect(roadmap).toContain('**Figure 2.** Research roadmap')
+    // A figure is a file or a diagram; without that rule a caller that omits the path renders
+    // `![Figure 3: t](undefined)`, which is a broken image that looks like a real one.
+    expect(() => figureBlock(3, { title: 't' })).toThrow(/exactly one of/)
+    expect(() =>
+      figureBlock(3, { title: 't', path: 'a.svg', mermaid: 'flowchart LR' }),
+    ).toThrow(/exactly one of/)
+  })
+
   it('numbers tables and puts the caption above them, where a reader looks for it', () => {
     const block = tableBlock(2, {
       title: 'Results',
