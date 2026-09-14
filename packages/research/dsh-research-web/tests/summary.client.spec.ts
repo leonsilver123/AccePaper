@@ -214,6 +214,66 @@ describe('summaryInputFrom — a step that failed mid-execution', () => {
   })
 })
 
+describe('summaryInputFrom — values this build cannot name', () => {
+  // The shape a `keyof` freeze cannot see: a field keeps its NAME while its VALUE SET grows. An
+  // independent audit found three coercions in the mapping defaulting silently on an unrecognised
+  // value — `pending` for a status, `A` for a phase, and `A` for an abstention's component, the last
+  // of which DISPLAYED a verdict under a component it was not about. They report now, and this pins
+  // that: a value the view cannot name must be visible as unknown, never absorbed into a real bucket.
+  const withUnknowns = { status: 'quiesced', phase: 'F', component: 'D' }
+
+  it('reports an unknown status as its own bucket instead of counting it as pending', () => {
+    const input = summaryInputFrom({
+      run: {
+        runId: 'run-1',
+        steps: [{
+          stepId: 'A1-landscape',
+          status: withUnknowns.status,
+          attemptId: 1,
+          kind: 'x',
+          producer: 'p',
+          outputSlugs: [],
+          artifacts: [],
+          verdicts: {},
+          usedRealTool: false,
+        }],
+      },
+      catalog: [{ id: 'A1-landscape', index: 1, phase: withUnknowns.phase, name: 'landscape', humanGate: false, gate: ['B'] }],
+      gates: [],
+      artifacts: [],
+      steps: [{ stepId: 'A1-landscape', status: withUnknowns.status, attempt: 1, holdReason: null }],
+    })
+
+    const summary = toRunSummary(input)
+    expect(summary.steps[0]?.status).toBe('unknown')
+    expect(summary.steps[0]?.phase).toBe('unknown')
+    // The counts keep it separate: folding it into `pending` is what made a step the Host had
+    // advanced read as 未开始.
+    expect(summary.byStatus.unknown).toBe(1)
+    expect(summary.byStatus.pending).toBe(0)
+  })
+
+  it('never attributes an abstention to a component it was not about', () => {
+    const input = summaryInputFrom({
+      run: { runId: 'run-1', steps: [] },
+      catalog: [],
+      gates: [{
+        stepId: 'A1-landscape',
+        component: withUnknowns.component,
+        outcome: 'abstained',
+        passed: false,
+        evidence: 'e',
+        rationale: 'r',
+        timestamp: 0,
+      }],
+      artifacts: [],
+      steps: [],
+    })
+
+    expect(input.abstentions[0]?.component).toBe('unknown')
+  })
+})
+
 describe('loadFixtureSummary — determinism', () => {
   it('returns an equal model on repeated calls (pure)', () => {
     expect(loadFixtureSummary()).toEqual(loadFixtureSummary())

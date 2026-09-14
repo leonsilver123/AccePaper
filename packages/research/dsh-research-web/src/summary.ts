@@ -16,7 +16,8 @@
  */
 
 /** Methodology phase (the research 16-step pipeline phases A–E). */
-export type Phase = 'A' | 'B' | 'C' | 'D' | 'E'
+/** Research phase. `'unknown'` reports a phase this build cannot name rather than defaulting. */
+export type Phase = 'A' | 'B' | 'C' | 'D' | 'E' | 'unknown'
 
 /** Judgment trinity component (A adversarial, B external anchor, C falsifiable). */
 export type TrinityComponent = 'A' | 'B' | 'C'
@@ -29,6 +30,14 @@ export type StepStatus =
   | 'passed'
   | 'blocked'
   | 'failed'
+  /**
+   * A status this build does not know.
+   *
+   * The mapping used to DEFAULT an unrecognised status to `pending`, which reported a step the
+   * Host had advanced as 未开始 and folded it into a real bucket in the counts. A value the view
+   * cannot name is reported as one, and `unknown` is its own bucket so nothing absorbs it.
+   */
+  | 'unknown'
 
 /** Explicit gate outcome — the single source of truth for a component verdict. */
 export type GateOutcome = 'passed' | 'blocked' | 'failed' | 'abstained'
@@ -104,7 +113,8 @@ export interface AbstentionRecord {
   readonly runId: string
   readonly stepId: string
   readonly attemptId: number
-  readonly component: TrinityComponent
+  /** The component that abstained; `'unknown'` when this build cannot name it — never coerced. */
+  readonly component: TrinityComponent | 'unknown'
   readonly reasonCode: string
   readonly evidenceRefs: ReadonlyArray<string>
   /** ISO-8601 timestamp. */
@@ -201,6 +211,7 @@ const EMPTY_BY_STATUS: Record<StepStatus, number> = {
   passed: 0,
   blocked: 0,
   failed: 0,
+  unknown: 0,
 }
 
 /**

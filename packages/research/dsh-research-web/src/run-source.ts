@@ -145,11 +145,15 @@ const PHASES: ReadonlyArray<Phase> = ['A', 'B', 'C', 'D', 'E']
 const COMPONENTS: ReadonlyArray<TrinityComponent> = ['A', 'B', 'C']
 
 function asStepStatus(value: string): StepStatus {
-  return STEP_STATUSES.find(status => status === value) ?? 'pending'
+  // REPORT, do not default. Defaulting to `pending` showed a step the Host had advanced as 未开始
+  // and folded it into a real bucket in the counts. An independent audit found the three coercions
+  // in this file defaulting silently, and named this as the shape a `keyof` freeze cannot see.
+  if (STEP_STATUSES.some(status => status === value)) return value as StepStatus
+  return 'unknown'
 }
 
 function asPhase(value: string): Phase {
-  return PHASES.find(phase => phase === value) ?? 'A'
+  return PHASES.some(phase => phase === value) ? (value as Phase) : 'unknown'
 }
 
 function asComponent(value: string): TrinityComponent | undefined {
@@ -253,7 +257,9 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
         runId: snapshot.run.runId,
         stepId: gate.stepId,
         attemptId: stateByStep.get(gate.stepId)?.attempt ?? 0,
-        component: (asComponent(component) ?? 'A'),
+        // NEVER coerced to a component. Defaulting to `A` displayed a verdict under a component it
+        // was not about — the one coercion of the three that misattributes rather than under-reports.
+        component: asComponent(component) ?? 'unknown',
         reasonCode: gate.rationale === '' ? 'GATE_ABSTAINED' : gate.rationale,
         evidenceRefs: [],
         recordedAt: new Date(gate.timestamp).toISOString(),
