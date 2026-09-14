@@ -1,5 +1,7 @@
 # @deepseek-ai/dsh-research-app
 
+English | [中文](README.zh.md)
+
 The **dsh Research bundle (T30)** — the research-surface layer of the dsh profile stack. It layers over `dsh-web-app` (which layers over `dsh-base`) to package the DeepSeek Harness research-paper production system as a distributable bundle.
 
 ## What it does

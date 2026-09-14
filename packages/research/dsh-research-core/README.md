@@ -1,15 +1,17 @@
 # @deepseek-ai/dsh-research-core
 
-AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级、引文身份链、A/B/C 闸门裁决,以及运行状态快照存储。零运行时依赖、零 Cordis,可在任何宿主中单元测试。
+English | [中文](README.zh.md)
 
-设计前提是 **AI 生成的科学论断不可信**,因此状态机把"不可作弊地记录科研判断"落成约束:唯一前向迁移器、唯一闸门裁决器、`abstained` 优先级最高且永不可升级为 `passed`、人审批一次性防重放、回滚级联传递闭包、快照深克隆后深冻结。
+The pure-logic kernel of the AI research-paper production system: the 16-step state machine, L0 literature tiering, the citation identity chain, A/B/C gate adjudication, and the run-state snapshot store. Zero runtime dependencies, zero Cordis, unit-testable in any host.
 
-公共入口刻意不导出 `approveHumanGate` / `transition` / `submitHumanApproval` 与可变的步骤单例;人审批只经 `./host` 子路径可达,而该子路径只暴露受限的生产入口。
+The design premise is that **AI-generated scientific claims are untrustworthy**, so the state machine turns "recording research judgments without being able to cheat" into constraints: a single forward transitioner, a single gate adjudicator, `abstained` taking highest precedence and never upgradable to `passed`, one-shot replay protection for human approval, rollback cascading to a transitive closure, and snapshots deep-cloned then deep-frozen.
+
+The public entry point deliberately does not export `approveHumanGate` / `transition` / `submitHumanApproval` or the mutable step singletons; human approval is reachable only through the `./host` subpath, and that subpath exposes only the restricted production entry points.
 
 ## Known Limitations and Deferred Work
 
-- `snapshot-store.ts` 目前没有生产消费者:它提供原子写盘与重放防护,但没有任何 runner 或团队代码读取它,因此 Session 进程级重启恢复仍未实现——底层已备,接线未做。
-- 状态机记录判定,但不产出判定:闸门裁决的输入(L0 分级、引文核验、A/B/C 三通道)由调用方构造,本包不接触网络、文件系统或时钟。
-- `ResearchError` 基类同时被闸门等纯逻辑兄弟模块导入。这是有意的近期安排(共享基类、无运行时环),长期应迁到中性模块以进一步解耦。
+- `snapshot-store.ts` has no production consumer yet: it provides atomic writes and replay protection, but no runner or team code reads it, so process-level restart recovery for a Session is still unimplemented — the substrate is ready, the wiring is not.
+- The state machine records adjudications but does not produce them: the inputs to a gate verdict (L0 tiering, citation verification, the A/B/C channels) are constructed by the caller, and this package touches no network, filesystem, or clock.
+- The `ResearchError` base class is also imported by sibling pure-logic modules such as the gate. This is a deliberate near-term arrangement (a shared base class, no runtime cycle); in the long run it should move to a neutral module to decouple further.
 
 No invariant companion is published: this package's cross-module invariants are asserted directly by its own specs, and it ships no `./invariant` entry for one to accompany.

@@ -1,15 +1,17 @@
 # @deepseek-ai/dsh-research-tools
 
-科研流水线的七个工具实现(文献检索 / 引文核验 / claim 构造 / 消融 / 图表 / 三线表 / 路线图),以及它们的**封闭输入 schema** 与 `ResearchToolInvoker` 接缝。本包是纯库:不依赖 Cordis,注册与宿主接线由 `dsh-research-cordis` 负责。
+English | [中文](README.zh.md)
 
-`RESEARCH_TOOL_DIRECTORY` 是工具的审计真源:每个工具条目标注 `modelExposure`(`pipeline_only` 或 `model_ready`)并附一条 `reason` 说明该判定为何成立。工具函数本身是纯的,外部数据只经 adapter 接缝进入。
+The seven tool implementations of the research pipeline (literature search / citation verification / claim construction / ablation / figure / three-line table / roadmap), plus their **closed input schemas** and the `ResearchToolInvoker` seam. This package is a pure library: it does not depend on Cordis, and registration and host wiring are owned by `dsh-research-cordis`.
+
+`RESEARCH_TOOL_DIRECTORY` is the audit source of truth for the tools: each tool entry records `modelExposure` (`pipeline_only` or `model_ready`) together with a `reason` stating why that judgment holds. The tool functions themselves are pure; external data enters only through the adapter seam.
 
 ## Known Limitations and Deferred Work
 
-- 七个工具的**输入目前全部来自 fixture**:工具函数真实执行,但喂给它们的数据是合成的,因此产出不构成真实科研结果。这是与 `runner/registry.ts` 中 `real_tool_fixture_input` 标注对应的诚实边界。
-- `citation-verify` 工具**没有生产消费者**:团队侧的 B 通道走 core 的 `verifyCitation`,而非该工具;它仍注册在目录中以满足"七个工具"的名册声明。
-- 外部数据源(Crossref / OpenAlex / 分区表)一律经 adapter 接缝,仓库内不附带真实凭据或未确认许可的数据集。
+- **All seven tools currently take fixture input**: the tool functions really execute, but the data fed to them is synthetic, so their output does not constitute a real research result. This is the honest boundary corresponding to the `real_tool_fixture_input` label in `runner/registry.ts`.
+- The `citation-verify` tool **has no production consumer**: the team-side B channel goes through core's `verifyCitation` rather than this tool; it stays registered in the directory to satisfy the "seven tools" roster declaration.
+- External data sources (Crossref / OpenAlex / tier tables) all go through the adapter seam; the repository ships no real credentials and no dataset whose licence is unconfirmed.
 
 No invariant companion is published: the tool contracts are frozen by the directory entries and covered by the package's own specs, so no `./invariant` entry is published alongside it.
 
-- **调用方式与数据来源是两个独立的事实,标签只描述前者**(2026-09-14)。`ResearchToolTruthfulness` 只有两个值:`direct_call`(研究层直接调用工具函数)与 `host_tool_runtime`(经宿主 agent-loop 铸造的工具运行时执行)。**`direct_call` 不说明数据是什么** —— 直调的不是 fixture;同理,走宿主运行时的通道也可能拿到 fixture 输入。数据是什么记录在适配器配置与产物自身的 `corpus` / `source` / `*Source` 字段上。**两个标签合起来也不等于"结论已验证"。** 四个 `pipeline_only` 工具的直调是**已接受的架构边界**,详见 `dsh-research-cordis` README。
+- **How a tool is invoked and where its data comes from are two independent facts, and the label describes only the former** (2026-09-14). `ResearchToolTruthfulness` has exactly two values: `direct_call` (the research layer calls the tool function directly) and `host_tool_runtime` (executed through the tool runtime the host agent-loop mints). **`direct_call` says nothing about what the data is** — a direct call is not automatically a fixture; by the same token, a channel that goes through the host runtime can also receive fixture input. What the data is is recorded in the adapter configuration and in the artifact's own `corpus` / `source` / `*Source` fields. **Neither label, nor the two together, means "the conclusion has been verified."** The direct calls of the four `pipeline_only` tools are an **accepted architectural boundary**; see the `dsh-research-cordis` README.
