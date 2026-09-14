@@ -553,6 +553,35 @@ interface VehicleState {
   readonly acceleration: number
 }
 
+/**
+ * The equations this study's model is, as the manuscript states them.
+ *
+ * EACH LINE DESCRIBES THIS MODULE'S OWN COMPUTATION, not a textbook's general form: the desired gap
+ * carries the `max(0, …)` the integration loop applies, the gap is floored the way the loop floors
+ * it, and the acceleration is clamped per vehicle class. A reader comparing these against
+ * `runPlatoon` finds the same expressions; a reader comparing them against a paper on the
+ * Intelligent Driver Model finds the standard model, which is the point.
+ */
+export const MODEL_EQUATIONS: ReadonlyArray<{ readonly name: string; readonly latex: string; readonly note: string }> = [
+  {
+    name: 'Desired gap',
+    latex:
+      's^{*} = s_{0} + \\max\\left(0,\\; v T + \\frac{v \\Delta v}{2\\sqrt{a b}}\\right)',
+    note: 'The gap a follower wants, at speed v with approach speed Δv; a is the maximum acceleration and b the comfortable deceleration.',
+  },
+  {
+    name: 'Acceleration',
+    latex:
+      '\\dot{v} = \\mathrm{clamp}\\!\\left(a\\left[1 - \\left(\\frac{v}{v_{0}}\\right)^{\\delta} - \\left(\\frac{s^{*}}{\\max(s, 0.01)}\\right)^{2}\\right],\\; -b_{\\text{class}},\\; a\\right)',
+    note: 'Integrated at the declared fixed step; the clamp is the vehicle class\'s own deceleration limit.',
+  },
+  {
+    name: 'Time to collision',
+    latex: '\\mathrm{TTC} = \\frac{s}{\\Delta v} \\quad (\\Delta v > 0), \\qquad \\infty \\text{ otherwise}',
+    note: 's is the bumper-to-bumper gap; the platoon\'s measurement is the minimum over all followers and the whole window.',
+  },
+]
+
 /** Time-to-collision from one follower to its leader, or Infinity when it is not closing. */
 function timeToCollision(follower: VehicleState, leader: VehicleState): number {
   const gap =

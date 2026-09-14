@@ -110,6 +110,7 @@ import {
 
 import { assembleManuscript } from './manuscript.ts'
 import {
+  equationBlock,
   figureBlock,
   formatReference,
   markdownPipeTable,
@@ -157,6 +158,7 @@ import {
   boundaryTest,
   comparePlatoons,
   evaluatePrediction,
+  MODEL_EQUATIONS,
   experimentStudy,
   runPlatoon,
   studyFromPack,
@@ -2601,9 +2603,17 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // twice. The assembler's block wins because it is the one that actually holds the
   // entries, so the empty outline section is dropped here and the replacement is
   // recorded on the artifact rather than happening silently.
+  // THE MODEL'S EQUATIONS GO IN THE METHOD SECTION, which is where a reader looks for them. They
+  // are the module's own computation (see MODEL_EQUATIONS), not decoration, and the section is
+  // extended rather than replaced so the prose the draft wrote stays where it is.
+  const equations = equationBlock(MODEL_EQUATIONS)
+  const withEquations = sections.map(section =>
+    section.id === 'method' && equations.length > 0
+      ? { ...section, bodyText: `${section.bodyText}\n\n${equations}` }
+      : section)
   const sectionsForAssembly = referenceEntries.length > 0
-    ? sections.filter(section => section.id !== 'references')
-    : sections
+    ? withEquations.filter(section => section.id !== 'references')
+    : withEquations
   // The manuscript carries the figures D1 actually rendered: the data figure as the
   // svg it produced, the roadmap as the mermaid block it produced, then the results
   // table. Until this, the Figures section held the table alone and the rendered
