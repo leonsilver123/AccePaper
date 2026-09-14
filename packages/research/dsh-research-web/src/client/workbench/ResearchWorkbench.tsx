@@ -11,6 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ResearchKey } from '../locales.ts'
+import type { ApprovalSubmitter } from '../approval-source.ts'
 import { loadFixtureSummary } from '../../loader.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
 import { PipelinePanel } from './PipelinePanel.tsx'
@@ -35,6 +36,11 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * to start, in which case the view shows the fixture and no run control.
    */
   readonly onRun?: () => Promise<ReturnType<typeof loadFixtureSummary>>
+  /**
+   * Submit one human-gate decision to the backend. Omitted by a host whose deployment serves no
+   * authenticated approval endpoint, in which case the approval panel's buttons stay disabled.
+   */
+  readonly onApprove?: ApprovalSubmitter
 }
 
 /** Workbench sub-panel tab identifiers. */
@@ -62,7 +68,7 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
  * @param props - slot runtime props, the `research` namespace translate `t`, and an
  *   optional `summary` to render in place of the bundled fixture.
  */
-export function ResearchWorkbench({ t, summary: injected, onRun }: ResearchViewProps) {
+export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: ResearchViewProps) {
   // The hook runs unconditionally so its order is stable; the fixture is only
   // materialized when no summary was injected.
   const [live, setLive] = useState<ReturnType<typeof loadFixtureSummary> | undefined>(undefined)
@@ -120,7 +126,14 @@ export function ResearchWorkbench({ t, summary: injected, onRun }: ResearchViewP
       {active === 'roadmap' && <RoadmapPanel summary={summary} t={t} />}
       {active === 'gates' && <GatePanel summary={summary} t={t} />}
       {active === 'adversarial' && <AdversarialPanel summary={summary} t={t} />}
-      {active === 'approval' && <ApprovalPanel summary={summary} t={t} />}
+      {active === 'approval' && (
+        <ApprovalPanel
+          summary={summary}
+          t={t}
+          {...onApprove === undefined ? {} : { onSubmit: onApprove }}
+          onDecided={setLive}
+        />
+      )}
       {active === 'recovery' && <RecoveryPanel summary={summary} t={t} />}
     </div>
   )

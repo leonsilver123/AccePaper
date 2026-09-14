@@ -230,6 +230,12 @@
       // research/ folders carry the dsh- prefix in their directory names, so the generated
       // aliases cannot map them; these five stay hand-written.
       "@deepseek-ai/dsh-research-core": ["./packages/research/dsh-research-core/src"],
+      // The host trust channel is a SUBPATH, and the only export that can move a humanGate
+      // step from `gated` to `passed`. Core's main entry deliberately exports no approval
+      // capability, so a consumer must name this subpath; without the alias it would resolve
+      // through node_modules to `lib/`, i.e. the artifact plane (AGENTS.md: source plane and
+      // artifact plane are never mixed).
+      "@deepseek-ai/dsh-research-core/host": ["./packages/research/dsh-research-core/src/host-prod.ts"],
       "@deepseek-ai/dsh-research-cordis": ["./packages/research/dsh-research-cordis/src"],
       "@deepseek-ai/dsh-research-team": ["./packages/research/dsh-research-team/src"],
       "@deepseek-ai/dsh-research-tools": ["./packages/research/dsh-research-tools/src"],

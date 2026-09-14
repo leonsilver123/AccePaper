@@ -285,9 +285,25 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(String(doc.tableMarkdown)).toContain('Adaptive')
     expect(typeof doc.bindingHash).toBe('string')
     expect(String(doc.bindingHash).length).toBeGreaterThan(0)
-    const pkg = doc.reproduciblePackage as { files?: unknown }
-    expect(Array.isArray(pkg.files)).toBe(true)
-    expect((pkg.files as unknown[]).length).toBeGreaterThanOrEqual(3)
+    // `packageFiles` holds CONTENT, not a list of names. The earlier field listed five
+    // filenames nothing wrote, which read as run output; asserting a non-empty body per
+    // path is the property that distinguishes a produced package from a proposed one.
+    const pkg = doc.packageFiles as Record<string, unknown>
+    // Presence means content: a path an un-run upstream step left without a body is
+    // OMITTED, never declared empty.
+    for (const path of ['manuscript.md', 'experiment-tables.md']) {
+      expect(typeof pkg[path], path).toBe('string')
+      expect((pkg[path] as string).length, path).toBeGreaterThan(0)
+    }
+    for (const [path, content] of Object.entries(pkg)) {
+      expect((content as string).length, path).toBeGreaterThan(0)
+    }
+    expect(pkg['manuscript.md']).toContain('## Results')
+    // This executor ran without D1, so the figure has no content and its path is absent.
+    // When it IS present it must be the rendered SVG, not a placeholder for one.
+    if (pkg['figures/figure-1.svg'] !== undefined) {
+      expect(pkg['figures/figure-1.svg']).toContain('<svg')
+    }
   })
 
   it('C3-boundary really aggregated repeated ablation runs (ablation lives at C3)', async () => {

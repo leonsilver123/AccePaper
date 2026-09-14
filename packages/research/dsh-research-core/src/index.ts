@@ -184,4 +184,32 @@ export type {
   SnapshotStep,
   SnapshotStore,
   FileSnapshotStoreOptions,
+  VersionedSnapshot,
 } from './snapshot-store.ts'
+
+// ── P5 run persistence — the record + restore layer over the snapshot store ───
+// `captureRunSnapshot` writes a live run to a data-only record; `restoreRun` rebuilds a run from
+// a validated record and requires the caller to supply the capability the resumed run runs on.
+// `createRunPersistence` binds both to one directory with a monotonic revision guard, so a
+// snapshot captured from older state cannot silently overwrite newer state. No capability,
+// service object or credential is persisted (contract §8.4).
+export {
+  createRunPersistence,
+  captureRunSnapshot,
+  restoreRun,
+  parseRunSnapshotPayload,
+  SnapshotConflictError,
+  SnapshotInvalidError,
+  RUN_SNAPSHOT_SCHEMA_VERSION,
+  RUN_SNAPSHOT_ERROR_CODES,
+} from './run-persistence.ts'
+export type {
+  InterruptedStep,
+  PersistedRunHeader,
+  PersistedStepState,
+  RestoredRun,
+  RunPersistence,
+  RunPersistenceOptions,
+  RunSaveOptions,
+  RunSnapshotPayload,
+} from './run-persistence.ts'

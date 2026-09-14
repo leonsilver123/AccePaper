@@ -91,6 +91,7 @@ import {
   LITERATURE_SEARCH_TOOL_ID,
   LITERATURE_SEARCH_TOOL_VERSION,
   ROADMAP_TOOL_ID,
+  ROADMAP_TOOL_VERSION,
   THREE_LINE_TABLE_TOOL_ID,
   THREE_LINE_TABLE_TOOL_VERSION,
   constructClaim,
@@ -2261,12 +2262,18 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? (revised.renderedFigures as ReadonlyArray<{ kind?: unknown; svg?: unknown; content?: unknown; format?: unknown }>)
     : []
   const figureBlocks: string[] = []
+  // Kept separately as well as inline: the package writes each part as its own file with its
+  // own source, so the figure's provenance never stands in for the table's or the roadmap's.
+  let figureSvg = ''
+  let roadmapMermaid = ''
   for (const entry of rendered) {
     if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
+      figureSvg = entry.svg
       figureBlocks.push(entry.svg)
     }
     if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
-      figureBlocks.push(['```mermaid', entry.content.trim(), '```'].join('\n'))
+      roadmapMermaid = entry.content.trim()
+      figureBlocks.push(['```mermaid', roadmapMermaid, '```'].join('\n'))
     }
   }
   figureBlocks.push(artifact.render.text)
@@ -2275,6 +2282,29 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     sections: sectionsForAssembly,
     figures: figureBlocks,
     references: referenceEntries,
+  })
+  // The package's OWN files, as CONTENT. E1 produces these; the run exporter adds the
+  // run-level files (summary, step record, claim-evidence, citations, experiment,
+  // reproducibility, manifest) and writes the whole set to disk. A path whose upstream step
+  // did not run has no content and is OMITTED, never declared empty — the earlier version of
+  // this artifact listed five filenames no step wrote, which read as run output.
+  const pkg = nonEmptyPackageFiles({
+    'manuscript.md': {
+      content: assembled.markdown,
+      source: 'assembleManuscript(revised-draft + venue scope + references)',
+    },
+    'experiment-tables.md': {
+      content: artifact.render.text,
+      source: `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`,
+    },
+    'figures/figure-1.svg': {
+      content: figureSvg,
+      source: `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`,
+    },
+    'roadmap.md': {
+      content: roadmapMermaid.length > 0 ? ['```mermaid', roadmapMermaid, '```'].join('\n') : '',
+      source: `${ROADMAP_TOOL_ID}@${ROADMAP_TOOL_VERSION}`,
+    },
   })
   return {
     'formatted-manuscript': tagArtifact(
@@ -2296,15 +2326,14 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sectionHeadings: sections.map(s => s.heading),
         tableMarkdown: artifact.render.text,
         bindingHash: artifact.bindingHash,
-        reproduciblePackage: {
-          // `produced: false` is the load-bearing field. The filenames below are a
-          // PROPOSAL for a later wave, and listing them beside a produced manuscript
-          // invites a reader to take them as artifacts of this run. No step writes
-          // any of them.
-          produced: false,
-          files: ['manuscript.md', 'experiment-tables.md', 'figures/figure-1.svg', 'roadmap.md', 'run-manifest.json'],
-          note: 'PROPOSED package layout, NOT produced: no step writes these files. The manuscript text itself IS produced (see `manuscript`); exporting it as a package is a later wave',
-        },
+        // The package's OWN files, as CONTENT. E1 produces exactly these four; the run
+        // exporter adds the run-level files (summary, step record, claim-evidence,
+        // citations, experiment, reproducibility, manifest) and writes the whole set to
+        // disk. A file appears here only when its content is really produced below — the
+        // earlier version of this field listed five filenames that no step wrote, which
+        // read as run output beside a produced manuscript.
+        packageFiles: pkg.files,
+        packageSources: pkg.sources,
         note: 'formatted-manuscript ASSEMBLED by the E1-format executor from the revised draft + venue scope; the results table is rendered by the REAL renderThreeLineTable sub-capability — the tool is E1\'s table capability, not the format step itself',
       },
       E1_PRODUCER,
@@ -2312,6 +2341,29 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
     ),
   }
+}
+
+/**
+ * Select the package files this run actually produced.
+ *
+ * A file whose content is empty is OMITTED rather than declared: an upstream step that did
+ * not run leaves E1 with nothing for that path, and a declared-but-empty file is exactly the
+ * "listed but not produced" defect this replaced. Presence therefore means content.
+ *
+ * @param candidates - each path's content and the producer that supplied it.
+ * @returns the non-empty paths mapped to their content, plus a parallel source map.
+ */
+function nonEmptyPackageFiles(
+  candidates: Readonly<Record<string, { readonly content: string; readonly source: string }>>,
+): { readonly files: Readonly<Record<string, string>>; readonly sources: Readonly<Record<string, string>> } {
+  const files: Record<string, string> = {}
+  const sources: Record<string, string> = {}
+  for (const [path, entry] of Object.entries(candidates)) {
+    if (entry.content.length === 0) continue
+    files[path] = entry.content
+    sources[path] = entry.source
+  }
+  return { files, sources }
 }
 
 /** E2-submit runs no executor at all (human gate stop). */

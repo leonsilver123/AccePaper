@@ -74,6 +74,9 @@
     },
     {
       "path": "../../typert/protocol"
+    },
+    {
+      "path": "../../research/dsh-research-team"
     }
   ]
 }

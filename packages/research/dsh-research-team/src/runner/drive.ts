@@ -310,7 +310,13 @@ export async function driveRemaining(
       if (step.id !== fromStepId) continue
       started = true
     }
-    outcomes.push(await driveStep(store, runId, step.id, stepOpts))
+    const outcome = await driveStep(store, runId, step.id, stepOpts)
+    outcomes.push(outcome)
+    // Same rule as runT19B: stop at the first step that did not pass. Driving on would make the
+    // next step's `canStart` guard throw "dependency order violated", which reports the
+    // consequence and hides the cause — the failure that motivated this rule in runT19B applies
+    // identically to a resumed run, and a resume is exactly where a step is expected to fail.
+    if (outcome.status !== 'passed' && outcome.status !== 'gated') break
   }
   if (!started) throw new Error(`T19B drive: unknown fromStepId '${fromStepId}'`)
   return { runId, steps: outcomes }

@@ -10,20 +10,23 @@ import { useCallback } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RunSummary } from '../summary.ts'
+import type { ApprovalSubmitter } from './approval-source.ts'
 import { ResearchWorkbench } from './workbench/ResearchWorkbench.tsx'
 
 /** Resolve the summary for one real run, or reject with why it could not be produced. */
 export type ResearchRunSource = () => Promise<RunSummary>
 
 /**
- * Build the slot component bound to one run source.
+ * Build the slot component bound to one run source and one approval endpoint.
  *
  * @param run - starts a run and resolves with its summary.
+ * @param approve - submits one human-gate decision to the backend. Omitted when this
+ *   deployment serves no authenticated approval endpoint, which disables the panel's buttons.
  * @returns a conversation-view component that renders the research workbench.
  */
-export function researchViewWith(run: ResearchRunSource) {
+export function researchViewWith(run: ResearchRunSource, approve?: ApprovalSubmitter) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
-    return <ResearchWorkbench {...props} onRun={onRun} />
+    return <ResearchWorkbench {...props} onRun={onRun} {...approve === undefined ? {} : { onApprove: approve }} />
   }
 }

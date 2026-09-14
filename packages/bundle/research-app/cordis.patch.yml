@@ -69,6 +69,17 @@
         # through every value derived from them. Relative paths resolve against the
         # engine's `workspace`. Point this at a different directory to run a different case.
         casePackDirectory: plan/overnight/2026-09-09/case-pack-traffic
+        # Where a finished run's reproducible package is written. Every file the manifest
+        # names is really written, with its byte count and content digest. This default is
+        # the repository's gitignored scratch area, so a demo run leaves the tree clean;
+        # point it anywhere the deployment wants the export to land. Like
+        # `casePackDirectory` it is a deployment setting, not a request field.
+        packageDirectory: .workbuddy/tmp/research-run-package
+        # Where the durable run snapshot lives. A finished run is written here, and a later
+        # process can restore it and drive it on — the run's steps, artifacts, gate verdicts,
+        # abstentions and consumed approval events all survive the boundary, while no service
+        # object or credential is persisted. Omitted, runs are not persisted and cannot resume.
+        snapshotDirectory: .workbuddy/tmp/research-run-snapshot
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.

@@ -47,12 +47,26 @@ export interface SnapshotPayload {
   consumedApprovalEventIds: Array<string>
 }
 
-/** Contract for a snapshot store. */
-export interface SnapshotStore {
+/**
+ * The minimum a persisted snapshot carries for the store's version gate. A payload type of the
+ * caller's own only needs this field.
+ */
+export interface VersionedSnapshot {
+  schemaVersion: number
+}
+
+/**
+ * Contract for a snapshot store.
+ *
+ * `P` is the caller's payload type. The store checks exactly two things about it: the file parses
+ * as JSON, and its `schemaVersion` is a number equal to the configured one. Any further structure
+ * is the caller's to validate — pass a payload type whose loader validates what it reads.
+ */
+export interface SnapshotStore<P extends VersionedSnapshot = SnapshotPayload> {
   /** Atomically persist a snapshot (never partially overwrites an existing good file). */
-  save(snapshot: SnapshotPayload): Promise<void>
+  save(snapshot: P): Promise<void>
   /** Load the persisted snapshot, or throw a {@link SnapshotStoreError} on any problem. */
-  load(): Promise<SnapshotPayload>
+  load(): Promise<P>
 }
 
 /** Stable error codes surfaced on {@link SnapshotStoreError}. */
@@ -116,18 +130,20 @@ export interface FileSnapshotStoreOptions {
  *
  * The store uses atomic write + rename semantics and fails closed on read so that
  * a caller can never observe a torn or partial snapshot.
+ *
+ * @param opts Directory plus the `schemaVersion` this store accepts. A file stamped
+ *   with another version is rejected with {@link SnapshotVersionError}.
+ * @returns The store. `save` stamps `opts.schemaVersion` over the payload's own value.
  */
-export function createFileSnapshotStore(opts: FileSnapshotStoreOptions): SnapshotStore {
+export function createFileSnapshotStore<P extends VersionedSnapshot = SnapshotPayload>(
+  opts: FileSnapshotStoreOptions,
+): SnapshotStore<P> {
   const { dir, schemaVersion } = opts
   const targetPath = join(dir, SNAPSHOT_FILE_NAME)
 
-  async function save(snapshot: SnapshotPayload): Promise<void> {
+  async function save(snapshot: P): Promise<void> {
     // Always stamp the expected schema version so a round-trip is self-consistent.
-    const payload: SnapshotPayload = {
-      ...snapshot,
-      schemaVersion,
-    }
-    const serialized = JSON.stringify(payload)
+    const serialized = JSON.stringify({ ...snapshot, schemaVersion })
     // Random suffix avoids collisions if two writers ever race and lets us clean up.
     const tmpPath = join(dir, `${SNAPSHOT_FILE_NAME}.tmp.${randomBytes(6).toString('hex')}`)
     await writeFile(tmpPath, serialized, { encoding: 'utf8' })
@@ -135,7 +151,7 @@ export function createFileSnapshotStore(opts: FileSnapshotStoreOptions): Snapsho
     await rename(tmpPath, targetPath)
   }
 
-  async function load(): Promise<SnapshotPayload> {
+  async function load(): Promise<P> {
     if (!existsSync(targetPath)) {
       throw new SnapshotNotFoundError()
     }
@@ -153,7 +169,7 @@ export function createFileSnapshotStore(opts: FileSnapshotStoreOptions): Snapsho
       // Fail closed: NEVER return partial/best-effort state.
       throw new SnapshotCorruptError('Snapshot file content is not valid JSON.', { cause })
     }
-    const obj = parsed as Partial<SnapshotPayload> | null
+    const obj = parsed as Partial<VersionedSnapshot> | null
     if (typeof obj?.schemaVersion !== 'number') {
       throw new SnapshotCorruptError('Snapshot file is missing a numeric schemaVersion.')
     }
@@ -162,7 +178,7 @@ export function createFileSnapshotStore(opts: FileSnapshotStoreOptions): Snapsho
         `Snapshot schemaVersion=${obj.schemaVersion} does not match expected ${schemaVersion}.`,
       )
     }
-    return parsed as SnapshotPayload
+    return parsed as P
   }
 
   return { save, load }

@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { buildSummary } from '../loader.ts'
 import { summaryInputFrom, type WireRunSnapshot } from '../run-source.ts'
+import { buildApprovalSubmitter } from './approval-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 
@@ -28,11 +29,16 @@ import { researchViewWith } from './ResearchEntry.tsx'
  * asserts them, so a rename there fails a test instead of silently blanking the view.
  */
 interface ResearchRemoteNamespace {
-  run(request: { readonly domainDirection?: string }): Promise<WireRunSnapshot>
-}
-
-interface RemoteFace {
-  readonly research: ResearchRemoteNamespace
+  /**
+   * One generated Remote method returns `RemoteResult<ResearchRunSnapshot>` — the value on
+   * success or the host's failure — NOT the snapshot itself. Reading the wrapper as if it were
+   * the snapshot is what made the tab report `Cannot read properties of undefined (reading
+   * 'steps')` after the namespace was finally mounted.
+   */
+  run(request: { readonly domainDirection?: string }): Promise<
+    { readonly ok: true; readonly value: WireRunSnapshot }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
 }
 
 /** Required services: the conversation slot, registries, sessions, locale, and Remote. */
@@ -49,11 +55,33 @@ export function apply(ctx: Context): void {
   // Registration-time text (the view tab label) reads through the bound
   // translate as a thunk, so it follows the active locale without re-registration.
   const t = ctx.locale.bind(NS)
-  // `ctx.remote.research.run(...)` starts a real run on the Host. The result is mapped
-  // into the view model here; the view never sees the wire payload.
-  const remote = ctx.remote as unknown as RemoteFace
-  const run = async (): Promise<ReturnType<typeof buildSummary>> =>
-    buildSummary(summaryInputFrom(await remote.research.run({})))
+  // The namespace is read through `ctx.get`, never the property proxy. A mounted namespace is a
+  // service named `remote.<namespace>`, and the proxy resolves a property only for a context whose
+  // fiber carries it or that declares it in `inject`; this plugin declares `remote`, not each
+  // namespace, so `ctx.remote.research` threw `cannot get property "remote.research" without
+  // inject` on the first real click. `ctx.get` reads the global service store, which is the
+  // documented read for a service this plugin does not declare — the same distinction the prose
+  // writer needed for `ctx.agentLoop` (docs/postmortem/0001-acp-default-export-drops-inject.md).
+  const run = async (): Promise<ReturnType<typeof buildSummary>> => {
+    const remote = ctx.get('remote.research') as unknown as ResearchRemoteNamespace | undefined
+    if (remote === undefined) {
+      throw new Error(
+        'the client has no `remote.research` namespace: the assembly that mounts Remote '
+        + 'namespaces did not mount the research one',
+      )
+    }
+    const result = await remote.run({})
+    // A refused call carries the host's own failure; surfacing it here is what keeps the tab
+    // from showing a stale fixture as though the run had produced it.
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+    return buildSummary(summaryInputFrom(result.value))
+  }
+  // `ctx.connection.rpc.call` reaches the approval channel `dsh-research-team` registers on the
+  // HOST's Connection service, so the browser attaches its authenticated session cookie and the
+  // decision is attributable to the host's operator rather than to anything in the payload.
+  // Resolved per call: a deployment whose trust surface mounts late — or not at all — still
+  // gets a working view, and the panel says so when there is nothing to call.
+  const approve = buildApprovalSubmitter(() => ctx.get('connection'))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'research',
@@ -64,5 +92,5 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run)))
+  }, researchViewWith(run, approve)))
 }

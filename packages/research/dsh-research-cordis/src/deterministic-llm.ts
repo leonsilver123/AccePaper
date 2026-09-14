@@ -168,6 +168,9 @@ export function createDeterministicAdapter(config: DeterministicProseConfig): Re
   const resolveModel = (provider: string, model: string): Promise<{ provider: string; id: string; name: string }> =>
     Promise.resolve({ provider, id: model, name: model })
 
+  // The provider contract is an AsyncIterable and the body has no asynchronous step: the
+  // response is computed from the request rather than awaited from anywhere.
+  // oxlint-disable-next-line typescript/require-await -- a provider stream is async by contract
   async function* stream(request: RequestFace): AsyncGenerator<Chunk> {
     const text = deriveDeterministicText(request, config)
     // Two deltas, so a real run exercises the streaming join as well as the final

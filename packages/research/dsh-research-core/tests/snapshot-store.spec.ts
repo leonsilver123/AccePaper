@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile, readdir } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -128,6 +128,21 @@ describe('snapshot-store: load failure modes (fail-closed)', () => {
     }
     expect(err).toBeInstanceOf(SnapshotVersionError)
     expect((err as SnapshotVersionError).code).toBe(SNAPSHOT_ERROR_CODES.VERSION_UNSUPPORTED)
+  })
+
+  it('a path that exists but cannot be read as a file throws SnapshotCorruptError', async () => {
+    const dir = await freshDir()
+    const store = createFileSnapshotStore({ dir, schemaVersion: SCHEMA })
+    // A directory at the snapshot path: `existsSync` is satisfied, reading it as a file is not.
+    await mkdir(join(dir, SNAPSHOT_FILE_NAME))
+    let err: unknown
+    try {
+      await store.load()
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(SnapshotCorruptError)
+    expect((err as SnapshotCorruptError).code).toBe(SNAPSHOT_ERROR_CODES.CORRUPT)
   })
 
   it('garbage partial write is not readable as a complete snapshot', async () => {

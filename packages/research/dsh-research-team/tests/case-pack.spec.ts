@@ -160,7 +160,7 @@ describe('the loader and the core allowlist agree', () => {
     const store: ResearchRunStore = new Map()
     const runId = createRun(store)
     for (const slug of Object.values(CASE_PACK_INPUT_SLUGS)) {
-      expect(() => setRunInput(store, runId, slug, { probe: true })).not.toThrow()
+      expect(() => { setRunInput(store, runId, slug, { probe: true }) }).not.toThrow()
     }
   })
 })

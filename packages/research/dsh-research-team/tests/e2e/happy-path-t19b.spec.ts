@@ -309,11 +309,19 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(manuscript).toContain('Adaptive')
     expect(manuscript).toContain('Fixed-time')
     // E1 is the FORMAT STEP, not the table tool: the manuscript is strictly
-    // longer than the bare table render and declares a reproducible package.
+    // longer than the bare table render and produces the package's own files as
+    // CONTENT — a list of filenames nothing wrote would read as run output.
     const tableMarkdown = String(formatted.tableMarkdown)
     expect(manuscript.length).toBeGreaterThan(tableMarkdown.length)
-    expect((formatted.reproduciblePackage as { files?: unknown[] }).files?.length ?? 0)
-      .toBeGreaterThanOrEqual(3)
+    const packageFiles = formatted.packageFiles as Record<string, string>
+    expect(Object.keys(packageFiles).length).toBeGreaterThanOrEqual(3)
+    // Every file E1 contributes carries a body; a path that is present but empty is
+    // the "listed but not produced" defect this replaced.
+    for (const [path, content] of Object.entries(packageFiles)) {
+      expect(content.length, path).toBeGreaterThan(0)
+    }
+    expect(packageFiles['manuscript.md']).toBe(manuscript)
+    expect(packageFiles['experiment-tables.md']).toBe(tableMarkdown)
     expect(Array.isArray(formatted.sectionHeadings)).toBe(true)
   })
 

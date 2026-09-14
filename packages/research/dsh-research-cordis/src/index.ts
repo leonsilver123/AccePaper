@@ -197,6 +197,27 @@ export interface Config {
    */
   readonly casePackDirectory?: string
   /**
+   * Directory the run's reproducible package is written to. Omitted, no package is written.
+   *
+   * Also a DEPLOYMENT setting for the same reason as {@link Config.casePackDirectory}: the
+   * export runs inside `runPipeline`, which Remote clients can invoke, so a request-supplied
+   * path would let a browser choose where the host writes files.
+   *
+   * Relative paths resolve against {@link Config.workspace}.
+   */
+  readonly packageDirectory?: string
+  /**
+   * Directory holding the durable run snapshot. Omitted, runs are not persisted.
+   *
+   * A DEPLOYMENT setting for the same reason as the two above. The directory must exist: the
+   * snapshot store never creates it, so a missing one surfaces at the first save rather than
+   * being papered over, and the runner-side service creates it at startup where it resolves
+   * this option.
+   *
+   * Relative paths resolve against {@link Config.workspace}.
+   */
+  readonly snapshotDirectory?: string
+  /**
    * Absolute working directory for every agent session this engine creates (prose
    * writes and model-ready tool invocations). Omitted, it resolves to the
    * deployment's `process.cwd()`.
@@ -291,6 +312,16 @@ export class ResearchEngine extends Service {
    */
   readonly casePackDirectory: string | undefined
   /**
+   * Resolved directory the run package is written to, or undefined when the deployment
+   * configured none. Read by the runner-side service, which performs the export.
+   */
+  readonly packageDirectory: string | undefined
+  /**
+   * Resolved directory holding the durable run snapshot, or undefined when the deployment
+   * configured none. Read by the runner-side service, which performs the save and restore.
+   */
+  readonly snapshotDirectory: string | undefined
+  /**
    * The real-model prose writer when `config.prose` names a route, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the team service
    * reads it so one deployment-level choice governs every prose step.
@@ -318,6 +349,8 @@ export class ResearchEngine extends Service {
     this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
     this.sessionCwd = resolveWorkspace(config.workspace)
     this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
+    this.packageDirectory = resolveCasePackDirectory(config.packageDirectory, this.sessionCwd)
+    this.snapshotDirectory = resolveCasePackDirectory(config.snapshotDirectory, this.sessionCwd)
 
     const prose = config.prose
     if (prose?.kind === 'deterministic') {

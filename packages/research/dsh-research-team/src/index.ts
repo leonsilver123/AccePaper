@@ -36,12 +36,16 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
+import { mkdirSync } from 'node:fs'
+
 import { Context } from '@deepseek-ai/cordis'
 import type {
   ResearchArtifactMetaView,
   ResearchGateVerdictView,
   ResearchRunRequest,
   ResearchRunSnapshot,
+  ResearchPackageExport,
+  ResearchRunPersistence,
   ResearchStepCatalogEntry,
   ResearchStepStateView,
 } from './types.ts'
@@ -63,13 +67,21 @@ import type { SessionId } from './types.ts'
 import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
 import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
-import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
+import { createRunPersistence, getArtifact, getRunSnapshot, getStepDefinitions, rollback } from '@deepseek-ai/dsh-research-core'
+import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
+import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
-import { runT19B } from './runner/drive.ts'
+import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
+import {
+  forgetRuns,
+  installApprovalEndpoint,
+  rememberRun,
+  type ApprovalConnectionHost,
+} from './approval.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
 // The package entry re-exports its caller-visible brands, errors, entities,
@@ -104,6 +116,10 @@ export {
 } from './types.ts'
 export { errorMessage, ResearchRoster } from './roster.ts'
 export type { ResearchMembership, SpawnMemberRequest } from './roster.ts'
+// NOTE: the human-approval surface (`./approval.ts`) is deliberately NOT re-exported from this
+// entry. Its one caller is the Connection channel it registers, and keeping it off the package
+// export map means the only way to decide a human gate is the authenticated route — no service
+// method and no importable function can be reached from an ordinary tool call.
 export { ResearchTaskBoard } from './task-board.ts'
 export type { CreateResearchTaskRequest, UpdateResearchTaskRequest } from './task-board.ts'
 export { researchTeamProjectionDefinition } from './research-projection.ts'
@@ -183,7 +199,40 @@ declare module '@deepseek-ai/cordis' {
  * @param store - the store the run populated.
  * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
  */
-function snapshotOf(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
+/**
+ * The first step of a restored run that is not in a terminal state.
+ *
+ * A resumed run picks up here: the steps before it are terminal, and re-driving one would either
+ * be refused by the engine's own guards or repeat work the snapshot already records as done.
+ *
+ * @param restored - the restored run and the facts about its interrupted steps.
+ * @returns the step id to resume from.
+ * @throws {Error} when every step is terminal, which is not a resumable state.
+ */
+function firstNonTerminalStep(restored: RestoredRun): string {
+  // `passed` is done and `gated` awaits a human — neither is re-driven by a resume. A `failed`
+  // or `blocked` step is NOT done: it is where the run stopped, and a resume RETRIES it (after a
+  // rollback), which is the recovery path the engine documents. Treating those as terminal would
+  // skip the step and then fail the next one's dependency guard, reporting the consequence
+  // instead of the cause.
+  const done = new Set(['passed', 'gated'])
+  const state = getRunSnapshot(restored.store, restored.runId).steps
+  for (const step of getStepDefinitions()) {
+    const current = state[step.id]
+    if (current === undefined) continue
+    if (!done.has(current.status)) return step.id
+  }
+  throw new Error(
+    `[research] run ${restored.runId} has no step left to resume — every step is terminal`,
+  )
+}
+
+function snapshotOf(
+  run: RunResult,
+  store: ResearchRunStore,
+  packageExport: ResearchPackageExport | null = null,
+  runPersistence: ResearchRunPersistence | null = null,
+): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, run.runId)
   const catalog: ReadonlyArray<ResearchStepCatalogEntry> = getStepDefinitions().map(step => ({
     id: step.id,
@@ -228,7 +277,7 @@ function snapshotOf(run: RunResult, store: ResearchRunStore): ResearchRunSnapsho
     invalidated: meta.invalidated,
   }))
 
-  return { run, catalog, gates, artifacts, steps }
+  return { run, catalog, gates, artifacts, steps, packageExport, runPersistence }
 }
 
 /** Options for one {@link ResearchTeamService.runPipeline} invocation. */
@@ -282,6 +331,16 @@ export class ResearchTeamService extends TypertRemoteService {
     // before its next turn depends on them. Recovery is contained and logged,
     // never fatal to the resume path.
     ctx.on('agent/session-start', ({ agent }) => { this.scheduleRecovery(agent) })
+    // Human approval needs the host's browser authentication, which only the Connection
+    // service provides. It is an OPTIONAL service read with `ctx.get` (never a declared
+    // injection): a deployment without a browser surface keeps every other research
+    // capability and simply serves no approval endpoint, which is the honest posture —
+    // an approval nobody authenticated would be worth less than none.
+    ctx.inject(['connection'], (connectionCtx) => {
+      const connection = connectionCtx.get('connection') as ApprovalConnectionHost | undefined
+      if (connection === undefined) return
+      installApprovalEndpoint(connection)
+    })
     ctx.effect(() => {
       const disposers: Array<() => void> = [
         ctx.root.sessionProjections.register(researchTeamProjectionDefinition),
@@ -291,6 +350,9 @@ export class ResearchTeamService extends TypertRemoteService {
         for (const dispose of disposers.reverse()) dispose()
         this.disposal.abort()
         this.roster.close()
+        // The remembered runs are run state; a reloaded plugin must not keep approving
+        // runs it no longer drives.
+        forgetRuns()
       }
     }, 'researchTeam.runtime()')
   }
@@ -408,6 +470,10 @@ export class ResearchTeamService extends TypertRemoteService {
    * outside the tests, which is why the assembled tool dependencies could reach
    * the cordis tool surface but never a pipeline run.
    *
+   * The run is REMEMBERED for the life of this plugin: `E2-submit` stops at `gated`, and the
+   * only later way to move it on is an approval that must address the very store that drove it.
+   * A store dropped here would leave the gate permanently undecidable.
+   *
    * @param options - the run seed and a cancellation signal.
    * @returns the per-step outcomes plus the run id.
    */
@@ -423,7 +489,137 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
     })
-    return snapshotOf(run, store)
+    const packageExport = this.exportRunPackage(store, run)
+    // The snapshot directory holds ONE run, so a NEW run supersedes whatever is stored rather
+    // than writing alongside it — and it says so explicitly, because `save` correctly refuses to
+    // overwrite a snapshot it did not expect. Without this, every run after the first is refused
+    // with SNAPSHOT_CONFLICT and silently persists nothing.
+    const snapshotStore = this.hostRunPersistence()
+    if (snapshotStore !== undefined) await snapshotStore.discard()
+    const persistence = await this.persistRun(store, run, 0)
+    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, persistence))
+    return snapshotOf(run, store, packageExport, persistence)
+  }
+
+  /**
+   * The run persistence this deployment configured, or undefined when it configured none.
+   *
+   * The snapshot DIRECTORY is created here, at the point this option is resolved, because the
+   * store never creates it: a missing directory must surface as a failed save rather than be
+   * papered over, and creating it lazily at the first save would turn a deployment mistake into
+   * a silent first-run success.
+   *
+   * @returns the bound persistence, or undefined when no directory is configured.
+   */
+  private hostRunPersistence(): RunPersistence | undefined {
+    const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
+    const directory = research?.snapshotDirectory
+    if (directory === undefined) return undefined
+    mkdirSync(directory, { recursive: true })
+    return createRunPersistence({ dir: directory })
+  }
+
+  /**
+   * Persist the finished run when the deployment configured a directory.
+   *
+   * The snapshot is written AFTER the run, from the same store the run used, and the failure is
+   * reported rather than swallowed: a caller told a run was persisted who finds no snapshot has
+   * been misled. `baseRevision` is 0 because this store has never been persisted — a directory
+   * that already holds a newer snapshot refuses the write instead of overwriting it.
+   *
+   * @param store - the run store, still live at this point.
+   * @param run - the driven run.
+   * @returns the persisted revision, or the failure, or null when no directory is configured.
+   */
+  private async persistRun(
+    store: ResearchRunStore,
+    run: RunResult,
+    baseRevision: number,
+  ): Promise<ResearchRunPersistence | null> {
+    const persistence = this.hostRunPersistence()
+    if (persistence === undefined) return null
+    try {
+      const payload = await persistence.save(store, run.runId, { baseRevision })
+      return { runId: run.runId, revision: payload.revision, interrupted: [] }
+    } catch (error) {
+      return { runId: run.runId, revision: null, interrupted: [], error: errorMessage(error) }
+    }
+  }
+
+  /**
+   * Restore the persisted run and drive it to completion.
+   *
+   * The restored run executes ONLY through the capability this method supplies — the same
+   * `toolDeps` and `proseWriter` a fresh run uses — because a snapshot is data and never a
+   * service object. The cross-step context is rebuilt from the restored artifacts, since the
+   * claim and the prediction it commits to are what the C gates read.
+   *
+   * @param options - a cancellation signal.
+   * @returns the resumed run's snapshot.
+   * @throws {Error} when no snapshot directory is configured, or nothing is persisted.
+   */
+  async resumeRunPipeline(options: { readonly signal?: AbortSignal } = {}): Promise<ResearchRunSnapshot> {
+    const persistence = this.hostRunPersistence()
+    if (persistence === undefined) {
+      throw new Error('[research] no snapshot directory is configured, so there is no run to resume')
+    }
+    const capability = { toolDeps: this.hostToolDeps(), proseWriter: this.hostProseWriter() }
+    const restored = await persistence.tryLoad(capability)
+    if (restored === null) {
+      throw new Error('[research] no persisted run to resume in the configured snapshot directory')
+    }
+    const runCtx = createRunContext()
+    const prediction = getArtifact(restored.store, restored.runId, 'falsifiable-prediction') as
+      | { text?: unknown; ref?: unknown }
+      | undefined
+    const claim = getArtifact(restored.store, restored.runId, 'claim') as { claimId?: unknown } | undefined
+    if (typeof prediction?.text === 'string') runCtx.predictionText = prediction.text
+    if (typeof prediction?.ref === 'string') runCtx.claimRef = prediction.ref
+    if (typeof claim?.claimId === 'string') runCtx.claimId = claim.claimId
+
+    // The first step that is not terminal is where the resumed run picks up: everything before
+    // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,
+    // repeat work the snapshot already records as done.
+    const from = firstNonTerminalStep(restored)
+    const resumeState = getRunSnapshot(restored.store, restored.runId).steps[from]
+    if (resumeState !== undefined && (resumeState.status === 'failed' || resumeState.status === 'blocked')) {
+      // The step stopped without completing, so it goes back to `pending` before it is driven
+      // again; `startStep` refuses anything else, and the rollback also invalidates whatever the
+      // failed attempt left registered.
+      rollback(restored.store, restored.runId, from)
+    }
+    const run = await driveRemaining(restored.store, restored.runId, runCtx, from, {
+      ...(capability.toolDeps !== undefined ? { toolDeps: capability.toolDeps } : {}),
+      ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    })
+    // The revised revision is this write's base, so a write that raced another process is still
+    // refused rather than clobbering it.
+    return snapshotOf(run, restored.store, null, await this.persistRun(restored.store, run, restored.revision))
+  }
+
+  /**
+   * Write the run's package when the deployment configured a directory.
+   *
+   * A failed export is REPORTED, not swallowed: a caller that was told a package exists and
+   * finds none has been misled, which is worse than being told the export failed. The
+   * directory comes from the deployment's config, never from the request — `runPipeline` is
+   * exposed as a Remote method, so a client-supplied path would name a filesystem location.
+   *
+   * @param store - the run store, still live at this point.
+   * @param run - the driven run.
+   * @returns what was written, or the failure, or null when no directory is configured.
+   */
+  private exportRunPackage(store: ResearchRunStore, run: RunResult): ResearchPackageExport | null {
+    const research = this.ctx.get('research') as { packageDirectory?: string } | undefined
+    const directory = research?.packageDirectory
+    if (directory === undefined) return null
+    try {
+      const manifest = writeRunPackage(planRunPackage(store, run), directory)
+      return { files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })) }
+    } catch (error) {
+      return { files: [], error: errorMessage(error) }
+    }
   }
 
   /**

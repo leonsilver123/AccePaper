@@ -408,4 +408,39 @@ export interface ResearchRunSnapshot {
   readonly artifacts: ReadonlyArray<ResearchArtifactMetaView>
   /** Per-step runtime state (attempt, hold reason). */
   readonly steps: ReadonlyArray<ResearchStepStateView>
+  /**
+   * The export result, when the deployment configured a package directory.
+   *
+   * Carries the manifest the run wrote: every file with its byte count and content digest,
+   * plus the per-step record. A run with no configured directory leaves this null, and a run
+   * whose export failed reports it rather than silently omitting it.
+   */
+  readonly packageExport: ResearchPackageExport | null
+  /**
+   * The durability result, when the deployment configured a snapshot directory.
+   *
+   * `revision` is the persisted revision on success and null on failure, with `error` naming the
+   * failure. Null (the whole field) means the deployment configured no directory, which is a
+   * different fact from a write that was attempted and refused.
+   */
+  readonly runPersistence: ResearchRunPersistence | null
+}
+
+/** What persisting one run did, or why it did nothing. */
+export interface ResearchRunPersistence {
+  readonly runId: string
+  /** Persisted revision, or null when the write was refused or failed. */
+  readonly revision: number | null
+  /** Steps that were in flight when the snapshot was taken (empty for a fresh save). */
+  readonly interrupted: ReadonlyArray<string>
+  /** Set when the write failed; `revision` is then null. */
+  readonly error?: string
+}
+
+/** What a run's package export produced, or why it produced nothing. */
+export interface ResearchPackageExport {
+  /** Paths as written, relative to the package root. Never the absolute directory. */
+  readonly files: ReadonlyArray<{ readonly path: string; readonly bytes: number; readonly sha256: string }>
+  /** Set when the export failed; `files` is then empty. */
+  readonly error?: string
 }
