@@ -25,7 +25,7 @@ kind: "package-group"
 | 包 | 角色 | ctx key |
 |---|---|---|
 | [`dsh-research-core/`](dsh-research-core/README.zh.md) | 16 步状态机、L0 分层路由、引用核验、门禁裁定与持久化快照存储。零依赖。 | 库 —— 无 ctx key |
-| [`dsh-research-tools/`](dsh-research-tools/README.zh.md) | 七个产物工具、它们封闭的输入 schema,以及 `ResearchToolInvoker` 接缝 | 库 —— 无 ctx key |
+| [`dsh-research-tools/`](dsh-research-tools/README.zh.md) | 七个产物工具、它们封闭的输入 schema,以及 `ResearchToolInvoker` seam | 库 —— 无 ctx key |
 | [`dsh-research-cordis/`](dsh-research-cordis/README.zh.md) | 暴露 `ctx.research`,并把七个工具(含 agent-loop invoker)注册到真实的 `ctx.tools` | `ctx.research` |
 | [`dsh-research-team/`](dsh-research-team/README.zh.md) | 红队编队、CAS 修订任务板、写作用域守卫与持久会话投影 | `ctx.agentTeams` |
 | [`dsh-research-web/`](dsh-research-web/README.zh.md) | 双面插件:宿主面惰性,浏览器面挂载研究标签页 | 无 ctx key |
