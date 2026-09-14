@@ -475,13 +475,38 @@ export class ResearchTeamService extends TypertRemoteService {
     // rather than the conflict it is. Chaining the two steps removes the window inside this
     // process; a cross-process race is still the store's to refuse, and now has a correct
     // revision to compare against.
+    const persistence = await this.recordRun(run, store)
+    rememberRun(
+      run.runId,
+      store,
+      () => snapshotOf(run, store, packageExport, persistence),
+      // The approval handler persists through THIS closure, so a decision is as durable as the
+      // run that produced it. Handing the decision only to memory left the snapshot saying E2
+      // `gated` after a person had approved it — a restart would have asked them again.
+      () => this.recordRun(run, store),
+    )
+    return snapshotOf(run, store, packageExport, persistence)
+  }
+
+  /**
+   * Write this run's current state to its durable snapshot, and re-export its package.
+   *
+   * Both halves run together because a state that reached the snapshot but not the package (or
+   * the reverse) publishes two records of the same run that disagree. The read-then-save pair is
+   * serialized so two writers cannot both pass the revision guard.
+   *
+   * @param run - the driven run.
+   * @param store - the store the run populated, still live.
+   * @returns the persisted revision, or the failure, or null when no directory is configured.
+   */
+  private async recordRun(run: RunResult, store: ResearchRunStore): Promise<ResearchRunPersistence | null> {
     const persistence = await this.serialized(async () => {
       // The predecessor read here is THIS run's earlier revision, if any — never another run's.
       const stored = await this.readStoredRun(run.runId)
       return this.persistRun(store, run, stored?.revision ?? 0)
     })
-    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, persistence))
-    return snapshotOf(run, store, packageExport, persistence)
+    this.exportRunPackage(store, run)
+    return persistence
   }
 
   /**
@@ -704,7 +729,12 @@ export class ResearchTeamService extends TypertRemoteService {
     // Remembered like a fresh run: a resumed run that reaches E2 must be approvable, and the
     // approval endpoint resolves the run through this registry. Without it the gate would refuse
     // with `research/approval-run-unknown` — a resumed run no person could ever pass.
-    rememberRun(restored.runId, restored.store, () => snapshotOf(run, restored.store, null, persisted))
+    rememberRun(
+      restored.runId,
+      restored.store,
+      () => snapshotOf(run, restored.store, null, persisted),
+      () => this.recordRun(run, restored.store),
+    )
     return snapshotOf(run, restored.store, null, persisted)
   }
 

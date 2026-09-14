@@ -376,6 +376,27 @@ describe('run-persistence: the record is data only', () => {
     }
   })
 
+  it('CAPTURES a shared reference, which JSON represents by writing it twice', () => {
+    // A shared reference is NOT a cycle: JSON spells it out twice and restores an equal value.
+    // The walk used one never-popped `seen` set, so the second visit of any object already
+    // visited — a sibling that aliases its neighbour, not an ancestor — was refused with
+    // "is cyclic". It refused this repository's own `A3-agenda` artifact, whose `phases` and
+    // `plan` are the same array, and the run could not be snapshotted at all.
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    const shared = ['one', 'two']
+    requireRun(store, runId).inputs['fixture'] = { phases: shared, plan: shared }
+    const payload = captureRunSnapshot(store, runId, 1)
+    expect(payload.run.inputs['fixture']).toEqual({ phases: ['one', 'two'], plan: ['one', 'two'] })
+    // A real cycle — an object reachable from itself — is still refused.
+    const cyclic: Record<string, unknown> = { name: 'fixture-cycle' }
+    cyclic['self'] = cyclic
+    requireRun(store, runId).inputs['fixture'] = { outer: { inner: cyclic } }
+    expect(thrownBy(() => captureRunSnapshot(store, runId, 1))).toMatchObject({
+      code: 'DSH_SNAPSHOT_VALUE_NOT_JSON',
+    })
+  })
+
   it('persists a null run value, which JSON represents', () => {
     const store = freshStore()
     const runId = seedRun(store, RUN_ID)

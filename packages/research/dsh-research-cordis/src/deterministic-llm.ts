@@ -131,12 +131,86 @@ function requestText(request: RequestFace): string {
 }
 
 /**
+ * A `LABEL: shape` line the caller's instruction declares as the response format.
+ *
+ * All-caps only. The template this route writes carries `Task:` (mixed case) and the agent
+ * loop's runtime snapshot carries its own prose, so requiring caps keeps a label from being
+ * invented out of unrelated text.
+ */
+const FORMAT_LINE = /^([A-Z][A-Z0-9_-]{0,31}):\s*(\S.*)$/u
+
+/** One `LABEL: shape` pair the instruction declared. */
+export interface DeclaredField {
+  readonly label: string
+  /** The shape the instruction wrote after the label, verbatim. */
+  readonly shape: string
+}
+
+/**
+ * The labelled response format a caller's instruction declares.
+ *
+ * THE PROPERTY THIS EXISTS FOR. A step that consumes a labelled field cannot use a reply that
+ * does not carry the label, and several steps fail rather than invent one. This route used to
+ * echo only the instruction's FIRST line, so every labelled step received a well-meaning
+ * paragraph and threw: the deployment's own prose route could not drive A3-agenda, and every
+ * later step behind it never ran. A route that stands in for a model has to answer in the
+ * format the request asked for, or it is not a stand-in.
+ *
+ * @param prompt - the caller's request text.
+ * @returns one entry per declared field, in the order they were written.
+ */
+export function declaredFieldsOf(prompt: string): ReadonlyArray<DeclaredField> {
+  const out: DeclaredField[] = []
+  for (const raw of prompt.split('\n')) {
+    const match = FORMAT_LINE.exec(raw.trim())
+    if (match === null) continue
+    out.push({ label: match[1] as string, shape: (match[2] as string).trim() })
+  }
+  return out
+}
+
+/** The separator a shape uses between alternative values, `||` before `|`. */
+function separatorOf(shape: string): string | undefined {
+  if (shape.includes('||')) return '||'
+  if (shape.includes('|')) return '|'
+  return undefined
+}
+
+/** The noun a `<...>` placeholder names, with its angle brackets removed. */
+function nounOf(part: string): string {
+  const inner = /^<([^>]*)>$/u.exec(part.trim())?.[1]?.trim()
+  return inner !== undefined && inner.length > 0 ? inner : part.trim()
+}
+
+/**
+ * One value for a declared field, marked as the demo value it is.
+ *
+ * The value is BUILT FROM THE SHAPE the instruction wrote — `<phase>` becomes `phase 1` —
+ * rather than invented from nothing, and every value carries the notice, so no reader can
+ * take it for generated content. A shape naming N alternatives produces N distinct values,
+ * because a step that splits the field on its separator needs N entries, not one repeated.
+ */
+function demoValuesFor(field: DeclaredField): ReadonlyArray<string> {
+  const separator = separatorOf(field.shape)
+  const parts = separator === undefined ? [field.shape] : field.shape.split(separator)
+  const nouns = parts.map(nounOf).filter(noun => noun.length > 0)
+  const list = nouns.length > 0 ? nouns : [field.label]
+  return list.map((noun, index) => {
+    const ordinal = list.length > 1 ? ` ${String(index + 1)}` : ''
+    return `${noun}${ordinal} — DEMO value: the deterministic offline route generates no content`
+  })
+}
+
+/**
  * Derive the response body for one request.
  *
  * Pure and total: the same request always yields the same text, and a request carrying no
  * readable prompt yields the placeholder for an empty instruction rather than throwing —
  * the writer above treats empty text as a failed write, which is the correct outcome and
  * should be reported as such rather than as a provider error.
+ *
+ * A request that declares a labelled format gets those labels after the notice, so the steps
+ * that consume labelled fields receive a well-formed answer. See {@link declaredFieldsOf}.
  *
  * @param request - the provider request.
  * @param config - the route's configuration.
@@ -146,11 +220,18 @@ export function deriveDeterministicText(request: unknown, config: DeterministicP
   const prompt = requestText(request as RequestFace)
   const instruction = prompt.split('\n', 1)[0]?.trim() ?? ''
   const template = config.template ?? DEFAULT_DETERMINISTIC_TEMPLATE
-  return template
+  const body = template
     .replaceAll('{{instruction}}', instruction)
     .replaceAll('{{digest}}', digestOf(prompt))
     .replaceAll('{{model}}', config.model)
     .replaceAll('{{provider}}', config.provider)
+
+  const fields = declaredFieldsOf(prompt)
+  if (fields.length === 0) return body
+  const answered = fields
+    .map(field => `${field.label}: ${demoValuesFor(field).join(separatorOf(field.shape) ?? ' ')}`)
+    .join('\n')
+  return `${body}\n\n${answered}`
 }
 
 /**

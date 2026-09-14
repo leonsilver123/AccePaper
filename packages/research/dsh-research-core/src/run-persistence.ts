@@ -492,8 +492,15 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
  * disappear — so a run holding one is refused at save time instead of being restored altered.
  * Artifact values are the run's own data, so a silent degradation here would change a result
  * across a restart. Cycles are rejected too (the walk is not a serializer).
+ *
+ * `ancestors` holds the objects on the path from the root to here, NOT every object ever
+ * visited. The difference is the whole point: JSON represents a SHARED reference faithfully by
+ * writing it out twice, and only an object that contains itself cannot be written at all. A set
+ * that is never popped from conflates the two and refuses ordinary data — it refused this
+ * repository's own `A3-agenda` artifact, whose `phases` and `plan` are the same array, and
+ * reported a "cycle" that did not exist. An entry is therefore removed on the way back out.
  */
-function assertJsonRepresentable(value: unknown, what: string, seen: Set<object>): void {
+function assertJsonRepresentable(value: unknown, what: string, ancestors: Set<object>): void {
   if (value === null) return
   switch (typeof value) {
     case 'string':
@@ -512,24 +519,28 @@ function assertJsonRepresentable(value: unknown, what: string, seen: Set<object>
     default:
       break
   }
-  if (seen.has(value)) {
+  if (ancestors.has(value)) {
     throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is cyclic, which JSON cannot represent.`)
   }
-  seen.add(value)
-  if (Array.isArray(value)) {
-    for (const [i, item] of (value as ReadonlyArray<unknown>).entries()) {
-      assertJsonRepresentable(item, `${what}[${i}]`, seen)
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) {
+      for (const [i, item] of (value as ReadonlyArray<unknown>).entries()) {
+        assertJsonRepresentable(item, `${what}[${i}]`, ancestors)
+      }
+      return
     }
-    return
-  }
-  const proto: unknown = Object.getPrototypeOf(value)
-  if (proto !== Object.prototype && proto !== null) {
-    const name = (proto as { constructor?: { name?: string } }).constructor?.name ?? 'non-plain'
-    throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is a ${name} instance, which JSON serializes as a plain object.`)
-  }
-  const record = value as Record<string, unknown>
-  for (const key of Object.keys(record)) {
-    assertJsonRepresentable(record[key], `${what}.${key}`, seen)
+    const proto: unknown = Object.getPrototypeOf(value)
+    if (proto !== Object.prototype && proto !== null) {
+      const name = (proto as { constructor?: { name?: string } }).constructor?.name ?? 'non-plain'
+      throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is a ${name} instance, which JSON serializes as a plain object.`)
+    }
+    const record = value as Record<string, unknown>
+    for (const key of Object.keys(record)) {
+      assertJsonRepresentable(record[key], `${what}.${key}`, ancestors)
+    }
+  } finally {
+    ancestors.delete(value)
   }
 }
 

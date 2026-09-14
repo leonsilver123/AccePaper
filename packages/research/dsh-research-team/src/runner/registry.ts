@@ -2128,8 +2128,13 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'Write the title and section headings for the paper that reports this work.',
         'Reply with exactly these two lines and nothing else:',
         'TITLE: <a specific paper title>',
-        `SECTIONS: ${OUTLINE_SKELETON.length} headings separated by " | ", in this order: `
-          + OUTLINE_SKELETON.map(s => s.id).join(', '),
+        // One placeholder per heading the outline needs, so the declared format says HOW MANY
+        // values it wants. It used to read "7 headings separated by ' | '" in prose, which a
+        // reader understands and a rule cannot: the deployment's offline route answered with the
+        // separator it saw named, produced two headings, and D2 refused the outline. A format
+        // line has to be answerable, not just describable.
+        `SECTIONS: ${OUTLINE_SKELETON.map(() => '<heading>').join(' | ')}`,
+        `  (one per placeholder, in this order: ${OUTLINE_SKELETON.map(s => s.id).join(', ')})`,
       ].join('\n'),
       context: {
         claim: claim?.assertion ?? claimRef,

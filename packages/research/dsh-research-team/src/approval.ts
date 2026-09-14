@@ -47,7 +47,7 @@ import type { ResearchRunStore, StepStatus } from '@deepseek-ai/dsh-research-cor
 import { createHostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 import type { HostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 
-import type { ResearchRunSnapshot } from './types.ts'
+import type { ResearchRunPersistence, ResearchRunSnapshot } from './types.ts'
 
 /**
  * Channel the approval endpoints are served on.
@@ -109,6 +109,16 @@ export interface ApprovalDecision {
   readonly decidedAt: number
   /** The run re-projected after the decision, so a caller renders backend truth, not its own. */
   readonly snapshot: ResearchRunSnapshot
+  /**
+   * Whether the decision reached the durable snapshot, and why not when it did not.
+   *
+   * A decision that only exists in this process is a decision a restart forgets: the restored
+   * run would show E2 `gated` again and ask the person to approve what they already approved.
+   * The failure is REPORTED rather than swallowed — the caller decided, and has to be able to
+   * tell the difference between "recorded" and "lost when this process ends".
+   */
+  readonly persisted: boolean
+  readonly persistenceError?: string
 }
 
 /** One logical RPC endpoint result, as the Host Connection carrier carries it. */
@@ -150,6 +160,14 @@ export interface RememberedRun {
    * driver's own outcome kinds) that do not live in the store and must not be re-derived.
    */
   readonly project: () => ResearchRunSnapshot
+  /**
+   * Write this run's CURRENT state to its durable snapshot, and re-export its package.
+   *
+   * Absent when the deployment configured no snapshot directory, in which case there is
+   * nothing to be durable about and `ApprovalDecision.persisted` reports false for the same
+   * reason a save would.
+   */
+  readonly persist?: () => Promise<ResearchRunPersistence | null>
 }
 
 /**
@@ -209,8 +227,13 @@ function requireHostChannel(): HostApprovalChannel {
  * @param store - the store the run populated.
  * @param project - re-projects the run from its current store, as its owner builds it.
  */
-export function rememberRun(runId: string, store: ResearchRunStore, project: () => ResearchRunSnapshot): void {
-  rememberedRuns.set(runId, { store, project })
+export function rememberRun(
+  runId: string,
+  store: ResearchRunStore,
+  project: () => ResearchRunSnapshot,
+  persist?: () => Promise<ResearchRunPersistence | null>,
+): void {
+  rememberedRuns.set(runId, persist === undefined ? { store, project } : { store, project, persist })
 }
 
 /**
@@ -264,7 +287,7 @@ export function readSubmission(payload: unknown): ApprovalSubmission | undefined
  * @param submission - the four fields the caller stated.
  * @returns the decision with the re-projected run, or the refusal that stopped it.
  */
-export function submitApproval(submission: ApprovalSubmission): ApprovalWireResult {
+export async function submitApproval(submission: ApprovalSubmission): Promise<ApprovalWireResult> {
   const { runId, stepId, attempt, decision } = submission
   const run = rememberedRuns.get(runId)
   if (run === undefined) {
@@ -301,6 +324,25 @@ export function submitApproval(submission: ApprovalSubmission): ApprovalWireResu
   try {
     const principal = channel.mintPrincipal(runId, stepId, OPERATOR_PRINCIPAL_ID, approvalEventId)
     const status = channel.submit(run.store, runId, stepId, decision, principal)
+    // PERSIST AFTER the decision, never before: the store now holds the state the decision
+    // produced, and saving first would write the pre-decision state under a revision the
+    // decision then invalidates. A failure here does NOT un-decide anything — the run has the
+    // new status in memory — so it is reported alongside the decision rather than turned into
+    // a refusal that would misdescribe what happened.
+    let persisted = false
+    let persistenceError: string | undefined
+    if (run.persist !== undefined) {
+      const saved = await run.persist().catch((error: unknown) => ({
+        runId,
+        revision: null,
+        interrupted: [],
+        error: error instanceof Error ? error.message : String(error),
+      }) satisfies ResearchRunPersistence)
+      persisted = saved !== null && saved.revision !== null
+      if (!persisted) persistenceError = saved?.error ?? 'no snapshot directory is configured for this deployment'
+    } else {
+      persistenceError = 'no snapshot directory is configured for this deployment'
+    }
     return {
       ok: true,
       value: {
@@ -312,6 +354,8 @@ export function submitApproval(submission: ApprovalSubmission): ApprovalWireResu
         approvalEventId,
         decidedAt: Date.now(),
         snapshot: run.project(),
+        persisted,
+        ...(persistenceError === undefined ? {} : { persistenceError }),
       },
     }
   } catch (error) {
@@ -340,7 +384,7 @@ function refuse(code: ApprovalErrorCode, message: string): ApprovalWireResult {
  * @param payload - the decoded request body.
  * @returns the decision, or the refusal that stopped it.
  */
-export function decideApprovalRequest(endpoint: string, payload: unknown): ApprovalWireResult {
+export async function decideApprovalRequest(endpoint: string, payload: unknown): Promise<ApprovalWireResult> {
   if (endpoint !== APPROVAL_DECIDE_ENDPOINT) {
     return refuse(APPROVAL_ERROR_CODES.requestInvalid, `unknown approval endpoint '${endpoint}'`)
   }

@@ -442,6 +442,53 @@ describe('the deterministic offline prose route', () => {
     expect(deriveDeterministicText({ messages: [] }, config)).toContain('DEMO DRAFT')
   })
 
+  it('ANSWERS IN THE LABELLED FORMAT the instruction declares', () => {
+    // The defect this pins: the route echoed only the instruction's FIRST line, so every step
+    // that consumes a labelled field received a paragraph and threw. On the real deployment
+    // A3-agenda failed with "the model response did not carry PHASES/CONTRIBUTIONS" and the
+    // pipeline stopped there — three steps in, with the rest never run. A route standing in for
+    // a model has to answer in the format the request asked for.
+    const instruction = [
+      'Derive the research agenda and the contribution list that the claim commits this study to delivering.',
+      'Reply with exactly these two labelled blocks and nothing else:',
+      'PHASES: <phase> | <phase> | <phase>',
+      'CONTRIBUTIONS: <one contribution> || <another contribution>',
+    ].join('\n')
+    const request = { messages: [{ role: 'user', content: [{ type: 'text', text: instruction }] }] }
+
+    const text = deriveDeterministicText(request, { provider: 'p', model: 'm' })
+
+    // The notice survives: the answer is still unmistakably a demo.
+    expect(text).toContain('DEMO DRAFT')
+    // The labels are present and the values are non-empty, which is what the step parses.
+    // The parse is written HERE rather than imported from the consumer: this package must not
+    // depend on `dsh-research-team` (the dependency direction is core <- tools <- {cordis, team}),
+    // and a test that reached across would not compile.
+    const field = (label: string): string | undefined => text
+      .split('\n')
+      .map(line => new RegExp(`^${label}\\s*[:=]\\s*(.*)$`, 'i').exec(line.trim()))
+      .find(match => match !== null && match[1] !== undefined && match[1].trim().length > 0)?.[1]?.trim()
+    expect(field('PHASES')).toBeDefined()
+    expect(field('CONTRIBUTIONS')).toBeDefined()
+    // The SEPARATORS carry through, because a step splits the field on them. Three phases and
+    // two contributions, not one value repeated.
+    const phases = field('PHASES')!.split('|').map(s => s.trim()).filter(Boolean)
+    const contributions = field('CONTRIBUTIONS')!.split('||').map(s => s.trim()).filter(Boolean)
+    expect(phases).toHaveLength(3)
+    expect(contributions).toHaveLength(2)
+    expect(new Set(phases).size).toBe(3)
+    // Every generated value says what it is, so nothing here can be read as a finding.
+    for (const value of [...phases, ...contributions]) expect(value).toContain('DEMO value')
+  })
+
+  it('leaves a request without a declared format exactly as it was', () => {
+    // The change is additive: a caller that declared no format gets the same body as before.
+    const request = { messages: [{ role: 'user', content: [{ type: 'text', text: 'Just write something.' }] }] }
+    const text = deriveDeterministicText(request, { provider: 'p', model: 'm' })
+    expect(text).toContain('Task: Just write something.')
+    expect(text).not.toContain('DEMO value')
+  })
+
   it('REGISTERS WHEN THE LLM SERVICE APPEARS AFTER THE ENGINE (loader order)', async () => {
     // The engine binds `llm` through `ctx.inject` because the loader starts its entries
     // concurrently: on a real boot the service is absent while the engine loads. Reading
