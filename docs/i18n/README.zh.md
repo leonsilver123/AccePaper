@@ -53,6 +53,7 @@
 - `docs/AGENTS.md`、`.agents/notes/**/AGENTS.md` 以及指向它们的 `CLAUDE.md` 指令符号链接：agent 指令，与根 `AGENTS.md` 一样只以英文维护。
 - `docs/i18n/terminology.md` 与 [style-samples.md](style-samples.md)：二者本身即为中英对照文档。
 - [translation-prompt.md](translation-prompt.md)：自动翻译流水线的提示词模板；正文逐字进入模型请求，配对翻译会改变流水线行为。
+- `research-skills/`：vendored 的第三方语料，其上游仓库、许可证与 commit SHA 记在 [research-skills/PROVENANCE.md](../../research-skills/PROVENANCE.md)。中文对侧会成为 fork 自撰的派生文本，与重新下载上游所得产生分歧，因此该语料按原样维护。`vendor/` 出于同一理由排除在范围之外，走的是 [`scripts/translation-pairing.ts`](../../scripts/translation-pairing.ts) 里的 `TRANSLATION_SCOPE_GLOB_EXCLUDES` 而不是这份清单。**本排除只覆盖 vendored 语料**：fork 自己维护的 `packages/research/**/README.md` 与研究子系统页**必须配对**。
 - `.agents/notes/archived/`：冻结的历史三文件配对。[`verify-archived-agent-notes`](../../scripts/verify-archived-agent-notes.ts) 校验其完整性和内容封存记录；翻译维护绝不能重写这些文件。
 
 **统一要求**：当前及今后纳入范围的每篇文档，合并时都必须构成完整的双语配对。[scripts/translation-pairing.manifest.json](../../scripts/translation-pairing.manifest.json) 只包含显式排除项；不存在逐文件推进清单、日期分界或 README 专用政策类别。
