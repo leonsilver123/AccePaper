@@ -193,7 +193,7 @@ describe('the resumed claim material is the material the run was GIVEN', () => {
     expect(material.metricKey).toBe(String(packClaim['metricKey']))
     expect(material.truthfulness).toBe('fixture')
     // ...and the declared commitment comes through the same reader.
-    expect(resumed.commitment).toEqual({ direction: 'increase', bounded: false })
+    expect(resumed.commitment).toEqual({ direction: 'increase', bound: 'at-least' })
   })
 
   it('reports a GAP for a field the run itself does not have, rather than inventing one', async () => {

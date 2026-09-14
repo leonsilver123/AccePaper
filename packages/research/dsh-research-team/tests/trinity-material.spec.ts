@@ -40,7 +40,7 @@ const SUPPORTING: ClaimMaterial = {
   truthfulness: 'fixture',
   measuredMetricKey: MEASURED_METRIC_KEY,
   declaredSources: ['case-pack.json', 'mock-experiment.json', 'claim.json'],
-  commitment: { direction: 'increase', bounded: false },
+  commitment: { direction: 'increase', bound: 'at-least' },
 }
 
 /** Material that CONTRADICTS what the study can test, in three different ways. */

@@ -175,7 +175,8 @@ export function commitmentFrom(value: unknown): PredictionCommitment | undefined
   const record = asRecord(value)
   if (record === undefined) return undefined
   const direction = record['direction']
-  const bounded = record['bounded']
-  if ((direction !== 'increase' && direction !== 'decrease') || typeof bounded !== 'boolean') return undefined
-  return { direction, bounded }
+  const bound = record['bound']
+  if (direction !== 'increase' && direction !== 'decrease') return undefined
+  if (bound !== 'at-least' && bound !== 'at-most' && bound !== 'within') return undefined
+  return { direction, bound }
 }

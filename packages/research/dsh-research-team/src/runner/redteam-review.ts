@@ -8,6 +8,11 @@
  * on it advanced for a reason unrelated to the work. This module makes the A channel's
  * votes DERIVED from the material, so changing the material changes the verdict.
  *
+ * Every check is either a DECLARATION or an EXACT MATCH. Nothing here infers meaning from prose:
+ * a direction and a bound are declared, and the anchor beside the number is compared as a string.
+ * That was an auditor's conclusion after four attempts at a prose reader reached a wrong verdict on
+ * the shipped study, and its recommendation — replace it with something narrower — is what this is.
+ *
  * WHAT THIS IS, AND IS NOT. Each role applies a fixed checklist to the claim material and
  * reports what it found. That is a rule-based review, not a model review: no model is
  * called, no prompt is sent, and the result is `local_computation`. The roles are the
@@ -37,6 +42,7 @@
 import type { ResearchRebuttalPosition } from '../types.ts'
 
 import type { PredictionCommitment } from './platoon-sim.ts'
+import { anchorBoundNear, percentagesIn, thresholdFromPrediction } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -253,8 +259,8 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
         }
         : {
           check: 'the claim declares which way its quantity should move',
-          found: `declared: the quantity should ${material.commitment.direction}`
-            + (material.commitment.bounded ? ', bounded by the stated threshold' : ', clearing the stated threshold'),
+          found: `declared: the quantity should ${material.commitment.direction}, `
+            + `${material.commitment.bound} the stated threshold`,
           position: 'support',
         }
       : {
@@ -262,6 +268,63 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
         found: 'no threshold to be bound to',
         position: 'abstain',
       },
+    // THE DECLARATION MUST AGREE WITH THE CLAIM'S OWN WORDS. The gate grades a declared direction
+    // and bound plus a parsed number, and nothing tied those to the sentence: an audit showed that
+    // changing ONE declared field records a claim its own sentence refutes as supported, with no
+    // wordplay needed. The anchor literal beside the number is checked by STRING EQUALITY — wire
+    // format, not a reading — so a contradiction is exact and belongs here as a `refute`.
+    //
+    // The two cases are different findings and are kept apart: an ABSENT anchor is the claim
+    // declining to relate the number to the change (a gap), while a PRESENT anchor naming a
+    // different bound is the claim contradicting itself.
+    hasThreshold && material.commitment !== undefined && thresholdFromPrediction(prediction) !== undefined
+      ? (() => {
+        const stated = thresholdFromPrediction(prediction) as number
+        const anchor = anchorBoundNear(prediction, stated)
+        if (anchor === undefined) {
+          return {
+            check: 'the prediction anchors its threshold to the change',
+            found: 'the prediction states a percentage with no anchor beside it (>=, <=, at least, at most, no more than, within), so nothing in its own words says how the number relates to the change',
+            position: 'abstain',
+          }
+        }
+        return anchor === material.commitment.bound
+          ? {
+            check: 'the prediction anchors its threshold to the change',
+            found: `anchored "${anchor}", which is what the claim declares`,
+            position: 'support',
+          }
+          : {
+            check: 'the prediction anchors its threshold to the change',
+            found: `the prediction anchors "${anchor}" while the claim declares "${material.commitment.bound}" — the declaration and the sentence contradict each other`,
+            position: 'refute',
+          }
+      })()
+      : {
+        check: 'the prediction anchors its threshold to the change',
+        found: 'no declared commitment or threshold to check the anchor against',
+        position: 'abstain',
+      },
+    // ONE percentage. `thresholdFromPrediction` takes the first, which is unambiguous as a string
+    // and not as a commitment: "Over 20% of the simulated interval, the … shall exceed by at least
+    // 35%" reads its threshold as 20 while the sentence commits to 35.
+    percentagesIn(prediction).length > 1
+      ? {
+        check: 'the prediction commits to exactly one threshold',
+        found: `it states ${String(percentagesIn(prediction).length)} percentages (${percentagesIn(prediction).join(', ')}), so which one is the threshold is a guess`,
+        position: 'refute',
+      }
+      : percentagesIn(prediction).length === 1
+        ? {
+          check: 'the prediction commits to exactly one threshold',
+          found: 'one percentage, so the graded number is the only one it could mean',
+          position: 'support',
+        }
+        : {
+          check: 'the prediction commits to exactly one threshold',
+          found: 'no percentage at all',
+          position: 'abstain',
+        },
     // The decisive check: the claim's declared quantity and the study's measured quantity
     // must be the same one. A mismatch is not an evidence gap — the claim is about
     // something this study will never measure, and no amount of running fixes it.

@@ -75,6 +75,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
+import { commitmentFrom } from './resume.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
 import type { PlatoonStudy, PredictionCommitment } from './platoon-sim.ts'
 
@@ -1028,7 +1029,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // `increase`, because the fixture claim's sentence says the quantity RISES ("raises the platoon
   // minimum time-to-collision"). A declared commitment that disagreed with the fixture's own words
   // would be worse than none at all.
-  let commitment: PredictionCommitment | undefined = { direction: 'increase', bounded: false }
+  let commitment: PredictionCommitment | undefined = { direction: 'increase', bound: 'at-least' }
 
   // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
   // content, and it is preferred over the model because the pack is what the run was
@@ -1046,12 +1047,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     metricKey = typeof packClaim.metricKey === 'string' ? packClaim.metricKey : ''
     // Read from the pack's declared block, validated by shape. Anything else is the claim
     // declining to say which way its quantity should move, which the C channel holds on.
-    const declared = packClaim.commitment as { direction?: unknown; bounded?: unknown } | undefined
-    commitment = declared !== undefined
-      && (declared.direction === 'increase' || declared.direction === 'decrease')
-      && typeof declared.bounded === 'boolean'
-      ? { direction: declared.direction, bounded: declared.bounded }
-      : undefined
+    commitment = commitmentFrom(packClaim.commitment)
     claimSource = 'case-pack'
     claimRoute = {
       source: 'case-pack',

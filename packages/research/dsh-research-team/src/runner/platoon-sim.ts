@@ -47,8 +47,9 @@
  *   declared headways, the pack's own stop-and-go      4.158 s
  *   declared headways, a near-total stop (24 of 25 m/s) 2.847 s — harsher than the pack declares
  *
- * The rate is 0.00% at every one of those, and an auditor's 3366-configuration sweep found the same
- * over the DECLARED headways and forcings.
+ * The rate is 0.00% at every one of those. An auditor's 3366-configuration sweep covered a WIDER
+ * range of headways and deceleration limits than the pack declares and did not enter the band
+ * either, which is why the qualifier below is about the CONCLUSION rather than about that sweep.
  *
  * THAT QUALIFIER IS LOAD-BEARING, and this paragraph previously lacked it: it claimed the band was
  * never entered at all, which an auditor then refuted using knobs the pack can reach — a 0.15 s
@@ -297,8 +298,8 @@ export type PredictionAdjudication =
     readonly thresholdPct: number
     /** The direction the claim DECLARED, which is the one its threshold was graded in. */
     readonly direction: PredictionCommitment['direction']
-    /** True when the claim CAPPED the change rather than requiring it to clear a bar. */
-    readonly bounded: boolean
+    /** How the claim relates the threshold to the change; see {@link PredictionCommitment.bound}. */
+    readonly bound: PredictionCommitment['bound']
     readonly detail: string
     /** The claim's own phrasing that binds it to the measured quantity. */
     readonly matchedPhrase: string
@@ -746,11 +747,76 @@ export interface PredictionCommitment {
   /** Which way the claim says the measured quantity should move. */
   readonly direction: 'increase' | 'decrease'
   /**
-   * True when the claim CAPS the change ("no more than 20%") rather than requiring it to clear a
-   * bar ("at least 20%"). Graded `<=` and `>=` respectively, which is the distinction the prose
-   * reader kept getting backwards.
+   * How the stated threshold relates to the change.
+   *
+   * THREE VALUES, not a boolean, and the third is why. `bounded: boolean` could express "at least"
+   * and "at most" and nothing else, so a claim with a TWO-SIDED tolerance — "shall stay within 20%
+   * of the baseline" — had to be declared as one of them, and an audit showed the result: declared
+   * `at most`, measured a 38.20% fall, graded `-38.20 <= 20` → SUPPORTED, for a claim a 38% fall
+   * plainly violates. The declaration was HONEST and the model could not express it. That is the
+   * only one of the audit's boundaries that produced a false positive on its own.
+   *
+   *   at-least : met when the change in `direction` is `>= threshold`  ("by at least 20%")
+   *   at-most  : met when it is `<= threshold`                          ("by no more than 20%")
+   *   within   : met when `|change| <= threshold`                       ("within 20%")
    */
-  readonly bounded: boolean
+  readonly bound: 'at-least' | 'at-most' | 'within'
+}
+
+/**
+ * The literal an anchor's text uses, and the bound it asserts.
+ *
+ * WHY A LITERAL AND NOT A READING. The gate grades two declared bits plus a parsed number, and
+ * nothing tied those bits to the claim's sentence — an audit demonstrated that changing ONE
+ * declared field records a claim its own sentence refutes as supported, with no wordplay needed.
+ * Its proposed fix is this: require the sentence to carry a MACHINE-READABLE anchor beside the
+ * number, and compare the declared bound to that token by STRING EQUALITY. That is wire-format
+ * validation, not reading: there is no heuristic here, only whether one string equals another.
+ *
+ * The cost is one fixture edit — the pack's sentence says "by at least 20%" and now says "≥ 20%" —
+ * and the gain is that a declaration contradicting the claim's own words stops being invisible.
+ */
+const ANCHOR_TOKENS: ReadonlyArray<{ readonly text: string; readonly bound: PredictionCommitment['bound'] }> = [
+  { text: '>=', bound: 'at-least' },
+  { text: '≥', bound: 'at-least' },
+  { text: 'at least', bound: 'at-least' },
+  { text: '<=', bound: 'at-most' },
+  { text: '≤', bound: 'at-most' },
+  { text: 'at most', bound: 'at-most' },
+  { text: 'no more than', bound: 'at-most' },
+  { text: 'within', bound: 'within' },
+]
+
+/**
+ * The anchor the prediction states beside its threshold, if it states one.
+ *
+ * The anchor must sit NEAR the number — the twenty characters before it — because an anchor
+ * elsewhere in the sentence is not the one the threshold is bound by.
+ *
+ * @param predictionText - the prediction as written.
+ * @param thresholdPct - the percentage the prediction states.
+ * @returns the bound the anchor asserts, or undefined when no anchor is beside the number.
+ */
+export function anchorBoundNear(predictionText: string, thresholdPct: number): PredictionCommitment['bound'] | undefined {
+  const match = /(\d+(?:\.\d+)?)\s*%/u.exec(predictionText)
+  if (match === null || Number(match[1]) !== thresholdPct) return undefined
+  const before = predictionText.slice(Math.max(0, match.index - 20), match.index).toLowerCase()
+  return ANCHOR_TOKENS.find(token => before.includes(token.text))?.bound
+}
+
+/**
+ * Every distinct percentage the prediction states, in order.
+ *
+ * A1S pinned this: `thresholdFromPrediction` takes the FIRST percentage, which is unambiguous as a
+ * STRING and not as a COMMITMENT. "Over 20% of the simulated interval, the … shall exceed the
+ * baseline by at least 35%" reads its threshold as 20 while the sentence commits to 35. Requiring
+ * exactly one percentage makes the number it grades the only number it could mean.
+ *
+ * @param predictionText - the prediction as written.
+ * @returns the percentages, in the order they appear.
+ */
+export function percentagesIn(predictionText: string): ReadonlyArray<number> {
+  return [...predictionText.matchAll(/(\d+(?:\.\d+)?)\s*%/gu)].map(match => Number(match[1]))
 }
 
 export function thresholdFromPrediction(predictionText: string): number | undefined {
@@ -812,6 +878,16 @@ export function evaluatePrediction(
         + 'is unverified and the measurement cannot adjudicate it',
     }
   }
+  // Exactly one percentage, so the number graded is the only number the sentence could mean.
+  const percentages = percentagesIn(predictionText)
+  if (percentages.length > 1) {
+    return {
+      kind: 'unbindable',
+      reason:
+        `the claim states ${String(percentages.length)} percentages (${percentages.map(String).join(', ')}), `
+        + 'so which of them is the threshold is a guess — a falsifiable prediction commits to one number',
+    }
+  }
   const thresholdPct = thresholdFromPrediction(predictionText)
   if (thresholdPct === undefined) {
     return {
@@ -850,7 +926,30 @@ export function evaluatePrediction(
         + 'state what it is testing, exactly as it has to declare the quantity itself',
     }
   }
-  const { direction, bounded } = commitment
+  const { direction, bound } = commitment
+  // The declaration must agree with the claim's OWN anchor literal, compared as strings. This is
+  // the wire-format check an audit proposed in place of reading the sentence: it needs no
+  // comprehension, and a mismatch is a positive contradiction — the same class as a declared
+  // metric that disagrees with the measured one — so the claim is not gradeable as stated.
+  const anchorBound = anchorBoundNear(predictionText, thresholdPct)
+  if (anchorBound === undefined) {
+    return {
+      kind: 'unbindable',
+      reason:
+        'the prediction states a percentage but carries no anchor beside it (one of: '
+        + `${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's own words `
+        + 'says how the number relates to the change and the declared bound cannot be checked',
+    }
+  }
+  if (anchorBound !== bound) {
+    return {
+      kind: 'unbindable',
+      reason:
+        `the claim declares bound "${bound}" while its own prediction anchors the threshold with `
+        + `"${anchorBound}" — the declaration and the sentence contradict each other, so the claim is `
+        + 'not gradeable as stated',
+    }
+  }
 
   const improvementPct = comparison.relativeImprovementPct
   // What is graded is the change the CLAIM asked for, in the claim's own direction: a prediction
@@ -859,9 +958,12 @@ export function evaluatePrediction(
   const inClaimDirection = direction === 'increase' ? improvementPct : -improvementPct
   // A CAPPED prediction is met by staying under the cap, not by clearing it. Grading both the same
   // way reported a prediction that a 38.20% fall plainly violates as SUPPORTED.
-  const supportsPrediction = bounded
-    ? inClaimDirection <= thresholdPct
-    : inClaimDirection >= thresholdPct
+  const supportsPrediction = bound === 'at-least'
+    ? inClaimDirection >= thresholdPct
+    : bound === 'at-most'
+      ? inClaimDirection <= thresholdPct
+      // A two-sided tolerance, which `bounded: boolean` could not express at all.
+      : Math.abs(inClaimDirection) <= thresholdPct
   return {
     kind: 'adjudicated',
     matchedPhrase: matched,
@@ -869,10 +971,10 @@ export function evaluatePrediction(
     improvementPct,
     thresholdPct,
     direction,
-    bounded,
+    bound,
     detail:
       `the study ${supportsPrediction ? 'met' : 'missed'} the stated threshold: the claim predicts the `
-      + `quantity should ${direction}${bounded ? ' by no more than' : ' by at least'}, and the measurement moved ${improvementPct.toFixed(2)}% `
+      + `quantity should ${direction} (threshold ${bound}), and the measurement moved ${improvementPct.toFixed(2)}% `
       + `(i.e. ${inClaimDirection.toFixed(2)}% in the direction the claim asked for) against the required `
       + `${String(thresholdPct)}% of ${MEASURED_METRIC_LABEL} `
       + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)} -> `

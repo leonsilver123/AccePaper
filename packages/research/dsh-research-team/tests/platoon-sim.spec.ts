@@ -18,6 +18,8 @@ import {
   DECLARED_VEHICLE_CLASSES,
   MEASURED_METRIC_KEY,
   SIMULATION_INPUTS,
+  anchorBoundNear,
+  percentagesIn,
   STUDY_OPERATING_POINT,
   ablationStudy,
   boundaryTest,
@@ -223,7 +225,7 @@ describe('evaluatePrediction', () => {
   const canonical = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
 
   it('adjudicates the bound quantity and reports the measured direction', () => {
-    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
+    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(false)
@@ -242,7 +244,7 @@ describe('evaluatePrediction', () => {
     // direction was read from. The auditor's verdict was that it could not be trusted and should be
     // replaced by something narrower. This is the replacement: the claim DECLARES its commitment.
     const rise = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
-    const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
+    const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(increase.kind).toBe('adjudicated')
     if (increase.kind !== 'adjudicated') return
     expect(increase.direction).toBe('increase')
@@ -250,18 +252,27 @@ describe('evaluatePrediction', () => {
 
     // The SAME sentence, declared as a fall: the measurement fell 38.20%, so the claim is met.
     // The prose is not consulted for this, which is the point.
-    const decrease = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bounded: false })
+    const decrease = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
     expect(decrease.kind).toBe('adjudicated')
     if (decrease.kind !== 'adjudicated') return
     expect(decrease.direction).toBe('decrease')
     expect(decrease.supportsPrediction).toBe(true)
 
-    // A CAPPED commitment is met by staying under the cap. The same sentence, capped, is missed.
-    const capped = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bounded: true })
+    // A CAPPED commitment needs an anchor that SAYS so: declaring `at-most` against a sentence
+    // anchored "at least" is the declaration contradicting the claim's own words, and the gate
+    // refuses it rather than grading either half. The anchor is compared as a string, which is
+    // wire-format validation and not a reading.
+    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-most' })
+    expect(mismatched.kind).toBe('unbindable')
+    if (mismatched.kind === 'unbindable') expect(mismatched.reason).toContain('contradict each other')
+
+    // Anchored to match, the cap is graded: a 38.20% fall is not "at most 20%".
+    const cappedText = 'the HV-AV-HV platoon minimum time-to-collision versus the all-HV platoon minimum shall stay at most 20% apart'
+    const capped = evaluatePrediction(cappedText, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
     expect(capped.kind).toBe('adjudicated')
     if (capped.kind !== 'adjudicated') return
-    expect(capped.bounded).toBe(true)
-    expect(capped.supportsPrediction).toBe(false)
+    expect(capped.bound).toBe('at-most')
+    expect(capped.supportsPrediction).toBe(true)
   })
 
   it('HOLDS a claim that declares no commitment, rather than guessing one', () => {
@@ -305,7 +316,7 @@ describe('evaluatePrediction', () => {
       'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%',
       colliding,
       MEASURED_METRIC_KEY,
-      { direction: 'increase', bounded: false },
+      { direction: 'increase', bound: 'at-least' },
     )
     expect(verdict.kind).toBe('unbindable')
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('occupied the same space')
@@ -327,7 +338,7 @@ describe('evaluatePrediction', () => {
         },
       },
     }
-    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY, { direction: 'increase', bounded: false })
+    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(true)
@@ -375,8 +386,68 @@ describe('evaluatePrediction', () => {
       + 'minimum time-to-collision that assumed uniform arrivals',
       study,
       MEASURED_METRIC_KEY,
-      { direction: 'increase', bounded: false },
+      { direction: 'increase', bound: 'at-least' },
     )
     expect(verdict.kind).toBe('adjudicated')
+  })
+})
+
+describe('the declaration is checked against the claim\'s own words', () => {
+  // The gate grades two declared bits plus a number. Nothing tied them to the sentence, and an
+  // audit showed that changing ONE declared field records a claim its own sentence refutes as
+  // supported. Its proposed fix is what this tests: the sentence must carry a machine-readable
+  // anchor beside the number, and the declared bound is compared to that token by string equality.
+  const rise = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by at least 20%'
+
+  it('REFUSES a declaration that contradicts the anchor the sentence states', () => {
+    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+    expect(mismatched.kind).toBe('unbindable')
+    if (mismatched.kind === 'unbindable') {
+      expect(mismatched.reason).toContain('contradict each other')
+      expect(mismatched.reason).toContain('at-least')
+      expect(mismatched.reason).toContain('at-most')
+    }
+  })
+
+  it('REFUSES a prediction with no anchor beside its number', () => {
+    const unanchored = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by 20%'
+    const verdict = evaluatePrediction(unanchored, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    expect(verdict.kind).toBe('unbindable')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('no anchor beside it')
+  })
+
+  it('REFUSES a prediction stating more than one percentage', () => {
+    // `thresholdFromPrediction` takes the FIRST percentage — unambiguous as a string, not as a
+    // commitment. "Over 20% of the interval, the … shall exceed by at least 35%" grades 20 while
+    // the sentence commits to 35.
+    const twoNumbers = 'over 20% of the simulated interval, the platoon minimum time-to-collision shall exceed the all-HV baseline by at least 35%'
+    expect(percentagesIn(twoNumbers)).toEqual([20, 35])
+    const verdict = evaluatePrediction(twoNumbers, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    expect(verdict.kind).toBe('unbindable')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states 2 percentages')
+  })
+
+  it('grades a TWO-SIDED tolerance, which a boolean bound could not express', () => {
+    // The one boundary of the audit's three that produced a false positive on its own: declared as
+    // a cap, a 38.20% fall was graded `-38.20 <= 20` → SUPPORTED for a claim that a 38% fall
+    // plainly violates. The declaration was honest; the model could not express it.
+    const within = 'the platoon minimum time-to-collision versus the all-HV baseline shall stay within 40%'
+    const verdict = evaluatePrediction(within, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' })
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind !== 'adjudicated') return
+    expect(verdict.bound).toBe('within')
+    // |−38.20| <= 40 → met. Tighten the tolerance past the measured change and it is missed.
+    expect(verdict.supportsPrediction).toBe(true)
+    const tight = evaluatePrediction(
+      'the platoon minimum time-to-collision versus the all-HV baseline shall stay within 10%',
+      study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' },
+    )
+    expect(tight.kind === 'adjudicated' && tight.supportsPrediction).toBe(false)
+  })
+
+  it('reads the anchor only from beside the number', () => {
+    // An anchor elsewhere in the sentence is not the one the threshold is bound by.
+    expect(anchorBoundNear(rise, 20)).toBe('at-least')
+    expect(anchorBoundNear('at least the platoon minimum time-to-collision is checked, within 20% of it', 20)).toBe('within')
   })
 })
