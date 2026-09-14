@@ -284,14 +284,23 @@ export async function runT19B(
     // channel was rate-limited, and the caller was told A2's ordering was wrong.
     // The failing outcome carries `executeError`, so returning it is what lets a
     // caller say WHY the run ended.
-    if (outcome.status !== 'passed' && outcome.status !== 'gated') break
+    //
+    // `gated` means two different things and only one of them is a place to stop and return:
+    // E2's human gate (a person is expected next) and an ABSTAINED HOLD on any other step (the
+    // run cannot continue). Treating the hold as "gated, keep going" made the next step's guard
+    // throw, so an abstention reached the caller as a dependency error — the same
+    // reported-consequence-hides-cause defect this rule exists to remove. The outcome's own
+    // `kind` distinguishes them, because the driver sets `humanGate` for the human gate only.
+    if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
   return { runId, steps: outcomes }
 }
 
 /** Build a fresh cross-step context (claim / prediction wiring) for a run. */
 export function createRunContext(timestamp: number = FIXED_TS): RunContext {
-  return { predictionText: '', claimId: '', claimRef: '', timestamp }
+  // `metricKey` starts empty: nothing has declared what the claim is about yet, and the C
+  // channel treats an empty key as unbindable rather than assuming a quantity.
+  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp }
 }
 
 /** Drive every step from `fromStepId` (inclusive) through E2. */
@@ -312,11 +321,9 @@ export async function driveRemaining(
     }
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
-    // Same rule as runT19B: stop at the first step that did not pass. Driving on would make the
-    // next step's `canStart` guard throw "dependency order violated", which reports the
-    // consequence and hides the cause — the failure that motivated this rule in runT19B applies
-    // identically to a resumed run, and a resume is exactly where a step is expected to fail.
-    if (outcome.status !== 'passed' && outcome.status !== 'gated') break
+    // Same rule as runT19B, including the human-gate distinction: stop at the first step that did
+    // not pass, and continue through `gated` only when it is the human gate rather than a hold.
+    if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
   if (!started) throw new Error(`T19B drive: unknown fromStepId '${fromStepId}'`)
   return { runId, steps: outcomes }

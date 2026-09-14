@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-14-c-gate-could-not-tell-what-it-was-measuring.md
+2026-09-14-c-gate-could-not-tell-what-it-was-measuring.md: c67e3b83d455e35617a6626c1599c73302cd70b0
+2026-09-14-c-gate-could-not-tell-what-it-was-measuring.zh.md: 7065da273c28191d534f21cf0c2f9d9e4231bc14

@@ -36,7 +36,7 @@ import { judgeRound } from '../redteam/judge.ts'
 import { adjudicateClaimSupport } from '../experiment/support.ts'
 
 import { B_CHANNEL_CONTRADICT_REF, buildBChannelAnchors } from './anchor-fixture.ts'
-import { EXPERIMENT_RULE_VERSION, evaluatePrediction } from './traffic-sim.ts'
+import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC_LABEL, evaluatePrediction, experimentScenario } from './traffic-sim.ts'
 import { CANONICAL } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
@@ -168,11 +168,12 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
-  const experiment = evaluatePrediction(predictionText)
-  if (experiment === undefined) {
-    // FAIL-CLOSED: a prediction that states no numeric threshold cannot be
-    // adjudicated by this study, so the gate holds instead of fabricating a report.
-    // Symmetric with the C1 executor, which throws on the same condition.
+  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  if (experiment.kind === 'unbindable') {
+    // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
+    // at all, so the gate abstains instead of comparing an unrelated number to a threshold.
+    // Before this check a claim about a quantity nothing here measures was graded — either
+    // `passed` and carried to E2, or `failed` as "refuted" by a number it was never about.
     const held = adjudicateClaimSupport({
       claimRef,
       prediction: { text: predictionText },
@@ -183,8 +184,8 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
       outcome: held.outcome,
       passed: held.outcome === 'passed',
       evidence:
-        `team:adjudicateClaimSupport outcome=${held.outcome} `
-        + '(the prediction states no numeric threshold → hold; fail-closed, symmetric with C1-mvp)',
+        `team:adjudicateClaimSupport outcome=${held.outcome} (unbindable claim → hold; `
+        + `fail-closed, symmetric with C1-mvp): ${experiment.reason}`,
       rationale: held.summary,
       timestamp: ctx.runCtx.timestamp,
     }
@@ -208,7 +209,9 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     passed: rec.outcome === 'passed',
     evidence:
       `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
-      + `(live experiment: measured ${experiment.reductionPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}%)`,
+      + '(the experiment ran here over the measured demand profile: '
+      + `measured ${experiment.reductionPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
+      + `of ${MEASURED_METRIC_LABEL})`,
     rationale: rec.summary,
     timestamp: ctx.runCtx.timestamp,
   }

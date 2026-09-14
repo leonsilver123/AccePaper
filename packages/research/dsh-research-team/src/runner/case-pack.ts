@@ -328,6 +328,11 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
         prediction,
         falsificationExperiment,
         scope,
+        // Present only when the pack declares it. Absent means the claim states no quantity, and
+        // the C channel then HOLDS instead of grading it against whatever the experiment measured.
+        ...(typeof pack.files.get('claim.json')?.content.metricKey === 'string'
+          ? { metricKey: pack.files.get('claim.json')?.content.metricKey as string }
+          : {}),
         ...provenanceOf(pack, 'claim.json', [
           'claim.json#assertion.en',
           'claim.json#prediction.en',

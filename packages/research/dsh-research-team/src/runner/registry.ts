@@ -127,6 +127,7 @@ import {
   runFixedTimePolicy,
   thresholdFromPrediction,
   EXPERIMENT_RULE_VERSION,
+  MEASURED_METRIC_KEY,
 } from './traffic-sim.ts'
 import {
   STUDY_ASSUMPTIONS,
@@ -205,6 +206,14 @@ export interface RunContext {
   claimId: string
   /** Human-readable claim reference (set by A2-claim executor). */
   claimRef: string
+  /**
+   * The quantity the claim is about, as the claim declares it (set by A2-claim executor).
+   *
+   * Empty when the claim declares none. The C channel adjudicates only when this equals the
+   * quantity the experiment measures; anything else (including empty) makes the claim
+   * unbindable, and an unbindable claim HOLDS rather than being graded.
+   */
+  metricKey: string
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -360,6 +369,15 @@ const CANONICAL_CLAIM_REF = 're-planning the signal plan each interval reduces d
  * its own claim, which is what the model path produces.
  */
 const CANONICAL_PREDICTION = 'demand-weighted mean delay falls by at least 5% under per-interval re-planning'
+
+/**
+ * The quantity the fixture claim is about.
+ *
+ * It declares the study's measured key because that is what its prediction text names
+ * ("demand-weighted mean delay"). A claim whose text is about something else must declare
+ * something else, and then the C channel holds instead of grading it.
+ */
+const CANONICAL_METRIC_KEY = MEASURED_METRIC_KEY
 
 /**
  * The study's identity fields: what is being compared, and under which name.
@@ -905,6 +923,9 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let prediction = CANONICAL_PREDICTION
   let claimSource: 'model' | 'fixture' | 'case-pack' = 'fixture'
   let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
+  // What the claim is ABOUT. Only a claim that declares the quantity this study measures can be
+  // adjudicated by it; the fixture claim declares it because its own prediction text names it.
+  let metricKey = CANONICAL_METRIC_KEY
 
   // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
   // content, and it is preferred over the model because the pack is what the run was
@@ -916,6 +937,9 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     essentialDifference = requiredClaimField(packClaim, 'essentialDifference')
     experimentToFalsify = requiredClaimField(packClaim, 'experimentToFalsify')
     prediction = requiredClaimField(packClaim, 'prediction')
+    // A pack that declares no metric leaves the claim unbindable, and the C channel then HOLDS
+    // rather than grading it. That is the honest outcome for a claim this study cannot test.
+    metricKey = typeof packClaim.metricKey === 'string' ? packClaim.metricKey : ''
     claimSource = 'case-pack'
     claimRoute = {
       source: 'case-pack',
@@ -962,6 +986,10 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     experimentToFalsify = parsed.experimentToFalsify
     prediction = parsed.prediction
     claimSource = 'model'
+    // The response format asks for four labelled fields and no metric, so a model-derived claim
+    // is unbindable by construction. Widening the format is a separate change; until then the
+    // C channel holds rather than grading a claim whose quantity nobody stated.
+    metricKey = ''
     claimRoute = proseRouteOf(analysis)
   }
 
@@ -983,14 +1011,20 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimId = CANONICAL_CLAIM_ID
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = prediction
+  ctx.runCtx.metricKey = metricKey
   return {
-    claim: tagArtifact({ ...artifact.claim, claimSource }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
+    claim: tagArtifact({ ...artifact.claim, claimSource, metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
       {
         text: prediction,
         ref: CANONICAL_CLAIM_ID,
         supportStatus: artifact.claim.supportStatus,
         claimSource,
+        // What the claim is about. The C channel adjudicates only when this equals the quantity
+        // the experiment measures, so it is the field that decides whether the number below was
+        // ever a test of this claim.
+        metricKey: metricKey === '' ? null : metricKey,
+        measuredMetricKey: MEASURED_METRIC_KEY,
         claimRoute,
       },
       A2_PRODUCER,
@@ -1545,11 +1579,13 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText)
-  if (verdict === undefined) {
+  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
+  if (verdict.kind === 'unbindable') {
+    // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
+    // because there is no measurement that could adjudicate it.
     throw new Error(
-      'C1-mvp: the prediction states no numeric threshold, so the experiment cannot adjudicate it — '
-      + 'fail-closed (no adjudicable prediction ⇒ no pass)',
+      `C1-mvp: the experiment cannot adjudicate this claim — ${verdict.reason} `
+      + '(fail-closed: no adjudicable prediction ⇒ no pass)',
     )
   }
   const comparison = comparePolicies(experimentScenario())
@@ -1564,6 +1600,11 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         predictionText,
         experiment: {
           source: 'traffic-sim (Webster delay model, two-phase intersection)',
+          // What this experiment measures and what it does NOT. An artifact that states only
+          // "an experiment ran" invites the reader to assume it tested the claim; naming the
+          // quantity is what lets them check.
+          measures: MEASURED_METRIC_KEY,
+          doesNotMeasure: 'platoon car-following risk (TTC<1.5s rate), string stability, or any external SOTA',
           ruleVersion: EXPERIMENT_RULE_VERSION,
           demand: studyDemandEvidence(),
         },

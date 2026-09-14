@@ -38,11 +38,14 @@ import {
   tagArtifact,
 } from '../src/runner/registry.ts'
 import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.ts'
+import { MEASURED_METRIC_KEY } from '../src/runner/traffic-sim.ts'
 
 const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
 
 function freshRunCtx(): RunContext {
-  return { predictionText: '', claimId: '', claimRef: '', timestamp: FIXED_TS }
+  // No metric declared: a bare context cannot bind a claim to the experiment's quantity, so the
+  // C channel holds. Tests that want an adjudicated verdict set `metricKey` explicitly.
+  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp: FIXED_TS }
 }
 
 function execCtx(stepId: string, runCtx: RunContext = freshRunCtx()): ExecCtx {
@@ -411,11 +414,14 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       predictionText: 'no such experiment row',
       claimId: 'mock-claim-999',
       claimRef: 'missing row',
+      metricKey: MEASURED_METRIC_KEY,
       timestamp: FIXED_TS,
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture
     // row" but "the prediction states no threshold this study can check".
-    expect(() => entry?.executor(execCtx('C1-mvp', missing))).toThrow(/no numeric threshold/i)
+    // The fail-closed condition is now the MISSING BINDING as much as the missing threshold:
+    // a claim whose quantity the experiment does not measure cannot be executed against.
+    expect(() => entry?.executor(execCtx('C1-mvp', missing))).toThrow(/cannot adjudicate/i)
   })
 })
 

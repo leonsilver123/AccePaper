@@ -56,7 +56,7 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
     attemptId: 1,
     getInput: (slug: string) =>
       slug === 'claim' ? { claimRef: 'claim-1', assertion: 'adaptive control cuts delay' } : undefined,
-    runCtx: { predictionText: '', claimId: '', claimRef: '', timestamp: 1_700_000_000_000 },
+    runCtx: { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp: 1_700_000_000_000 },
     ...(writer !== undefined ? { proseWriter: writer } : {}),
   }
 }

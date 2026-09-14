@@ -351,12 +351,45 @@ export interface PredictionVerdict {
 }
 
 /**
+ * The quantity this study's experiment MEASURES.
+ *
+ * A claim is adjudicated only when it declares this same key. Without that binding the C
+ * channel compared the first percentage in the claim's prose against the measured delay
+ * reduction: a claim about platoon collision risk could be "refuted" by an unrelated delay
+ * number, and — worse — a claim about a quantity nothing here measures could be graded
+ * `passed` and carried to E2. The key is what makes the comparison a comparison.
+ */
+export const MEASURED_METRIC_KEY = 'mean-delay-seconds-per-vehicle'
+
+/** Display label for {@link MEASURED_METRIC_KEY}, for evidence strings. */
+export const MEASURED_METRIC_LABEL = 'demand-weighted mean vehicle delay (s/veh)'
+
+/**
+ * Why a prediction could not be adjudicated, or its verdict when it could.
+ *
+ * `unbindable` is not a failed verdict and not a pass: it says this study cannot adjudicate
+ * the claim at all, which callers must surface as an abstention rather than grade.
+ */
+export type PredictionAdjudication =
+  | {
+    readonly kind: 'adjudicated'
+    readonly supportsPrediction: boolean
+    readonly reductionPct: number
+    readonly thresholdPct: number
+    readonly detail: string
+  }
+  | { readonly kind: 'unbindable'; readonly reason: string }
+
+/**
  * Read the numeric threshold a prediction commits to.
  *
  * The prediction is prose, but a falsifiable one names a quantity, so the first
  * percentage in the text is the commitment. A prediction with no percentage is not
  * falsifiable in this study's terms and yields undefined, which callers must treat
  * as "cannot adjudicate" rather than as a pass.
+ *
+ * The threshold alone does NOT bind the prediction to the experiment; see
+ * {@link MEASURED_METRIC_KEY}.
  *
  * @param predictionText - the prediction as written.
  * @returns the threshold in percent, or undefined when none is stated.
@@ -381,20 +414,41 @@ export function thresholdFromPrediction(predictionText: string): number | undefi
 export function evaluatePrediction(
   predictionText: string,
   scenario: TrafficScenario = experimentScenario(),
-): PredictionVerdict | undefined {
+  metricKey?: string,
+): PredictionAdjudication {
+  // The binding is checked FIRST. A prediction about a quantity this study does not measure
+  // cannot be adjudicated however many percentages it states, and grading it would report an
+  // untested claim as supported or refuted.
+  if (metricKey === undefined || metricKey === '' || metricKey !== MEASURED_METRIC_KEY) {
+    // An empty key is NO key, not a key that differs: both mean nothing binds the claim to a
+    // measurement, and they read as different facts to whoever has to act on the hold.
+    return {
+      kind: 'unbindable',
+      reason: metricKey === undefined || metricKey === ''
+        ? `the claim declares no metric, so nothing binds it to the quantity this study measures (${MEASURED_METRIC_LABEL})`
+        : `the claim is about "${metricKey}" while this study measures "${MEASURED_METRIC_KEY}" (${MEASURED_METRIC_LABEL}), so the measurement cannot adjudicate it`,
+    }
+  }
   const thresholdPct = thresholdFromPrediction(predictionText)
-  if (thresholdPct === undefined) return undefined
+  if (thresholdPct === undefined) {
+    return {
+      kind: 'unbindable',
+      reason: `the claim is about ${MEASURED_METRIC_LABEL} but states no numeric threshold, so there is nothing to adjudicate`,
+    }
+  }
 
   const comparison = comparePolicies(scenario)
   const reductionPct = comparison.relativeReductionPct
   const supportsPrediction = comparison.meetsThreshold(thresholdPct)
   return {
+    kind: 'adjudicated',
     supportsPrediction,
     reductionPct,
     thresholdPct,
     detail:
       `adaptive control ${supportsPrediction ? 'met' : 'missed'} the stated threshold: `
       + `measured reduction ${reductionPct.toFixed(2)}% vs required ${String(thresholdPct)}% `
+      + `of ${MEASURED_METRIC_LABEL} `
       + `(fixed-time ${comparison.baseline.meanDelaySecondsPerVehicle.toFixed(2)} s/veh -> `
       + `adaptive ${comparison.variant.meanDelaySecondsPerVehicle.toFixed(2)} s/veh)`,
   }

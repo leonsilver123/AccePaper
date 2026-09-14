@@ -18,6 +18,14 @@ import { adjudicate } from '@deepseek-ai/dsh-research-core'
 
 import { researchTeamError } from '../types.ts'
 
+/**
+ * Whether the experiment RAN here or a fixture row answered.
+ *
+ * `'live'` means the experiment executed locally — NOT the truthfulness level `live_external`,
+ * which `registry.ts` defines as "a real external system was reached" and reserves for a
+ * deployment that wires a real catalogue. The C channel's own classification is
+ * `local_computation`. The word collides; the level never does, and this is the only reading.
+ */
 export type ExperimentSource = 'live' | 'mock-fixture'
 export type EvidenceGrade = 'live-verified' | 'mock-verified' | 'unverified'
 export type ClaimSupportVerdict = 'supported' | 'refuted' | 'undetermined'
