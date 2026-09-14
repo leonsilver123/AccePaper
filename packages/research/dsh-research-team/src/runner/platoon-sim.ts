@@ -132,7 +132,8 @@ export const SIMULATION_INPUTS = {
 export const MEASURED_METRIC_KEY = 'min-ttc-seconds'
 
 /** Display label for {@link MEASURED_METRIC_KEY}, for evidence strings. */
-export const MEASURED_METRIC_LABEL = "the platoon's minimum time-to-collision (s)"
+export const MEASURED_METRIC_LABEL =
+  "the platoon's minimum time-to-collision (s)"
 
 /** Whether a larger value of the measured quantity is better or worse. */
 export type MetricDirection = 'lower-is-better' | 'higher-is-better'
@@ -307,9 +308,17 @@ export type PredictionAdjudication =
   | { readonly kind: 'unbindable'; readonly reason: string }
 
 /** The Case Pack's declared 3-vehicle mixed platoon: HV, AV, HV. */
-export const MIXED_PLATOON_COMPOSITION: ReadonlyArray<VehicleClassId> = ['HV', 'AV', 'HV']
+export const MIXED_PLATOON_COMPOSITION: ReadonlyArray<VehicleClassId> = [
+  'HV',
+  'AV',
+  'HV',
+]
 /** The Case Pack's declared homogeneous platoon: HV, HV, HV. */
-export const HOMOGENEOUS_PLATOON_COMPOSITION: ReadonlyArray<VehicleClassId> = ['HV', 'HV', 'HV']
+export const HOMOGENEOUS_PLATOON_COMPOSITION: ReadonlyArray<VehicleClassId> = [
+  'HV',
+  'HV',
+  'HV',
+]
 
 /**
  * The operating point the study starts from.
@@ -335,11 +344,23 @@ export const STUDY_OPERATING_POINT = {
 } as const
 
 /** The Case Pack's declared vehicle parameters, as this module's class table. */
-export const DECLARED_VEHICLE_CLASSES: Readonly<Record<VehicleClassId, VehicleClass>> = {
-  HV: { reactionDelaySeconds: 1.2, desiredHeadwaySeconds: 2.0, maxDecelerationMps2: 7.5, lookAheadHorizonSeconds: 0 },
+export const DECLARED_VEHICLE_CLASSES: Readonly<
+  Record<VehicleClassId, VehicleClass>
+> = {
+  HV: {
+    reactionDelaySeconds: 1.2,
+    desiredHeadwaySeconds: 2.0,
+    maxDecelerationMps2: 7.5,
+    lookAheadHorizonSeconds: 0,
+  },
   // The AV predicts its leader's motion over its own 150 ms reaction horizon, which
   // cancels that delay and leaves no lag. Both declared numbers come from the Case Pack.
-  AV: { reactionDelaySeconds: 0.15, desiredHeadwaySeconds: 1.2, maxDecelerationMps2: 8.0, lookAheadHorizonSeconds: 0.15 },
+  AV: {
+    reactionDelaySeconds: 0.15,
+    desiredHeadwaySeconds: 1.2,
+    maxDecelerationMps2: 8.0,
+    lookAheadHorizonSeconds: 0.15,
+  },
 }
 
 /** The disturbance the two platoons are run under in the study's main comparison. */
@@ -395,9 +416,13 @@ export function experimentStudy(): PlatoonStudy {
  * @returns the study the pack describes, or undefined when the value is not a pack scenario
  *   holding exactly one homogeneous and one mixed platoon.
  */
-export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined {
-  if (scenarioInput === null || typeof scenarioInput !== 'object') return undefined
-  const declared = (scenarioInput as { domainScenarios?: unknown }).domainScenarios
+export function studyFromPack(
+  scenarioInput: unknown,
+): PlatoonStudy | undefined {
+  if (scenarioInput === null || typeof scenarioInput !== 'object')
+    return undefined
+  const declared = (scenarioInput as { domainScenarios?: unknown })
+    .domainScenarios
   if (!Array.isArray(declared) || declared.length !== 2) return undefined
 
   const build = (raw: unknown): PlatoonScenario | undefined => {
@@ -406,7 +431,11 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
     const composition = entry.platoonComposition
     const params = entry.vehicleParams
     const speed = entry.initialSpeed_mps
-    if (!Array.isArray(composition) || composition.some(id => id !== 'HV' && id !== 'AV')) return undefined
+    if (
+      !Array.isArray(composition) ||
+      composition.some(id => id !== 'HV' && id !== 'AV')
+    )
+      return undefined
     // A platoon needs a leader and at least one follower. Accepting a one-vehicle composition and
     // letting `runPlatoon` refuse it later turned a pack this loader cannot use into an uncaught
     // exception thrown from inside the C channel, where every neighbouring refusal (an
@@ -414,7 +443,8 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
     // found it; the contract here is "a pack this loader cannot read is refused", so it is refused.
     if (composition.length < 2) return undefined
     if (params === null || typeof params !== 'object') return undefined
-    if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0) return undefined
+    if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0)
+      return undefined
 
     const classes: Partial<Record<VehicleClassId, VehicleClass>> = {}
     for (const id of ['HV', 'AV'] as const) {
@@ -424,7 +454,12 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
       const reactionMs = row.reactionDelay_ms
       const headway = row.followDistance_s
       const decel = row.maxDecel_mps2
-      if (typeof reactionMs !== 'number' || typeof headway !== 'number' || typeof decel !== 'number') return undefined
+      if (
+        typeof reactionMs !== 'number' ||
+        typeof headway !== 'number' ||
+        typeof decel !== 'number'
+      )
+        return undefined
       const reactionDelaySeconds = reactionMs / 1000
       const declaredHorizonMs = row.predictiveHorizon_ms
       classes[id] = {
@@ -436,9 +471,14 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
         // (`studyEvidence.derivedParameters`): once the horizon became a real mechanism worth
         // 0.72 s of the measured effect, a result resting on it must not rest on a number no input
         // states. An audit raised exactly that, and the fix is for the pack to carry the field.
-        lookAheadHorizonSeconds: typeof declaredHorizonMs === 'number' && Number.isFinite(declaredHorizonMs) && declaredHorizonMs >= 0
-          ? declaredHorizonMs / 1000
-          : id === 'AV' ? reactionDelaySeconds : 0,
+        lookAheadHorizonSeconds:
+          typeof declaredHorizonMs === 'number' &&
+          Number.isFinite(declaredHorizonMs) &&
+          declaredHorizonMs >= 0
+            ? declaredHorizonMs / 1000
+            : id === 'AV'
+              ? reactionDelaySeconds
+              : 0,
       }
     }
     if (classes.HV === undefined) return undefined
@@ -458,20 +498,29 @@ export function studyFromPack(scenarioInput: unknown): PlatoonStudy | undefined 
   const built = declared.map(build)
   if (built.some(entry => entry === undefined)) return undefined
   const scenarios = built as ReadonlyArray<PlatoonScenario>
-  const homogeneous = scenarios.find(s => s.composition.every(id => id === 'HV'))
+  const homogeneous = scenarios.find(s =>
+    s.composition.every(id => id === 'HV'),
+  )
   const mixed = scenarios.find(s => s.composition.includes('AV'))
   if (homogeneous === undefined || mixed === undefined) return undefined
   return { baseline: homogeneous, variant: mixed }
 }
 
 /** The leader's imposed speed at one instant, m/s. */
-function leaderSpeedAt(forcing: LeaderForcing, cruiseMps: number, seconds: number): number {
+function leaderSpeedAt(
+  forcing: LeaderForcing,
+  cruiseMps: number,
+  seconds: number,
+): number {
   const phase = (2 * Math.PI * seconds) / forcing.periodSeconds
   if (forcing.kind === 'free-flow') {
     return Math.max(0, cruiseMps + forcing.amplitudeMps * Math.sin(phase))
   }
   // A stop-and-go wave: the speed falls to `cruise − drop` and returns, once per period.
-  return Math.max(0, cruiseMps - (forcing.speedDropMps / 2) * (1 - Math.cos(phase)))
+  return Math.max(
+    0,
+    cruiseMps - (forcing.speedDropMps / 2) * (1 - Math.cos(phase)),
+  )
 }
 
 /**
@@ -490,7 +539,9 @@ function leaderSpeedAt(forcing: LeaderForcing, cruiseMps: number, seconds: numbe
 function at<T>(list: ReadonlyArray<T>, index: number): T {
   const value = list[index]
   if (value === undefined) {
-    throw new Error(`[platoon-sim] internal index ${String(index)} is out of range (length ${String(list.length)})`)
+    throw new Error(
+      `[platoon-sim] internal index ${String(index)} is out of range (length ${String(list.length)})`,
+    )
   }
   return value
 }
@@ -504,7 +555,8 @@ interface VehicleState {
 
 /** Time-to-collision from one follower to its leader, or Infinity when it is not closing. */
 function timeToCollision(follower: VehicleState, leader: VehicleState): number {
-  const gap = leader.position - follower.position - SIMULATION_INPUTS.vehicleLengthM
+  const gap =
+    leader.position - follower.position - SIMULATION_INPUTS.vehicleLengthM
   const closingSpeed = follower.speed - leader.speed
   if (!(closingSpeed > 0)) return Number.POSITIVE_INFINITY
   if (!(gap > 0)) return 0
@@ -526,7 +578,10 @@ function timeToCollision(follower: VehicleState, leader: VehicleState): number {
 function extrapolate(state: VehicleState, seconds: number): VehicleState {
   if (seconds <= 0) return state
   return {
-    position: state.position + state.speed * seconds + 0.5 * state.acceleration * seconds ** 2,
+    position:
+      state.position +
+      state.speed * seconds +
+      0.5 * state.acceleration * seconds ** 2,
     speed: Math.max(0, state.speed + state.acceleration * seconds),
     acceleration: state.acceleration,
   }
@@ -535,14 +590,23 @@ function extrapolate(state: VehicleState, seconds: number): VehicleState {
 /** Run one platoon and measure it. Pure: same scenario in, same numbers out. */
 export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
   const { stepSeconds, warmupSeconds, measurementSeconds } = SIMULATION_INPUTS
-  const { vehicleLengthM, maxAccelerationMps2, comfortableDecelerationMps2, accelerationExponent, minimumGapM } =
-    SIMULATION_INPUTS
+  const {
+    vehicleLengthM,
+    maxAccelerationMps2,
+    comfortableDecelerationMps2,
+    accelerationExponent,
+    minimumGapM,
+  } = SIMULATION_INPUTS
   const count = scenario.composition.length
   if (count < 2) {
-    throw new Error(`[platoon-sim] a platoon needs at least a leader and one follower, got ${String(count)}`)
+    throw new Error(
+      `[platoon-sim] a platoon needs at least a leader and one follower, got ${String(count)}`,
+    )
   }
   const classes = scenario.composition.map(id => scenario.vehicleClasses[id])
-  const maxDelay = Math.max(...classes.map(klass => klass.reactionDelaySeconds))
+  const maxDelay = Math.max(
+    ...classes.map(klass => klass.reactionDelaySeconds),
+  )
   const bufferSteps = Math.max(1, Math.ceil(maxDelay / stepSeconds) + 1)
 
   // Positions increase along the direction of travel, so the leader is the LARGEST x.
@@ -552,9 +616,13 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
     acceleration: 0,
   }))
   /** Ring buffer of every vehicle's state, newest last. Index -1 is the present. */
-  const history: Array<ReadonlyArray<VehicleState>> = [states.map(s => ({ ...s }))]
+  const history: Array<ReadonlyArray<VehicleState>> = [
+    states.map(s => ({ ...s })),
+  ]
 
-  const totalSteps = Math.round((warmupSeconds + measurementSeconds) / stepSeconds)
+  const totalSteps = Math.round(
+    (warmupSeconds + measurementSeconds) / stepSeconds,
+  )
   const startStep = Math.round(warmupSeconds / stepSeconds)
 
   let minTtc = Number.POSITIVE_INFINITY
@@ -573,7 +641,11 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
     const previous = states
     const next: VehicleState[] = []
     // The leader's speed is IMPOSED; every follower's is computed.
-    const leaderSpeed = leaderSpeedAt(scenario.leader, scenario.initialSpeedMps, time)
+    const leaderSpeed = leaderSpeedAt(
+      scenario.leader,
+      scenario.initialSpeedMps,
+      time,
+    )
     next.push({
       position: at(previous, 0).position + leaderSpeed * stepSeconds,
       speed: leaderSpeed,
@@ -604,18 +676,29 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
 
       const gap = lead.position - me.position - vehicleLengthM
       const approachSpeed = me.speed - lead.speed
-      const desiredGap = minimumGapM
-        + Math.max(
+      const desiredGap =
+        minimumGapM +
+        Math.max(
           0,
-          me.speed * klass.desiredHeadwaySeconds
-          + (me.speed * approachSpeed) / (2 * Math.sqrt(maxAccelerationMps2 * comfortableDecelerationMps2)),
+          me.speed * klass.desiredHeadwaySeconds +
+            (me.speed * approachSpeed) /
+              (2 *
+                Math.sqrt(maxAccelerationMps2 * comfortableDecelerationMps2)),
         )
-      const freeFlow = 1 - (me.speed / scenario.desiredSpeedMps) ** accelerationExponent
+      const freeFlow =
+        1 - (me.speed / scenario.desiredSpeedMps) ** accelerationExponent
       const interaction = (desiredGap / Math.max(gap, 0.01)) ** 2
       const wanted = maxAccelerationMps2 * (freeFlow - interaction)
-      const acceleration = Math.max(-klass.maxDecelerationMps2, Math.min(maxAccelerationMps2, wanted))
+      const acceleration = Math.max(
+        -klass.maxDecelerationMps2,
+        Math.min(maxAccelerationMps2, wanted),
+      )
       const speed = Math.max(0, me.speed + acceleration * stepSeconds)
-      next.push({ position: me.position + speed * stepSeconds, speed, acceleration })
+      next.push({
+        position: me.position + speed * stepSeconds,
+        speed,
+        acceleration,
+      })
     }
 
     states = next
@@ -645,14 +728,18 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
       // Jerk is the change of acceleration between consecutive steps, so it needs the
       // PREVIOUS state — reading `next` here would difference a value against itself and
       // report a flat zero, which is exactly what the first version of this loop did.
-      jerkSum += Math.abs(follow.acceleration - at(previous, index).acceleration) / stepSeconds
+      jerkSum +=
+        Math.abs(follow.acceleration - at(previous, index).acceleration) /
+        stepSeconds
     }
   }
 
-  const amplitude = (index: number): number => (at(speedMax, index) - at(speedMin, index)) / 2
+  const amplitude = (index: number): number =>
+    (at(speedMax, index) - at(speedMin, index)) / 2
   const leaderAmplitude = amplitude(0)
   const lastAmplitude = amplitude(count - 1)
-  const stringStabilityIndex = leaderAmplitude > 0 ? 1 - lastAmplitude / leaderAmplitude : 0
+  const stringStabilityIndex =
+    leaderAmplitude > 0 ? 1 - lastAmplitude / leaderAmplitude : 0
 
   return {
     composition: scenario.composition,
@@ -660,11 +747,13 @@ export function runPlatoon(scenario: PlatoonScenario): PlatoonResult {
       position: index,
       vehicleClass,
       speedAmplitudeMps: amplitude(index),
-      minimumGapM: minGap[index] === Number.POSITIVE_INFINITY ? 0 : at(minGap, index),
+      minimumGapM:
+        minGap[index] === Number.POSITIVE_INFINITY ? 0 : at(minGap, index),
     })),
     minTtcSeconds: Number.isFinite(minTtc) ? minTtc : Number.POSITIVE_INFINITY,
     ttcLt1_5RatePct: samples > 0 ? (riskySamples / samples) * 100 : 0,
-    meanTimeHeadwaySeconds: headwaySamples > 0 ? headwaySum / headwaySamples : 0,
+    meanTimeHeadwaySeconds:
+      headwaySamples > 0 ? headwaySum / headwaySamples : 0,
     meanJerkMps3: samples > 0 ? jerkSum / samples : 0,
     stringStabilityIndex,
     stringStable: stringStabilityIndex >= 0,
@@ -695,17 +784,21 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
   // by NOTHING in the tree; an audit found that. It refuses the comparison instead.
   const collided = baseline.collisions > 0 || variant.collisions > 0
   const isComparable =
-    !collided && Number.isFinite(base) && base > 0 && Number.isFinite(variant.minTtcSeconds)
+    !collided &&
+    Number.isFinite(base) &&
+    base > 0 &&
+    Number.isFinite(variant.minTtcSeconds)
   const forward = MEASURED_METRIC_DIRECTION === 'higher-is-better' ? 1 : -1
   const relativeImprovementPct = isComparable
-    ? (forward * (variant.minTtcSeconds - base) / base) * 100
+    ? ((forward * (variant.minTtcSeconds - base)) / base) * 100
     : 0
   return {
     baseline,
     variant,
     isComparable,
     relativeImprovementPct,
-    meetsThreshold: (thresholdPct: number) => isComparable && relativeImprovementPct >= thresholdPct,
+    meetsThreshold: (thresholdPct: number) =>
+      isComparable && relativeImprovementPct >= thresholdPct,
   }
 }
 
@@ -743,6 +836,8 @@ export function comparePlatoons(study: PlatoonStudy): PlatoonComparison {
  * A claim that declares no commitment HOLDS. That is the same fail-closed answer an unstated metric
  * key gets, and it is the same demand: a study has to say what it is testing.
  */
+export type PredictionDirection = 'increase' | 'decrease'
+
 export interface PredictionCommitment {
   /** Which way the claim says the measured quantity should move. */
   readonly direction: 'increase' | 'decrease'
@@ -776,7 +871,10 @@ export interface PredictionCommitment {
  * The cost is one fixture edit — the pack's sentence says "by at least 20%" and now says "≥ 20%" —
  * and the gain is that a declaration contradicting the claim's own words stops being invisible.
  */
-const ANCHOR_TOKENS: ReadonlyArray<{ readonly text: string; readonly bound: PredictionCommitment['bound'] }> = [
+const ANCHOR_TOKENS: ReadonlyArray<{
+  readonly text: string
+  readonly bound: PredictionCommitment['bound']
+}> = [
   { text: '>=', bound: 'at-least' },
   { text: '≥', bound: 'at-least' },
   { text: 'at least', bound: 'at-least' },
@@ -784,8 +882,72 @@ const ANCHOR_TOKENS: ReadonlyArray<{ readonly text: string; readonly bound: Pred
   { text: '≤', bound: 'at-most' },
   { text: 'at most', bound: 'at-most' },
   { text: 'no more than', bound: 'at-most' },
+  // A natural way to write a cap that the first table missed, so a pack author writing it got
+  // "carries no anchor beside it" for a sentence that states its bound perfectly well.
+  { text: 'not exceed', bound: 'at-most' },
+  { text: 'does not exceed', bound: 'at-most' },
   { text: 'within', bound: 'within' },
 ]
+
+/**
+ * The words that commit a prediction to a direction, and which one.
+ *
+ * THE SYMMETRIC HALF OF THE ANCHOR, and both auditors reached it independently: the anchor bound
+ * the THRESHOLD but not the DIRECTION, so a claim whose sentence says the quantity rises could
+ * declare `decrease` and be graded as a fall. One auditor ran it end to end — a pack declaring
+ * `{direction: 'decrease', bound: 'at-least'}` against the sentence "shall exceed … by ≥ 20%"
+ * returned `supports: true` and `verdict: supported` on a measurement of −38.20%. That is the same
+ * class as the truthfulness pair the loader now refuses, in the same file, describing the same
+ * material.
+ *
+ * WHAT THIS CAN AND CANNOT DO. It is a word test, and the direction readers this batch deleted were
+ * word tests too — but the failure directions are not comparable. Every outcome of THIS check is
+ * either "the declaration agrees with the sentence" or a HOLD: a missed word, a spurious word, an
+ * ambiguous sentence, or a mismatch all stop the C channel without producing a verdict. An auditor
+ * checked that property and confirmed a false match can only make the gate STRICTER, never hand out
+ * a pass. A reader whose errors could reach a `supports` value is what got deleted; this one cannot.
+ */
+const DIRECTION_TOKENS: ReadonlyArray<{
+  readonly text: string
+  readonly direction: PredictionDirection
+}> = [
+  { text: 'exceed', direction: 'increase' },
+  { text: 'exceeds', direction: 'increase' },
+  { text: 'rising', direction: 'increase' },
+  { text: 'rise', direction: 'increase' },
+  { text: 'rises', direction: 'increase' },
+  { text: 'increase', direction: 'increase' },
+  { text: 'increases', direction: 'increase' },
+  { text: 'higher', direction: 'increase' },
+  { text: 'greater', direction: 'increase' },
+  { text: 'raises', direction: 'increase' },
+  { text: 'falling', direction: 'decrease' },
+  { text: 'fall', direction: 'decrease' },
+  { text: 'falls', direction: 'decrease' },
+  { text: 'decrease', direction: 'decrease' },
+  { text: 'decreases', direction: 'decrease' },
+  { text: 'lower', direction: 'decrease' },
+  { text: 'reduces', direction: 'decrease' },
+  { text: 'drops', direction: 'decrease' },
+]
+
+/**
+ * The direction the prediction's own words name, when they name exactly one.
+ *
+ * @param predictionText - the prediction as written.
+ * @returns the direction, or undefined when the sentence names none or names both.
+ */
+export function directionNamedIn(
+  predictionText: string,
+): PredictionDirection | undefined {
+  const lowered = predictionText.toLowerCase()
+  const found = new Set<PredictionDirection>()
+  for (const token of DIRECTION_TOKENS) {
+    if (new RegExp(`\\b${token.text}\\b`, 'u').test(lowered))
+      found.add(token.direction)
+  }
+  return found.size === 1 ? [...found][0] : undefined
+}
 
 /**
  * The anchor the prediction states beside its threshold, if it states one.
@@ -797,10 +959,15 @@ const ANCHOR_TOKENS: ReadonlyArray<{ readonly text: string; readonly bound: Pred
  * @param thresholdPct - the percentage the prediction states.
  * @returns the bound the anchor asserts, or undefined when no anchor is beside the number.
  */
-export function anchorBoundNear(predictionText: string, thresholdPct: number): PredictionCommitment['bound'] | undefined {
+export function anchorBoundNear(
+  predictionText: string,
+  thresholdPct: number,
+): PredictionCommitment['bound'] | undefined {
   const match = /(\d+(?:\.\d+)?)\s*%/u.exec(predictionText)
   if (match === null || Number(match[1]) !== thresholdPct) return undefined
-  const before = predictionText.slice(Math.max(0, match.index - 20), match.index).toLowerCase()
+  const before = predictionText
+    .slice(Math.max(0, match.index - 20), match.index)
+    .toLowerCase()
   return ANCHOR_TOKENS.find(token => before.includes(token.text))?.bound
 }
 
@@ -816,10 +983,14 @@ export function anchorBoundNear(predictionText: string, thresholdPct: number): P
  * @returns the percentages, in the order they appear.
  */
 export function percentagesIn(predictionText: string): ReadonlyArray<number> {
-  return [...predictionText.matchAll(/(\d+(?:\.\d+)?)\s*%/gu)].map(match => Number(match[1]))
+  return [...predictionText.matchAll(/(\d+(?:\.\d+)?)\s*%/gu)].map(match =>
+    Number(match[1]),
+  )
 }
 
-export function thresholdFromPrediction(predictionText: string): number | undefined {
+export function thresholdFromPrediction(
+  predictionText: string,
+): number | undefined {
   const match = predictionText.match(/(\d+(?:\.\d+)?)\s*%/)
   if (match === null) return undefined
   const value = Number(match[1])
@@ -833,7 +1004,10 @@ export function thresholdFromPrediction(predictionText: string): number | undefi
  * @param metricKey - the key the claim declares.
  * @returns the matched phrase, or undefined when the text names no phrasing of that quantity.
  */
-export function claimTextNamesQuantity(text: string, metricKey: string): string | undefined {
+export function claimTextNamesQuantity(
+  text: string,
+  metricKey: string,
+): string | undefined {
   const phrases = METRIC_PHRASES[metricKey]
   if (phrases === undefined) return undefined
   const lowered = text.toLowerCase()
@@ -860,12 +1034,17 @@ export function evaluatePrediction(
   // The binding is checked FIRST. A prediction about a quantity this study does not measure
   // cannot be adjudicated however many percentages it states, and grading it would report an
   // untested claim as supported or refuted.
-  if (metricKey === undefined || metricKey === '' || metricKey !== MEASURED_METRIC_KEY) {
+  if (
+    metricKey === undefined ||
+    metricKey === '' ||
+    metricKey !== MEASURED_METRIC_KEY
+  ) {
     return {
       kind: 'unbindable',
-      reason: metricKey === undefined || metricKey === ''
-        ? `the claim declares no metric, so nothing binds it to the quantity this study measures (${MEASURED_METRIC_LABEL})`
-        : `the claim is about "${metricKey}" while this study measures "${MEASURED_METRIC_KEY}" (${MEASURED_METRIC_LABEL}), so the measurement cannot adjudicate it`,
+      reason:
+        metricKey === undefined || metricKey === ''
+          ? `the claim declares no metric, so nothing binds it to the quantity this study measures (${MEASURED_METRIC_LABEL})`
+          : `the claim is about "${metricKey}" while this study measures "${MEASURED_METRIC_KEY}" (${MEASURED_METRIC_LABEL}), so the measurement cannot adjudicate it`,
     }
   }
   const matched = claimTextNamesQuantity(predictionText, metricKey)
@@ -873,9 +1052,9 @@ export function evaluatePrediction(
     return {
       kind: 'unbindable',
       reason:
-        `the claim declares the metric "${metricKey}" but the prediction it commits to does not name `
-        + `that quantity (no phrasing of ${MEASURED_METRIC_LABEL} appears in it), so the declaration `
-        + 'is unverified and the measurement cannot adjudicate it',
+        `the claim declares the metric "${metricKey}" but the prediction it commits to does not name ` +
+        `that quantity (no phrasing of ${MEASURED_METRIC_LABEL} appears in it), so the declaration ` +
+        'is unverified and the measurement cannot adjudicate it',
     }
   }
   // Exactly one percentage, so the number graded is the only number the sentence could mean.
@@ -884,8 +1063,8 @@ export function evaluatePrediction(
     return {
       kind: 'unbindable',
       reason:
-        `the claim states ${String(percentages.length)} percentages (${percentages.map(String).join(', ')}), `
-        + 'so which of them is the threshold is a guess — a falsifiable prediction commits to one number',
+        `the claim states ${String(percentages.length)} percentages (${percentages.map(String).join(', ')}), ` +
+        'so which of them is the threshold is a guess — a falsifiable prediction commits to one number',
     }
   }
   const thresholdPct = thresholdFromPrediction(predictionText)
@@ -901,18 +1080,20 @@ export function evaluatePrediction(
     // Fail-closed: a platoon that never closed on its leader has no minimum
     // time-to-collision, so there is no ratio to test the threshold against. Grading it
     // would report "the prediction was refuted" for a measurement that never happened.
-    const collisionCount = comparison.baseline.collisions + comparison.variant.collisions
+    const collisionCount =
+      comparison.baseline.collisions + comparison.variant.collisions
     return {
       kind: 'unbindable',
-      reason: collisionCount > 0
-        ? `the simulation produced ${String(collisionCount)} vehicle-time samples in which two `
-          + 'vehicles occupied the same space, so the platoons did not follow and the trajectories '
-          + 'describe a failed run rather than a risky one — the measurement cannot adjudicate the '
-          + 'prediction'
-        : 'the simulation produced no comparable minimum time-to-collision '
-          + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, `
-          + `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement `
-          + 'cannot adjudicate the prediction',
+      reason:
+        collisionCount > 0
+          ? `the simulation produced ${String(collisionCount)} vehicle-time samples in which two ` +
+            'vehicles occupied the same space, so the platoons did not follow and the trajectories ' +
+            'describe a failed run rather than a risky one — the measurement cannot adjudicate the ' +
+            'prediction'
+          : 'the simulation produced no comparable minimum time-to-collision ' +
+            `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)}, ` +
+            `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)}), so the measurement ` +
+            'cannot adjudicate the prediction',
     }
   }
   // The commitment is DECLARED, not inferred. See `PredictionCommitment` for why the inference was
@@ -921,9 +1102,9 @@ export function evaluatePrediction(
     return {
       kind: 'unbindable',
       reason:
-        `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but declares no `
-        + 'commitment, so nothing says which way the quantity is supposed to move — a study has to '
-        + 'state what it is testing, exactly as it has to declare the quantity itself',
+        `the claim is about ${MEASURED_METRIC_LABEL} and states a threshold, but declares no ` +
+        'commitment, so nothing says which way the quantity is supposed to move — a study has to ' +
+        'state what it is testing, exactly as it has to declare the quantity itself',
     }
   }
   const { direction, bound } = commitment
@@ -936,18 +1117,39 @@ export function evaluatePrediction(
     return {
       kind: 'unbindable',
       reason:
-        'the prediction states a percentage but carries no anchor beside it (one of: '
-        + `${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's own words `
-        + 'says how the number relates to the change and the declared bound cannot be checked',
+        'the prediction states a percentage but carries no anchor beside it (one of: ' +
+        `${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's own words ` +
+        'says how the number relates to the change and the declared bound cannot be checked',
     }
   }
   if (anchorBound !== bound) {
     return {
       kind: 'unbindable',
       reason:
-        `the claim declares bound "${bound}" while its own prediction anchors the threshold with `
-        + `"${anchorBound}" — the declaration and the sentence contradict each other, so the claim is `
-        + 'not gradeable as stated',
+        `the claim declares bound "${bound}" while its own prediction anchors the threshold with ` +
+        `"${anchorBound}" — the declaration and the sentence contradict each other, so the claim is ` +
+        'not gradeable as stated',
+    }
+  }
+  // ...and the DIRECTION must agree with the sentence too. Absent or ambiguous is a gap; a
+  // disagreement is the contradiction. Neither can produce a verdict, which is the property that
+  // separates this from the reader this batch deleted.
+  const namedDirection = directionNamedIn(predictionText)
+  if (namedDirection === undefined) {
+    return {
+      kind: 'unbindable',
+      reason:
+        'the prediction names no direction, or names both, so nothing in its own words says which ' +
+        'way the quantity should move and the declared direction cannot be checked',
+    }
+  }
+  if (namedDirection !== direction) {
+    return {
+      kind: 'unbindable',
+      reason:
+        `the claim declares direction "${direction}" while its own prediction says the quantity ` +
+        `should ${namedDirection} — the declaration and the sentence contradict each other, so the ` +
+        'claim is not gradeable as stated',
     }
   }
 
@@ -955,15 +1157,17 @@ export function evaluatePrediction(
   // What is graded is the change the CLAIM asked for, in the claim's own direction: a prediction
   // that the margin gets WORSE is met by a negative improvement. This is the line whose absence let
   // the gate report a met prediction as a negated one.
-  const inClaimDirection = direction === 'increase' ? improvementPct : -improvementPct
+  const inClaimDirection =
+    direction === 'increase' ? improvementPct : -improvementPct
   // A CAPPED prediction is met by staying under the cap, not by clearing it. Grading both the same
   // way reported a prediction that a 38.20% fall plainly violates as SUPPORTED.
-  const supportsPrediction = bound === 'at-least'
-    ? inClaimDirection >= thresholdPct
-    : bound === 'at-most'
-      ? inClaimDirection <= thresholdPct
-      // A two-sided tolerance, which `bounded: boolean` could not express at all.
-      : Math.abs(inClaimDirection) <= thresholdPct
+  const supportsPrediction =
+    bound === 'at-least'
+      ? inClaimDirection >= thresholdPct
+      : bound === 'at-most'
+        ? inClaimDirection <= thresholdPct
+        : // A two-sided tolerance, which `bounded: boolean` could not express at all.
+        Math.abs(inClaimDirection) <= thresholdPct
   return {
     kind: 'adjudicated',
     matchedPhrase: matched,
@@ -973,18 +1177,20 @@ export function evaluatePrediction(
     direction,
     bound,
     detail:
-      `the study ${supportsPrediction ? 'met' : 'missed'} the stated threshold: the claim predicts the `
-      + `quantity should ${direction} (threshold ${bound}), and the measurement moved ${improvementPct.toFixed(2)}% `
-      + `(i.e. ${inClaimDirection.toFixed(2)}% in the direction the claim asked for) against the required `
-      + `${String(thresholdPct)}% of ${MEASURED_METRIC_LABEL} `
-      + `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)} -> `
-      + `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)})`,
+      `the study ${supportsPrediction ? 'met' : 'missed'} the stated threshold: the claim predicts the ` +
+      `quantity should ${direction} (threshold ${bound}), and the measurement moved ${improvementPct.toFixed(2)}% ` +
+      `(i.e. ${inClaimDirection.toFixed(2)}% in the direction the claim asked for) against the required ` +
+      `${String(thresholdPct)}% of ${MEASURED_METRIC_LABEL} ` +
+      `(all-HV ${formatSeconds(comparison.baseline.minTtcSeconds)} -> ` +
+      `HV-AV-HV ${formatSeconds(comparison.variant.minTtcSeconds)})`,
   }
 }
 
 /** Format a time-to-collision for prose, naming the no-closing case rather than printing Infinity. */
 function formatSeconds(value: number): string {
-  return Number.isFinite(value) ? `${value.toFixed(2)} s` : 'no closing conflict observed'
+  return Number.isFinite(value)
+    ? `${value.toFixed(2)} s`
+    : 'no closing conflict observed'
 }
 
 /** The Case Pack ablation ids this study can run. */
@@ -1003,12 +1209,18 @@ export type AblationModule = (typeof ABLATION_MODULES)[number]
  * @param moduleRemoved - which mechanism to remove.
  * @returns the study with the AV degraded, or undefined for an unknown module.
  */
-export function ablationStudy(study: PlatoonStudy, moduleRemoved: string): PlatoonStudy | undefined {
+export function ablationStudy(
+  study: PlatoonStudy,
+  moduleRemoved: string,
+): PlatoonStudy | undefined {
   const av = study.variant.vehicleClasses.AV
   let degraded: VehicleClass
   if (moduleRemoved === 'av-reaction') {
     // Reaction delay forced to the human value; the look-ahead mechanism is kept.
-    degraded = { ...av, reactionDelaySeconds: DECLARED_VEHICLE_CLASSES.HV.reactionDelaySeconds }
+    degraded = {
+      ...av,
+      reactionDelaySeconds: DECLARED_VEHICLE_CLASSES.HV.reactionDelaySeconds,
+    }
   } else if (moduleRemoved === 'predictive') {
     // Look-ahead removed; the fast reaction is kept, so the AV now lags by its raw
     // 150 ms physical reaction delay instead of by nothing.
@@ -1044,14 +1256,20 @@ export function boundaryTest(study: PlatoonStudy = experimentStudy()): {
   readonly scopeLimited: boolean
 } {
   const freeFlow = runPlatoon(study.variant)
-  const stopAndGo = runPlatoon({ ...study.variant, leader: STOP_AND_GO_FORCING })
-  const marginRatio = Number.isFinite(freeFlow.minTtcSeconds) && freeFlow.minTtcSeconds > 0
-    ? stopAndGo.minTtcSeconds / freeFlow.minTtcSeconds
-    : Number.NaN
+  const stopAndGo = runPlatoon({
+    ...study.variant,
+    leader: STOP_AND_GO_FORCING,
+  })
+  const marginRatio =
+    Number.isFinite(freeFlow.minTtcSeconds) && freeFlow.minTtcSeconds > 0
+      ? stopAndGo.minTtcSeconds / freeFlow.minTtcSeconds
+      : Number.NaN
   return {
     freeFlow,
     stopAndGo,
     marginRatio,
-    scopeLimited: Number.isFinite(marginRatio) && marginRatio < SIMULATION_INPUTS.boundaryMarginRatio,
+    scopeLimited:
+      Number.isFinite(marginRatio) &&
+      marginRatio < SIMULATION_INPUTS.boundaryMarginRatio,
   }
 }

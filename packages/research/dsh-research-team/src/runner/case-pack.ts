@@ -128,9 +128,10 @@ function envelopePair(file: string, sourceKind: string, truthfulness: string): v
   if (admitted === undefined) {
     throw new CasePackError(
       'CASE_PACK_ENVELOPE_INVALID',
-      `[case-pack] ${file}: sourceKind "${sourceKind}" is not one this loader defines `
-      + `(${Object.keys(TRUTHFULNESS_BY_SOURCE_KIND).join(', ')}), so nothing says which truthfulness `
-      + 'levels it may claim',
+      `[case-pack] ${file}: sourceKind "${sourceKind}" is not one schemaVersion `
+      + `"${CASE_PACK_SCHEMA_VERSION}" defines (${Object.keys(TRUTHFULNESS_BY_SOURCE_KIND).join(', ')}), `
+      + 'so nothing says which truthfulness levels it may claim — a NEW kind arrives with a new '
+      + 'schemaVersion, and this loader accepts only the one above',
     )
   }
   if (!admitted.includes(truthfulness)) {
@@ -191,6 +192,23 @@ function stringListFrom(pack: CasePack, file: CasePackFileName, pointer: string)
     )
   }
   return cursor as ReadonlyArray<string>
+}
+
+/**
+ * Refuse to publish a provenance value the pack did not carry.
+ *
+ * @param file - the file it should have come from.
+ * @param field - the envelope field that is missing.
+ * @returns never — this always throws.
+ * @throws {CasePackError} always, naming the file and the field.
+ */
+function requireEnvelope(file: string, field: string): never {
+  throw new CasePackError(
+    'CASE_PACK_DATUM_MISSING',
+    `[case-pack] ${file}: the primary file's envelope is unavailable, so "${field}" cannot be `
+    + 'stamped on the values derived from it — the loader validates every envelope, so this is a '
+    + 'defect in the derivation, not a fact about the pack',
+  )
 }
 
 /** Read a required nested string out of one loaded file. */
@@ -344,9 +362,12 @@ function provenanceOf(
   return {
     casePackId: pack.id,
     casePackDirectory: pack.directory,
-    sourceKind: primary?.sourceKind ?? 'unknown',
-    truthfulness: primary?.truthfulness ?? 'unknown',
-    provenance: primary?.provenance ?? 'unknown',
+    // `'unknown'` would flow into the artifact looking like a level. The loader validates every
+    // envelope before a pack is returned, so a missing primary here is a bug in this function, not
+    // a fact about the pack — and a bug should throw rather than be published as a provenance value.
+    sourceKind: primary?.sourceKind ?? requireEnvelope(primaryFile, 'sourceKind'),
+    truthfulness: primary?.truthfulness ?? requireEnvelope(primaryFile, 'truthfulness'),
+    provenance: primary?.provenance ?? requireEnvelope(primaryFile, 'provenance'),
     primaryFile,
     derivedFrom,
   }

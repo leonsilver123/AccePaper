@@ -250,9 +250,16 @@ describe('evaluatePrediction', () => {
     expect(increase.direction).toBe('increase')
     expect(increase.supportsPrediction).toBe(false)
 
-    // The SAME sentence, declared as a fall: the measurement fell 38.20%, so the claim is met.
-    // The prose is not consulted for this, which is the point.
-    const decrease = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    // The SAME sentence declared as a FALL is refused, and that is the point of this being a
+    // declared field rather than a free one: the sentence says "exceeds", the declaration says the
+    // quantity should decrease, and the two contradict each other — the same class as the
+    // truthfulness pair the loader refuses. A matching sentence IS graded as a fall instead.
+    const declaredFall = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    expect(declaredFall.kind).toBe('unbindable')
+    if (declaredFall.kind === 'unbindable') expect(declaredFall.reason).toContain('the declaration and the sentence contradict each other')
+
+    const fallen = 'the HV-AV-HV platoon minimum time-to-collision falls by at least 20% against the all-HV platoon minimum'
+    const decrease = evaluatePrediction(fallen, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
     expect(decrease.kind).toBe('adjudicated')
     if (decrease.kind !== 'adjudicated') return
     expect(decrease.direction).toBe('decrease')
@@ -267,7 +274,8 @@ describe('evaluatePrediction', () => {
     if (mismatched.kind === 'unbindable') expect(mismatched.reason).toContain('contradict each other')
 
     // Anchored to match, the cap is graded: a 38.20% fall is not "at most 20%".
-    const cappedText = 'the HV-AV-HV platoon minimum time-to-collision versus the all-HV platoon minimum shall stay at most 20% apart'
+    // The sentence names a direction AND an anchor that agree with what it declares.
+    const cappedText = 'the HV-AV-HV platoon minimum time-to-collision shall rise by at most 20% against the all-HV platoon minimum'
     const capped = evaluatePrediction(cappedText, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
     expect(capped.kind).toBe('adjudicated')
     if (capped.kind !== 'adjudicated') return
@@ -382,7 +390,7 @@ describe('evaluatePrediction', () => {
     // establish that a claim is ABOUT a quantity; it can only establish that the claim used
     // the words. The check is a NECESSARY condition and not a sufficient one.
     const verdict = evaluatePrediction(
-      'the platoon string-stability index improves by at least 20%, unlike prior work on '
+      'the platoon string-stability index increases by at least 20%, unlike prior work on '
       + 'minimum time-to-collision that assumed uniform arrivals',
       study,
       MEASURED_METRIC_KEY,
@@ -431,7 +439,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // The one boundary of the audit's three that produced a false positive on its own: declared as
     // a cap, a 38.20% fall was graded `-38.20 <= 20` → SUPPORTED for a claim that a 38% fall
     // plainly violates. The declaration was honest; the model could not express it.
-    const within = 'the platoon minimum time-to-collision versus the all-HV baseline shall stay within 40%'
+    const within = 'the platoon minimum time-to-collision against the all-HV baseline shall rise within 40%'
     const verdict = evaluatePrediction(within, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
@@ -439,10 +447,45 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // |−38.20| <= 40 → met. Tighten the tolerance past the measured change and it is missed.
     expect(verdict.supportsPrediction).toBe(true)
     const tight = evaluatePrediction(
-      'the platoon minimum time-to-collision versus the all-HV baseline shall stay within 10%',
+      'the platoon minimum time-to-collision against the all-HV baseline shall rise within 10%',
       study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' },
     )
     expect(tight.kind === 'adjudicated' && tight.supportsPrediction).toBe(false)
+  })
+
+  it('HOLDS a sentence that names both directions, and one that names none', () => {
+    // Ambiguity is a gap, not a contradiction: the gate cannot tell which word the claim means, so
+    // it holds. Every outcome of this check is either agreement or a hold — a missed word, a
+    // spurious word or an ambiguous sentence can only make the gate STRICTER, never hand out a
+    // pass. That property is what separates it from the prose reader this batch deleted.
+    const both = 'the platoon minimum time-to-collision rises under the AV and falls under the all-HV platoon by at least 20%'
+    const ambiguous = evaluatePrediction(both, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    expect(ambiguous.kind).toBe('unbindable')
+    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('names both')
+
+    const none = 'the platoon minimum time-to-collision against the all-HV platoon by at least 20%'
+    const silent = evaluatePrediction(none, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    expect(silent.kind).toBe('unbindable')
+    if (silent.kind === 'unbindable') expect(silent.reason).toContain('names no direction')
+  })
+
+  it('reads a cap written as "not exceed" too, when the anchor sits beside the number', () => {
+    // A natural way to write a cap, added to the table after an audit showed a pack author writing
+    // it would get "carries no anchor beside it" for a sentence that states its bound perfectly
+    // well. The anchor must be ADJACENT to the number — that is the check, and the accepted forms
+    // are a closed, exhaustive list rather than a reading of English.
+    const text = 'the platoon minimum time-to-collision shall rise and shall not exceed 20% above the all-HV baseline'
+    expect(anchorBoundNear(text, 20)).toBe('at-most')
+    const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+    expect(verdict.kind).toBe('adjudicated')
+
+    // A cap whose anchor is only in a NEGATED PHRASE elsewhere — "not exceed the baseline by more
+    // than 20%" — holds, because `more than` beside the number is a FLOOR without the negation in
+    // front of it and the negation is outside the window. Stated as a limit, not left to be found:
+    // the anchor set is closed and the anchor has to be adjacent.
+    const distant = 'the platoon minimum time-to-collision shall rise and not exceed the all-HV baseline by more than 20%'
+    expect(anchorBoundNear(distant, 20)).toBeUndefined()
+    expect(evaluatePrediction(distant, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' }).kind).toBe('unbindable')
   })
 
   it('reads the anchor only from beside the number', () => {

@@ -273,7 +273,7 @@ describe('the envelope pair', () => {
 
   it('REFUSES a sourceKind this loader does not define, rather than guessing its levels', () => {
     const load = loadingWith('claim.json', (content) => { content['sourceKind'] = 'peer-reviewed' })
-    expect(load).toThrow(/sourceKind "peer-reviewed" is not one this loader defines/)
+    expect(load).toThrow(/sourceKind "peer-reviewed" is not one schemaVersion/)
   })
 
   it('still loads the SHIPPED pack, whose pair is honest', () => {
