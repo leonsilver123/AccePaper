@@ -42,7 +42,7 @@
 import type { ResearchRebuttalPosition } from '../types.ts'
 
 import type { PredictionCommitment } from './platoon-sim.ts'
-import { anchorBoundNear, percentagesIn, requirementDirectionIn, thresholdFromPrediction } from './platoon-sim.ts'
+import { anchorBoundIn, measuringClause, percentagesIn, requirementDirectionIn, thresholdFromPrediction } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -202,6 +202,12 @@ function reviewMethod(material: ClaimMaterial): RoleReview {
 function reviewStatistics(material: ClaimMaterial): RoleReview {
   const prediction = material.prediction.trim()
   const hasThreshold = /\d+(?:\.\d+)?\s*%/.test(prediction)
+  // Read ONCE, from the clause that names the measured quantity. Presence elsewhere in the
+  // sentence is not enough: an auditor reached `supported` with the number and its anchor attached
+  // to a different quantity.
+  const clause = measuringClause(prediction, material.metricKey)
+  const clauseAnchor = clause === undefined ? undefined : anchorBoundIn(clause)
+  const clauseDirection = clause === undefined ? undefined : requirementDirectionIn(clause)
 
   return review('red-stat', [
     prediction.length === 0
@@ -278,30 +284,27 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
     // declining to relate the number to the change (a gap), while a PRESENT anchor naming a
     // different bound is the claim contradicting itself.
     hasThreshold && material.commitment !== undefined && thresholdFromPrediction(prediction) !== undefined
-      ? (() => {
-        const stated = thresholdFromPrediction(prediction) as number
-        const anchor = anchorBoundNear(prediction, stated)
-        if (anchor === undefined) {
-          return {
-            check: 'the prediction anchors its threshold to the change',
-            found: 'the prediction states a percentage with no anchor beside it (>=, <=, at least, at most, no more than, within), so nothing in its own words says how the number relates to the change',
-            position: 'abstain',
-          }
+      ? clauseAnchor === undefined
+        ? {
+          check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
+          found: clause === undefined
+            ? 'no clause of the prediction names the measured quantity'
+            : 'the clause naming the measured quantity carries no anchor, or more than one',
+          position: 'abstain',
         }
-        return anchor === material.commitment.bound
+        : clauseAnchor === material.commitment.bound
           ? {
-            check: 'the prediction anchors its threshold to the change',
-            found: `anchored "${anchor}", which is what the claim declares`,
+            check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
+            found: `anchored "${clauseAnchor}", which is what the claim declares`,
             position: 'support',
           }
           : {
-            check: 'the prediction anchors its threshold to the change',
-            found: `the prediction anchors "${anchor}" while the claim declares "${material.commitment.bound}" — the declaration and the sentence contradict each other`,
+            check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
+            found: `the prediction anchors "${clauseAnchor}" while the claim declares "${material.commitment.bound}" — the declaration and the sentence contradict each other`,
             position: 'refute',
           }
-      })()
       : {
-        check: 'the prediction anchors its threshold to the change',
+        check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
         found: 'no declared commitment or threshold to check the anchor against',
         position: 'abstain',
       },
@@ -309,15 +312,15 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
     // requirement share the same number and the same operator and only the sentence's force
     // differs — an auditor graded a violated prohibition as MET. The reviewer reports the gap; the
     // C channel holds on the same condition.
-    requirementDirectionIn(prediction) === undefined
+    clauseDirection === undefined
       ? {
-        check: 'the prediction states a positive requirement',
-        found: 'the prediction does not state its direction as "shall <rise|fall|…>", so whether it requires a change or PROHIBITS one cannot be read from it',
+        check: 'the prediction states a positive requirement in the clause naming the quantity',
+        found: 'it does not state its direction as "shall <rise|fall|…>" there, so whether it requires a change or PROHIBITS one cannot be read from it',
         position: 'abstain',
       }
       : {
-        check: 'the prediction states a positive requirement',
-        found: `the prediction states a positive requirement: shall ${String(requirementDirectionIn(prediction))}`,
+        check: 'the prediction states a positive requirement in the clause naming the quantity',
+        found: `it states a positive requirement there: shall ${clauseDirection}`,
         position: 'support',
       },
     // ONE percentage. `thresholdFromPrediction` takes the first, which is unambiguous as a string

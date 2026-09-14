@@ -1010,6 +1010,19 @@ export function requirementDirectionIn(predictionText: string): PredictionDirect
  * @param thresholdPct - the percentage the prediction states.
  * @returns the bound the anchor asserts, or undefined when no anchor is beside the number.
  */
+export function anchorBoundIn(clause: string): PredictionCommitment['bound'] | undefined {
+  const lowered = clause.toLowerCase()
+  const found = ANCHOR_TOKENS.filter(token => lowered.includes(token.text))
+  const distinct = new Set(found.map(token => token.bound))
+  // MORE THAN ONE DISTINCT BOUND IS A GAP, NOT A GUESS. The previous version took the first hit by
+  // TABLE ORDER inside a 20-character window, so "…by at most, at least 20%" resolved by array
+  // position rather than by anything the sentence said. Requiring uniqueness removes that and the
+  // character cliff that pushed a correct anchor out of the window ("by at least an additional
+  // 20%" held). Both failure directions are HOLD.
+  return distinct.size === 1 ? [...distinct][0] : undefined
+}
+
+/** The anchor beside the threshold in a sentence, by table order. Retained for the specs that pin it. */
 export function anchorBoundNear(
   predictionText: string,
   thresholdPct: number,
@@ -1046,6 +1059,57 @@ export function thresholdFromPrediction(
   if (match === null) return undefined
   const value = Number(match[1])
   return Number.isFinite(value) ? value : undefined
+}
+
+
+/**
+ * Where one clause ends and the next begins.
+ *
+ * Punctuation, plus the conjunctions that introduce a new clause. A period between digits is not a
+ * boundary, so a decimal or a version is not mistaken for a sentence break.
+ */
+const CLAUSE_BOUNDARY = /[;,]|(?<!\d)\.(?!\d)|\b(?:while|whereas|because|although|and|but)\b/iu
+
+/**
+ * The clause of a prediction that names the quantity this study measures.
+ *
+ * WHY A CLAUSE AND NOT THE SENTENCE. Every check in this gate used to be an EXISTENCE check — is
+ * the phrase there, is the percentage there, is an anchor there, is a direction word there — and
+ * an auditor broke it a fourth time by keeping all four present while attaching them to something
+ * else:
+ *
+ *   "The platoon mean headway shall reduce by at least 20% while the minimum time-to-collision
+ *    falls."
+ *
+ * The number and its anchor belong to MEAN HEADWAY. The sentence never says the measured quantity
+ * moved 20%, and the gate reported `supported` — the fourth time a literal was present without
+ * being attached. The module had recorded "a keyword test cannot establish that a claim is ABOUT a
+ * quantity, only that it USED the words" as a RELEVANCE WEAKNESS; the auditor's case shows it is a
+ * false-positive generator, and it is handled as one now.
+ *
+ * So the literals are required to sit in the clause that names the measured quantity — the unit a
+ * sentence's meaning lives in.
+ *
+ * THE LIMIT OF THIS RULE, stated before it is relied on: clause splitting is a heuristic, so it can
+ * cut in the wrong place — and when it does, the literals land in different segments and the result
+ * is a HOLD, never a pass. A conjunction INSIDE the measuring clause still passes ("the mean
+ * headway and the minimum time-to-collision shall both fall by at least 20%"), which is honest:
+ * that sentence does require the measured quantity to fall by 20%.
+ *
+ * @param predictionText - the prediction as written.
+ * @param metricKey - the quantity the claim declared.
+ * @returns the clause naming it, or undefined when no clause does.
+ */
+export function measuringClause(predictionText: string, metricKey: string): string | undefined {
+  const phrases = METRIC_PHRASES[metricKey]
+  if (phrases === undefined) return undefined
+  return predictionText
+    .split(CLAUSE_BOUNDARY)
+    .map(part => part.trim())
+    .find((part) => {
+      const lowered = part.toLowerCase()
+      return phrases.some(phrase => lowered.includes(phrase))
+    })
 }
 
 /**
@@ -1108,23 +1172,29 @@ export function evaluatePrediction(
         'is unverified and the measurement cannot adjudicate it',
     }
   }
-  // Exactly one percentage, so the number graded is the only number the sentence could mean.
-  const percentages = percentagesIn(predictionText)
-  if (percentages.length > 1) {
+  // EVERYTHING BELOW IS SCOPED TO THIS CLAUSE. Presence anywhere in the sentence is not enough:
+  // see `measuringClause` for the counterexample that attached the number and its anchor to a
+  // different quantity and still reached `supported`.
+  const clause = measuringClause(predictionText, metricKey)
+  if (clause === undefined) {
     return {
       kind: 'unbindable',
       reason:
-        `the claim states ${String(percentages.length)} percentages (${percentages.map(String).join(', ')}), ` +
-        'so which of them is the threshold is a guess — a falsifiable prediction commits to one number',
+        `the measurement cannot adjudicate the prediction: no clause of it names ${MEASURED_METRIC_LABEL}`,
     }
   }
-  const thresholdPct = thresholdFromPrediction(predictionText)
-  if (thresholdPct === undefined) {
+  // Exactly one percentage in that clause, so the number graded is the only number it could mean.
+  const percentages = percentagesIn(clause)
+  if (percentages.length !== 1) {
     return {
       kind: 'unbindable',
-      reason: `the claim is about ${MEASURED_METRIC_LABEL} but states no numeric threshold, so there is nothing to adjudicate`,
+      reason:
+        `the clause naming ${MEASURED_METRIC_LABEL} states ${String(percentages.length)} percentages `
+        + `(${percentages.map(String).join(', ') || 'none'}), so which of them is the threshold is a `
+        + 'guess — a falsifiable prediction commits to one number',
     }
   }
+  const thresholdPct = percentages[0] as number
 
   const comparison = comparePlatoons(study)
   if (!comparison.isComparable) {
@@ -1176,14 +1246,14 @@ export function evaluatePrediction(
   // the wire-format check an audit proposed in place of reading the sentence: it needs no
   // comprehension, and a mismatch is a positive contradiction — the same class as a declared
   // metric that disagrees with the measured one — so the claim is not gradeable as stated.
-  const anchorBound = anchorBoundNear(predictionText, thresholdPct)
+  const anchorBound = anchorBoundIn(clause)
   if (anchorBound === undefined) {
     return {
       kind: 'unbindable',
       reason:
-        'the prediction states a percentage but carries no anchor beside it (one of: ' +
-        `${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's own words ` +
-        'says how the number relates to the change and the declared bound cannot be checked',
+        'the clause naming the measured quantity carries no anchor, or carries more than one '
+        + `(accepted: ${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's `
+        + 'own words says how the number relates to the change',
     }
   }
   if (anchorBound !== bound) {
@@ -1198,7 +1268,7 @@ export function evaluatePrediction(
   // ...and the DIRECTION must agree with the sentence too. Absent or ambiguous is a gap; a
   // disagreement is the contradiction. Neither can produce a verdict, which is the property that
   // separates this from the reader this batch deleted.
-  const namedDirection = requirementDirectionIn(predictionText)
+  const namedDirection = requirementDirectionIn(clause)
   if (namedDirection === undefined) {
     return {
       kind: 'unbindable',

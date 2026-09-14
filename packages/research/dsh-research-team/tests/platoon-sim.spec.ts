@@ -382,14 +382,19 @@ describe('evaluatePrediction', () => {
   it('holds a claim that states no numeric threshold', () => {
     const verdict = evaluatePrediction('the platoon minimum time-to-collision improves', study, MEASURED_METRIC_KEY)
     expect(verdict.kind).toBe('unbindable')
-    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states no numeric threshold')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states 0 percentages')
   })
 
-  it('DOCUMENTS the limit: a claim that merely MENTIONS the phrasing still binds', () => {
+  it('HOLDS a claim that only MENTIONS the measured quantity in another clause', () => {
     // The false-positive direction, which the phrase check cannot close and which is pinned
     // here so a future change to it is visible rather than silent. No keyword test can
     // establish that a claim is ABOUT a quantity; it can only establish that the claim used
     // the words. The check is a NECESSARY condition and not a sufficient one.
+    // This case used to be recorded as a LIMIT — the phrase was present, so the claim "used the
+    // words", and a claim naming the quantity in passing was graded. Scoping to the clause removes
+    // it: the phrase sits in the second clause while the number and its anchor sit in the first, so
+    // the clause naming the quantity states no percentage and the gate holds. The limit that
+    // replaces it is the segmentation heuristic, which fails to a HOLD rather than to a pass.
     const verdict = evaluatePrediction(
       'the platoon string-stability index shall rise by at least 20%, unlike prior work on '
       + 'minimum time-to-collision that assumed uniform arrivals',
@@ -397,7 +402,7 @@ describe('evaluatePrediction', () => {
       MEASURED_METRIC_KEY,
       { direction: 'increase', bound: 'at-least' },
     )
-    expect(verdict.kind).toBe('adjudicated')
+    expect(verdict.kind).toBe('unbindable')
   })
 })
 
@@ -422,18 +427,26 @@ describe('the declaration is checked against the claim\'s own words', () => {
     const unanchored = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by 20%'
     const verdict = evaluatePrediction(unanchored, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(verdict.kind).toBe('unbindable')
-    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('no anchor beside it')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('carries no anchor')
   })
 
-  it('REFUSES a prediction stating more than one percentage', () => {
-    // `thresholdFromPrediction` takes the FIRST percentage — unambiguous as a string, not as a
-    // commitment. "Over 20% of the interval, the … shall exceed by at least 35%" grades 20 while
-    // the sentence commits to 35.
+  it('grades the percentage of the clause naming the quantity, and refuses a clause stating two', () => {
+    // The old rule took the FIRST percentage in the sentence: "Over 20% of the interval, the … shall
+    // exceed by at least 35%" graded 20 while the sentence commits to 35. Scoping to the clause
+    // fixes it — the 20% belongs to a different clause — so the graded number is 35.
     const twoNumbers = 'over 20% of the simulated interval, the platoon minimum time-to-collision shall exceed the all-HV baseline by at least 35%'
     expect(percentagesIn(twoNumbers)).toEqual([20, 35])
     const verdict = evaluatePrediction(twoNumbers, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
-    expect(verdict.kind).toBe('unbindable')
-    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states 2 percentages')
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind === 'adjudicated') expect(verdict.thresholdPct).toBe(35)
+
+    // Two in the SAME clause is still a guess, and holds.
+    // One clause, two percentages: parentheses are not clause boundaries, so neither can be
+    // explained away as belonging to another clause.
+    const sameClause = 'the platoon minimum time-to-collision shall exceed the all-HV baseline by at least 35% (within 20%)'
+    const ambiguous = evaluatePrediction(sameClause, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    expect(ambiguous.kind).toBe('unbindable')
+    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('states 2 percentages')
   })
 
   it('grades a TWO-SIDED tolerance, which a boolean bound could not express', () => {
@@ -460,9 +473,11 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // spurious word or an ambiguous sentence can only make the gate STRICTER, never hand out a
     // pass. That property is what separates it from the prose reader this batch deleted.
     const both = 'the platoon minimum time-to-collision rises under the AV and falls under the all-HV platoon by at least 20%'
+    // Both hold. WHICH guard reports it depends on where the clause boundary falls — the first
+    // clause here names the quantity and carries a direction but no percentage — and the property
+    // that matters is that neither is graded.
     const ambiguous = evaluatePrediction(both, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
     expect(ambiguous.kind).toBe('unbindable')
-    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('required form')
 
     const none = 'the platoon minimum time-to-collision against the all-HV platoon by at least 20%'
     const silent = evaluatePrediction(none, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
@@ -536,8 +551,9 @@ describe('the declaration is checked against the claim\'s own words', () => {
       'the platoon minimum time-to-collision shall rise by no more than 20% above the all-HV baseline',
     ]) {
       const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+      // Which guard fires differs — the negation words are on two of them, and the third carries no
+      // anchor in its clause at all. All three hold, which is the property that matters.
       expect(verdict.kind, text).toBe('unbindable')
-      if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('contains a negation')
     }
     // The non-negated form of the same cap IS graded.
     const positive = 'the platoon minimum time-to-collision shall rise by at most 20% above the all-HV baseline'
@@ -558,5 +574,59 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // An anchor elsewhere in the sentence is not the one the threshold is bound by.
     expect(anchorBoundNear(rise, 20)).toBe('at-least')
     expect(anchorBoundNear('at least the platoon minimum time-to-collision is checked, within 20% of it', 20)).toBe('within')
+  })
+})
+
+describe('the literals must be ATTACHED to the measured quantity, not merely present', () => {
+  it('HOLDS the counterexample an auditor built: the number belongs to another quantity', () => {
+    // Every check in this gate was an existence check — is the phrase there, the percentage, an
+    // anchor, a direction word — and an auditor broke it a fourth time with all four present,
+    // attached to something else:
+    //
+    //   "The platoon mean headway shall reduce by at least 20% while the minimum time-to-collision
+    //    falls."
+    //
+    // The 20% and its anchor belong to MEAN HEADWAY. The sentence never says the measured quantity
+    // moved 20%, and the gate reported `supported`. The module had called this a "relevance
+    // weakness"; the auditor's case shows it generates false positives, and it is handled as one.
+    const sentence = 'The platoon mean headway shall reduce by at least 20% while the platoon minimum time-to-collision falls.'
+    const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    expect(verdict.kind).toBe('unbindable')
+    // ...and its mirror, where the number sits with the measured quantity and the direction does
+    // not. Both are refused; either alone would have been graded.
+    const mirrored = 'The platoon minimum time-to-collision shall fall while the platoon mean headway reduces by at least 20%.'
+    expect(evaluatePrediction(mirrored, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' }).kind)
+      .toBe('unbindable')
+  })
+
+  it('NEVER grades a scattered prediction (property, seeded)', () => {
+    // A case table is how the previous four rounds were validated, and each round the next sentence
+    // was outside the table. This generates combinations nobody wrote by hand and asserts the
+    // invariant for all of them: when the phrase naming the measured quantity sits in one clause
+    // and the number with its anchor in another, the gate must not adjudicate. Seeded, so a failure
+    // reproduces exactly.
+    const subjects = ['the platoon mean headway', 'the platoon minimum time-to-collision', 'the platoon mean jerk']
+    const moves = ['shall reduce', 'shall fall', 'shall exceed', 'shall rise']
+    const thresholds = ['by at least 20%', 'by at least 5%']
+    const directionOf = (move: string): 'increase' | 'decrease' => (move === 'shall reduce' || move === 'shall fall' ? 'decrease' : 'increase')
+    let seed = 20260914
+    const pick = <T>(list: ReadonlyArray<T>): T => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return list[seed % list.length] as T
+    }
+    let scattered = 0
+    for (let i = 0; i < 200; i++) {
+      const numbered = pick(subjects)
+      const named = pick(subjects)
+      const move = pick(moves)
+      const threshold = pick(thresholds)
+      if (named === 'the platoon minimum time-to-collision') continue
+      const sentence = `${numbered} ${move} ${threshold} while ${named}.`
+      const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: directionOf(move), bound: 'at-least' })
+      expect(verdict.kind, sentence).toBe('unbindable')
+      scattered++
+    }
+    // The generator has to have actually generated the cases, or the loop proves nothing.
+    expect(scattered).toBeGreaterThan(100)
   })
 })
