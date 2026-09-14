@@ -49,6 +49,8 @@ import { isAbsolute } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
+import { createDeterministicAdapter } from './deterministic-llm.ts'
+import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
@@ -122,6 +124,34 @@ declare module '@deepseek-ai/cordis' {
  */
 export type ProseChannelConfig = Omit<LlmProseWriterConfig, 'cwd'>
 
+/**
+ * Which provider route the prose steps run on.
+ *
+ * The two variants are a deployment's choice between reaching a real model vendor and
+ * running fully offline. Neither is a default: `kind` is required, because the two
+ * produce artifacts that must be described differently — see
+ * {@link DeterministicProseConfig} for what the deterministic route's text is and is not.
+ */
+export type ProseChannel =
+  | ({ readonly kind: 'llm' } & ProseChannelConfig)
+  | {
+    readonly kind: 'deterministic'
+    /** Model id requests are addressed to; defaults to the route's own id. */
+    readonly model?: string
+    /** Provider route to register; defaults to {@link DETERMINISTIC_PROSE_PROVIDER}. */
+    readonly provider?: string
+    /** Route display name. */
+    readonly name?: string
+    /** Body template; see {@link DEFAULT_DETERMINISTIC_TEMPLATE}. */
+    readonly template?: string
+  }
+
+/** Route the deterministic prose provider registers on when a deployment names none. */
+export const DETERMINISTIC_PROSE_PROVIDER = 'research-deterministic'
+
+/** Model id the deterministic prose route offers when a deployment names none. */
+export const DETERMINISTIC_PROSE_MODEL = 'deterministic-prose-v1'
+
 export interface Config {
   readonly requireResearchTools?: boolean
   /**
@@ -143,14 +173,16 @@ export interface Config {
    */
   readonly citationResolver?: CitationChannel
   /**
-   * Real-model channel for prose steps (A1 gap analysis, D2 outline, D3 writing,
-   * D4 rebuttal). Omitted, those steps emit their fixture text and the deployment
-   * stays fully offline — the same posture as an omitted `literatureSearch`.
+   * Channel for prose steps (A1 gap analysis, D2 outline, D3 writing, D4 rebuttal).
+   *
+   * Omitted, those steps emit their fixture text and no provider is contacted — the same
+   * posture as an omitted `literatureSearch`. Otherwise `kind` selects between a real
+   * provider route and the deterministic offline route.
    *
    * The session's working directory is NOT set here: this engine resolves it once
    * from {@link Config.workspace} and supplies it to the writer.
    */
-  readonly prose?: ProseChannelConfig
+  readonly prose?: ProseChannel
   /**
    * Absolute working directory for every agent session this engine creates (prose
    * writes and model-ready tool invocations). Omitted, it resolves to the
@@ -233,14 +265,50 @@ export class ResearchEngine extends Service {
    */
   readonly proseWriter: LlmProseWriter | undefined
 
+  /**
+   * The deterministic provider to register at load, when the deployment selected that
+   * route. Registration is deferred to {@link ResearchEngine.[Service.init]} so it is an
+   * effect owned by this fiber rather than a side effect of construction.
+   */
+  private readonly deterministicProse: DeterministicProseConfig | undefined
+
+  /** Set at the commit point of the deterministic route's registration. */
+  private proseReady = false
+
+  /** True once the deterministic prose provider is registered on `ctx.llm`. */
+  get proseRouteReady(): boolean {
+    return this.proseReady
+  }
+
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
     this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
     this.sessionCwd = resolveWorkspace(config.workspace)
-    this.proseWriter = config.prose !== undefined
-      ? new LlmProseWriter(ctx, { ...config.prose, cwd: this.sessionCwd })
-      : undefined
+
+    const prose = config.prose
+    if (prose?.kind === 'deterministic') {
+      this.deterministicProse = {
+        provider: prose.provider ?? DETERMINISTIC_PROSE_PROVIDER,
+        model: prose.model ?? DETERMINISTIC_PROSE_MODEL,
+        ...prose.name === undefined ? {} : { name: prose.name },
+        ...prose.template === undefined ? {} : { template: prose.template },
+      }
+      this.proseWriter = new LlmProseWriter(ctx, {
+        provider: this.deterministicProse.provider,
+        model: this.deterministicProse.model,
+        cwd: this.sessionCwd,
+      })
+    } else if (prose !== undefined) {
+      this.proseWriter = new LlmProseWriter(ctx, {
+        provider: prose.provider,
+        model: prose.model,
+        ...prose.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: prose.idleTimeoutMs },
+        cwd: this.sessionCwd,
+      })
+    } else {
+      this.proseWriter = undefined
+    }
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
@@ -248,25 +316,51 @@ export class ResearchEngine extends Service {
     this.ctx.effect(() => () => {
       runs.clear()
     }, 'research.runs')
-    // The seven research tools ride a nested plugin that DECLARES the `tools`
-    // inject (cordis refuses a ctx.tools read without one). That dependency has to
-    // be waited for, not merely assumed.
+    // Both host services this engine binds to are LOAD-ORDER DEPENDENT. The loader
+    // starts its entries concurrently, so neither `ctx.get('tools')` nor
+    // `ctx.get('llm')` is available while this method runs — measured on a real 1120
+    // boot: both are `undefined` here and objects about 50 ms later. Reading either
+    // one directly skipped its binding permanently, and the tolerant paths swallowed
+    // the skip: the bundle once served a UI with NO research tools registered, and the
+    // deterministic prose route failed the whole boot. `ctx.inject` is the framework's
+    // own answer — the callback runs once the dependency is available, whenever that
+    // turns out to be.
     //
-    // MEASURED, not reasoned: on a real 1120 boot of the shipped bundle,
-    // `ctx.get('tools')` is undefined while this method runs and is an object
-    // about 50 ms later. The loader starts its entries concurrently, so mounting
-    // the tool plugin from here skipped it permanently — the bundle served a UI
-    // with NO research tools registered, and the old tolerant path swallowed the
-    // skip. `ctx.inject` is the framework's own answer and is what the rest of the
-    // repository uses for exactly this: the callback runs once the dependency is
-    // available, whenever that turns out to be.
-    const injected = this.ctx.inject(['tools'], toolsCtx => this.mountResearchTools(toolsCtx))
-    // When the service is ALREADY up the mount settles within this load, so await
-    // it and keep the load-time gate (`requireResearchTools` still throws out of
-    // `ctx.plugin` in that case). When it is not up yet, awaiting would hang the
-    // load for as long as the host takes to provide it, so the registration
-    // commits whenever the service appears.
-    if (this.ctx.get('tools') !== undefined) await injected
+    // When a service is ALREADY up the work settles within this load, so awaiting
+    // keeps a load-time gate (`requireResearchTools` still throws out of `ctx.plugin`
+    // in that case). When it is not up yet, awaiting would hang the load for as long
+    // as the host takes to provide it, so the effect commits whenever it appears.
+    const injectedTools = this.ctx.inject(['tools'], toolsCtx => this.mountResearchTools(toolsCtx))
+    if (this.ctx.get('tools') !== undefined) await injectedTools
+    if (this.deterministicProse !== undefined) {
+      const injectedLlm = this.ctx.inject(['llm'], llmCtx => this.registerDeterministicProse(llmCtx))
+      if (this.ctx.get('llm') !== undefined) await injectedLlm
+    }
+  }
+
+  /**
+   * Register the deterministic prose provider on the real `ctx.llm`, when the deployment
+   * selected that route, as an effect owned by this engine's fiber.
+   *
+   * The `llm` service is read through `ctx.get`: this engine does not declare it as an
+   * injection, and a deployment that selected the deterministic route without an LLM
+   * runtime cannot serve prose at all — so its absence is reported as itself rather than
+   * discovered later as a failed write.
+   *
+   * @throws {Error} when the deterministic route is configured but no LLM service exists.
+   */
+  private registerDeterministicProse(llmCtx: Context): void {
+    const config = this.deterministicProse
+    if (config === undefined) return
+    const llm = llmCtx.get('llm') as
+      | { registerAdapter: (providers: string[], adapter: unknown) => () => void }
+      | undefined
+    if (llm === undefined) return
+    llmCtx.effect(
+      () => llm.registerAdapter([config.provider], createDeterministicAdapter(config)),
+      'research.prose.deterministic',
+    )
+    this.proseReady = true
   }
 
   /**
@@ -411,3 +505,7 @@ export type { OpenAlexCitationResolverOptions } from './openalex-citation-resolv
 /** Real-model prose channel for the runner's text-producing steps. */
 export { LlmProseWriter, assistantTextOf, turnErrorOf } from './llm-prose-writer.ts'
 export type { LlmProseWriterConfig, ProseRequestLike, ProseResultLike } from './llm-prose-writer.ts'
+
+/** Deterministic offline provider for the prose channel (see its module header). */
+export { createDeterministicAdapter, DEFAULT_DETERMINISTIC_TEMPLATE, deriveDeterministicText, digestOf } from './deterministic-llm.ts'
+export type { DeterministicProseConfig } from './deterministic-llm.ts'

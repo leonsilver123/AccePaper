@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-14-deterministic-offline-prose-route.md
+2026-09-14-deterministic-offline-prose-route.md: 68862cfe42125d2848ccdb9f4a6e1a19241acedf
+2026-09-14-deterministic-offline-prose-route.zh.md: 82d6822255100e2ef0ff22cf34bf6769fdcbae9f

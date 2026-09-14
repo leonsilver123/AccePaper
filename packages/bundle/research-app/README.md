@@ -32,14 +32,17 @@ The research bundle is added to the profile's `dsh.profile.bundles` so its `cord
 - `cordis.patch.yml` — the bundle patch (transport port + research roster).
 - `src/index.ts` — runtime-inert module marker; all behaviour lives in the mounted research packages.
 
-## Retrieval channel
+## Channel configuration
 
-The `research-cordis` row configures `literatureSearch`. It ships as `openalex`, so the mounted engine retrieves genuine catalogue records through the real adapter; setting `{ kind: fixture }` runs fully offline against the synthetic corpus. An omitted channel defaults to the fixture, so that config line is the deployment's explicit opt-in to live retrieval.
+The `research-cordis` row configures three deployment-level channels, and **this bundle ships the offline posture**: `literatureSearch` and `citationResolver` are `fixture`, and `prose` is `kind: deterministic`.
+
+The offline posture is the product: the profile boots and runs a full pipeline with no model credential and no network, and every artifact is reproducible. Prose produced that way is a **demo draft** — a pure function of the request, labelled as such in its own text — and is never a model-written research finding. The real channels are the explicit opt-in; `cordis.patch.yml` ends with the replacement block to paste, and it needs both a provider credential and network egress.
 
 ## Known Limitations and Deferred Work
 
 - The roster mounts three plugin rows. The two pure libraries (`dsh-research-core`, `dsh-research-tools`) are dependencies rather than rows, because they expose no `apply`/`name` and would crash `ctx.registry.plugin`.
-- The `research-cordis` row sets `requireResearchTools: true` and configures the three live channels (`literatureSearch`/`citationResolver`: `openalex`; `prose`: `deepseek-official`/`deepseek-v4-pro`). Verified on a real 1120 boot. Note what the flag does NOT mean: it cannot refuse to boot when the `tools` service is merely late — the loader starts rows concurrently and that is not distinguishable from absent at load time — so it makes a registration FAILURE loud rather than making registration a startup gate.
+- The `research-cordis` row sets `requireResearchTools: true`. Note what the flag does NOT mean: it cannot refuse to boot when the `tools` service is merely late — the loader starts rows concurrently and that is not distinguishable from absent at load time — so it makes a registration FAILURE loud rather than making registration a startup gate. `ctx.research.toolsReady` and `ctx.research.proseRouteReady` are the two commit points, both verified on a real 1120 boot.
+- Steps whose product is **structured** (A2's labelled claim fields, for example) do not accept a prose reply: they parse labelled fields out of the response and fail when the labels are absent. The deterministic route answers the free-text steps; supplying structured step content from the selected Case Pack is tracked in `plan/PRODUCT-CLOSURE-EXECUTION.md` as P3. Until it lands, an offline run stops at A2 and reports why.
 - Port 1120 is a fallback only; an explicit `--port` flag still wins, so an operator can move the research server without editing the patch.
 
 No invariant companion is published: this package carries no runtime behaviour of its own because its `src/index.ts` is an inert marker, so no `./invariant` entry is published alongside it.

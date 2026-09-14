@@ -19,6 +19,8 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { LlmAdapter, ToolCallId, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { assistantTextOf, LlmProseWriter, turnErrorOf } from '../src/llm-prose-writer.ts'
+import { deriveDeterministicText, digestOf } from '../src/deterministic-llm.ts'
+import { DETERMINISTIC_PROSE_MODEL, ResearchEngine } from '../src/index.ts'
 
 const CWD = process.cwd()
 const STEP = 'A1-landscape'
@@ -98,8 +100,8 @@ async function hostPlugin(name: string): Promise<unknown> {
   return loaded.default
 }
 
-async function setupRuntime(script: Entry[]) {
-  const ctx = new Context()
+/** Mount the host services a prose write needs, in the order a real boot provides them. */
+async function mountRuntime(ctx: Context): Promise<void> {
   await ctx.plugin((await hostPlugin('dsh-llm')) as new (ctx: Context) => unknown)
   await ctx.plugin((await hostPlugin('dsh-session')) as new (ctx: Context) => unknown)
   await ctx.plugin((await hostPlugin('dsh-session-projection')) as new (ctx: Context) => unknown)
@@ -115,6 +117,11 @@ async function setupRuntime(script: Entry[]) {
     (await hostPlugin('dsh-agent-loop')) as new (ctx: Context, cfg: { agents: unknown[] }) => unknown,
     { agents: [] },
   )
+}
+
+async function setupRuntime(script: Entry[]) {
+  const ctx = new Context()
+  await mountRuntime(ctx)
 
   const adapter = new ScriptedAdapter(script)
   ;(ctx as unknown as { llm: { registerAdapter: (p: string[], a: unknown) => void } })
@@ -334,5 +341,135 @@ describe('LlmProseWriter against a real agent loop', () => {
     expect(adapter.requests).toHaveLength(2)
     expect(result.text).toBe('this write only')
     await anyCtx.fiber.dispose()
+  })
+})
+
+describe('the deterministic offline prose route', () => {
+  it('registers on the real llm service and produces its draft through the real agent loop', async () => {
+    const { ctx } = await setupRuntime([])
+    await ctx.plugin(ResearchEngine, { prose: { kind: 'deterministic' } })
+    const engine = ctx.get('research') as { proseWriter: LlmProseWriter | undefined }
+    expect(engine.proseWriter).toBeDefined()
+
+    const result = await engine.proseWriter?.write({
+      stepId: STEP,
+      instruction: 'Analyse the gap for adaptive signal control.',
+      context: { topic: 'traffic' },
+    })
+
+    // The product names itself as a demo draft. This is the property that keeps it from
+    // being read downstream as a model-written research finding.
+    expect(result?.text).toContain('DEMO DRAFT')
+    expect(result?.text).toContain('No model was called')
+    expect(result?.text).toContain('Analyse the gap for adaptive signal control.')
+    expect(result?.provider).toBe('research-deterministic')
+    expect(result?.model).toBe(DETERMINISTIC_PROSE_MODEL)
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
+  })
+
+  it('derives from the step instruction, not from the runtime-context snapshot', async () => {
+    // The loop appends its own runtime-context user message after the caller's. Reading
+    // the LAST user message therefore read the snapshot, and the derived text described
+    // the deployment rather than the task — a wrong product that still looked plausible.
+    const { ctx } = await setupRuntime([])
+    await ctx.plugin(ResearchEngine, { prose: { kind: 'deterministic' } })
+    const engine = ctx.get('research') as { proseWriter: LlmProseWriter | undefined }
+
+    const result = await engine.proseWriter?.write({
+      stepId: STEP,
+      instruction: 'Assess whether adaptive control beats fixed-time plans.',
+      context: { topic: 'traffic' },
+    })
+
+    expect(result?.text).toContain('Task: Assess whether adaptive control beats fixed-time plans.')
+    expect(result?.text).not.toContain('Current runtime context')
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
+  })
+
+  it('answers the same request with the same text, and different requests differently', async () => {
+    const { ctx } = await setupRuntime([])
+    await ctx.plugin(ResearchEngine, { prose: { kind: 'deterministic' } })
+    const engine = ctx.get('research') as { proseWriter: LlmProseWriter | undefined }
+    const write = (instruction: string) => engine.proseWriter?.write({
+      stepId: STEP,
+      instruction,
+      context: { topic: 'traffic' },
+    })
+
+    const first = await write('Instruction one.')
+    const again = await write('Instruction one.')
+    const other = await write('Instruction two.')
+
+    expect(again?.text).toBe(first?.text)
+    expect(other?.text).not.toBe(first?.text)
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
+  })
+
+  it('reads past a trailing plugin snapshot back to the caller message', () => {
+    // Shapes below are copied from a REAL boot's session dump. The loop appends the
+    // runtime-context snapshot after the caller's message, and the first version of the
+    // derivation read that snapshot: the draft restated the sandbox policy as its task.
+    const request = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Real instruction.\n\nContext (JSON):\n{}' }], source: { kind: 'user' } },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.' }],
+          source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot' },
+        },
+      ],
+    }
+
+    const text = deriveDeterministicText(request, { provider: 'p', model: 'm' })
+    expect(text).toContain('Task: Real instruction.')
+    expect(text).not.toContain('Current runtime context')
+    // A request composed entirely by the harness still answers rather than going empty.
+    expect(deriveDeterministicText({ messages: [request.messages[1]] }, { provider: 'p', model: 'm' }))
+      .toContain('Task: Current runtime context.')
+  })
+
+  it('derives its text from the request and records the digest of what it read', () => {
+    const config = { provider: 'p', model: 'm' }
+    const request = { messages: [{ role: 'user', content: [{ type: 'text', text: 'Instruction.\n\nContext (JSON):\n{}' }] }] }
+
+    const text = deriveDeterministicText(request, config)
+    expect(text).toContain('Instruction.')
+    expect(text).toContain(`sha256:${digestOf('Instruction.\n\nContext (JSON):\n{}')}`)
+    // A deployment that replaces the template replaces the whole body.
+    expect(deriveDeterministicText(request, { ...config, template: 'only {{model}}' })).toBe('only m')
+    // A request with no readable prompt still answers, so the writer reports "no text"
+    // rather than misattributing an empty request to a provider failure.
+    expect(deriveDeterministicText({ messages: [] }, config)).toContain('DEMO DRAFT')
+  })
+
+  it('REGISTERS WHEN THE LLM SERVICE APPEARS AFTER THE ENGINE (loader order)', async () => {
+    // The engine binds `llm` through `ctx.inject` because the loader starts its entries
+    // concurrently: on a real boot the service is absent while the engine loads. Reading
+    // it eagerly failed the whole boot. This pins the order the loader actually uses.
+    const ctx = new Context()
+    await ctx.plugin(ResearchEngine, { prose: { kind: 'deterministic' } })
+    const engine = ctx.get('research') as { proseRouteReady: boolean }
+    expect(engine.proseRouteReady).toBe(false)
+
+    await mountRuntime(ctx)
+
+    const ready = ctx.get('research') as { proseRouteReady: boolean; proseWriter?: LlmProseWriter }
+    expect(ready.proseRouteReady).toBe(true)
+    const result = await ready.proseWriter?.write({ stepId: STEP, instruction: 'After the fact.', context: {} })
+    expect(result?.text).toContain('DEMO DRAFT')
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
+  })
+
+  it('loads without an llm service, and fails a write rather than serving nothing', async () => {
+    // Absence at load is not a failure: at that moment "not up yet" and "never" are
+    // indistinguishable. What must not happen is a write that appears to succeed.
+    const ctx = new Context()
+    await ctx.plugin(ResearchEngine, { prose: { kind: 'deterministic' } })
+    const engine = ctx.get('research') as { proseRouteReady: boolean; proseWriter?: LlmProseWriter }
+    expect(engine.proseRouteReady).toBe(false)
+
+    await expect(engine.proseWriter?.write({ stepId: STEP, instruction: 'x', context: {} }))
+      .rejects.toThrow(/no `agentLoop` service/)
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
   })
 })

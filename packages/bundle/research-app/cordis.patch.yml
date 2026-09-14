@@ -43,28 +43,26 @@
         # which is the failure mode this flag exists to remove. Verified against a
         # real 1120 boot: the profile starts with all seven tools registered.
         requireResearchTools: true
-        # Retrieval channel for the seven research tools. `openalex` is the real
-        # catalogue, so A1-landscape retrieves genuine literature and every
-        # downstream artifact carries real records. Set `{ kind: fixture }` to run
-        # fully offline against the synthetic corpus; an omitted channel defaults
-        # to the fixture, so this line is the deployment's explicit opt-in to live
-        # retrieval and should not be removed casually.
+        # ── OFFLINE POSTURE (the shipped default) ──────────────────────────────
+        # This bundle is the offline research product: it boots and runs a full
+        # pipeline with no model credential and no network, and every artifact it
+        # produces is reproducible. Deterministic prose is LABELLED as a demo draft
+        # wherever it appears and must never be read as a model-written finding.
+        #
+        # To run against the real catalogue and a real model, replace the three
+        # lines below with the block at the end of this file. That is a deployment
+        # decision, not a default: `openalex` makes A1-landscape retrieve genuine
+        # literature and a fabricated DOI an authoritative `not_found` (a hard
+        # block), and a real prose route needs a credential for its provider route.
         literatureSearch:
-          kind: openalex
-        # Bibliographic resolver for the citation identity chain. `openalex` makes a
-        # fabricated DOI an authoritative not_found (a hard block) instead of a
-        # fixture verdict. Set `{ kind: fixture }` to keep the chain offline.
+          kind: fixture
         citationResolver:
-          kind: openalex
-        # Real-model channel for the prose steps (A1 gap analysis, B1 method,
-        # D2 outline, D3 writing, D4 rebuttal). Without it those steps emit their
-        # fixture text and no model is ever called on the shipped path. The writer
-        # routes through the host agent loop and NEEDS a credential for this
-        # provider route: with none, a prose write fails the step loudly rather
-        # than falling back to fixture text (fail-closed, no silent downgrade).
+          kind: fixture
+        # Prose steps (A1 gap analysis, B1 method, D2 outline, D3 writing, D4
+        # rebuttal) route through the REAL agent loop on a provider whose response
+        # is derived from the request rather than generated. Same request, same text.
         prose:
-          provider: deepseek-official
-          model: deepseek-v4-pro
+          kind: deterministic
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.
@@ -75,3 +73,21 @@
     # view mounts into the conversation.view slot via the client (browser) half.
     - id: research-web
       name: '@deepseek-ai/dsh-research-web'
+
+# ── OPT-IN: the live channels ─────────────────────────────────────────────────
+# Replace the three `literatureSearch` / `citationResolver` / `prose` lines in the
+# research-cordis row above with this block to run against a real model vendor and
+# the real OpenAlex catalogue. It requires a credential for the prose provider route
+# and network egress; without either, A1-landscape fails the step rather than
+# downgrading to fixture evidence (fail-closed, no silent substitution).
+#
+#        literatureSearch:
+#          kind: openalex
+#          mailto: <contact address — OpenAlex's polite pool rejects unidentified callers>
+#        citationResolver:
+#          kind: openalex
+#          mailto: <contact address>
+#        prose:
+#          kind: llm
+#          provider: deepseek-official
+#          model: deepseek-v4-pro
