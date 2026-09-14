@@ -198,7 +198,11 @@ export interface RunPersistence {
    * revision equals `options.baseRevision`; on success the file is stamped `baseRevision + 1`.
    * Returns the payload that was written.
    */
-  save(store: ResearchRunStore, runId: string, options: RunSaveOptions): Promise<RunSnapshotPayload>
+  save(
+    store: ResearchRunStore,
+    runId: string,
+    options: RunSaveOptions,
+  ): Promise<RunSnapshotPayload>
   /** Load, validate and restore the snapshot onto `capability`. Throws on any problem. */
   load<C>(capability: C): Promise<RestoredRun<C>>
   /** Like {@link RunPersistence.load}, but returns `null` when no snapshot file exists at all.
@@ -226,16 +230,31 @@ const STEP_STATUSES: ReadonlySet<string> = new Set<string>([
 ])
 
 /** Gate outcomes accepted at the load boundary (mirrors the engine's write-boundary allow-list). */
-const GATE_OUTCOMES: ReadonlySet<string> = new Set<string>(['passed', 'blocked', 'failed', 'abstained'])
+const GATE_OUTCOMES: ReadonlySet<string> = new Set<string>([
+  'passed',
+  'blocked',
+  'failed',
+  'abstained',
+])
 
 /** Hold reasons accepted at the load boundary. */
-const HOLD_REASONS: ReadonlySet<string> = new Set<string>(['human_gate', 'gate_abstained'])
+const HOLD_REASONS: ReadonlySet<string> = new Set<string>([
+  'human_gate',
+  'gate_abstained',
+])
 
 /** Approval decisions accepted at the load boundary. */
-const DECISIONS: ReadonlySet<string> = new Set<string>(['approved', 'rejected'])
+const DECISIONS: ReadonlySet<string> = new Set<string>([
+  'approved',
+  'rejected',
+])
 
 /** Trinity components accepted at the load boundary. */
-const TRINITY_COMPONENTS: ReadonlySet<string> = new Set<string>(['A', 'B', 'C'])
+const TRINITY_COMPONENTS: ReadonlySet<string> = new Set<string>([
+  'A',
+  'B',
+  'C',
+])
 
 /** Audit event kinds accepted at the load boundary (mirrors `AuditEventKind`). */
 const AUDIT_EVENT_KINDS: ReadonlySet<string> = new Set<string>([
@@ -297,10 +316,16 @@ function asCount(value: unknown, what: string): number {
  * Narrow a durable string to one of `allowed`. Call sites cast the result to the union the set
  * was written from; this check is what makes that cast honest.
  */
-function asMemberOf(value: unknown, allowed: ReadonlySet<string>, what: string): string {
+function asMemberOf(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  what: string,
+): string {
   const s = asString(value, what)
   if (!allowed.has(s)) {
-    throw new SnapshotInvalidError(`${what} '${s}' is not one of ${[...allowed].join(', ')}.`)
+    throw new SnapshotInvalidError(
+      `${what} '${s}' is not one of ${[...allowed].join(', ')}.`,
+    )
   }
   return s
 }
@@ -313,20 +338,32 @@ function parseApproval(raw: unknown, what: string): ApprovalRecord {
     step_id: asString(o.step_id, `${what}.step_id`),
     attempt_id: asCount(o.attempt_id, `${what}.attempt_id`),
     principalId: asString(o.principalId, `${what}.principalId`),
-    approval_event_id: asString(o.approval_event_id, `${what}.approval_event_id`),
+    approval_event_id: asString(
+      o.approval_event_id,
+      `${what}.approval_event_id`,
+    ),
     decision: decision as ApprovalRecord['decision'],
-    ...(o.rationale !== undefined ? { rationale: asString(o.rationale, `${what}.rationale`) } : {}),
+    ...(o.rationale !== undefined
+      ? { rationale: asString(o.rationale, `${what}.rationale`) }
+      : {}),
     timestamp: asNumber(o.timestamp, `${what}.timestamp`),
   }
 }
 
-function parseGateResults(raw: unknown, what: string): Partial<Record<TrinityComponent, GateVerdict>> {
+function parseGateResults(
+  raw: unknown,
+  what: string,
+): Partial<Record<TrinityComponent, GateVerdict>> {
   const o = asRecord(raw, what)
   const result: Partial<Record<TrinityComponent, GateVerdict>> = {}
   for (const key of Object.keys(o)) {
     const component = asMemberOf(key, TRINITY_COMPONENTS, `${what} key`)
     const v = asRecord(o[key], `${what}.${key}`)
-    const outcome = asMemberOf(v.outcome, GATE_OUTCOMES, `${what}.${key}.outcome`)
+    const outcome = asMemberOf(
+      v.outcome,
+      GATE_OUTCOMES,
+      `${what}.${key}.outcome`,
+    )
     result[component as TrinityComponent] = {
       component: component as TrinityComponent,
       outcome: outcome as GateVerdict['outcome'],
@@ -347,27 +384,47 @@ interface AttemptCore {
   holdReason?: HoldReason
 }
 
-function parseAttemptCore(o: Record<string, unknown>, what: string): AttemptCore {
+function parseAttemptCore(
+  o: Record<string, unknown>,
+  what: string,
+): AttemptCore {
   return {
     artifacts: asRecord(o.artifacts, `${what}.artifacts`),
     gateResults: parseGateResults(o.gateResults, `${what}.gateResults`),
-    ...(o.approval !== undefined ? { approval: parseApproval(o.approval, `${what}.approval`) } : {}),
+    ...(o.approval !== undefined
+      ? { approval: parseApproval(o.approval, `${what}.approval`) }
+      : {}),
     ...(o.holdReason !== undefined
-      ? { holdReason: asMemberOf(o.holdReason, HOLD_REASONS, `${what}.holdReason`) as HoldReason }
+      ? {
+        holdReason: asMemberOf(
+          o.holdReason,
+          HOLD_REASONS,
+          `${what}.holdReason`,
+        ) as HoldReason,
+      }
       : {}),
   }
 }
 
-function parseHistory(raw: unknown, what: string): ReadonlyArray<AttemptRecord> {
+function parseHistory(
+  raw: unknown,
+  what: string,
+): ReadonlyArray<AttemptRecord> {
   return asArray(raw, what).map((entry, i) => {
     const entryWhat = `${what}[${i}]`
     const o = asRecord(entry, entryWhat)
     if (o.superseded !== true) {
-      throw new SnapshotInvalidError(`${entryWhat}.superseded must be true (history holds superseded attempts only).`)
+      throw new SnapshotInvalidError(
+        `${entryWhat}.superseded must be true (history holds superseded attempts only).`,
+      )
     }
     return {
       attempt_id: asCount(o.attempt_id, `${entryWhat}.attempt_id`),
-      status: asMemberOf(o.status, STEP_STATUSES, `${entryWhat}.status`) as StepStatus,
+      status: asMemberOf(
+        o.status,
+        STEP_STATUSES,
+        `${entryWhat}.status`,
+      ) as StepStatus,
       ...parseAttemptCore(o, entryWhat),
       superseded: true,
     }
@@ -380,16 +437,27 @@ function parseStep(raw: unknown, index: number): PersistedStepState {
   const stepId = asString(o.stepId, `${what}.stepId`)
   const def = getStepDefinitionById(stepId)
   if (def === undefined) {
-    throw new SnapshotInvalidError(`${what}.stepId '${stepId}' is not a step of the live 16-step pipeline.`)
+    throw new SnapshotInvalidError(
+      `${what}.stepId '${stepId}' is not a step of the live 16-step pipeline.`,
+    )
   }
   const attempts = asCount(o.attempts, `${what}.attempts`)
   const attemptId = asCount(o.attempt_id, `${what}.attempt_id`)
   if (attemptId > attempts) {
-    throw new SnapshotInvalidError(`${what}.attempt_id ${attemptId} exceeds attempts ${attempts} (the engine advances the attempt id once per start).`)
+    throw new SnapshotInvalidError(
+      `${what}.attempt_id ${attemptId} exceeds attempts ${attempts} (the engine advances the attempt id once per start).`,
+    )
   }
-  const outputs = asArray(o.outputs, `${what}.outputs`).map((s, i) => asString(s, `${what}.outputs[${i}]`))
-  if (outputs.length !== def.outputs.length || outputs.some((slug, i) => slug !== def.outputs[i])) {
-    throw new SnapshotInvalidError(`${what}.outputs [${outputs.join(', ')}] disagree with the live definition of '${stepId}' [${def.outputs.join(', ')}].`)
+  const outputs = asArray(o.outputs, `${what}.outputs`).map((s, i) =>
+    asString(s, `${what}.outputs[${i}]`),
+  )
+  if (
+    outputs.length !== def.outputs.length ||
+    outputs.some((slug, i) => slug !== def.outputs[i])
+  ) {
+    throw new SnapshotInvalidError(
+      `${what}.outputs [${outputs.join(', ')}] disagree with the live definition of '${stepId}' [${def.outputs.join(', ')}].`,
+    )
   }
   return {
     stepId,
@@ -398,8 +466,12 @@ function parseStep(raw: unknown, index: number): PersistedStepState {
     attempt_id: attemptId,
     ...parseAttemptCore(o, what),
     history: parseHistory(o.history, `${what}.history`),
-    ...(o.startedAt !== undefined ? { startedAt: asNumber(o.startedAt, `${what}.startedAt`) } : {}),
-    ...(o.finishedAt !== undefined ? { finishedAt: asNumber(o.finishedAt, `${what}.finishedAt`) } : {}),
+    ...(o.startedAt !== undefined
+      ? { startedAt: asNumber(o.startedAt, `${what}.startedAt`) }
+      : {}),
+    ...(o.finishedAt !== undefined
+      ? { finishedAt: asNumber(o.finishedAt, `${what}.finishedAt`) }
+      : {}),
     outputs,
   }
 }
@@ -412,11 +484,18 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
     const rec = asRecord(o[slug], what)
     const recordedSlug = asString(rec.slug, `${what}.slug`)
     if (recordedSlug !== slug) {
-      throw new SnapshotInvalidError(`${what}.slug '${recordedSlug}' does not match its registry key '${slug}'.`)
+      throw new SnapshotInvalidError(
+        `${what}.slug '${recordedSlug}' does not match its registry key '${slug}'.`,
+      )
     }
-    const producerStepId = asString(rec.producerStepId, `${what}.producerStepId`)
+    const producerStepId = asString(
+      rec.producerStepId,
+      `${what}.producerStepId`,
+    )
     if (getStepDefinitionById(producerStepId) === undefined) {
-      throw new SnapshotInvalidError(`${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline.`)
+      throw new SnapshotInvalidError(
+        `${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline.`,
+      )
     }
     if (typeof rec.invalidated !== 'boolean') {
       throw new SnapshotInvalidError(`${what}.invalidated must be a boolean.`)
@@ -424,7 +503,10 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
     registry[slug] = {
       slug,
       producerStepId,
-      producerAttemptId: asCount(rec.producerAttemptId, `${what}.producerAttemptId`),
+      producerAttemptId: asCount(
+        rec.producerAttemptId,
+        `${what}.producerAttemptId`,
+      ),
       value: rec.value,
       producedAt: asNumber(rec.producedAt, `${what}.producedAt`),
       invalidated: rec.invalidated,
@@ -439,13 +521,23 @@ function parseEvents(raw: unknown, runId: string): ReadonlyArray<AuditEvent> {
     const o = asRecord(entry, what)
     const eventRunId = asString(o.runId, `${what}.runId`)
     if (eventRunId !== runId) {
-      throw new SnapshotInvalidError(`${what}.runId '${eventRunId}' does not match the snapshot's run '${runId}'.`)
+      throw new SnapshotInvalidError(
+        `${what}.runId '${eventRunId}' does not match the snapshot's run '${runId}'.`,
+      )
     }
     return {
-      kind: asMemberOf(o.kind, AUDIT_EVENT_KINDS, `${what}.kind`) as AuditEvent['kind'],
+      kind: asMemberOf(
+        o.kind,
+        AUDIT_EVENT_KINDS,
+        `${what}.kind`,
+      ) as AuditEvent['kind'],
       runId: eventRunId,
-      ...(o.stepId !== undefined ? { stepId: asString(o.stepId, `${what}.stepId`) } : {}),
-      ...(o.attemptId !== undefined ? { attemptId: asCount(o.attemptId, `${what}.attemptId`) } : {}),
+      ...(o.stepId !== undefined
+        ? { stepId: asString(o.stepId, `${what}.stepId`) }
+        : {}),
+      ...(o.attemptId !== undefined
+        ? { attemptId: asCount(o.attemptId, `${what}.attemptId`) }
+        : {}),
       ts: asNumber(o.ts, `${what}.ts`),
       ...(o.detail !== undefined ? { detail: o.detail } : {}),
     }
@@ -462,11 +554,15 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
   const headerRaw = asRecord(o.run, 'snapshot.run')
   const runId = asString(headerRaw.runId, 'snapshot.run.runId')
   const inputs = asRecord(headerRaw.inputs, 'snapshot.run.inputs')
-  const steps = asArray(o.steps, 'snapshot.steps').map((s, i) => parseStep(s, i))
+  const steps = asArray(o.steps, 'snapshot.steps').map((s, i) =>
+    parseStep(s, i),
+  )
   const seen = new Set<string>()
   for (const step of steps) {
     if (seen.has(step.stepId)) {
-      throw new SnapshotInvalidError(`snapshot.steps contains '${step.stepId}' more than once.`)
+      throw new SnapshotInvalidError(
+        `snapshot.steps contains '${step.stepId}' more than once.`,
+      )
     }
     seen.add(step.stepId)
   }
@@ -478,9 +574,10 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
     steps,
     registry: parseRegistry(o.registry),
     events: parseEvents(o.events, runId),
-    consumedApprovalEventIds: asArray(o.consumedApprovalEventIds, 'snapshot.consumedApprovalEventIds').map(
-      (id, i) => asString(id, `snapshot.consumedApprovalEventIds[${i}]`),
-    ),
+    consumedApprovalEventIds: asArray(
+      o.consumedApprovalEventIds,
+      'snapshot.consumedApprovalEventIds',
+    ).map((id, i) => asString(id, `snapshot.consumedApprovalEventIds[${i}]`)),
   }
 }
 
@@ -500,7 +597,11 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
  * repository's own `A3-agenda` artifact, whose `phases` and `plan` are the same array, and
  * reported a "cycle" that did not exist. An entry is therefore removed on the way back out.
  */
-function assertJsonRepresentable(value: unknown, what: string, ancestors: Set<object>): void {
+function assertJsonRepresentable(
+  value: unknown,
+  what: string,
+  ancestors: Set<object>,
+): void {
   if (value === null) return
   switch (typeof value) {
     case 'string':
@@ -508,19 +609,28 @@ function assertJsonRepresentable(value: unknown, what: string, ancestors: Set<ob
       return
     case 'number':
       if (!Number.isFinite(value)) {
-        throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is ${String(value)}, which JSON represents as null (T19 snapshot capture refuses a value it cannot persist faithfully).`)
+        throw new ResearchError(
+          'DSH_SNAPSHOT_VALUE_NOT_JSON',
+          `${what} is ${String(value)}, which JSON represents as null (T19 snapshot capture refuses a value it cannot persist faithfully).`,
+        )
       }
       return
     case 'undefined':
     case 'function':
     case 'symbol':
     case 'bigint':
-      throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is a ${typeof value}, which JSON cannot represent (T19 snapshot capture refuses a value it cannot persist faithfully).`)
+      throw new ResearchError(
+        'DSH_SNAPSHOT_VALUE_NOT_JSON',
+        `${what} is a ${typeof value}, which JSON cannot represent (T19 snapshot capture refuses a value it cannot persist faithfully).`,
+      )
     default:
       break
   }
   if (ancestors.has(value)) {
-    throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is cyclic, which JSON cannot represent.`)
+    throw new ResearchError(
+      'DSH_SNAPSHOT_VALUE_NOT_JSON',
+      `${what} is cyclic, which JSON cannot represent.`,
+    )
   }
   ancestors.add(value)
   try {
@@ -532,8 +642,13 @@ function assertJsonRepresentable(value: unknown, what: string, ancestors: Set<ob
     }
     const proto: unknown = Object.getPrototypeOf(value)
     if (proto !== Object.prototype && proto !== null) {
-      const name = (proto as { constructor?: { name?: string } }).constructor?.name ?? 'non-plain'
-      throw new ResearchError('DSH_SNAPSHOT_VALUE_NOT_JSON', `${what} is a ${name} instance, which JSON serializes as a plain object.`)
+      const name =
+        (proto as { constructor?: { name?: string } }).constructor?.name ??
+        'non-plain'
+      throw new ResearchError(
+        'DSH_SNAPSHOT_VALUE_NOT_JSON',
+        `${what} is a ${name} instance, which JSON serializes as a plain object.`,
+      )
     }
     const record = value as Record<string, unknown>
     for (const key of Object.keys(record)) {
@@ -558,10 +673,17 @@ function persistable<T>(value: T, what: string): T {
  * The returned record references the run's values (it is consumed synchronously by
  * {@link RunPersistence.save}, which serializes it immediately) and does not own them.
  */
-export function captureRunSnapshot(store: ResearchRunStore, runId: string, revision: number): RunSnapshotPayload {
+export function captureRunSnapshot(
+  store: ResearchRunStore,
+  runId: string,
+  revision: number,
+): RunSnapshotPayload {
   const run: RunState | undefined = store.get(runId)
   if (run === undefined) {
-    throw new ResearchRunError('RUN_NOT_FOUND', `captureRunSnapshot: run '${runId}' not found`)
+    throw new ResearchRunError(
+      'RUN_NOT_FOUND',
+      `captureRunSnapshot: run '${runId}' not found`,
+    )
   }
   const steps: PersistedStepState[] = []
   for (const [stepId, state] of run.steps) {
@@ -570,15 +692,33 @@ export function captureRunSnapshot(store: ResearchRunStore, runId: string, revis
       status: state.status,
       attempts: state.attempts,
       attempt_id: state.attempt_id,
-      artifacts: persistable({ ...state.artifacts }, `run '${runId}' step '${stepId}' artifacts`),
-      gateResults: persistable({ ...state.gateResults }, `run '${runId}' step '${stepId}' gateResults`),
+      artifacts: persistable(
+        { ...state.artifacts },
+        `run '${runId}' step '${stepId}' artifacts`,
+      ),
+      gateResults: persistable(
+        { ...state.gateResults },
+        `run '${runId}' step '${stepId}' gateResults`,
+      ),
       ...(state.approval !== undefined
-        ? { approval: persistable(state.approval, `run '${runId}' step '${stepId}' approval`) }
+        ? {
+          approval: persistable(
+            state.approval,
+            `run '${runId}' step '${stepId}' approval`,
+          ),
+        }
         : {}),
-      ...(state.holdReason !== undefined ? { holdReason: state.holdReason } : {}),
-      history: persistable([...state.history], `run '${runId}' step '${stepId}' history`),
+      ...(state.holdReason !== undefined
+        ? { holdReason: state.holdReason }
+        : {}),
+      history: persistable(
+        [...state.history],
+        `run '${runId}' step '${stepId}' history`,
+      ),
       ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
-      ...(state.finishedAt !== undefined ? { finishedAt: state.finishedAt } : {}),
+      ...(state.finishedAt !== undefined
+        ? { finishedAt: state.finishedAt }
+        : {}),
       outputs: [...state.outputs],
     })
   }
@@ -591,7 +731,10 @@ export function captureRunSnapshot(store: ResearchRunStore, runId: string, revis
     schemaVersion: RUN_SNAPSHOT_SCHEMA_VERSION,
     savedAtIso: new Date().toISOString(),
     revision,
-    run: { runId, inputs: persistable({ ...run.inputs }, `run '${runId}' inputs`) },
+    run: {
+      runId,
+      inputs: persistable({ ...run.inputs }, `run '${runId}' inputs`),
+    },
     steps,
     registry,
     events: persistable(run.events, `run '${runId}' audit log`),
@@ -617,7 +760,10 @@ function executedStatusOf(detail: unknown): string | undefined {
  * read, copied from the record, or otherwise inspected; it is carried on the handle so the
  * resumed run executes through the capability THIS process built.
  */
-export function restoreRun<C>(payload: RunSnapshotPayload, capability: C): RestoredRun<C> {
+export function restoreRun<C>(
+  payload: RunSnapshotPayload,
+  capability: C,
+): RestoredRun<C> {
   const steps = new Map<string, StepState>()
   for (const persisted of payload.steps) {
     steps.set(persisted.stepId, {
@@ -627,8 +773,12 @@ export function restoreRun<C>(payload: RunSnapshotPayload, capability: C): Resto
       attempt_id: persisted.attempt_id,
       artifacts: { ...persisted.artifacts },
       gateResults: { ...persisted.gateResults },
-      ...(persisted.approval !== undefined ? { approval: persisted.approval } : {}),
-      ...(persisted.holdReason !== undefined ? { holdReason: persisted.holdReason } : {}),
+      ...(persisted.approval !== undefined
+        ? { approval: persisted.approval }
+        : {}),
+      ...(persisted.holdReason !== undefined
+        ? { holdReason: persisted.holdReason }
+        : {}),
       history: [...persisted.history],
       startedAt: persisted.startedAt,
       finishedAt: persisted.finishedAt,
@@ -650,11 +800,22 @@ export function restoreRun<C>(payload: RunSnapshotPayload, capability: C): Resto
   for (const [stepId, state] of steps) {
     if (state.status !== 'in_progress') continue
     const exec = payload.events.find(
-      e => e.kind === 'step-executed' && e.stepId === stepId && e.attemptId === state.attempt_id,
+      e =>
+        e.kind === 'step-executed' &&
+        e.stepId === stepId &&
+        e.attemptId === state.attempt_id,
     )
     const executed = exec !== undefined
-    const resumeVia = executedStatusOf(exec?.detail) === 'success' ? 'continue_gate' : 'rollback_and_retry'
-    interrupted.push({ stepId, attemptId: state.attempt_id, executed, resumeVia })
+    const resumeVia =
+      executedStatusOf(exec?.detail) === 'success'
+        ? 'continue_gate'
+        : 'rollback_and_retry'
+    interrupted.push({
+      stepId,
+      attemptId: state.attempt_id,
+      executed,
+      resumeVia,
+    })
   }
 
   return {
@@ -675,10 +836,13 @@ export function restoreRun<C>(payload: RunSnapshotPayload, capability: C): Resto
  * two processes may hold one apiece and are kept consistent by the revision guard, not by shared
  * memory.
  */
-export function createRunPersistence(options: RunPersistenceOptions): RunPersistence {
+export function createRunPersistence(
+  options: RunPersistenceOptions,
+): RunPersistence {
   const dir = options.dir
   const schemaVersion = options.schemaVersion ?? RUN_SNAPSHOT_SCHEMA_VERSION
-  const file: SnapshotStore<RunSnapshotPayload> = createFileSnapshotStore<RunSnapshotPayload>({ dir, schemaVersion })
+  const file: SnapshotStore<RunSnapshotPayload> =
+    createFileSnapshotStore<RunSnapshotPayload>({ dir, schemaVersion })
 
   async function read(): Promise<RunSnapshotPayload> {
     return parseRunSnapshotPayload(await file.load())
@@ -696,14 +860,44 @@ export function createRunPersistence(options: RunPersistenceOptions): RunPersist
   }
 
   return {
-    async save(store: ResearchRunStore, runId: string, saveOptions: RunSaveOptions): Promise<RunSnapshotPayload> {
+    async save(
+      store: ResearchRunStore,
+      runId: string,
+      saveOptions: RunSaveOptions,
+    ): Promise<RunSnapshotPayload> {
       const persisted = await readIfPresent()
       const persistedRevision = persisted?.revision ?? 0
       if (saveOptions.baseRevision !== persistedRevision) {
-        throw new SnapshotConflictError(persistedRevision, saveOptions.baseRevision)
+        throw new SnapshotConflictError(
+          persistedRevision,
+          saveOptions.baseRevision,
+        )
       }
       const payload = captureRunSnapshot(store, runId, persistedRevision + 1)
-      await file.save(payload)
+      try {
+        await file.save(payload)
+      } catch (cause) {
+        // The revision guard above is a read-then-write, and two PROCESSES can both pass it: each
+        // reads revision N, each captures N+1, and the writes collide. The file layer survives
+        // that — it writes a temp file and renames it over the target, so exactly one wins — but
+        // the loser is told whatever the filesystem said, which on Windows is
+        // `EPERM: operation not permitted, rename ...`. That names an operation, not the fact,
+        // and the fact is the one this module already has a word for.
+        //
+        // So: when the write fails, re-read. If the revision MOVED, the failure was this race and
+        // the caller gets the conflict, naming the revision that beat it. If it did not move, the
+        // failure is something else — a real permission problem, a full disk — and is rethrown
+        // with its own cause rather than disguised as a conflict.
+        const afterFailure = await readIfPresent().catch(() => null)
+        const winnerRevision = afterFailure?.revision ?? persistedRevision
+        if (winnerRevision !== persistedRevision) {
+          throw new SnapshotConflictError(
+            winnerRevision,
+            saveOptions.baseRevision,
+          )
+        }
+        throw cause
+      }
       return payload
     },
 
