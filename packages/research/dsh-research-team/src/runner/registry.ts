@@ -620,7 +620,7 @@ function requiredClaimField(claim: Record<string, unknown>, field: string): stri
 }
 
 /**
- * The threshold the run's claim DECLARES, as artifact text.
+ * The bar the run's claim DECLARES, as artifact text: the comparison its bound names, and the number.
  *
  * Several artifacts describe the bar the experiment has to clear. They used to hardcode "5%", the
  * fixture prediction's number, so a run whose claim committed to 11% published artifacts promising
@@ -628,11 +628,20 @@ function requiredClaimField(claim: Record<string, unknown>, field: string): stri
  * sentence, for the reason `PredictionCommitment.thresholdPct` gives — and a claim that declares
  * none says so here rather than having one invented for it.
  *
+ * THE OPERATOR IS PART OF THE BAR, and it is read from `bound`. The three call sites used to spell
+ * ">=" themselves while this returned only the number, so a pack declaring `at-most` or `within`
+ * published artifacts promising "gain >= 20%" while the C gate graded "<= 20%" or "|change| <= 20%".
+ * Measured by changing only `bound` on the shipped pack: the artifacts still read ">= 20%" and the
+ * same −38.20% run was recorded SUPPORTED.
+ *
  * @param commitment - the claim's declared commitment, or undefined when it declared none.
- * @returns the declared threshold, or a phrase saying none was declared.
+ * @returns the declared comparison, or a parenthesized phrase saying none was declared.
  */
 function thresholdLabel(commitment: PredictionCommitment | undefined): string {
-  return commitment === undefined ? 'no declared threshold' : `${String(commitment.thresholdPct)}%`
+  if (commitment === undefined) return '(no declared threshold)'
+  const operator =
+    commitment.bound === 'at-least' ? '>=' : commitment.bound === 'at-most' ? '<=' : 'within'
+  return `${operator} ${String(commitment.thresholdPct)}%`
 }
 
 /**
@@ -1273,7 +1282,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           id: contribution.id,
           claimRef,
           claim: contribution.statement,
-          expectedEvidence: `platoon minimum-TTC gain >= ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
+          expectedEvidence: `platoon minimum-TTC gain ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
         })),
         agendaSource,
         note: agendaSource === 'fixture'
@@ -1703,7 +1712,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           source: 'platoon-sim (both platoons simulated under the declared disturbance)',
           study: studyEvidence(study),
         },
-        beatsBaselineWhen: `variant minimum time-to-collision exceeds the baseline's by >= ${thresholdLabel(ctx.runCtx.commitment)}`,
+        beatsBaselineWhen: `variant minimum time-to-collision moves ${thresholdLabel(ctx.runCtx.commitment)} against the baseline's, in the claim's declared direction`,
         note: 'baseline MEASURED by simulating the homogeneous platoon; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
@@ -2065,7 +2074,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { id: 'baseline-input', label: 'Homogeneous platoon (HV-HV-HV)', kind: 'input' },
       { id: 'adaptive-policy', label: 'Mixed platoon (HV-AV-HV)', kind: 'process' },
       { id: 'delay-experiment', label: 'Platoon experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: `Minimum TTC gain >= ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
+      { id: 'reduction-outcome', label: `Minimum TTC gain ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },

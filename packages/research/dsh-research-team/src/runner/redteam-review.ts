@@ -42,7 +42,7 @@
 import type { ResearchRebuttalPosition } from '../types.ts'
 
 import type { PredictionCommitment } from './platoon-sim.ts'
-import { anchorBoundIn, measuringClause, percentagesIn, requirementDirectionIn } from './platoon-sim.ts'
+import { anchorBoundIn, carriesNegation, measuringClause, percentagesIn, requirementDirectionIn } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -317,17 +317,24 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
     // requirement share the same number and the same operator and only the sentence's force
     // differs — an auditor graded a violated prohibition as MET. The reviewer reports the gap; the
     // C channel holds on the same condition.
-    statedDirection === undefined
+    carriesNegation(prediction)
       ? {
         check: 'the prediction states a positive requirement',
-        found: 'it does not state its direction as "shall <rise|fall|…>", so whether it requires a change or PROHIBITS one cannot be read from it',
+        found:
+            'it contains a negation, so whether it requires a change or PROHIBITS one cannot be read from it — the C channel holds on the same condition',
         position: 'abstain',
       }
-      : {
-        check: 'the prediction states a positive requirement',
-        found: `it states a positive requirement: shall ${statedDirection}`,
-        position: 'support',
-      },
+      : statedDirection === undefined
+        ? {
+          check: 'the prediction states a positive requirement',
+          found: 'it does not state its direction as "shall <rise|fall|…>", so whether it requires a change or PROHIBITS one cannot be read from it',
+          position: 'abstain',
+        }
+        : {
+          check: 'the prediction states a positive requirement',
+          found: `it states a positive requirement: shall ${statedDirection}`,
+          position: 'support',
+        },
     // ONE percentage, and it must be the DECLARED one. The C gate grades the declared threshold;
     // the prose number is checked for agreement with it, which is an equality between two values
     // rather than a reading of the sentence. Four measured attempts to make a literal rule

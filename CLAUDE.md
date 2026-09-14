@@ -70,7 +70,7 @@ Fixture evidence never upgrades to real evidence; passing tests are not completi
 
 ## Where current state lives
 
-The planning corpus is tracked here and is the authority on status. Under `packages/research/` there are no READMEs at all; each package documents its contracts in file-header comments.
+The planning corpus is tracked here and is the authority on status. Each research package carries a README alongside its file-header contract comments (`ce2ed07c`, 2026-09-12, added the five; this file claimed until 2026-09-14 that there were none). None of those READMEs has a Chinese counterpart yet, so `verify-translation-pairing` lists them.
 
 - `plan/overnight/2026-09-09/t30-attempts.md` — newest technical truth: the port-1120 boot recipe and its failure modes.
 - `plan/overnight/2026-09-09/HANDOFF-2026-09-09.md` — status matrix, git topology, environment traps, prioritized next steps. Predates the successful Attempt 4.

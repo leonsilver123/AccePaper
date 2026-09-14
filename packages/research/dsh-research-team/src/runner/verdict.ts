@@ -219,8 +219,9 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     source: 'live' as const,
     supportsPrediction: experiment.supportsPrediction,
     detail: experiment.detail,
-    // The experiment RAN and read the graded number out of the prediction's own sentence,
-    // so it can state decisiveness. A decisive negation is a completed test: the claim is
+    // The experiment RAN and graded the DECLARED threshold against its own measurement, so it
+    // can state decisiveness — the graded number comes from the declaration, not from the
+    // prediction prose (see PredictionCommitment.thresholdPct). A decisive negation is a completed test: the claim is
     // recorded as refuted and the step advances. Without this the run hard-fails whenever
     // the hypothesis loses, which is a pipeline that can only run studies that succeed.
     decisive: true,

@@ -535,6 +535,25 @@ describe('the declaration is checked against the claim\'s own words', () => {
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('requirement or a PROHIBITION')
   })
 
+  it('HOLDS a prohibition whose negation sits OUTSIDE the clause naming the quantity', () => {
+    // AUDIT-S round 8, P0. Scoping the polarity read to the measuring clause was tried, to admit a
+    // negation sitting in a second clause. A prohibition keeps its required shape INSIDE that clause
+    // and can put its negation anywhere else, so all three shapes below returned
+    // `supportsPrediction: true` on a measured 38.20% FALL — a false PASS, not a false refusal, and
+    // the opposite direction from the one the narrowing was argued for. The read is whole-sentence
+    // again; each of these is a counterexample that decided it, and the last assertion is the control
+    // that stops the case from being satisfied by refusing everything.
+    const before = 'It must not be the case, under free flow, that the HV-AV-HV platoon minimum time-to-collision shall fall by at least 20%.'
+    const afterSemicolon = 'Under free flow the HV-AV-HV platoon minimum time-to-collision shall fall by at least 20%; that must not happen.'
+    const trailing = 'Under free flow the HV-AV-HV platoon minimum time-to-collision shall fall by at least 20%, which must never happen.'
+    for (const text of [before, afterSemicolon, trailing]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
+      expect(verdict.kind, text).toBe('unbindable')
+    }
+    const positive = 'Under free flow the HV-AV-HV platoon minimum time-to-collision shall fall by at least 20%.'
+    expect(evaluatePrediction(positive, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 }).kind).toBe('adjudicated')
+  })
+
   it('HOLDS an emphasis-cased prohibition, which the first guard let through', () => {
     // An auditor found the negation guard was case-SENSITIVE while the two anchor checks beside it
     // folded case first, so `shall Not fall` and `shall NOT FALL` walked past it — and it ran the

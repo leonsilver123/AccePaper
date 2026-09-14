@@ -926,6 +926,23 @@ const ANCHOR_TOKENS: ReadonlyArray<{
 const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['’]t/iu
 
 /**
+ * Whether a prediction carries a negation, read over the WHOLE sentence.
+ *
+ * The C gate holds on this, and the red team abstains on the same condition, so both read it from
+ * here rather than keeping a second copy of the word list. Scoping it to the clause that names the
+ * measured quantity was tried and refuted: a prohibition keeps the required shape inside that clause
+ * ("…shall fall by at least 20%") and can put its negation anywhere else, which reached a verdict of
+ * SUPPORTED on a measured 38.20% fall. See `POLARITY_WORDS` for the word list and the reachability
+ * this costs.
+ *
+ * @param predictionText - the falsifiable prediction, whole.
+ * @returns true when any listed negation word appears in it.
+ */
+export function carriesNegation(predictionText: string): boolean {
+  return POLARITY_WORDS.test(predictionText)
+}
+
+/**
  * The shape a prediction must have for its direction to be gradeable: `shall <direction word>`.
  *
  * WHY A SHAPE, NOT A LONGER LIST. The guard above is a BLACKLIST, and an auditor showed it cannot
@@ -1231,12 +1248,15 @@ export function evaluatePrediction(
   // POLARITY FIRST. A negation makes the sentence ungradeable whatever its words say, because the
   // model cannot tell a prohibition from a requirement — see `POLARITY_WORDS` for the counterexample
   // that refuted the previous claim that a mismatched anchor could only ever be stricter.
-  // SCOPED LIKE EVERYTHING IT PROTECTS. Every other check below reads the clause, and this one read
-  // the whole sentence — so a negation in a SECOND clause held a sentence the clause scoping exists
-  // to admit: "…shall rise by at least 20%, and the mean headway must not exceed its band" was
-  // refused while the same sentence with "stays within its band" was adjudicated. It fails closed,
-  // so it was never a false pass, but it refused exactly the honest sentences the scoping is for.
-  if (POLARITY_WORDS.test(clause)) {
+  // NOT SCOPED TO THE CLAUSE, and that was measured rather than assumed. Reading this over the
+  // clause alone was tried, to admit a negation in a SECOND clause ("…shall rise by at least 20%,
+  // and the mean headway must not exceed its band"). An audit refuted it with three shapes — the
+  // negation BEFORE the measuring clause, AFTER a semicolon, and in a TRAILING clause — where the
+  // prohibition kept its required shape inside the clause and the gate reported
+  // `supportsPrediction: true` on a measured 38.20% FALL. A whole-sentence read refuses those
+  // honest sentences too, and that is the correct direction: a false refusal is a HOLD the author
+  // fixes by writing positively, while a false pass publishes a refuted claim as supported.
+  if (carriesNegation(predictionText)) {
     return {
       kind: 'unbindable',
       reason:
