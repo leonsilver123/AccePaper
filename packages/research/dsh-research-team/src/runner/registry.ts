@@ -230,11 +230,14 @@ export interface RunContext {
    */
   study: PlatoonStudy
   /**
-   * Which way the claim declares its quantity should move, and whether it caps the change.
+   * The claim's DECLARED commitment: which way its quantity should move, whether it caps the change,
+   * and by how much — the three fields the C gate grades.
    *
    * Declared by the selected Case Pack (set by the A2-claim executor). Absent means the claim
    * declared none, and the C channel then HOLDS rather than inferring a direction from the
-   * prediction's prose — an inference three audit rounds showed cannot be trusted.
+   * prediction's prose — an inference three audit rounds showed cannot be trusted. Every write here
+   * comes from `commitmentFrom` or from the A2 fixture literal; see `evaluatePrediction`'s
+   * `commitment` parameter for why the grading trusts the value's shape.
    */
   commitment?: PredictionCommitment
   /** The fixed timestamp used across the run (set by the driver). */
