@@ -89,10 +89,10 @@ export interface AssembledManuscript {
 /** Recursively freeze a value, returning it with its type unchanged. */
 function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== 'object') return value
-  for (const key of Object.keys(value as Record<string, unknown>)) {
+  for (const key of Object.keys(value)) {
     deepFreeze((value as Record<string, unknown>)[key])
   }
-  return Object.freeze(value) as T
+  return Object.freeze(value)
 }
 
 /** Throw the module's coded error for one refusal. */

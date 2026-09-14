@@ -132,7 +132,6 @@ import {
   experimentStudy,
   runPlatoon,
   studyFromPack,
-  thresholdFromPrediction,
 } from './platoon-sim.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -621,20 +620,19 @@ function requiredClaimField(claim: Record<string, unknown>, field: string): stri
 }
 
 /**
- * The threshold the run's prediction actually commits to, as artifact text.
+ * The threshold the run's claim DECLARES, as artifact text.
  *
- * Several artifacts describe the bar the experiment has to clear. They used to
- * hardcode "5%", which is the fixture prediction's number — so a run whose claim
- * committed to 11% still published artifacts promising 5% while the C gate
- * adjudicated against the 11% it parsed. The bar is whatever the prediction says,
- * and when it says nothing this reports that rather than inventing one.
+ * Several artifacts describe the bar the experiment has to clear. They used to hardcode "5%", the
+ * fixture prediction's number, so a run whose claim committed to 11% published artifacts promising
+ * 5%. The bar is whatever the claim declares — a DECLARED field, not a number read out of its
+ * sentence, for the reason `PredictionCommitment.thresholdPct` gives — and a claim that declares
+ * none says so here rather than having one invented for it.
  *
- * @param predictionText - the run's falsifiable prediction.
- * @returns the committed threshold, or a phrase saying none was stated.
+ * @param commitment - the claim's declared commitment, or undefined when it declared none.
+ * @returns the declared threshold, or a phrase saying none was declared.
  */
-function thresholdLabel(predictionText: string): string {
-  const threshold = thresholdFromPrediction(predictionText)
-  return threshold === undefined ? 'no numeric threshold stated' : `${threshold}%`
+function thresholdLabel(commitment: PredictionCommitment | undefined): string {
+  return commitment === undefined ? 'no declared threshold' : `${String(commitment.thresholdPct)}%`
 }
 
 /**
@@ -1029,7 +1027,11 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // `increase`, because the fixture claim's sentence says the quantity RISES ("raises the platoon
   // minimum time-to-collision"). A declared commitment that disagreed with the fixture's own words
   // would be worse than none at all.
-  let commitment: PredictionCommitment | undefined = { direction: 'increase', bound: 'at-least' }
+  let commitment: PredictionCommitment | undefined = {
+    direction: 'increase',
+    bound: 'at-least',
+    thresholdPct: 20,
+  }
 
   // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
   // content, and it is preferred over the model because the pack is what the run was
@@ -1271,7 +1273,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           id: contribution.id,
           claimRef,
           claim: contribution.statement,
-          expectedEvidence: `platoon minimum-TTC gain >= ${thresholdLabel(predictionText)} (prediction: ${predictionText})`,
+          expectedEvidence: `platoon minimum-TTC gain >= ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
         })),
         agendaSource,
         note: agendaSource === 'fixture'
@@ -1666,7 +1668,6 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
  *  pre-registered baseline protocol + a SOTA-comparison note with zero anchored
  *  rows. Ablation is NOT here — it belongs to C3-boundary (T19-S fix). */
 function b3Executor(ctx: ExecCtx): Record<string, unknown> {
-  const { predictionText } = canonicalOf(ctx)
   const method = readInput(ctx, 'method-spec')
   const dataset = readInput(ctx, 'dataset')
   const study = ctx.runCtx.study
@@ -1702,7 +1703,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           source: 'platoon-sim (both platoons simulated under the declared disturbance)',
           study: studyEvidence(study),
         },
-        beatsBaselineWhen: `variant minimum time-to-collision exceeds the baseline's by >= ${thresholdLabel(predictionText)}`,
+        beatsBaselineWhen: `variant minimum time-to-collision exceeds the baseline's by >= ${thresholdLabel(ctx.runCtx.commitment)}`,
         note: 'baseline MEASURED by simulating the homogeneous platoon; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
       B3_PRODUCER,
@@ -2024,7 +2025,6 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *  purpose names (数据图/三线表/路线图). figure-plan lists each figure with the
  *  evidence produced by its real tool execution. */
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
-  const { predictionText } = canonicalOf(ctx)
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
   // The figures plot the SAME measurements the experiment produced, so a chart can
   // never disagree with the verdict it illustrates.
@@ -2065,7 +2065,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { id: 'baseline-input', label: 'Homogeneous platoon (HV-HV-HV)', kind: 'input' },
       { id: 'adaptive-policy', label: 'Mixed platoon (HV-AV-HV)', kind: 'process' },
       { id: 'delay-experiment', label: 'Platoon experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: `Minimum TTC gain >= ${thresholdLabel(predictionText)}`, kind: 'output' },
+      { id: 'reduction-outcome', label: `Minimum TTC gain >= ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },

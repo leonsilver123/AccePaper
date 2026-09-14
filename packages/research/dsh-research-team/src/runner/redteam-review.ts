@@ -42,7 +42,7 @@
 import type { ResearchRebuttalPosition } from '../types.ts'
 
 import type { PredictionCommitment } from './platoon-sim.ts'
-import { anchorBoundIn, measuringClause, percentagesIn, requirementDirectionIn, thresholdFromPrediction } from './platoon-sim.ts'
+import { anchorBoundIn, measuringClause, percentagesIn, requirementDirectionIn } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -205,9 +205,16 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
   // Read ONCE, from the clause that names the measured quantity. Presence elsewhere in the
   // sentence is not enough: an auditor reached `supported` with the number and its anchor attached
   // to a different quantity.
+  // Read from the clause naming the measured quantity, not from the whole sentence: a second clause
+  // may legitimately carry its own number or anchor, and an audit measured honest sentences that a
+  // whole-sentence read refuses. This is SCOPE, not soundness — the threshold is a declared field
+  // and the C verdict grades it, so a number the prose attached elsewhere no longer reaches the
+  // verdict; what is left here is whether the claim's own words agree with its declaration. See
+  // `measuringClause` for what the scoping does and does not establish.
   const clause = measuringClause(prediction, material.metricKey)
-  const clauseAnchor = clause === undefined ? undefined : anchorBoundIn(clause)
-  const clauseDirection = clause === undefined ? undefined : requirementDirectionIn(clause)
+  const statedAnchor = clause === undefined ? undefined : anchorBoundIn(clause)
+  const statedDirection = clause === undefined ? undefined : requirementDirectionIn(clause)
+  const statedPercentages = clause === undefined ? [] : percentagesIn(clause)
 
   return review('red-stat', [
     prediction.length === 0
@@ -274,74 +281,79 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
         found: 'no threshold to be bound to',
         position: 'abstain',
       },
-    // THE DECLARATION MUST AGREE WITH THE CLAIM'S OWN WORDS. The gate grades a declared direction
-    // and bound plus a parsed number, and nothing tied those to the sentence: an audit showed that
+    // THE DECLARATION MUST AGREE WITH THE CLAIM'S OWN WORDS. The gate grades THREE declared fields
+    // — direction, bound and threshold — and nothing ties them to the sentence: an audit showed that
     // changing ONE declared field records a claim its own sentence refutes as supported, with no
-    // wordplay needed. The anchor literal beside the number is checked by STRING EQUALITY — wire
-    // format, not a reading — so a contradiction is exact and belongs here as a `refute`.
+    // wordplay needed. The anchor literal is checked by STRING EQUALITY — wire format, not a
+    // reading — so a contradiction is exact and belongs here as a `refute`.
     //
     // The two cases are different findings and are kept apart: an ABSENT anchor is the claim
     // declining to relate the number to the change (a gap), while a PRESENT anchor naming a
     // different bound is the claim contradicting itself.
-    hasThreshold && material.commitment !== undefined && thresholdFromPrediction(prediction) !== undefined
-      ? clauseAnchor === undefined
+    hasThreshold && material.commitment !== undefined
+      ? statedAnchor === undefined
         ? {
-          check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
-          found: clause === undefined
-            ? 'no clause of the prediction names the measured quantity'
-            : 'the clause naming the measured quantity carries no anchor, or more than one',
+          check: 'the prediction anchors its threshold to the change',
+          found: 'the prediction carries no anchor, or more than one',
           position: 'abstain',
         }
-        : clauseAnchor === material.commitment.bound
+        : statedAnchor === material.commitment.bound
           ? {
-            check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
-            found: `anchored "${clauseAnchor}", which is what the claim declares`,
+            check: 'the prediction anchors its threshold to the change',
+            found: `anchored "${statedAnchor}", which is what the claim declares`,
             position: 'support',
           }
           : {
-            check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
-            found: `the prediction anchors "${clauseAnchor}" while the claim declares "${material.commitment.bound}" — the declaration and the sentence contradict each other`,
+            check: 'the prediction anchors its threshold to the change',
+            found: `the prediction anchors "${statedAnchor}" while the claim declares "${material.commitment.bound}" — the declaration and the sentence contradict each other`,
             position: 'refute',
           }
       : {
-        check: 'the prediction anchors its threshold to the change in the clause naming the quantity',
-        found: 'no declared commitment or threshold to check the anchor against',
+        check: 'the prediction anchors its threshold to the change',
+        found: 'no declared commitment to check the anchor against',
         position: 'abstain',
       },
     // POLARITY. A negation makes the prediction ungradeable, because a prohibition and a
     // requirement share the same number and the same operator and only the sentence's force
     // differs — an auditor graded a violated prohibition as MET. The reviewer reports the gap; the
     // C channel holds on the same condition.
-    clauseDirection === undefined
+    statedDirection === undefined
       ? {
-        check: 'the prediction states a positive requirement in the clause naming the quantity',
-        found: 'it does not state its direction as "shall <rise|fall|…>" there, so whether it requires a change or PROHIBITS one cannot be read from it',
+        check: 'the prediction states a positive requirement',
+        found: 'it does not state its direction as "shall <rise|fall|…>", so whether it requires a change or PROHIBITS one cannot be read from it',
         position: 'abstain',
       }
       : {
-        check: 'the prediction states a positive requirement in the clause naming the quantity',
-        found: `it states a positive requirement there: shall ${clauseDirection}`,
+        check: 'the prediction states a positive requirement',
+        found: `it states a positive requirement: shall ${statedDirection}`,
         position: 'support',
       },
-    // ONE percentage. `thresholdFromPrediction` takes the first, which is unambiguous as a string
-    // and not as a commitment: "Over 20% of the simulated interval, the … shall exceed by at least
-    // 35%" reads its threshold as 20 while the sentence commits to 35.
-    percentagesIn(prediction).length > 1
+    // ONE percentage, and it must be the DECLARED one. The C gate grades the declared threshold;
+    // the prose number is checked for agreement with it, which is an equality between two values
+    // rather than a reading of the sentence. Four measured attempts to make a literal rule
+    // establish WHERE the prose number attaches all failed on the same thing, so the gate stopped
+    // asking: a number written about another quantity is now a prose defect, not a graded one.
+    statedPercentages.length === 0
       ? {
-        check: 'the prediction commits to exactly one threshold',
-        found: `it states ${String(percentagesIn(prediction).length)} percentages (${percentagesIn(prediction).join(', ')}), so which one is the threshold is a guess`,
-        position: 'refute',
+        check: 'the prediction states the declared threshold',
+        found: 'the prediction states no percentage',
+        position: 'abstain',
       }
-      : percentagesIn(prediction).length === 1
+      : material.commitment !== undefined &&
+          statedPercentages.length === 1 &&
+          statedPercentages[0] === material.commitment.thresholdPct
         ? {
-          check: 'the prediction commits to exactly one threshold',
-          found: 'one percentage, so the graded number is the only one it could mean',
+          check: 'the prediction states the declared threshold',
+          found: `it states ${String(material.commitment.thresholdPct)}%, which is what the claim declares`,
           position: 'support',
         }
         : {
-          check: 'the prediction commits to exactly one threshold',
-          found: 'no percentage at all',
-          position: 'abstain',
+          check: 'the prediction states the declared threshold',
+          found:
+              material.commitment === undefined
+                ? 'no declared threshold to check the prediction against'
+                : `the claim declares ${String(material.commitment.thresholdPct)}% while the prediction states ${statedPercentages.map(String).join(', ')}% — the declaration and the sentence contradict each other`,
+          position: 'refute',
         },
     // The decisive check: the claim's declared quantity and the study's measured quantity
     // must be the same one. A mismatch is not an evidence gap — the claim is about

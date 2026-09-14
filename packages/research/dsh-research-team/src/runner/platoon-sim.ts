@@ -856,14 +856,25 @@ export interface PredictionCommitment {
    *   within   : met when `|change| <= threshold`                       ("within 20%")
    */
   readonly bound: 'at-least' | 'at-most' | 'within'
+  /**
+   * The percentage the claim commits the measured quantity to move by.
+   *
+   * THE THIRD DECLARED FIELD, and the last one this gate needed. The threshold used to be PARSED
+   * from the sentence, and a sentence can state a percentage that belongs to a different quantity:
+   * with the declaration held fixed and only the prose number changed, the verdict flipped (5% and
+   * 20% supported, 99% refuted), so the gate was grading a threshold the claim had never put on the
+   * quantity it is about. Declaring it takes the prose out of the verdict; the prose still has to
+   * state this number, and `evaluatePrediction` says why that check survives and what it is worth.
+   */
+  readonly thresholdPct: number
 }
 
 /**
  * The literal an anchor's text uses, and the bound it asserts.
  *
- * WHY A LITERAL AND NOT A READING. The gate grades two declared bits plus a parsed number, and
- * nothing tied those bits to the claim's sentence — an audit demonstrated that changing ONE
- * declared field records a claim its own sentence refutes as supported, with no wordplay needed.
+ * WHY A LITERAL AND NOT A READING. The gate grades three declared fields — direction, bound and
+ * threshold — and nothing tied them to the claim's sentence — an audit demonstrated that changing
+ * ONE declared field records a claim its own sentence refutes as supported, with no wordplay.
  * Its proposed fix is this: require the sentence to carry a MACHINE-READABLE anchor beside the
  * number, and compare the declared bound to that token by STRING EQUALITY. That is wire-format
  * validation, not reading: there is no heuristic here, only whether one string equals another.
@@ -1040,26 +1051,13 @@ export function anchorBoundIn(clause: string): PredictionCommitment['bound'] | u
   return distinct.size === 1 ? [...distinct][0] : undefined
 }
 
-/** The anchor beside the threshold in a sentence, by table order. Retained for the specs that pin it. */
-export function anchorBoundNear(
-  predictionText: string,
-  thresholdPct: number,
-): PredictionCommitment['bound'] | undefined {
-  const match = /(\d+(?:\.\d+)?)\s*%/u.exec(predictionText)
-  if (match === null || Number(match[1]) !== thresholdPct) return undefined
-  const before = predictionText
-    .slice(Math.max(0, match.index - 20), match.index)
-    .toLowerCase()
-  return ANCHOR_TOKENS.find(token => before.includes(token.text))?.bound
-}
-
 /**
  * Every distinct percentage the prediction states, in order.
  *
- * A1S pinned this: `thresholdFromPrediction` takes the FIRST percentage, which is unambiguous as a
- * STRING and not as a COMMITMENT. "Over 20% of the simulated interval, the … shall exceed the
- * baseline by at least 35%" reads its threshold as 20 while the sentence commits to 35. Requiring
- * exactly one percentage makes the number it grades the only number it could mean.
+ * The verdict does not grade any of them — the threshold is DECLARED. What this supports is the
+ * consistency check: the sentence must state the declared number, exactly once. "Over 20% of the
+ * simulated interval, the … shall exceed the baseline by at least 35%" states two, so which one the
+ * claim meant is a guess, and a guess is a HOLD.
  *
  * @param predictionText - the prediction as written.
  * @returns the percentages, in the order they appear.
@@ -1069,16 +1067,6 @@ export function percentagesIn(predictionText: string): ReadonlyArray<number> {
     Number(match[1]),
   )
 }
-
-export function thresholdFromPrediction(
-  predictionText: string,
-): number | undefined {
-  const match = predictionText.match(/(\d+(?:\.\d+)?)\s*%/)
-  if (match === null) return undefined
-  const value = Number(match[1])
-  return Number.isFinite(value) ? value : undefined
-}
-
 
 /**
  * Where one clause ends and the next begins.
@@ -1091,28 +1079,29 @@ const CLAUSE_BOUNDARY = /[;,]|(?<!\d)\.(?!\d)|\b(?:while|whereas|because|althoug
 /**
  * The clause of a prediction that names the quantity this study measures.
  *
- * WHY A CLAUSE AND NOT THE SENTENCE. Every check in this gate used to be an EXISTENCE check — is
- * the phrase there, is the percentage there, is an anchor there, is a direction word there — and
- * an auditor broke it a fourth time by keeping all four present while attaching them to something
- * else:
+ * WHAT THIS IS FOR NOW — scope, not soundness. The anchor, the direction word and the percentage are
+ * read from this clause, and NOT from the whole sentence, because a sentence's second clause may
+ * legitimately carry its own number or anchor: read over the whole prediction, "…shall fall by at
+ * least 20%, and the headway stays within its band" states two anchors and holds, and "…shall rise
+ * while the minimum time-to-collision shall fall by at least 20%" is refused for the direction of
+ * the WRONG clause. An independent audit measured all three of those as new false refusals of
+ * honest sentences, and they are why this function survived.
  *
- *   "The platoon mean headway shall reduce by at least 20% while the minimum time-to-collision
- *    falls."
+ * WHAT IT IS NOT. It is not a claim that a literal inside this clause is ABOUT this quantity, and
+ * the module no longer makes that claim. Four measured attempts to establish where a number
+ * attaches — a wider boundary table, requiring the phrase before the direction structure, requiring
+ * it to be an argument of the predicate, and narrowing to one template — all died on the same
+ * thing: the distinguishing material is predicate structure, and every literal proxy for it is an
+ * open class. `whilst` and `though` are synonyms of two listed boundaries and split nothing; a
+ * participial adjunct needs no connective at all; and "…shall lower the platoon minimum
+ * time-to-collision thereby reducing the platoon mean headway by at least 20%" is an argument AND
+ * binds its number elsewhere.
  *
- * The number and its anchor belong to MEAN HEADWAY. The sentence never says the measured quantity
- * moved 20%, and the gate reported `supported` — the fourth time a literal was present without
- * being attached. The module had recorded "a keyword test cannot establish that a claim is ABOUT a
- * quantity, only that it USED the words" as a RELEVANCE WEAKNESS; the auditor's case shows it is a
- * false-positive generator, and it is handled as one now.
- *
- * So the literals are required to sit in the clause that names the measured quantity — the unit a
- * sentence's meaning lives in.
- *
- * THE LIMIT OF THIS RULE, stated before it is relied on: clause splitting is a heuristic, so it can
- * cut in the wrong place — and when it does, the literals land in different segments and the result
- * is a HOLD, never a pass. A conjunction INSIDE the measuring clause still passes ("the mean
- * headway and the minimum time-to-collision shall both fall by at least 20%"), which is honest:
- * that sentence does require the measured quantity to fall by 20%.
+ * So clause splitting is a heuristic and can cut in the wrong place. When it cuts too finely the
+ * literals land in different segments and the result is a HOLD; when it does not cut at all, the
+ * number the prose states is still required to EQUAL the declared threshold, and the verdict grades
+ * the declaration rather than any number read from the sentence. Both failure directions stop short
+ * of the verdict. `PredictionCommitment.thresholdPct` is where the graded number comes from.
  *
  * @param predictionText - the prediction as written.
  * @param metricKey - the quantity the claim declared.
@@ -1190,9 +1179,11 @@ export function evaluatePrediction(
         'is unverified and the measurement cannot adjudicate it',
     }
   }
-  // EVERYTHING BELOW IS SCOPED TO THIS CLAUSE. Presence anywhere in the sentence is not enough:
-  // see `measuringClause` for the counterexample that attached the number and its anchor to a
-  // different quantity and still reached `supported`.
+  // The literals are read from the clause naming the measured quantity, not from the whole
+  // sentence: a second clause may legitimately carry its own number or anchor, and an audit measured
+  // three honest sentences that a whole-sentence read refuses. See `measuringClause` for what this
+  // scoping is and, more importantly, what it is NOT — the verdict grades the declaration, so a
+  // number the prose attached elsewhere no longer reaches it.
   const clause = measuringClause(predictionText, metricKey)
   if (clause === undefined) {
     return {
@@ -1201,18 +1192,6 @@ export function evaluatePrediction(
         `the measurement cannot adjudicate the prediction: no clause of it names ${MEASURED_METRIC_LABEL}`,
     }
   }
-  // Exactly one percentage in that clause, so the number graded is the only number it could mean.
-  const percentages = percentagesIn(clause)
-  if (percentages.length !== 1) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the clause naming ${MEASURED_METRIC_LABEL} states ${String(percentages.length)} percentages `
-        + `(${percentages.map(String).join(', ') || 'none'}), so which of them is the threshold is a `
-        + 'guess — a falsifiable prediction commits to one number',
-    }
-  }
-  const thresholdPct = percentages[0] as number
 
   const comparison = comparePlatoons(study)
   if (!comparison.isComparable) {
@@ -1246,11 +1225,32 @@ export function evaluatePrediction(
         'state what it is testing, exactly as it has to declare the quantity itself',
     }
   }
-  const { direction, bound } = commitment
+  const { direction, bound, thresholdPct } = commitment
+  // The prose must STATE the declared threshold, exactly once. This is an equality between two
+  // values, not a reading of the sentence — which is why it survives the deletion above. It can see
+  // that the number the claim wrote is the number the claim declared; it cannot see which quantity
+  // that number was written about, and after four measured attempts neither can any literal rule.
+  // A prose number that differs contradicts the declaration; none at all means the claim never
+  // committed in writing.
+  const statedPercentages = percentagesIn(clause)
+  if (statedPercentages.length !== 1 || statedPercentages[0] !== thresholdPct) {
+    return {
+      kind: 'unbindable',
+      reason:
+        `the claim declares a threshold of ${String(thresholdPct)}%, while its own prediction states `
+        + `${statedPercentages.length === 0 ? 'none' : `${statedPercentages.map(String).join(', ')}%`} `
+        + '— the declaration and the sentence contradict each other, so the claim is not gradeable as stated',
+    }
+  }
   // POLARITY FIRST. A negation makes the sentence ungradeable whatever its words say, because the
   // model cannot tell a prohibition from a requirement — see `POLARITY_WORDS` for the counterexample
   // that refuted the previous claim that a mismatched anchor could only ever be stricter.
-  if (POLARITY_WORDS.test(predictionText)) {
+  // SCOPED LIKE EVERYTHING IT PROTECTS. Every other check below reads the clause, and this one read
+  // the whole sentence — so a negation in a SECOND clause held a sentence the clause scoping exists
+  // to admit: "…shall rise by at least 20%, and the mean headway must not exceed its band" was
+  // refused while the same sentence with "stays within its band" was adjudicated. It fails closed,
+  // so it was never a false pass, but it refused exactly the honest sentences the scoping is for.
+  if (POLARITY_WORDS.test(clause)) {
     return {
       kind: 'unbindable',
       reason:
@@ -1269,7 +1269,7 @@ export function evaluatePrediction(
     return {
       kind: 'unbindable',
       reason:
-        'the clause naming the measured quantity carries no anchor, or carries more than one '
+        'the prediction carries no anchor, or carries more than one '
         + `(accepted: ${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's `
         + 'own words says how the number relates to the change',
     }

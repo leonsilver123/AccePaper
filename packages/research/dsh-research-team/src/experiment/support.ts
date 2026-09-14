@@ -163,7 +163,7 @@ export function adjudicateClaimSupport(input: ClaimSupportInput): Readonly<Claim
     // negation is also `passed`, because the step's question is whether the claim met a
     // falsifiable test this study could run. The verdict is read from the REPORT, not from
     // the outcome, so a refuted prediction can never be published as a supported one.
-    const negated = report.supportsPrediction === false
+    const negated = ! report.supportsPrediction
     return {
       claimRef,
       ...(prediction.ref === undefined ? {} : { predictionRef: prediction.ref }),

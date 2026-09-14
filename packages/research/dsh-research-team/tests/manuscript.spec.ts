@@ -84,7 +84,7 @@ describe('E1-format manuscript assembly', () => {
     // The counts are the module's own claim about what it rendered; an input that
     // carries its own numbers must not be able to overstate the assembled document.
     const tampered = { ...input(), sectionCount: 99, figureCount: 99, referenceCount: 99 }
-    const result = assembleManuscript(tampered as unknown as ManuscriptInput)
+    const result = assembleManuscript(tampered)
 
     expect(result.sectionCount).toBe(SECTIONS.length)
     expect(result.figureCount).toBe(FIGURES.length)

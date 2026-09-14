@@ -18,7 +18,6 @@ import {
   DECLARED_VEHICLE_CLASSES,
   MEASURED_METRIC_KEY,
   SIMULATION_INPUTS,
-  anchorBoundNear,
   percentagesIn,
   requirementDirectionIn,
   STUDY_OPERATING_POINT,
@@ -226,7 +225,7 @@ describe('evaluatePrediction', () => {
   const canonical = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
 
   it('adjudicates the bound quantity and reports the measured direction', () => {
-    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const verdict = evaluatePrediction(canonical, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(false)
@@ -245,7 +244,7 @@ describe('evaluatePrediction', () => {
     // direction was read from. The auditor's verdict was that it could not be trusted and should be
     // replaced by something narrower. This is the replacement: the claim DECLARES its commitment.
     const rise = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
-    const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const increase = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(increase.kind).toBe('adjudicated')
     if (increase.kind !== 'adjudicated') return
     expect(increase.direction).toBe('increase')
@@ -255,12 +254,12 @@ describe('evaluatePrediction', () => {
     // declared field rather than a free one: the sentence says "exceeds", the declaration says the
     // quantity should decrease, and the two contradict each other — the same class as the
     // truthfulness pair the loader refuses. A matching sentence IS graded as a fall instead.
-    const declaredFall = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    const declaredFall = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(declaredFall.kind).toBe('unbindable')
     if (declaredFall.kind === 'unbindable') expect(declaredFall.reason).toContain('the declaration and the sentence contradict each other')
 
     const fallen = 'the HV-AV-HV platoon shall fall in minimum time-to-collision by at least 20% against the all-HV platoon'
-    const decrease = evaluatePrediction(fallen, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    const decrease = evaluatePrediction(fallen, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(decrease.kind).toBe('adjudicated')
     if (decrease.kind !== 'adjudicated') return
     expect(decrease.direction).toBe('decrease')
@@ -270,14 +269,14 @@ describe('evaluatePrediction', () => {
     // anchored "at least" is the declaration contradicting the claim's own words, and the gate
     // refuses it rather than grading either half. The anchor is compared as a string, which is
     // wire-format validation and not a reading.
-    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-most' })
+    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-most', thresholdPct: 20 })
     expect(mismatched.kind).toBe('unbindable')
     if (mismatched.kind === 'unbindable') expect(mismatched.reason).toContain('contradict each other')
 
     // Anchored to match, the cap is graded: a 38.20% fall is not "at most 20%".
     // The sentence names a direction AND an anchor that agree with what it declares.
     const cappedText = 'the HV-AV-HV platoon minimum time-to-collision shall rise by at most 20% against the all-HV platoon minimum'
-    const capped = evaluatePrediction(cappedText, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+    const capped = evaluatePrediction(cappedText, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most', thresholdPct: 20 })
     expect(capped.kind).toBe('adjudicated')
     if (capped.kind !== 'adjudicated') return
     expect(capped.bound).toBe('at-most')
@@ -325,7 +324,7 @@ describe('evaluatePrediction', () => {
       'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%',
       colliding,
       MEASURED_METRIC_KEY,
-      { direction: 'increase', bound: 'at-least' },
+      { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
     )
     expect(verdict.kind).toBe('unbindable')
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('occupied the same space')
@@ -347,7 +346,7 @@ describe('evaluatePrediction', () => {
         },
       },
     }
-    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const verdict = evaluatePrediction(canonical, generous, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(true)
@@ -379,10 +378,16 @@ describe('evaluatePrediction', () => {
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('does not name that quantity')
   })
 
-  it('holds a claim that states no numeric threshold', () => {
-    const verdict = evaluatePrediction('the platoon minimum time-to-collision improves', study, MEASURED_METRIC_KEY)
+  it('holds a claim whose prediction states no percentage, whatever it declares', () => {
+    // The prose must state the DECLARED number, exactly once, and that equality is the only thing the
+    // gate still reads out of the sentence. A claim that declares a threshold its own prediction
+    // never writes is not gradeable as stated.
+    // The case used to declare no commitment at all, so the guard it reached first was the
+    // "declares no commitment" one above rather than the percentage guard it is about. Declaring a
+    // threshold is what puts it on the check it names.
+    const verdict = evaluatePrediction('the platoon minimum time-to-collision improves', study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('unbindable')
-    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states 0 percentages')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('states none')
   })
 
   it('HOLDS a claim that only MENTIONS the measured quantity in another clause', () => {
@@ -394,27 +399,34 @@ describe('evaluatePrediction', () => {
     // words", and a claim naming the quantity in passing was graded. Scoping to the clause removes
     // it: the phrase sits in the second clause while the number and its anchor sit in the first, so
     // the clause naming the quantity states no percentage and the gate holds. The limit that
-    // replaces it is the segmentation heuristic, which fails to a HOLD rather than to a pass.
+    // replaces it is the segmentation heuristic, which fails to a HOLD rather than to a pass. That
+    // scoping is scope rather than soundness — `measuringClause` in the module says what it is and,
+    // more to the point, what it is not: a literal inside the clause naming the quantity is not
+    // thereby shown to be ABOUT it, which is why the number the verdict grades is the declared
+    // threshold rather than anything read from the sentence.
     const verdict = evaluatePrediction(
       'the platoon string-stability index shall rise by at least 20%, unlike prior work on '
       + 'minimum time-to-collision that assumed uniform arrivals',
       study,
       MEASURED_METRIC_KEY,
-      { direction: 'increase', bound: 'at-least' },
+      { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
     )
     expect(verdict.kind).toBe('unbindable')
   })
 })
 
 describe('the declaration is checked against the claim\'s own words', () => {
-  // The gate grades two declared bits plus a number. Nothing tied them to the sentence, and an
-  // audit showed that changing ONE declared field records a claim its own sentence refutes as
-  // supported. Its proposed fix is what this tests: the sentence must carry a machine-readable
-  // anchor beside the number, and the declared bound is compared to that token by string equality.
+  // The gate grades three DECLARED fields — direction, bound and threshold — and nothing tied them
+  // to the sentence, so an audit showed that changing ONE declared field records a claim its own
+  // sentence refutes as supported. What this tests is the tie: the sentence must name the measured
+  // quantity, carry a machine-readable anchor and a direction word, and state the declared
+  // percentage, and each is compared to the declaration by STRING EQUALITY — wire-format validation,
+  // which needs no comprehension. A disagreement is a contradiction and is refused; an absence is a
+  // gap and is held, and none of the three can produce a verdict on its own.
   const rise = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
 
   it('REFUSES a declaration that contradicts the anchor the sentence states', () => {
-    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+    const mismatched = evaluatePrediction(rise, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most', thresholdPct: 20 })
     expect(mismatched.kind).toBe('unbindable')
     if (mismatched.kind === 'unbindable') {
       expect(mismatched.reason).toContain('contradict each other')
@@ -425,7 +437,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
 
   it('REFUSES a prediction with no anchor beside its number', () => {
     const unanchored = 'the HV-AV-HV platoon minimum time-to-collision exceeds the all-HV platoon minimum by 20%'
-    const verdict = evaluatePrediction(unanchored, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const verdict = evaluatePrediction(unanchored, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('unbindable')
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('carries no anchor')
   })
@@ -433,10 +445,13 @@ describe('the declaration is checked against the claim\'s own words', () => {
   it('grades the percentage of the clause naming the quantity, and refuses a clause stating two', () => {
     // The old rule took the FIRST percentage in the sentence: "Over 20% of the interval, the … shall
     // exceed by at least 35%" graded 20 while the sentence commits to 35. Scoping to the clause
-    // fixes it — the 20% belongs to a different clause — so the graded number is 35.
+    // fixes it — the 20% belongs to a different clause — so the 35 is what the declaration is
+    // checked against. That equality is with the DECLARED threshold rather than a reading of the
+    // sentence, which makes the scope a question of WHERE the gate looks rather than of what it can
+    // understand; `measuringClause` in the module states both halves of that.
     const twoNumbers = 'over 20% of the simulated interval, the platoon minimum time-to-collision shall exceed the all-HV baseline by at least 35%'
     expect(percentagesIn(twoNumbers)).toEqual([20, 35])
-    const verdict = evaluatePrediction(twoNumbers, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const verdict = evaluatePrediction(twoNumbers, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 35 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind === 'adjudicated') expect(verdict.thresholdPct).toBe(35)
 
@@ -444,9 +459,9 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // One clause, two percentages: parentheses are not clause boundaries, so neither can be
     // explained away as belonging to another clause.
     const sameClause = 'the platoon minimum time-to-collision shall exceed the all-HV baseline by at least 35% (within 20%)'
-    const ambiguous = evaluatePrediction(sameClause, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const ambiguous = evaluatePrediction(sameClause, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 35 })
     expect(ambiguous.kind).toBe('unbindable')
-    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('states 2 percentages')
+    if (ambiguous.kind === 'unbindable') expect(ambiguous.reason).toContain('states 35, 20%')
   })
 
   it('grades a TWO-SIDED tolerance, which a boolean bound could not express', () => {
@@ -454,7 +469,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // a cap, a 38.20% fall was graded `-38.20 <= 20` → SUPPORTED for a claim that a 38% fall
     // plainly violates. The declaration was honest; the model could not express it.
     const within = 'the platoon minimum time-to-collision against the all-HV baseline shall rise within 40%'
-    const verdict = evaluatePrediction(within, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' })
+    const verdict = evaluatePrediction(within, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within', thresholdPct: 40 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.bound).toBe('within')
@@ -462,7 +477,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     expect(verdict.supportsPrediction).toBe(true)
     const tight = evaluatePrediction(
       'the platoon minimum time-to-collision against the all-HV baseline shall rise within 10%',
-      study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within' },
+      study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'within', thresholdPct: 10 },
     )
     expect(tight.kind === 'adjudicated' && tight.supportsPrediction).toBe(false)
   })
@@ -476,11 +491,11 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // Both hold. WHICH guard reports it depends on where the clause boundary falls — the first
     // clause here names the quantity and carries a direction but no percentage — and the property
     // that matters is that neither is graded.
-    const ambiguous = evaluatePrediction(both, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const ambiguous = evaluatePrediction(both, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(ambiguous.kind).toBe('unbindable')
 
     const none = 'the platoon minimum time-to-collision against the all-HV platoon by at least 20%'
-    const silent = evaluatePrediction(none, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' })
+    const silent = evaluatePrediction(none, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
     expect(silent.kind).toBe('unbindable')
     if (silent.kind === 'unbindable') expect(silent.reason).toContain('required form')
   })
@@ -491,7 +506,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     // `decrease`, `≥` reads as `at-least`, and BOTH agree with this declaration, so the gate graded
     // the prohibition as a requirement and reported `supported`.
     const prohibition = 'The insertion of one AV shall not cause the platoon minimum time-to-collision to fall by ≥ 20% relative to the all-HV baseline'
-    const verdict = evaluatePrediction(prohibition, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    const verdict = evaluatePrediction(prohibition, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('unbindable')
     if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('requirement or a PROHIBITION')
   })
@@ -504,7 +519,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     const lower = 'the HV-AV-HV platoon shall not fall in minimum time-to-collision by at least 20%'
     const upper = 'the HV-AV-HV platoon shall NOT fall in minimum time-to-collision by at least 20%'
     for (const text of [lower, upper]) {
-      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
       expect(verdict.kind, text).toBe('unbindable')
     }
   })
@@ -519,7 +534,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
       'the HV-AV-HV platoon shall never fall in minimum time-to-collision by at least 20%',
       'the HV-AV-HV platoon shall, under no circumstances, fall in minimum time-to-collision by at least 20%',
     ]) {
-      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
       // All three hold. WHICH guard catches them differs and is not the point — `refrain` has no
       // negation word and is caught by the SHAPE, the other two by the negation guard that runs
       // first. That both reach the same safe answer from different directions is the point.
@@ -527,7 +542,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
     }
     const refrain = evaluatePrediction(
       'the HV-AV-HV platoon shall refrain from falling in minimum time-to-collision by at least 20%',
-      study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' },
+      study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 },
     )
     expect(refrain.kind === 'unbindable' && refrain.reason).toContain('required form')
     // The positive form of the same sentence is graded, whatever its case.
@@ -536,7 +551,7 @@ describe('the declaration is checked against the claim\'s own words', () => {
       'the HV-AV-HV platoon SHALL FALL in minimum time-to-collision by at least 20%',
     ]) {
       expect(requirementDirectionIn(text), text).toBe('decrease')
-      expect(evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' }).kind, text).toBe('adjudicated')
+      expect(evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 }).kind, text).toBe('adjudicated')
     }
   })
 
@@ -550,30 +565,47 @@ describe('the declaration is checked against the claim\'s own words', () => {
       'the platoon minimum time-to-collision shall rise and shall not exceed 20% above the all-HV baseline',
       'the platoon minimum time-to-collision shall rise by no more than 20% above the all-HV baseline',
     ]) {
-      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most', thresholdPct: 20 })
       // Which guard fires differs — the negation words are on two of them, and the third carries no
       // anchor in its clause at all. All three hold, which is the property that matters.
       expect(verdict.kind, text).toBe('unbindable')
     }
     // The non-negated form of the same cap IS graded.
     const positive = 'the platoon minimum time-to-collision shall rise by at most 20% above the all-HV baseline'
-    expect(anchorBoundNear(positive, 20)).toBe('at-most')
-    expect(evaluatePrediction(positive, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' }).kind).toBe('adjudicated')
+    expect(evaluatePrediction(positive, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most', thresholdPct: 20 }).kind).toBe('adjudicated')
   })
 
   it('CLOSES the substring problem a bare `includes` had', () => {
     // `no` inside `normal` and `not` inside `note` used to hold a perfectly gradeable prediction;
     // word boundaries are what fixed it, and this pins that they did.
     const normal = 'under normal free flow the platoon minimum time-to-collision shall rise by at least 20%'
-    expect(evaluatePrediction(normal, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' }).kind).toBe('adjudicated')
+    expect(evaluatePrediction(normal, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 }).kind).toBe('adjudicated')
     const note = 'note that the platoon minimum time-to-collision shall rise by at least 20%'
-    expect(evaluatePrediction(note, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' }).kind).toBe('adjudicated')
+    expect(evaluatePrediction(note, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 }).kind).toBe('adjudicated')
   })
 
-  it('reads the anchor only from beside the number', () => {
-    // An anchor elsewhere in the sentence is not the one the threshold is bound by.
-    expect(anchorBoundNear(rise, 20)).toBe('at-least')
-    expect(anchorBoundNear('at least the platoon minimum time-to-collision is checked, within 20% of it', 20)).toBe('within')
+  it('reads the anchor from the clause naming the quantity, not from the whole sentence', () => {
+    // `anchorBoundIn` takes a clause and requires the bound it finds there to be UNIQUE. The read is
+    // scoped to the clause naming the measured quantity because a second clause may legitimately
+    // carry its own anchor: read over the whole sentence, the sentence below states two distinct
+    // bounds ("at least" for the threshold, "within" for the headway band) and holds, which is a
+    // false refusal of an honest sentence. Scoped, it grades.
+    // The proximity window this replaced went with `anchorBoundNear`: what makes a bound ambiguous is
+    // a second anchor in the same CLAUSE, which is a uniqueness rule rather than a distance.
+    const twoClauses = 'the platoon minimum time-to-collision shall rise by at least 20%, and the mean headway stays within its band'
+    const verdict = evaluatePrediction(twoClauses, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
+    expect(verdict.kind).toBe('adjudicated')
+    if (verdict.kind === 'adjudicated') expect(verdict.bound).toBe('at-least')
+
+    // ...and inside ONE clause, two distinct bounds are a gap rather than a guess: nothing says which
+    // of them the threshold is bound by, so the gate holds instead of resolving by table order. The
+    // sentence carries both tokens, so what refuses it is the uniqueness rule and not their absence.
+    const twoBounds = 'the platoon minimum time-to-collision shall rise by at least 20% within the baseline band'
+    expect(twoBounds).toContain('at least')
+    expect(twoBounds).toContain('within')
+    const held = evaluatePrediction(twoBounds, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
+    expect(held.kind).toBe('unbindable')
+    if (held.kind === 'unbindable') expect(held.reason).toContain('carries more than one')
   })
 })
 
@@ -587,15 +619,25 @@ describe('the literals must be ATTACHED to the measured quantity, not merely pre
     //    falls."
     //
     // The 20% and its anchor belong to MEAN HEADWAY. The sentence never says the measured quantity
-    // moved 20%, and the gate reported `supported`. The module had called this a "relevance
-    // weakness"; the auditor's case shows it generates false positives, and it is handled as one.
+    // moved 20%, and the gate reported `supported`. What refuses it is the clause scope: the number
+    // and its anchor sit in the clause about headway, and the clause naming the measured quantity
+    // states no percentage.
+    //
+    // THAT SCOPE IS NOT SOUNDNESS, and the module no longer claims it is. Four measured attempts to
+    // establish where a number ATTACHES — a wider boundary table, requiring the phrase before the
+    // direction structure, requiring it to be an argument of the predicate, and narrowing to one
+    // template — all died on the same thing: the distinguishing material is predicate structure and
+    // every literal proxy for it is an open class. So the scope can cut in the wrong place, and the
+    // threshold is a DECLARED field for that reason: the verdict grades `commitment.thresholdPct`
+    // and never a number read from the sentence. What the scope decides is only whether the sentence
+    // states that number where the gate looks, and both failure directions are a HOLD.
     const sentence = 'The platoon mean headway shall reduce by at least 20% while the platoon minimum time-to-collision falls.'
-    const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('unbindable')
     // ...and its mirror, where the number sits with the measured quantity and the direction does
     // not. Both are refused; either alone would have been graded.
     const mirrored = 'The platoon minimum time-to-collision shall fall while the platoon mean headway reduces by at least 20%.'
-    expect(evaluatePrediction(mirrored, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' }).kind)
+    expect(evaluatePrediction(mirrored, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 }).kind)
       .toBe('unbindable')
   })
 
@@ -605,6 +647,10 @@ describe('the literals must be ATTACHED to the measured quantity, not merely pre
     // invariant for all of them: when the phrase naming the measured quantity sits in one clause
     // and the number with its anchor in another, the gate must not adjudicate. Seeded, so a failure
     // reproduces exactly.
+    // What makes it hold is the clause scope rather than a reading of where a number attaches — the
+    // module records four measured attempts to establish that, all of which failed. The threshold is
+    // DECLARED, so the number the verdict grades never comes out of the sentence; what the sentence
+    // must do is state that number inside the clause the scope picks.
     const subjects = ['the platoon mean headway', 'the platoon minimum time-to-collision', 'the platoon mean jerk']
     const moves = ['shall reduce', 'shall fall', 'shall exceed', 'shall rise']
     const thresholds = ['by at least 20%', 'by at least 5%']
@@ -626,43 +672,61 @@ describe('the literals must be ATTACHED to the measured quantity, not merely pre
       // subject (or the first clause states the requirement legitimately) and `named` must be.
       if (numbered === MEASURED || named !== MEASURED) continue
       const sentence = `${numbered} ${move} ${threshold} while ${named}.`
-      const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: directionOf(move), bound: 'at-least' })
+      // The declaration matches the number the sentence states, so the refusal cannot be blamed on
+      // the declaration disagreeing with the prose: it is the scatter alone that stops the grading.
+      const verdict = evaluatePrediction(sentence, study, MEASURED_METRIC_KEY, { direction: directionOf(move), bound: 'at-least', thresholdPct: threshold === thresholds[0] ? 20 : 5 })
       expect(verdict.kind, sentence).toBe('unbindable')
       scattered++
     }
     // The generator has to have actually generated the cases, or the loop proves nothing.
     expect(scattered).toBeGreaterThan(100)
-  })
+    // ~270 of the generated sentences reach a real adjudication and every one of those runs BOTH
+    // platoon simulations, so this case is seconds of wall clock on its own — over vitest's 5 s
+    // default once the suite's workers are loaded, which is a timeout rather than a slow assertion.
+    // The budget is raised rather than the sample reduced: the sample is what makes the property
+    // worth asserting.
+  }, 30_000)
 })
 
-describe('the shape check KNOWN limits, recorded rather than left to be rediscovered', () => {
+describe('the shape requirement on the prose, and what it does not establish', () => {
   // The auditor that built these answered the question I had set it — "does a prohibition exist that
   // satisfies the shape?" — with yes, and its advice was to fix the CLAIM rather than the mechanism:
   // this is a check on the SHAPE of a sentence, not an analysis of its polarity, and extending the
   // word list for `neither` / `nor` / `none` would repeat the mistake the list was abandoned for.
   //
-  // So these two cases pin the escape deliberately. If a future change closes either, this test
-  // fails and the limit gets rewritten — which is the point of writing it down.
-  it('LIMIT: a prohibition that negates its SUBJECT still reaches a verdict', () => {
+  // WHAT THE TWO PROHIBITION CASES BELOW RECORD. Both were written when the gate inferred a direction out of the
+  // sentence, and the finding then was that the shape check let a prohibition through to a verdict.
+  // They still reach a verdict — but no longer because a check failed. The verdict grades the
+  // DECLARED threshold, which these claims state honestly, and a sentence's FORCE is outside what
+  // this gate grades at all: a claim declaring that the measured quantity should fall by 20% is
+  // graded on whether it did. A prohibition written in the required shape is a PROSE defect rather
+  // than a graded one, and what it costs stays bounded by the declaration having to be honest — the
+  // same demand the shape requirement makes from the other side. If a future change does start
+  // reading a sentence's force, these fail and this note gets rewritten, which is why they are here.
+  it('a prohibition that negates its SUBJECT is graded on its declaration', () => {
     const subjectNegation = 'Neither platoon shall fall short of the baseline minimum time-to-collision by at least 20%'
-    // The direction word follows `shall`, no word on the negation list appears, and the declared
-    // commitment agrees — so a 38.20% fall is graded as MEETING a prohibition it violates.
-    const verdict = evaluatePrediction(subjectNegation, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    // The direction word follows `shall` and no word on the negation list appears, so nothing in the
+    // sentence marks it as a prohibition — and under the declared-threshold design nothing needs to.
+    // The declaration says the quantity should fall by 20%, and the measurement fell 38.20%.
+    const verdict = evaluatePrediction(subjectNegation, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind === 'adjudicated') expect(verdict.supportsPrediction).toBe(true)
     expect(requirementDirectionIn(subjectNegation)).toBe('decrease')
   })
 
-  it('LIMIT: a prohibition APPENDED as a second clause still reaches a verdict', () => {
+  it('a prohibition appended as a second clause is graded on its declaration too', () => {
     const appended = 'the platoon minimum time-to-collision shall fall by at least 20%; that outcome is forbidden'
-    const verdict = evaluatePrediction(appended, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    const verdict = evaluatePrediction(appended, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind === 'adjudicated') expect(verdict.supportsPrediction).toBe(true)
   })
 
-  it('...and what the check DOES close is still closed', () => {
-    // The property that makes the limits narrow: every ordinary phrasing that is not a requirement
-    // holds, and none of them can produce a verdict.
+  it('...and what the shape requirement DOES refuse is unchanged', () => {
+    // WHERE THESE HOLDS COME FROM, stated because it moved. Not from detecting a prohibition: the
+    // two cases above are graded, and nothing on this path reads a sentence's force. They hold
+    // because the direction word must immediately follow `shall`, so a negation in that position
+    // leaves no direction word to read. That is the narrower property that survives — every phrasing
+    // that does not state its direction as `shall <word>` holds, and none of them produces a verdict.
     for (const text of [
       'the platoon minimum time-to-collision shall not fall by at least 20%',
       'the platoon minimum time-to-collision shall never fall by at least 20%',
@@ -671,7 +735,7 @@ describe('the shape check KNOWN limits, recorded rather than left to be rediscov
       // word that can follow it, and the table no longer pretends otherwise.
       'the platoon minimum time-to-collision shall reduces by at least 20%',
     ]) {
-      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least', thresholdPct: 20 })
       expect(verdict.kind, text).toBe('unbindable')
     }
     // ...except the three base forms an auditor showed were missing from the table. They grade now,

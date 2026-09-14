@@ -86,6 +86,7 @@ export type CasePackErrorCode =
   | 'CASE_PACK_ENVELOPE_INVALID'
   | 'CASE_PACK_VERSION_UNSUPPORTED'
   | 'CASE_PACK_DATUM_MISSING'
+  | 'CASE_PACK_COMMITMENT_INVALID'
 
 /** A refusal to load or use a case pack, carrying which file and datum caused it. */
 export class CasePackError extends Error {
@@ -141,6 +142,58 @@ function envelopePair(file: string, sourceKind: string, truthfulness: string): v
       + `may claim (${admitted.join(', ')}) — the two fields describe the same material and must agree`,
     )
   }
+}
+
+/** The direction values a declared commitment may carry. */
+const COMMITMENT_DIRECTIONS: ReadonlyArray<string> = ['increase', 'decrease']
+/** The bound values a declared commitment may carry. */
+const COMMITMENT_BOUNDS: ReadonlyArray<string> = ['at-least', 'at-most', 'within']
+
+/**
+ * Validate a pack's declared commitment at LOAD time, or refuse the pack.
+ *
+ * The commitment is what the C gate grades: the direction, the bound, and the threshold the measured
+ * quantity must move by — all three DECLARED, none read out of the prediction's prose. It arrives
+ * from a file, so it is validated where the file is parsed rather than where it is graded, and for
+ * the same reason `sourceKind`/`truthfulness` are: a declaration that is present but incomplete is
+ * self-contained malformed material, not an evidence gap, and reading it as absent would hold the
+ * run for a reason the pack never stated. What an unchecked value costs is measurable — with no
+ * `thresholdPct` the comparison has no bar at all, and `0` or a negative one makes every movement
+ * satisfy an `at-least` claim.
+ *
+ * Declaring NO commitment stays legal: the claim is then ungradeable and the C channel HOLDS.
+ *
+ * @param value - `claim.json`'s `commitment` member, or undefined when the pack declares none.
+ * @returns the value unchanged, once it is known to be a well-formed commitment.
+ * @throws {CasePackError} `CASE_PACK_COMMITMENT_INVALID` naming what the declaration is missing.
+ */
+function requireDeclaredCommitment(value: unknown): unknown {
+  if (value === undefined) return undefined
+  const record = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+  const direction = record?.['direction']
+  const bound = record?.['bound']
+  const thresholdPct = record?.['thresholdPct']
+  const malformed =
+    record === undefined ||
+    typeof direction !== 'string' ||
+    !COMMITMENT_DIRECTIONS.includes(direction) ||
+    typeof bound !== 'string' ||
+    !COMMITMENT_BOUNDS.includes(bound) ||
+    typeof thresholdPct !== 'number' ||
+    !Number.isFinite(thresholdPct) ||
+    thresholdPct <= 0
+  if (malformed) {
+    throw new CasePackError(
+      'CASE_PACK_COMMITMENT_INVALID',
+      '[case-pack] claim.json: `commitment` must declare `direction` ' +
+        `(${COMMITMENT_DIRECTIONS.join(' | ')}), \`bound\` (${COMMITMENT_BOUNDS.join(' | ')}) ` +
+        'and a POSITIVE FINITE `thresholdPct` — those three declared fields are what the C gate ' +
+        'grades, so an incomplete declaration is refused here rather than held at grading time',
+    )
+  }
+  return value
 }
 
 /** Read one envelope field as a non-empty string, or refuse the file. */
@@ -395,12 +448,13 @@ export function planCasePackInputs(pack: CasePack): ReadonlyArray<CasePackRunInp
   const falsificationExperiment = casePackDatum(pack, 'claim.json', 'falsification.experiment')
   const scope = casePackDatum(pack, 'claim.json', 'falsification.scope')
   const dataSource = casePackDatum(pack, 'claim.json', 'falsification.dataSource')
-  // The claim's DECLARED commitment: which way its quantity should move, and whether it caps the
-  // change. Required, like the metric key is not — a pack that declares no commitment leaves the
-  // claim ungradeable, and the C channel then HOLDS rather than inferring a direction from prose.
-  const commitment = pack.files.get('claim.json')?.content.commitment as
-    | { direction?: unknown; bounded?: unknown }
-    | undefined
+  // The claim's DECLARED commitment: which way its quantity should move, whether it caps the change,
+  // and by how much. Declaring none stays legal — the claim is then ungradeable and the C channel
+  // HOLDS rather than inferring a direction from prose — but a declared one is validated HERE,
+  // because all three fields are what the C gate grades and a malformed declaration is self-contained
+  // material rather than an evidence gap. A commitment missing `thresholdPct` would otherwise read
+  // as no commitment at all, and the run would hold for a reason the pack never stated.
+  const commitment = requireDeclaredCommitment(pack.files.get('claim.json')?.content.commitment)
   const claimId = casePackDatum(pack, 'claim.json', 'id')
   // The pack's own list of its source files. The A channel's domain check traces the claim's
   // declared data source to one of these, so a claim pointing at a file the pack never

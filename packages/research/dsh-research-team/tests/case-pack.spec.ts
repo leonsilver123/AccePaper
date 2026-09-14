@@ -231,6 +231,45 @@ describe('planCasePackInputs', () => {
     expect(() => planCasePackInputs(loadCasePack(dir))).toThrow(/claim\.json#prediction/)
   })
 
+  it('carries a well-formed declared commitment through, and refuses an incomplete one', () => {
+    // The commitment is what the C gate GRADES — `direction`, `bound`, and the `thresholdPct` the
+    // measured quantity must move by. All three are declared rather than read out of the
+    // prediction's prose, and the declaration arrives from a FILE, so its shape is validated where
+    // the file is parsed. A declaration that is present but incomplete is self-contained malformed
+    // material rather than an evidence gap: read as absent it would hold the run for a reason the
+    // pack never stated, and a `0` or negative threshold would let every movement satisfy an
+    // `at-least` claim.
+    const claimOf = (dir: string): Record<string, unknown> =>
+      planCasePackInputs(loadCasePack(dir))
+        .find(input => input.slug === CASE_PACK_INPUT_SLUGS.claim)?.value as Record<string, unknown>
+    const withCommitment = (commitment: unknown): string =>
+      withField('claim.json', (content) => { content.commitment = commitment })
+
+    const declared = { direction: 'increase', bound: 'at-least', thresholdPct: 20 }
+    expect(claimOf(withCommitment(declared)).commitment).toEqual(declared)
+
+    // Declaring NO commitment stays legal — the claim is then ungradeable and the C channel HOLDS —
+    // so an absent member is deliberately not one of the refusals below.
+    for (const commitment of [
+      { direction: 'increase', bound: 'at-least' },
+      { direction: 'increase', bound: 'at-least', thresholdPct: 0 },
+      { direction: 'increase', bound: 'at-least', thresholdPct: -20 },
+      // The audit's own measurement, and the reason a zero is refused rather than read as absent:
+      // `{decrease, at-least, 0}` made EVERY movement satisfy the claim.
+      { direction: 'decrease', bound: 'at-least', thresholdPct: 0 },
+      { direction: 'increase', bound: 'bounded', thresholdPct: 20 },
+      { direction: 'sideways', bound: 'at-least', thresholdPct: 20 },
+    ]) {
+      try {
+        planCasePackInputs(loadCasePack(withCommitment(commitment)))
+        throw new Error(`expected a refusal for ${JSON.stringify(commitment)}`)
+      } catch (error) {
+        expect((error as CasePackError).code, JSON.stringify(commitment))
+          .toBe('CASE_PACK_COMMITMENT_INVALID')
+      }
+    }
+  })
+
   it('changes the derived inputs when a pack parameter changes', () => {
     // The acceptance property: the pack is the driver, not a decoration. A changed
     // parameter must reach the run input, which is what makes a run reproducible from

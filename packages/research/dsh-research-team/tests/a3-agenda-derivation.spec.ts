@@ -78,8 +78,8 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
 async function runA3(writer?: ResearchProseWriter): Promise<{ agenda: AgendaShape; list: ContributionListShape }> {
   const out = await executorOf('A3-agenda')(ctxFor(writer))
   return {
-    agenda: out.agenda as unknown as AgendaShape,
-    list: out['contribution-list'] as unknown as ContributionListShape,
+    agenda: out.agenda as AgendaShape,
+    list: out['contribution-list'] as ContributionListShape,
   }
 }
 
