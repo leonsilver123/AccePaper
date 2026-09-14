@@ -92,6 +92,7 @@ describe('buildSummary — adapter entry point', () => {
   it('accepts a mapped input and produces the same model shape', () => {
     const mapped: RunSummaryInput = {
       runId: 'run_mapped_xyz',
+      source: 'fixture',
       status: 'completed',
       steps: [
         { stepId: 's01', index: 1, phase: 'A', name: 'X', status: 'passed', attempt: 1, humanGate: false, gateOutcomes: [] },
@@ -110,7 +111,7 @@ describe('buildSummary — adapter entry point', () => {
 
   it('treats a humanGate step still pending as human-pending (not auto-completed)', () => {
     const input: RunSummaryInput = {
-      runId: 'run_hp', status: 'running',
+      runId: 'run_hp', source: 'fixture', status: 'running',
       steps: [
         { stepId: 'e2', index: 15, phase: 'E', name: 'Human', status: 'pending', attempt: 0, humanGate: true, gateOutcomes: [] },
       ],

@@ -1239,23 +1239,40 @@ describe('ResearchTeamService — the production pipeline entry', () => {
     const host = await bootHost()
     try {
       const result = await host.service.runPipeline()
-      expect(result.steps).toHaveLength(16)
-      expect(result.runId.length).toBeGreaterThan(0)
+      expect(result.run.steps).toHaveLength(16)
+      expect(result.run.runId.length).toBeGreaterThan(0)
+      // The catalogue travels with the run so a client can label the steps it gets.
+      expect(result.catalog).toHaveLength(16)
+      expect(result.catalog.map(entry => entry.id)).toEqual(result.run.steps.map(step => step.stepId))
+      // Every gate verdict the run recorded is projected with its evidence text.
+      expect(result.gates.length).toBeGreaterThan(0)
+      for (const gate of result.gates) {
+        expect(typeof gate.evidence).toBe('string')
+        expect(gate.evidence.length).toBeGreaterThan(0)
+      }
+      // Artifact metadata comes from the run's own registry, not from a summary count.
+      expect(result.artifacts.length).toBeGreaterThan(0)
 
       // E2-submit is the only step that does not pass: submission is a human act.
-      const gated = result.steps.filter(step => step.status === 'gated').map(step => step.stepId)
+      const gated = result.run.steps.filter(step => step.status === 'gated').map(step => step.stepId)
       expect(gated).toEqual(['E2-submit'])
-      for (const step of result.steps) {
+      for (const step of result.run.steps) {
         if (step.stepId === 'E2-submit') continue
         expect(step.status, step.stepId).toBe('passed')
       }
+      // The per-step state the client renders a held step from. A human-gate wait
+      // records NO hold reason — only a gate abstention does — so the status is the
+      // whole signal here.
+      const e2 = result.steps.find(step => step.stepId === 'E2-submit')
+      expect(e2?.status).toBe('gated')
+      expect(e2?.holdReason).toBeNull()
 
       // No `ctx.research` adapter is mounted in this harness, so the run takes the
       // fixture channels and says so: nothing claims a live catalogue or a model.
-      expect(result.steps.find(s => s.stepId === 'A1-landscape')?.kind)
+      expect(result.run.steps.find(s => s.stepId === 'A1-landscape')?.kind)
         .toBe('real_tool_fixture_input')
-      expect(result.steps.find(s => s.stepId === 'C1-mvp')?.kind).toBe('local_computation')
-      expect(result.steps.every(step => step.kind !== 'live_external')).toBe(true)
+      expect(result.run.steps.find(s => s.stepId === 'C1-mvp')?.kind).toBe('local_computation')
+      expect(result.run.steps.every(step => step.kind !== 'live_external')).toBe(true)
     } finally {
       await host.dispose()
     }
@@ -1268,8 +1285,8 @@ describe('ResearchTeamService — the production pipeline entry', () => {
       const second = await host.service.runPipeline()
       // A shared store would make the second run see its predecessors as satisfied
       // and report different per-step attempts; the ids differ and the shape does not.
-      expect(second.runId).not.toBe(first.runId)
-      expect(second.steps.map(s => s.status)).toEqual(first.steps.map(s => s.status))
+      expect(second.run.runId).not.toBe(first.run.runId)
+      expect(second.run.steps.map(s => s.status)).toEqual(first.run.steps.map(s => s.status))
     } finally {
       await host.dispose()
     }

@@ -20,6 +20,7 @@ export const FIXTURE_RUN_ID = 'run_demo_2026_0903_a1b2c3'
 /** The flattened 16-step demo run. */
 export const RESEARCH_FIXTURE: RunSummaryInput = {
   runId: FIXTURE_RUN_ID,
+  source: 'fixture',
   status: 'degraded',
   steps: [
     {

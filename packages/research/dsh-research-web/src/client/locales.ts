@@ -7,6 +7,10 @@ export const NS = 'research'
 export const zh = {
   'view.research': '科研',
   'mock.badge': '演示数据 (MOCK)',
+  'source.live': '真实运行',
+  'run.action': '运行流水线',
+  'run.running': '运行中…',
+  'run.error': '运行失败:{message}',
   'header.runId': '运行 ID',
   'header.status': '状态',
   'section.steps': '步骤进度',
@@ -130,6 +134,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export const en: Record<ResearchKey, string> = {
   'view.research': 'Research',
   'mock.badge': 'Demo data (MOCK)',
+  'source.live': 'Live run',
+  'run.action': 'Run pipeline',
+  'run.running': 'Running…',
+  'run.error': 'Run failed: {message}',
   'header.runId': 'Run ID',
   'header.status': 'Status',
   'section.steps': 'Step progress',

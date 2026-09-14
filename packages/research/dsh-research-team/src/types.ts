@@ -309,3 +309,103 @@ export interface TeamState {
   /** Head revision per artifact id (monotonic). */
   readonly artifactRevs: Readonly<Record<string, ResearchRev>>
 }
+
+/**
+ * Wire request for `ResearchTeamService.run`, the Remote entry to the 16-step pipeline.
+ *
+ * A distinct type from the in-process pipeline options because an `AbortSignal` cannot
+ * cross the wire: the request carries the seed alone and the Gateway contributes
+ * cancellation through the trailing parameter.
+ */
+export interface ResearchRunRequest {
+  /** Seed for the run's single seedable input (`domain-direction`). */
+  readonly domainDirection?: string
+}
+
+/**
+ * The runner's per-step outcome shape, re-exported so the Remote boundary can name it.
+ *
+ * The Typert generator requires a Remote method's parameter and result types to be
+ * exported from a public non-root type subpath (`./types`), so the boundary types are
+ * re-exported here rather than reached through the root entry.
+ */
+import type { RunResult } from './runner/types.ts'
+
+export type { RunResult, StepOutcome, StepArtifactEvidence } from './runner/types.ts'
+
+/**
+ * One pipeline step's catalogue entry, as the Remote boundary carries it.
+ *
+ * A client receives the run's per-step outcomes keyed by `stepId` and has no other way
+ * to learn a step's index, phase, display name, or whether it gates on a human — that
+ * catalogue belongs to core. Sending it with the run keeps the client from duplicating
+ * the 16-step definition, where it would drift.
+ */
+export interface ResearchStepCatalogEntry {
+  readonly id: string
+  readonly index: number
+  readonly phase: string
+  readonly name: string
+  readonly humanGate: boolean
+  readonly gate: ReadonlyArray<string>
+}
+
+/**
+ * One gate verdict as the Remote boundary carries it.
+ *
+ * Projected from the run's own snapshot rather than rebuilt from the summary counts,
+ * because `evidence` and `rationale` are what a reader checks a verdict against and
+ * they exist only on the recorded verdict.
+ */
+export interface ResearchGateVerdictView {
+  readonly stepId: string
+  readonly component: string
+  readonly outcome: string
+  readonly passed: boolean
+  readonly evidence: string
+  readonly rationale: string
+  readonly timestamp: number
+}
+
+/** One produced artifact's metadata as the Remote boundary carries it. */
+export interface ResearchArtifactMetaView {
+  readonly slug: string
+  readonly producerStepId: string
+  readonly producerAttemptId: number
+  readonly producedAt: number
+  readonly invalidated: boolean
+}
+
+/**
+ * One step's runtime state.
+ *
+ * `RunResult` carries the attempt id but not the hold reason, and a client rendering a
+ * held step needs to tell an abstention from a human wait.
+ */
+export interface ResearchStepStateView {
+  readonly stepId: string
+  readonly status: string
+  readonly attempt: number
+  /**
+   * The hold reason recorded on the step, or `null`.
+   *
+   * Only a gate abstention records one (`gate_abstained`). A step waiting at the human
+   * gate reads `status: 'gated'` with `holdReason: null` — its hold is the absence of an
+   * approval, not a recorded reason.
+   */
+  readonly holdReason: string | null
+}
+
+/** What `ResearchTeamService.runPipeline` returns, and what the Remote `run` sends. */
+export interface ResearchRunSnapshot {
+  /** The runner's own result, unchanged. */
+  readonly run: RunResult
+  /** The catalogue for the steps in `run.steps`, in canonical order. */
+  readonly catalog: ReadonlyArray<ResearchStepCatalogEntry>
+  /** Every gate verdict recorded during the run, with the evidence each carried. */
+  readonly gates: ReadonlyArray<ResearchGateVerdictView>
+  /** Every artifact the run registered, with its recorded metadata. */
+  readonly artifacts: ReadonlyArray<ResearchArtifactMetaView>
+  /** Per-step runtime state (attempt, hold reason). */
+  readonly steps: ReadonlyArray<ResearchStepStateView>
+}

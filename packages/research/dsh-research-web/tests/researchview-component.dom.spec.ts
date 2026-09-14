@@ -55,6 +55,21 @@ function makeTranslate(...dicts: ReadonlyArray<Record<string, string>>) {
 const t = makeTranslate(en)
 
 /** Convenience: render a React component with the `t` double via createElement (no JSX). */
+/** A minimal summary input with one step, used to exercise the source labelling. */
+function fixtureInput(): RunSummaryInput {
+  const fixture = loadFixtureSummary()
+  return {
+    runId: fixture.runId,
+    source: 'fixture',
+    status: fixture.status,
+    steps: fixture.steps,
+    artifacts: fixture.artifacts,
+    gates: fixture.gates,
+    abstentions: fixture.abstentions,
+    degradations: fixture.degradations,
+  }
+}
+
 function renderComp(element: Parameters<typeof render>[0]) {
   return render(element)
 }
@@ -409,6 +424,58 @@ describe('research workbench summary injection', () => {
 
     expect(fixtureRows).toBeGreaterThan(0)
     expect(injectedRows).toBeLessThan(fixtureRows)
+  })
+})
+
+// ===========================================================================
+// 10b. The run control (T44 wiring).
+//
+// The workbench could render an injected summary but had no way to OBTAIN one, so
+// the badge said MOCK unconditionally and no caller could start a run. These tests
+// pin the three behaviours that wiring introduces: the badge follows the summary's
+// source, the button starts a run and swaps the rendered summary, and a failed run
+// says so instead of leaving the fixture on screen.
+// ===========================================================================
+describe('research workbench run control', () => {
+  it('stops labelling a live run as demo data', async () => {
+    const live = toRunSummary({ ...fixtureInput(), source: 'live' })
+    renderComp(createElement(ResearchWorkbench, { t, summary: live }))
+
+    // Both the workbench and the summary panel carry a source badge, so the
+    // assertion counts rather than fetching a single node.
+    expect(screen.queryAllByText(en['mock.badge'])).toHaveLength(0)
+    expect(screen.getAllByText(en['source.live']).length).toBeGreaterThan(0)
+  })
+
+  it('renders no run control when the caller supplies no run source', () => {
+    renderComp(createElement(ResearchWorkbench, { t }))
+
+    expect(screen.queryByRole('button', { name: en['run.action'] })).toBeNull()
+  })
+
+  it('starts a run and renders the summary it resolves with', async () => {
+    const live = toRunSummary({ ...fixtureInput(), runId: 'run-live-42', source: 'live' })
+    const onRun = vi.fn().mockResolvedValue(live)
+    renderComp(createElement(ResearchWorkbench, { t, onRun }))
+
+    expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    expect(onRun).toHaveBeenCalledTimes(1)
+    // The run replaced the fixture: the badge follows the new summary's source.
+    expect(screen.queryAllByText(en['mock.badge'])).toHaveLength(0)
+    expect(screen.getAllByText(en['source.live']).length).toBeGreaterThan(0)
+  })
+
+  it('reports a failed run instead of leaving the fixture on screen', async () => {
+    const onRun = vi.fn().mockRejectedValue(new Error('gateway refused the call'))
+    renderComp(createElement(ResearchWorkbench, { t, onRun }))
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    // The failure is stated with its cause; the fixture is NOT passed off as the run.
+    expect(screen.getByText(en['run.error'].replace('{message}', 'gateway refused the call'))).toBeTruthy()
+    expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
   })
 })
 

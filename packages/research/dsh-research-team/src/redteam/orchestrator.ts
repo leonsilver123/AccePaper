@@ -111,7 +111,7 @@ export class ResearchFleetOrchestrator {
   async deploy(
     caller: Agent,
     config: RedTeamFleetConfig = {},
-    provider = 'spawn',
+    provider: string = 'spawn',
   ): Promise<ReadonlyArray<ResearchMemberView>> {
     const membership = this.requireLead(caller)
     const fleet = resolveFleet(config)

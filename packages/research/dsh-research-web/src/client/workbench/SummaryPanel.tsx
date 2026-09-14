@@ -11,7 +11,9 @@ import css from '../ResearchView.module.css'
 export function SummaryPanel({ summary, t }: PanelProps) {
   return (
     <div className={css.root}>
-      <span className={css.mockBadge}>{t('mock.badge')}</span>
+      {/* The badge states where the numbers came from: this panel is used both by the
+          workbench (which may hold a real run) and by the fixture-only view. */}
+      <span className={css.mockBadge}>{summary.isMock ? t('mock.badge') : t('source.live')}</span>
 
       <header className={css.header}>
         <h2>{t('view.research')}</h2>

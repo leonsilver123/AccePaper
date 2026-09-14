@@ -25,3 +25,6 @@
 - **`pnpm run lint` 对 research 包仍然是红的(改动之前就是)**:改动前实测 299 个错误,测试并入聚合后为 155,其中 research `src/` 的 62 个不受该改动影响、是既存问题;剩余 90 个测试侧错误是真实规则违反(动态 import 产生 `any` 导致的不安全赋值等),留给单独的改动。
 
 No invariant companion is published: the team fold and authorization relations are asserted by this package's own revision, projection and scope specs, and independent observers cannot diverge here, so no `./invariant` entry is published alongside it.
+
+- **`runPipeline` 是 Remote 出口**(2026-09-14):`ResearchTeamService` 继承 `TypertRemoteService`,`@Remote('run')` 挂在 wire namespace `research` 下(服务键仍是 `agentTeams`)。它返回的是**快照** —— 运行本身 + 16 步目录 + 每条闸门判定(含 evidence/rationale)+ 产物元数据 + 每步的 attempt 与 holdReason —— 而不是 `RunResult`,因为目录与证据都不在 `RunResult` 里,客户端重建它们只能靠编造。包 `exports` 因此新增 `./types`、`./typert`、`./remote` 三条子路径。
+- **构建顺序有坑**:`tsdown.config.ts` 的 `clean` 必须**只列本包真正产出的文件**。Client pass 在 Host pass 之后用同一份配置运行,`lib/*.js` 通配会删掉 Host pass 生成的 `typert.host.js` / `typert.remote-client.js`,而 Client pass 不会重新生成它们。

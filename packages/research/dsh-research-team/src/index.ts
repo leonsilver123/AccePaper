@@ -36,7 +36,18 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
+import type {
+  ResearchArtifactMetaView,
+  ResearchGateVerdictView,
+  ResearchRunRequest,
+  ResearchRunSnapshot,
+  ResearchStepCatalogEntry,
+  ResearchStepStateView,
+} from './types.ts'
+
+export type { ResearchRunRequest, ResearchRunSnapshot, ResearchStepCatalogEntry } from './types.ts'
+import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import { ResearchJournal } from './journal.ts'
@@ -52,6 +63,7 @@ import type { SessionId } from './types.ts'
 import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
 import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
+import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from './runner/drive.ts'
 import type { ResearchProseWriter } from './runner/registry.ts'
@@ -141,12 +153,72 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Deployment configuration for the research-team service. */
+/**
+ * Project one finished run into the shape the Remote boundary and the browser view consume.
+ *
+ * The run's own snapshot is the source: it is the only place the recorded gate verdicts
+ * (with the evidence a reader checks) and the artifact metadata live. Rebuilding either
+ * from {@link RunResult} would mean inventing the evidence strings.
+ *
+ * @param run - the driver's result.
+ * @param store - the store the run populated.
+ * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
+ */
+function snapshotOf(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
+  const snapshot = getRunSnapshot(store, run.runId)
+  const catalog: ReadonlyArray<ResearchStepCatalogEntry> = getStepDefinitions().map(step => ({
+    id: step.id,
+    index: step.index,
+    phase: step.phase,
+    name: step.name,
+    humanGate: step.humanGate,
+    gate: [...step.gate],
+  }))
+
+  const gates: ResearchGateVerdictView[] = []
+  const steps: ResearchStepStateView[] = []
+  for (const step of getStepDefinitions()) {
+    const state = snapshot.steps[step.id]
+    if (state === undefined) continue
+    steps.push({
+      stepId: state.stepId,
+      status: state.status,
+      attempt: state.attemptId,
+      holdReason: state.holdReason ?? null,
+    })
+    for (const component of ['A', 'B', 'C'] as const) {
+      const verdict = state.gateResults[component]
+      if (verdict === undefined) continue
+      gates.push({
+        stepId: step.id,
+        component: verdict.component,
+        outcome: verdict.outcome,
+        passed: verdict.passed,
+        evidence: verdict.evidence,
+        rationale: verdict.rationale,
+        timestamp: verdict.timestamp,
+      })
+    }
+  }
+
+  const artifacts: ResearchArtifactMetaView[] = Object.values(snapshot.registry).map(meta => ({
+    slug: meta.slug,
+    producerStepId: meta.producerStepId,
+    producerAttemptId: meta.producerAttemptId,
+    producedAt: meta.producedAt,
+    invalidated: meta.invalidated,
+  }))
+
+  return { run, catalog, gates, artifacts, steps }
+}
+
 /** Options for one {@link ResearchTeamService.runPipeline} invocation. */
 export interface ResearchPipelineOptions {
   /** Seed for the run's single seedable input (`domain-direction`). */
   readonly domainDirection?: string
   readonly signal?: AbortSignal
 }
+
 
 export interface ResearchTeamServiceConfig {
   /**
@@ -160,7 +232,7 @@ export interface ResearchTeamServiceConfig {
 }
 
 /** Research-team service: members, CAS tasks, and the write-scope guard. */
-export class ResearchTeamService extends Service {
+export class ResearchTeamService extends TypertRemoteService {
   static inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'subagents', 'tools']
 
   /** The tools the global guard treats as one-path scope-checkable writes. */
@@ -174,7 +246,10 @@ export class ResearchTeamService extends Service {
   readonly fleet: ResearchFleetOrchestrator
 
   constructor(ctx: Context, config: ResearchTeamServiceConfig = {}) {
-    super(ctx, 'agentTeams')
+    // The service key stays `agentTeams` (that is what host plugins inject); the WIRE
+    // namespace is `research`, so a browser client calls `ctx.remote.research.*` rather
+    // than reaching for a name that collides with the experimental agent-team package.
+    super(ctx, 'agentTeams', { namespace: 'research' })
     this.scopeCheckedTools = new Set(config.scopeCheckedTools ?? [])
     // Journal commits have no cross-member waiters in this package (no mailbox
     // or activity subsystem), so the synchronous notification is intentionally
@@ -317,15 +392,42 @@ export class ResearchTeamService extends Service {
    * @param options - the run seed and a cancellation signal.
    * @returns the per-step outcomes plus the run id.
    */
-  async runPipeline(options: ResearchPipelineOptions = {}): Promise<RunResult> {
+  async runPipeline(options: ResearchPipelineOptions = {}): Promise<ResearchRunSnapshot> {
     const store: ResearchRunStore = new Map()
     const toolDeps = this.hostToolDeps()
     const proseWriter = this.hostProseWriter()
-    return runT19B(store, {
+    const run = await runT19B(store, {
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
+    })
+    return snapshotOf(run, store)
+  }
+
+  /**
+   * {@link runPipeline}, exposed to Remote clients.
+   *
+   * The browser surface had no way to start a run: the driver's production entry
+   * existed and nothing called it, so the research tab could only ever render the
+   * bundled fixture. This is the CALLER. It returns the runner's own result rather
+   * than a presentation model — the client owns that mapping, and the wire carries
+   * exactly what {@link runPipeline} produced.
+   *
+   * The request carries no `AbortSignal`: the Gateway supplies cancellation through
+   * the trailing parameter, which is the convention every other Remote method here
+   * follows.
+   *
+   * @param request - the run seed. `domainDirection` is the runner's single
+   *   seedable input; omitting it uses the driver's default.
+   * @param signal - cancellation supplied by the caller.
+   * @returns the per-step outcomes plus the run id, as {@link runPipeline} returns.
+   */
+  @Remote('run')
+  run(request: ResearchRunRequest, signal?: AbortSignal): Promise<ResearchRunSnapshot> {
+    return this.runPipeline({
+      ...(request.domainDirection !== undefined ? { domainDirection: request.domainDirection } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 

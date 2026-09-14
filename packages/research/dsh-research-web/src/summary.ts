@@ -113,6 +113,15 @@ export interface DegradationNote {
 /** Flattened input the view consumes. A T19-B runner snapshot maps into this. */
 export interface RunSummaryInput {
   readonly runId: string
+  /**
+   * Where this summary came from.
+   *
+   * The view used to render a MOCK badge unconditionally, and the model declared
+   * `isMock: true` as a literal — so the badge kept saying MOCK even after the
+   * `summary` injection seam let a caller pass a real run in. The source is now part
+   * of the input and the badge follows it.
+   */
+  readonly source: 'fixture' | 'live'
   readonly status: RunStatus
   readonly steps: ReadonlyArray<StepView>
   readonly artifacts: ReadonlyArray<ArtifactView>
@@ -148,8 +157,8 @@ export interface RunSummary {
   readonly hasAbstention: boolean
   /** Whether any degradation annotation exists. */
   readonly hasDegradation: boolean
-  /** Always true: this package renders fixture/snapshot data, never live runs. */
-  readonly isMock: true
+  /** True when this summary came from the bundled fixture rather than a real run. */
+  readonly isMock: boolean
 }
 
 const EMPTY_BY_STATUS: Record<StepStatus, number> = {
@@ -200,6 +209,6 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     humanPending,
     hasAbstention: input.abstentions.length > 0,
     hasDegradation: input.degradations.length > 0,
-    isMock: true,
+    isMock: input.source === 'fixture',
   }
 }

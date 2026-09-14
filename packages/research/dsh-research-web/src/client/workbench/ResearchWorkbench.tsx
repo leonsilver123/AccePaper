@@ -5,7 +5,7 @@
  * roadmap / gates / adversarial / approval / recovery panels. All panels read the
  * same fixture/snapshot {@link RunSummary} (MOCK) loaded once here.
  */
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type {
   ConvViewProps,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -30,6 +30,11 @@ import css from './ResearchWorkbench.module.css'
 export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
   /** Run summary to render; the bundled MOCK fixture is used when omitted. */
   readonly summary?: ReturnType<typeof loadFixtureSummary>
+  /**
+   * Start a real run and resolve with its summary. Omitted by a host that has no run
+   * to start, in which case the view shows the fixture and no run control.
+   */
+  readonly onRun?: () => Promise<ReturnType<typeof loadFixtureSummary>>
 }
 
 /** Workbench sub-panel tab identifiers. */
@@ -57,15 +62,43 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
  * @param props - slot runtime props, the `research` namespace translate `t`, and an
  *   optional `summary` to render in place of the bundled fixture.
  */
-export function ResearchWorkbench({ t, summary: injected }: ResearchViewProps) {
+export function ResearchWorkbench({ t, summary: injected, onRun }: ResearchViewProps) {
   // The hook runs unconditionally so its order is stable; the fixture is only
   // materialized when no summary was injected.
-  const summary = useMemo(() => injected ?? loadFixtureSummary(), [injected])
+  const [live, setLive] = useState<ReturnType<typeof loadFixtureSummary> | undefined>(undefined)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const summary = useMemo(() => live ?? injected ?? loadFixtureSummary(), [live, injected])
   const [active, setActive] = useState<WorkbenchTab>('summary')
+
+  const start = useCallback(() => {
+    if (onRun === undefined) return
+    setRunning(true)
+    setError(undefined)
+    void onRun().then(
+      (result) => { setLive(result); setRunning(false) },
+      (cause: unknown) => {
+        // A run that failed is reported as a failure. Showing the fixture instead
+        // would leave a reader looking at demo numbers after asking for a real run.
+        setError(cause instanceof Error ? cause.message : String(cause))
+        setRunning(false)
+      },
+    )
+  }, [onRun])
 
   return (
     <div className={css.workbench}>
-      <span className={css.mockBadge}>{t('mock.badge')}</span>
+      {/* The badge states where the numbers came from. It used to be unconditional,
+          so an injected real run was still labelled as demo data. */}
+      <span className={css.mockBadge}>{summary.isMock ? t('mock.badge') : t('source.live')}</span>
+      {onRun !== undefined && (
+        <button type="button" className={css.tab} onClick={start} disabled={running}>
+          {running ? t('run.running') : t('run.action')}
+        </button>
+      )}
+      {error !== undefined && (
+        <span className={css.mockBadge}>{t('run.error').replace('{message}', error)}</span>
+      )}
 
       <nav className={css.tabs}>
         {TABS.map(tab => (
