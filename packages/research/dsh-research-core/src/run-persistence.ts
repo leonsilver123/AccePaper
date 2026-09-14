@@ -30,7 +30,7 @@
  * No Cordis / no external runtime deps.
  */
 
-import { unlink } from 'node:fs/promises'
+import { open, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
@@ -81,16 +81,96 @@ export class SnapshotInvalidError extends SnapshotStoreError {
   }
 }
 
+
+// ── One writer per run, ACROSS PROCESSES ─────────────────────────────────────
+//
+// The revision guard below is a read-then-write, and two PROCESSES can both pass it: each reads
+// revision N, each captures N+1, and each writes. The file layer survives the collision — it
+// writes a temp file and renames it over the target, so the file is never half-written — but
+// "survives" is not "refuses": when the two windows do NOT overlap, both writes succeed, both are
+// stamped revision N+1, and the second silently replaces the first. The loser's run state is gone
+// and nothing said so.
+//
+// That is not a theoretical window. It was measured: the same probe reported "at most one writer"
+// on one run and "BOTH writers succeeded" on the next, with no change to either process. A guard
+// whose outcome depends on scheduling is not a guard, so the read-compare-write is serialized on a
+// lock file that only one process can create.
+//
+// The lock is a file created with `wx` (exclusive create), which the filesystem makes atomic. A
+// holder that dies leaves the file behind, so a lock older than {@link SAVE_LOCK_STALE_MS} is
+// removed and re-taken — the alternative is a run that can never be saved again after one crash.
+
+/** How long a save waits for the run's lock before reporting that another writer holds it. */
+const SAVE_LOCK_WAIT_MS = 2_000
+
+/** How long between attempts to take the lock. */
+const SAVE_LOCK_RETRY_MS = 25
+
+/** Age at which a lock file is treated as left behind by a process that died holding it. */
+const SAVE_LOCK_STALE_MS = 30_000
+
+/** The lock file's name inside one run's snapshot directory. */
+const SAVE_LOCK_NAME = '.save.lock'
+
+/**
+ * Run `write` with the run's save lock held, releasing it whatever happens.
+ *
+ * @param dir - the run's snapshot directory.
+ * @param write - the read-compare-write to perform while the lock is held.
+ * @param runId - named in the refusal when the lock cannot be taken.
+ * @returns whatever `write` returned.
+ * @throws {SnapshotConflictError} when another writer holds the lock for longer than the wait.
+ */
+async function withSaveLock<T>(dir: string, runId: string, write: () => Promise<T>): Promise<T> {
+  const lockPath = join(dir, SAVE_LOCK_NAME)
+  const deadline = Date.now() + SAVE_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      const handle = await open(lockPath, 'wx')
+      try {
+        return await write()
+      } finally {
+        await handle.close().catch(() => undefined)
+        await unlink(lockPath).catch(() => undefined)
+      }
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
+      // Held. If it has been held long enough to be a corpse rather than a writer, clear it.
+      const age = await stat(lockPath).then(info => Date.now() - info.mtimeMs).catch(() => 0)
+      if (age > SAVE_LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => undefined)
+        continue
+      }
+      if (Date.now() >= deadline) {
+        throw new SnapshotConflictError(
+          0,
+          0,
+          `another process is writing run '${runId}' (it holds ${SAVE_LOCK_NAME}); this save waited `
+          + `${String(SAVE_LOCK_WAIT_MS)} ms and was refused rather than written alongside it`,
+        )
+      }
+      await new Promise((resolve) => { setTimeout(resolve, SAVE_LOCK_RETRY_MS) })
+    }
+  }
+}
+
 /**
  * Thrown when a save's `baseRevision` no longer matches the persisted revision: the write was
  * captured from older state than the file holds, so accepting it would silently discard the
  * newer state. The caller reloads and re-derives its write from the current snapshot.
  */
 export class SnapshotConflictError extends SnapshotStoreError {
-  constructor(persistedRevision: number, baseRevision: number) {
+  /**
+   * @param persistedRevision - the revision the file holds; ignored when `message` is given.
+   * @param baseRevision - the revision this write was based on; ignored when `message` is given.
+   * @param message - a specific conflict the revision pair cannot express, such as another
+   *   process holding the save lock. Naming why is the point: the caller's remedy differs.
+   */
+  constructor(persistedRevision: number, baseRevision: number, message?: string) {
     super(
       RUN_SNAPSHOT_ERROR_CODES.CONFLICT,
-      `Snapshot write refused: the persisted snapshot is at revision ${persistedRevision} but this write is based on revision ${baseRevision} — a newer snapshot exists (reload before saving).`,
+      message
+        ?? `Snapshot write refused: the persisted snapshot is at revision ${persistedRevision} but this write is based on revision ${baseRevision} — a newer snapshot exists (reload before saving).`,
     )
     this.name = 'SnapshotConflictError'
     Object.setPrototypeOf(this, new.target.prototype)
@@ -865,40 +945,43 @@ export function createRunPersistence(
       runId: string,
       saveOptions: RunSaveOptions,
     ): Promise<RunSnapshotPayload> {
-      const persisted = await readIfPresent()
-      const persistedRevision = persisted?.revision ?? 0
-      if (saveOptions.baseRevision !== persistedRevision) {
-        throw new SnapshotConflictError(
-          persistedRevision,
-          saveOptions.baseRevision,
-        )
-      }
-      const payload = captureRunSnapshot(store, runId, persistedRevision + 1)
-      try {
-        await file.save(payload)
-      } catch (cause) {
-        // The revision guard above is a read-then-write, and two PROCESSES can both pass it: each
-        // reads revision N, each captures N+1, and the writes collide. The file layer survives
-        // that — it writes a temp file and renames it over the target, so exactly one wins — but
-        // the loser is told whatever the filesystem said, which on Windows is
-        // `EPERM: operation not permitted, rename ...`. That names an operation, not the fact,
-        // and the fact is the one this module already has a word for.
-        //
-        // So: when the write fails, re-read. If the revision MOVED, the failure was this race and
-        // the caller gets the conflict, naming the revision that beat it. If it did not move, the
-        // failure is something else — a real permission problem, a full disk — and is rethrown
-        // with its own cause rather than disguised as a conflict.
-        const afterFailure = await readIfPresent().catch(() => null)
-        const winnerRevision = afterFailure?.revision ?? persistedRevision
-        if (winnerRevision !== persistedRevision) {
+      // The WHOLE read-compare-write is inside the lock, which is what makes the guard a guard.
+      return await withSaveLock(dir, runId, async () => {
+        const persisted = await readIfPresent()
+        const persistedRevision = persisted?.revision ?? 0
+        if (saveOptions.baseRevision !== persistedRevision) {
           throw new SnapshotConflictError(
-            winnerRevision,
+            persistedRevision,
             saveOptions.baseRevision,
           )
         }
-        throw cause
-      }
-      return payload
+        const payload = captureRunSnapshot(store, runId, persistedRevision + 1)
+        try {
+          await file.save(payload)
+        } catch (cause) {
+          // The revision guard above is a read-then-write, and two PROCESSES can both pass it: each
+          // reads revision N, each captures N+1, and the writes collide. The file layer survives
+          // that — it writes a temp file and renames it over the target, so exactly one wins — but
+          // the loser is told whatever the filesystem said, which on Windows is
+          // `EPERM: operation not permitted, rename ...`. That names an operation, not the fact,
+          // and the fact is the one this module already has a word for.
+          //
+          // So: when the write fails, re-read. If the revision MOVED, the failure was this race and
+          // the caller gets the conflict, naming the revision that beat it. If it did not move, the
+          // failure is something else — a real permission problem, a full disk — and is rethrown
+          // with its own cause rather than disguised as a conflict.
+          const afterFailure = await readIfPresent().catch(() => null)
+          const winnerRevision = afterFailure?.revision ?? persistedRevision
+          if (winnerRevision !== persistedRevision) {
+            throw new SnapshotConflictError(
+              winnerRevision,
+              saveOptions.baseRevision,
+            )
+          }
+          throw cause
+        }
+        return payload
+      })
     },
 
     async load<C>(capability: C): Promise<RestoredRun<C>> {

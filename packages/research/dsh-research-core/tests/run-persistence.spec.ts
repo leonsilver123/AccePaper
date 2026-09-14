@@ -113,6 +113,45 @@ async function writeTampered(mutate: (raw: Record<string, unknown>) => void): Pr
   await writeFile(join(dir, SNAPSHOT_FILE_NAME), JSON.stringify(raw), { encoding: 'utf8' })
 }
 
+describe('one writer per run, across processes', () => {
+  it('REFUSES a save while another writer holds the lock', async () => {
+    // The revision guard is a read-then-write and two PROCESSES can both pass it. Measured: the
+    // same contention probe reported "at most one writer" on one run and "BOTH writers succeeded"
+    // on the next, with no change to either process — so the guard held only when the two windows
+    // happened to overlap. The read-compare-write is now serialized on a lock file, and this is
+    // the refusal a second writer gets while the first holds it.
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    await persistence.save(store, runId, { baseRevision: 0 })
+
+    // Stand in for the other process by holding its lock.
+    const lock = join(dir, '.save.lock')
+    await writeFile(lock, '', 'utf8')
+    await expect(persistence.save(store, runId, { baseRevision: 1 }))
+      .rejects.toMatchObject({ code: 'SNAPSHOT_CONFLICT' })
+    // ...and the file was NOT touched by the refused writer.
+    expect((await persistence.read()).revision).toBe(1)
+    await rm(lock, { force: true })
+
+    // With the lock released the same write goes through, so the refusal was about the lock.
+    expect((await persistence.save(store, runId, { baseRevision: 1 })).revision).toBe(2)
+  }, 20_000)
+
+  it('re-takes a lock left behind by a process that died holding it', async () => {
+    // A lock file is the one thing a crash can leave that would otherwise make a run permanently
+    // unsaveable. An old one is treated as a corpse, not as a writer.
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    const lock = join(dir, '.save.lock')
+    await writeFile(lock, '', 'utf8')
+    const old = new Date(Date.now() - 120_000)
+    const { utimes } = await import('node:fs/promises')
+    await utimes(lock, old, old)
+
+    expect((await persistence.save(store, runId, { baseRevision: 0 })).revision).toBe(1)
+  })
+})
+
 describe('run-persistence: capture and restore', () => {
   it('restores a mid-run as state equal to the run that was saved', async () => {
     const store = freshStore()
