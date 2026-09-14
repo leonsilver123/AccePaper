@@ -469,23 +469,44 @@ describe('the declaration is checked against the claim\'s own words', () => {
     if (silent.kind === 'unbindable') expect(silent.reason).toContain('names no direction')
   })
 
-  it('reads a cap written as "not exceed" too, when the anchor sits beside the number', () => {
-    // A natural way to write a cap, added to the table after an audit showed a pack author writing
-    // it would get "carries no anchor beside it" for a sentence that states its bound perfectly
-    // well. The anchor must be ADJACENT to the number — that is the check, and the accepted forms
-    // are a closed, exhaustive list rather than a reading of English.
-    const text = 'the platoon minimum time-to-collision shall rise and shall not exceed 20% above the all-HV baseline'
-    expect(anchorBoundNear(text, 20)).toBe('at-most')
-    const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
-    expect(verdict.kind).toBe('adjudicated')
+  it('HOLDS a PROHIBITION, which the anchors cannot tell from a requirement', () => {
+    // The counterexample an auditor built after I claimed a mismatched anchor could only make the
+    // gate stricter. It is a prohibition — a 38.20% fall VIOLATES it — yet `fall` reads as
+    // `decrease`, `≥` reads as `at-least`, and BOTH agree with this declaration, so the gate graded
+    // the prohibition as a requirement and reported `supported`.
+    const prohibition = 'The insertion of one AV shall not cause the platoon minimum time-to-collision to fall by ≥ 20% relative to the all-HV baseline'
+    const verdict = evaluatePrediction(prohibition, study, MEASURED_METRIC_KEY, { direction: 'decrease', bound: 'at-least' })
+    expect(verdict.kind).toBe('unbindable')
+    if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('requirement or a PROHIBITION')
+  })
 
-    // A cap whose anchor is only in a NEGATED PHRASE elsewhere — "not exceed the baseline by more
-    // than 20%" — holds, because `more than` beside the number is a FLOOR without the negation in
-    // front of it and the negation is outside the window. Stated as a limit, not left to be found:
-    // the anchor set is closed and the anchor has to be adjacent.
-    const distant = 'the platoon minimum time-to-collision shall rise and not exceed the all-HV baseline by more than 20%'
-    expect(anchorBoundNear(distant, 20)).toBeUndefined()
-    expect(evaluatePrediction(distant, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' }).kind).toBe('unbindable')
+  it('HOLDS any negated anchor, and that is a stated consequence rather than an oversight', () => {
+    // A negation stops the grading instead of being interpreted, so the cap forms written as
+    // negations are unreachable and were removed from the table. A claim has to be a POSITIVE
+    // directional statement: "shall rise by at most 20%", not "shall not exceed 20%". An auditor
+    // asked for `not exceed` to be supported and a later auditor showed why it cannot be — this is
+    // the record of that, so the next reader does not re-open it as a missing token.
+    for (const text of [
+      'the platoon minimum time-to-collision shall rise and shall not exceed 20% above the all-HV baseline',
+      'the platoon minimum time-to-collision shall rise by no more than 20% above the all-HV baseline',
+    ]) {
+      const verdict = evaluatePrediction(text, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' })
+      expect(verdict.kind, text).toBe('unbindable')
+      if (verdict.kind === 'unbindable') expect(verdict.reason).toContain('contains a negation')
+    }
+    // The non-negated form of the same cap IS graded.
+    const positive = 'the platoon minimum time-to-collision shall rise by at most 20% above the all-HV baseline'
+    expect(anchorBoundNear(positive, 20)).toBe('at-most')
+    expect(evaluatePrediction(positive, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-most' }).kind).toBe('adjudicated')
+  })
+
+  it('CLOSES the substring problem a bare `includes` had', () => {
+    // `no` inside `normal` and `not` inside `note` used to hold a perfectly gradeable prediction;
+    // word boundaries are what fixed it, and this pins that they did.
+    const normal = 'under normal free flow the platoon minimum time-to-collision shall rise by at least 20%'
+    expect(evaluatePrediction(normal, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' }).kind).toBe('adjudicated')
+    const note = 'note that the platoon minimum time-to-collision shall rise by at least 20%'
+    expect(evaluatePrediction(note, study, MEASURED_METRIC_KEY, { direction: 'increase', bound: 'at-least' }).kind).toBe('adjudicated')
   })
 
   it('reads the anchor only from beside the number', () => {

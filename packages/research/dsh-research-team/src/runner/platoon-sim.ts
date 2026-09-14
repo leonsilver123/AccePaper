@@ -881,13 +881,38 @@ const ANCHOR_TOKENS: ReadonlyArray<{
   { text: '<=', bound: 'at-most' },
   { text: '≤', bound: 'at-most' },
   { text: 'at most', bound: 'at-most' },
-  { text: 'no more than', bound: 'at-most' },
-  // A natural way to write a cap that the first table missed, so a pack author writing it got
-  // "carries no anchor beside it" for a sentence that states its bound perfectly well.
-  { text: 'not exceed', bound: 'at-most' },
-  { text: 'does not exceed', bound: 'at-most' },
   { text: 'within', bound: 'within' },
 ]
+
+/**
+ * Words whose presence makes a prediction UNGRADEABLE, whatever else it says.
+ *
+ * THE FALSE POSITIVE THIS CLOSES, and an auditor built it after I claimed the opposite. The
+ * direction and bound anchors compare WORDS to a declaration, and a word test cannot see a
+ * sentence's POLARITY:
+ *
+ *   "The insertion of one AV shall NOT cause the platoon minimum time-to-collision to FALL by
+ *    ≥ 20% relative to the all-HV baseline."
+ *
+ * That is a PROHIBITION, and a 38.20% fall violates it. But `fall` reads as `decrease`, `≥` reads
+ * as `at-least`, and BOTH agree with a declaration of `{direction: 'decrease', bound: 'at-least'}`
+ * — so the gate graded the prohibition as a requirement and reported `supported`. A prohibition and
+ * a requirement share the same number and the same comparison operator; only the sentence's force
+ * differs, and nothing in this model carries force.
+ *
+ * So a negation stops the grading instead of being interpreted. It can only produce a HOLD, never
+ * a verdict, which is the property the previous claim lacked — the claim was that a mismatch could
+ * only make the gate stricter, and this counterexample is what refuted it.
+ *
+ * The word boundaries also close the reported `no`-inside-`normal` and `not`-inside-`note`
+ * substring problem, which a bare `includes` had.
+ *
+ * THE CONSEQUENCE, stated rather than discovered: the cap anchors written as negations
+ * (`no more than`, `not exceed`) are no longer reachable and are gone from the table. A claim has
+ * to be a POSITIVE directional statement — "shall rise by at most 20%", not "shall not exceed
+ * 20%" — and this model cannot express a prohibition at all.
+ */
+const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['\u2019]t/u
 
 /**
  * The words that commit a prediction to a direction, and which one.
@@ -900,12 +925,15 @@ const ANCHOR_TOKENS: ReadonlyArray<{
  * class as the truthfulness pair the loader now refuses, in the same file, describing the same
  * material.
  *
- * WHAT THIS CAN AND CANNOT DO. It is a word test, and the direction readers this batch deleted were
- * word tests too — but the failure directions are not comparable. Every outcome of THIS check is
- * either "the declaration agrees with the sentence" or a HOLD: a missed word, a spurious word, an
- * ambiguous sentence, or a mismatch all stop the C channel without producing a verdict. An auditor
- * checked that property and confirmed a false match can only make the gate STRICTER, never hand out
- * a pass. A reader whose errors could reach a `supports` value is what got deleted; this one cannot.
+ * WHAT THIS CAN AND CANNOT DO, corrected. I wrote here that every outcome of this check was either
+ * agreement or a HOLD, "so a false match can only make the gate stricter, never hand out a pass" —
+ * and an auditor refuted it: a PROHIBITION whose words agree with the declaration was graded as a
+ * requirement and PASSED. The claim was false, and the counterexample is recorded at
+ * `POLARITY_WORDS` where the guard against it lives.
+ *
+ * What survives is narrower and is the reason this check is still worth having: it verifies the
+ * declaration against the claim's own words, and a disagreement holds. It does NOT establish what
+ * the sentence means, and it cannot.
  */
 const DIRECTION_TOKENS: ReadonlyArray<{
   readonly text: string
@@ -1108,6 +1136,19 @@ export function evaluatePrediction(
     }
   }
   const { direction, bound } = commitment
+  // POLARITY FIRST. A negation makes the sentence ungradeable whatever its words say, because the
+  // model cannot tell a prohibition from a requirement — see `POLARITY_WORDS` for the counterexample
+  // that refuted the previous claim that a mismatched anchor could only ever be stricter.
+  if (POLARITY_WORDS.test(predictionText)) {
+    return {
+      kind: 'unbindable',
+      reason:
+        'the prediction contains a negation, so whether it states a requirement or a PROHIBITION '
+        + 'cannot be read from it — this model can only grade a positive statement of the direction '
+        + 'the quantity should move',
+    }
+  }
+
   // The declaration must agree with the claim's OWN anchor literal, compared as strings. This is
   // the wire-format check an audit proposed in place of reading the sentence: it needs no
   // comprehension, and a mismatch is a positive contradiction — the same class as a declared

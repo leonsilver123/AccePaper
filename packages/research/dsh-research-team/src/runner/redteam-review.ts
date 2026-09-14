@@ -305,6 +305,21 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
         found: 'no declared commitment or threshold to check the anchor against',
         position: 'abstain',
       },
+    // POLARITY. A negation makes the prediction ungradeable, because a prohibition and a
+    // requirement share the same number and the same operator and only the sentence's force
+    // differs — an auditor graded a violated prohibition as MET. The reviewer reports the gap; the
+    // C channel holds on the same condition.
+    /(?:not|no|never|without)|n['’]t/u.test(prediction)
+      ? {
+        check: 'the prediction states a positive requirement',
+        found: 'the prediction contains a negation, so whether it requires a change or PROHIBITS one cannot be read from it',
+        position: 'abstain',
+      }
+      : {
+        check: 'the prediction states a positive requirement',
+        found: 'the prediction states a positive requirement',
+        position: 'support',
+      },
     // ONE percentage. `thresholdFromPrediction` takes the first, which is unambiguous as a string
     // and not as a commitment: "Over 20% of the simulated interval, the … shall exceed by at least
     // 35%" reads its threshold as 20 while the sentence commits to 35.
