@@ -248,8 +248,11 @@ export interface ResearchProseResult {
  * @param source - a `*Source` field's value.
  * @returns the level this file's vocabulary assigns to it.
  */
-function proseKindOf(source: 'model' | 'deterministic' | 'fixture'): Truthfulness {
-  if (source === 'fixture') return 'fixture_executor'
+function proseKindOf(source: 'model' | 'deterministic' | 'fixture' | 'case-pack'): Truthfulness {
+  // `case-pack` is on the same axis as `fixture`: the text was read from a file the deployment
+  // supplied, not produced by any channel. It is listed here rather than special-cased at the call
+  // site so that the level of every prose-origin label is decided in one place.
+  if (source === 'fixture' || source === 'case-pack') return 'fixture_executor'
   // `model` is a deployment's configured model route; the deterministic offline route is
   // `mock_external` — real adaptation logic over a simulated model.
   return source === 'model' ? 'live_external' : 'mock_external'
@@ -1074,7 +1077,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
   return {
-    claim: tagArtifact({ ...artifact.claim, claimSource, metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
+    claim: tagArtifact({ ...artifact.claim, claimSource, claimKind: proseKindOf(claimSource), metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
       {
         text: prediction,

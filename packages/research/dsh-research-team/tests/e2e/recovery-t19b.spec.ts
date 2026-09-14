@@ -193,10 +193,13 @@ describe('T19-B recovery — execute-phase faults leave no artifact', () => {
 })
 
 describe('T19-B recovery — replay / duplicate protection', () => {
-  it('refuses to drive a step whose dependencies are not satisfied', async () => {
+  it('refuses to drive a step whose dependencies are not satisfied, and says WHICH', async () => {
+    // The message used to read "dependency order violated" whatever the reason, which sent a reader
+    // looking at the ordering when the real cause was a hold, a status, or a missing input. The
+    // assertion is on the cause now, so the class of misleading message stays retired.
     const { store, runId, runCtx } = freshStore()
     await expect(driveStep(store, runId, 'A2-claim', { runCtx })).rejects.toThrow(
-      /dependency order violated/i,
+      /missing 'landscape-map'/i,
     )
   })
 
