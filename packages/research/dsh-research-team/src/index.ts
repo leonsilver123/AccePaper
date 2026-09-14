@@ -483,11 +483,10 @@ export class ResearchTeamService extends TypertRemoteService {
       run.runId,
       store,
       () => snapshotOf(run, store, packageExport, persistence),
-      // The approval handler persists through THIS closure, so a decision is as durable as the
-      // run that produced it. Handing the decision only to memory left the snapshot saying E2
-      // `gated` after a person had approved it — a restart would have asked them again.
-      // The approval persists through the same writer the run did, so a decision is as durable
-      // as the run that produced it — and only the persistence half is wanted here.
+      // The approval persists through the SAME writer the run did, so a decision is as durable as
+      // the run that produced it — and only the persistence half is wanted here. Handing the
+      // decision to memory alone left the snapshot saying E2 `gated` after a person had approved
+      // it, so a restart asked them to approve what they already had.
       () => this.recordRun(run, store).then(recorded => recorded.persistence),
     )
     return snapshotOf(run, store, packageExport, persistence)

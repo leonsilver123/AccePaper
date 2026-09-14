@@ -26,7 +26,9 @@
 //   - a client cannot write `passed`: the payload's own `status`, `actor`, `principal` and
 //     `principalId` fields are read by nothing.
 
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -38,6 +40,7 @@ import {
   rollback,
   startStep,
 } from '@deepseek-ai/dsh-research-core'
+import { createRunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { createHostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 
@@ -385,6 +388,49 @@ describe('§8.1 an Agent cannot self-approve through an ordinary call', () => {
     expect(after.ok ? '' : after.error.code).toBe(APPROVAL_ERROR_CODES.runUnknown)
 
     // Re-register for any later suite.
+    rememberRun(drive.run.runId, drive.store, () => project(drive.run, drive.store))
+  })
+})
+
+describe('§8.1 a decision is as durable as the run that produced it', () => {
+  // The defect this covers: the handler moved the step in MEMORY and returned success while the
+  // snapshot on disk still said `gated`, so the next process asked the person to approve what they
+  // had already approved. `ApprovalDecision.persisted` reports which of the two happened; the
+  // assertion that settles it is on the FILE, read through a writer this test did not decide with.
+  it('writes the decision to the run snapshot, so a restart reads E2 as passed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-approval-durable-'))
+    const writer = createRunPersistence({ dir })
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    // The predecessor, written through the same writer: the run as it stands BEFORE the decision.
+    // Without it the test could not tell the decision's write from the run's own.
+    const before = await writer.save(drive.store, drive.run.runId, { baseRevision: 0 })
+    const beforeStep = before.steps.find(step => step.stepId === E2)
+    expect(beforeStep?.status).toBe('gated')
+    expect(beforeStep?.approval).toBeUndefined()
+
+    rememberRun(
+      drive.run.runId,
+      drive.store,
+      () => project(drive.run, drive.store),
+      async () => {
+        const written = await writer.save(drive.store, drive.run.runId, { baseRevision: before.revision })
+        return { runId: drive.run.runId, revision: written.revision, interrupted: [] }
+      },
+    )
+    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    expect(result.ok).toBe(true)
+    expect(result.ok ? result.value.persisted : undefined).toBe(true)
+    expect(result.ok ? result.value.persistenceError : 'no result').toBeUndefined()
+
+    // A FRESH writer over the same directory, which is all the next process has.
+    const reread = await createRunPersistence({ dir }).read()
+    const decided = reread.steps.find(step => step.stepId === E2)
+    expect(decided?.status).toBe('passed')
+    expect(decided?.approval?.decision).toBe('approved')
+    expect(reread.consumedApprovalEventIds).toContain(result.ok ? result.value.approvalEventId : 'no event')
+
+    // Leave the shared registry as the other suites expect to find it.
     rememberRun(drive.run.runId, drive.store, () => project(drive.run, drive.store))
   })
 })
