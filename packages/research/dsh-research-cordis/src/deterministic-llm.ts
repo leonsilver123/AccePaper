@@ -168,8 +168,12 @@ export function createDeterministicAdapter(config: DeterministicProseConfig): Re
   const resolveModel = (provider: string, model: string): Promise<{ provider: string; id: string; name: string }> =>
     Promise.resolve({ provider, id: model, name: model })
 
-  // The provider contract is an AsyncIterable and the body has no asynchronous step: the
-  // response is computed from the request rather than awaited from anywhere.
+  // An async generator because the provider contract is an AsyncIterable; the body has no
+  // asynchronous step, since the response is computed from the request rather than awaited.
+  // The gate's lint config enables `require-await` and reports it here, so the rule is disabled
+  // for this one declaration rather than an artificial `await` being added to satisfy it. (The
+  // staged pre-commit config does not enable the rule, so it reports this directive as unused;
+  // the gate config is the one that decides.)
   // oxlint-disable-next-line typescript/require-await -- a provider stream is async by contract
   async function* stream(request: RequestFace): AsyncGenerator<Chunk> {
     const text = deriveDeterministicText(request, config)
