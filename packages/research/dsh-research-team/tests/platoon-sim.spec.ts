@@ -51,15 +51,30 @@ describe('runPlatoon', () => {
   })
 
   it('reports the pack-declared TTC<1.5s rate even though it is inert here', () => {
-    // The metric the Case Pack's own mock rows are written in. At the declared headways an
-    // IDM platoon cannot reach `TTC < 1.5 s` — the smallest TTC a leader stopping dead can
-    // produce is `(s0 + v·T)/v`, above 1.5 s — so this rate is measured and REPORTED, and is
-    // deliberately not the quantity the claim binds to. A future change that made the rate
-    // nonzero would move this test, which is the point of pinning it.
     const result = runPlatoon(study.variant)
     expect(result.ttcLt1_5RatePct).toBe(0)
     expect(result.samples).toBeGreaterThan(0)
     expect(SIMULATION_INPUTS.ttcThresholdSeconds).toBe(1.5)
+  })
+
+  it('PINS the limit: the TTC<1.5s band is not entered at any forcing or headway tested', () => {
+    // The study does not bind its claim to this band, and the reason has to stay a MEASURED one.
+    // The first version of the reason was an argument — "an IDM platoon settles at s0 + v·T, so
+    // the smallest TTC a leader stopping dead can produce is (s0 + v·T)/v, above 1.5 s" — and it
+    // was wrong: that expression is the TTC a follower would see if it never braked, it is below
+    // 1.5 s for the AV's declared 1.2 s headway, and real followers brake. Only running it shows
+    // the band is not entered. This case keeps the reason empirical: if a model change ever puts
+    // the platoon into that band, it fails here rather than in a comment nobody re-reads.
+    const harsh = { ...study.variant, leader: { kind: 'stop-and-go' as const, speedDropMps: study.variant.initialSpeedMps - 1, periodSeconds: SIMULATION_INPUTS.disturbancePeriodSeconds } }
+    for (const amplitude of [SIMULATION_INPUTS.freeFlowAmplitudeMps, 12, SIMULATION_INPUTS.stopAndGoSpeedDropMps]) {
+      const forced = runPlatoon({ ...study.variant, leader: { kind: 'free-flow', amplitudeMps: amplitude, periodSeconds: SIMULATION_INPUTS.disturbancePeriodSeconds } })
+      expect(forced.ttcLt1_5RatePct, `amplitude ${String(amplitude)}`).toBe(0)
+    }
+    const stopped = runPlatoon(harsh)
+    expect(stopped.ttcLt1_5RatePct).toBe(0)
+    // ...and the floor the sweep found, so the "never below 2.08 s" claim in the module header is
+    // checked rather than remembered.
+    expect(stopped.minTtcSeconds).toBeGreaterThan(2.0)
   })
 
   it('reports a minimum time-to-collision that is a finite, positive number', () => {

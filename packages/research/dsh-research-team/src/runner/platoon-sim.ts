@@ -37,13 +37,25 @@
  *  - The absolute values are model output. The COMPARISON between the two platoons is the
  *    measurement; the absolute numbers are not field data and are labelled accordingly.
  *
- * A LIMIT THIS MODULE MEASURES AND REPORTS RATHER THAN HIDES. At the headways the Case
- * Pack declares, `TTC < 1.5 s` is close to unreachable: an IDM platoon settles at
- * `s0 + v·T`, so the smallest TTC a leader stopping dead can produce is `(s0 + v·T)/v`,
- * which is above 1.5 s for every speed. The rate is still measured and reported — it is
- * the quantity the pack's own mock rows are written in — but it is NOT the quantity the
- * study binds its claim to, because a metric that cannot move cannot adjudicate anything.
- * The bound quantity is the platoon's minimum time-to-collision, which does move.
+ * A LIMIT THIS MODULE MEASURES AND REPORTS RATHER THAN HIDES. At the headways and forcings
+ * this Case Pack declares, the `TTC < 1.5 s` band is not entered. That is a MEASUREMENT, not
+ * an argument: across disturbance amplitudes from 5 m/s to 24 m/s — the last a near-total
+ * stop from a 25 m/s cruise, harsher than anything the pack declares — and across desired
+ * headways from 2.0 s down to 0.3 s, the rate is 0.00% in every case and the platoon's
+ * minimum time-to-collision never falls below 2.08 s.
+ *
+ * The limiting factor is the model's own deceleration behaviour, and the arithmetic that
+ * first suggested otherwise was wrong: `(s0 + v·T)/v` is what the TTC would be if the
+ * follower never braked at all, and a follower does brake — within its reaction delay it can
+ * decelerate at least as hard as its leader, so the closing speed stays small relative to the
+ * gap it still has. That bound is below 1.5 s for the AV's declared 1.2 s headway, so it
+ * never ruled the band out; only running the simulation does.
+ *
+ * The rate is still measured and reported — it is the quantity the pack's own mock rows are
+ * written in — but it is NOT the quantity the study binds its claim to, because a metric that
+ * does not move cannot adjudicate anything. The bound quantity is the platoon's minimum
+ * time-to-collision, which does move. The pack's mock values for that column (18%–44%) are
+ * not reachable under this model at any setting tested.
  */
 
 /** Version of the rule that MEASURES this experiment. Identifies the measurement. */
