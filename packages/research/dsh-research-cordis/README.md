@@ -4,6 +4,18 @@
 
 本包是**薄适配层**:状态机委托给它,工具注册连同事务性回滚、可撤销句柄与模块私有 capability 一起在此实现。服务同时委托 T07/T08/T09 的纯结果面(`classifyL0` / `verifyCitation` / `evaluateGate` / `getGateIntent`),这些方法不触碰任何 run 状态。
 
+## 部署级配置
+
+三个字段各代表**一个**部署级选择,由引擎一次决定、全流水线共用:
+
+| 字段 | 决定什么 | 省略时 |
+|---|---|---|
+| `literatureSearch` / `citationResolver` | 检索与引文身份链打哪个目录(`fixture` 或 `openalex`) | fixture(离线) |
+| `prose` | 正文步骤走哪个 provider 路由 | 正文步骤输出其 fixture 文本,不调模型 |
+| `workspace` | 引擎创建的**每个** agent 会话的绝对工作目录 | `process.cwd()` |
+
+`workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达 provider **之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
+
 ## Known Limitations and Deferred Work
 
 - 本服务**不把闸门结果自动写回 StepState**。这是刻意的设计边界(服务是纯委托层,由 driver 决定何时调用 `submitGateVerdict` / `completeStep`),而不是契约缺口——`hold_abstained` 的容身处由 core 提供(状态机把 abstained 步骤钉在 `gated` 并记 `holdReason='gate_abstained'`)。

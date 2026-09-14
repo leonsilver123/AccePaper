@@ -17,6 +17,8 @@
  *  - Host services are loaded through the same non-literal dynamic-import seam
  *    as src/tools.ts, so host type graphs never enter this compilation.
  */
+import { randomUUID } from 'node:crypto'
+
 import type { Context } from '@deepseek-ai/cordis'
 import { modelReadyResearchToolIds } from './tools.ts'
 import type {
@@ -101,15 +103,28 @@ function firstToolResultText(events: unknown[]): string | undefined {
 
 let adapterSeq = 0
 
+/** Options for {@link AgentLoopResearchToolInvoker}. */
+export interface AgentLoopResearchToolInvokerOptions {
+  /**
+   * Absolute working directory for the agent session this invoker creates. Required:
+   * `{{cwd}}` is a strict system-prompt variable referenced by every shipped bundle's
+   * persona, so a session created without one fails at prompt assembly and the tool
+   * call never reaches the loop.
+   */
+  readonly cwd: string
+}
+
 /** Invoker bound to a live context whose agentLoop/tools/llm are present. */
 export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
   readonly truthfulness: ResearchToolTruthfulness = 'host_tool_runtime'
   readonly provenance: ResearchToolProvenance = 'agent-loop-toolruntime'
 
   private readonly ctx: Context
+  private readonly cwd: string
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, options: AgentLoopResearchToolInvokerOptions) {
     this.ctx = ctx
+    this.cwd = options.cwd
   }
 
   async invoke(
@@ -162,7 +177,14 @@ export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
     // Same read as the prose writer: `ctx.get`, never the property proxy, because a
     // context that does not declare `agentLoop` in its `inject` cannot resolve it.
     const agentLoop = this.ctx.get('agentLoop') as
-      | { create: (sessionId: unknown, cfg: { provider: string; model: string }) => unknown }
+      | {
+        /** The third parameter is the session's creation metadata; `cwd` lives there. */
+        create: (
+          sessionId: unknown,
+          cfg: { provider: string; model: string },
+          meta: { cwd: string },
+        ) => unknown
+      }
       | undefined
     if (agentLoop === undefined) {
       throw new Error('[research-invoker] the host provides no `agentLoop` service')
@@ -195,10 +217,14 @@ export class AgentLoopResearchToolInvoker implements ResearchToolInvoker {
     // Unique provider avoids clobbering any pre-registered mock adapter.
     const provider = `research-mock-${adapterSeq++}`
     anyCtx.llm.registerAdapter([provider], adapter)
-    const agent = agentLoop.create(host.SessionId(`res-invoke-${adapterSeq}`), {
+    // Same third-argument requirement as the prose writer: `meta.cwd` is the only
+    // source of the strict `{{cwd}}` prompt variable.
+    // Random, not the per-process counter: sessions are persisted, so a counter that
+    // restarts at zero on every boot collides with the previous run's session ids.
+    const agent = agentLoop.create(host.SessionId(`res-invoke-${randomUUID()}`), {
       provider,
       model: 'mock',
-    }) as {
+    }, { cwd: this.cwd }) as {
       followup: (message: unknown) => void
       session: { snapshotEvents: () => unknown[] }
     }

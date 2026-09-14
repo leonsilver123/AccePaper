@@ -13,8 +13,16 @@
  *
  * The writer never invents a result: a loop that ends without any assistant text
  * resolves to a rejection, and the caller (the step executor) fails the step rather
- * than passing an empty product downstream.
+ * than passing an empty product downstream. The rejection names the turn's own error
+ * when it had one, so an upstream failure is never reported as a neutral empty result.
+ *
+ * The session it creates carries an absolute `cwd` (see {@link LlmProseWriterConfig.cwd}).
+ * `{{cwd}}` is a strict system-prompt variable referenced by every shipped bundle's
+ * persona; a session without one fails at prompt assembly and its request never
+ * reaches the provider at all.
  */
+
+import { randomUUID } from 'node:crypto'
 
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -39,7 +47,12 @@ export interface ProseResultLike {
 
 /** Structural faces of the host services this writer needs. */
 interface AgentLoopFace {
-  create: (sessionId: unknown, config: { provider: string; model: string }) => unknown
+  /** The third parameter is the session's creation metadata; `cwd` lives there. */
+  create: (
+    sessionId: unknown,
+    config: { provider: string; model: string },
+    meta: { cwd: string },
+  ) => unknown
 }
 
 interface SessionHostFace {
@@ -71,19 +84,70 @@ export function assistantTextOf(event: unknown): ReadonlyArray<string> {
   return parts
 }
 
+/**
+ * The failure a session's turn ended with, if it ended that way.
+ *
+ * A turn that fails during prompt assembly leaves no `assistant/message` event at
+ * all, so the only record of WHY is the `turn/end` reason. Reading it is what keeps
+ * an upstream failure (unresolved prompt variable, provider error, cancelled
+ * request) from being reported as the neutral "the model produced no text".
+ *
+ * @param event - one entry from a session's snapshot events.
+ * @returns the reported message, or undefined when this event is not a failed turn end.
+ */
+export function turnErrorOf(event: unknown): string | undefined {
+  if (event === null || typeof event !== 'object') return undefined
+  const record = event as {
+    type?: unknown
+    data?: { reason?: { kind?: unknown; error?: unknown } }
+  }
+  if (record.type !== 'turn/end') return undefined
+  const reason = record.data?.reason
+  if (reason?.kind !== 'error') return undefined
+  const error = reason.error
+  if (error !== null && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') {
+    return (error as { message: string }).message
+  }
+  return String(error)
+}
+
 export interface LlmProseWriterConfig {
   /** Registered provider route, e.g. `deepseek-official`. */
   readonly provider: string
   /** Model id offered by that provider. */
   readonly model: string
+  /**
+   * Absolute working directory for the session this writer creates.
+   *
+   * Required, not defaulted: `{{cwd}}` is a strict system-prompt variable that every
+   * shipped bundle's persona references, and a session created without one fails at
+   * prompt ASSEMBLY — before any request reaches the provider. The engine resolves
+   * this once from its own `workspace` config, so a deployment does not restate it
+   * on the `prose` row.
+   */
+  readonly cwd: string
   /** Milliseconds to wait for the loop to go idle before failing the write. */
   readonly idleTimeoutMs?: number
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 120_000
 
-/** Monotonic suffix so concurrent writes never share a session id. */
-let proseSeq = 0
+/**
+ * Session id for one write.
+ *
+ * The suffix is random, not a per-process counter. Sessions are PERSISTED, so a counter
+ * restarts at zero on every boot and collides with the previous run's sessions: the
+ * store rejects the id ("already persisted at a different cwd"), which makes every prose
+ * write fail after a restart. Had the working directory matched, the collision would be
+ * worse than a failure — the write would resume a previous run's session and pull its
+ * assistant text into this step's product, which is precisely the cross-session leak the
+ * writer must not have.
+ *
+ * @returns an id unique across processes and concurrent writes.
+ */
+function proseSessionId(): string {
+  return `research-prose-${randomUUID()}`
+}
 
 /**
  * Turn a prose request into one model message. The upstream artifact values travel
@@ -100,6 +164,21 @@ function promptFor(request: ProseRequestLike): string {
 /** Collect the assistant text from a session's snapshot events. */
 function assistantTextFrom(events: ReadonlyArray<unknown>): string {
   return events.flatMap(event => assistantTextOf(event)).join('\n').trim()
+}
+
+/**
+ * The most recent failed-turn reason in a session's events.
+ *
+ * @param events - the session's snapshot events, in log order.
+ * @returns the last reported message, or undefined when no turn ended in error.
+ */
+function lastTurnErrorFrom(events: ReadonlyArray<unknown>): string | undefined {
+  let failure: string | undefined
+  for (const event of events) {
+    const message = turnErrorOf(event)
+    if (message !== undefined) failure = message
+  }
+  return failure
 }
 
 /**
@@ -149,6 +228,12 @@ export class LlmProseWriter {
    * @throws {Error} when the loop yields no assistant text or fails to settle.
    */
   async write(request: ProseRequestLike): Promise<ProseResultLike> {
+    // Checked BEFORE any await. A signal that arrived already aborted would otherwise
+    // be missed: the listener below is attached later, and an aborted signal never
+    // fires `abort` again — the write would run to completion against a cancelled request.
+    if (request.signal?.aborted === true) {
+      throw new Error(`[research-prose] ${request.stepId}: cancelled before the request was sent`)
+    }
     const host = await this.loadHost()
     // READ THE SERVICE THROUGH `ctx.get`, NOT THE PROPERTY PROXY. `ctx.agentLoop`
     // only resolves when the reading context declares `agentLoop` in its `inject`;
@@ -168,11 +253,16 @@ export class LlmProseWriter {
       on: (event: string, cb: (payload: { agent: unknown; status: string }) => void) => () => void
     }
 
-    const sessionId = host.SessionId(`research-prose-${proseSeq++}`)
+    const sessionId = host.SessionId(proseSessionId())
+    // The THIRD argument is the session's creation metadata, and `cwd` is the only
+    // source of the strict `{{cwd}}` prompt variable. Omitting it (as this call did)
+    // made every prose request fail at prompt assembly with
+    // `prompt variable "{{cwd}}" has no value for this assembly`, so no request ever
+    // reached the provider — a configured channel that failed before the model.
     const agent = agentLoop.create(sessionId, {
       provider: this.config.provider,
       model: this.config.model,
-    }) as {
+    }, { cwd: this.config.cwd }) as {
       followup: (message: unknown) => void
       session: { snapshotEvents: () => unknown[] }
     }
@@ -202,8 +292,20 @@ export class LlmProseWriter {
     }))
     await settled
 
-    const text = assistantTextFrom(agent.session.snapshotEvents())
+    const events = agent.session.snapshotEvents()
+    const text = assistantTextFrom(events)
     if (text.length === 0) {
+      // Separate the two outcomes a zero-length product can mean. A turn that ENDED
+      // IN ERROR never reached the provider (unresolved prompt variable, provider
+      // failure, cancellation), and reporting that as "the model produced no text"
+      // hides the cause in exactly the way the engine's own discipline forbids.
+      const failure = lastTurnErrorFrom(events)
+      if (failure !== undefined) {
+        throw new Error(
+          `[research-prose] ${request.stepId}: the request failed before the model produced `
+          + `text: ${failure}`,
+        )
+      }
       throw new Error(`[research-prose] ${request.stepId}: the model produced no text (no default pass)`)
     }
     return { text, provider: this.config.provider, model: this.config.model }

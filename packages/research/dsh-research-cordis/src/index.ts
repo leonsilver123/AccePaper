@@ -44,6 +44,8 @@
  * @module @deepseek-ai/dsh-research-cordis
  */
 
+import { isAbsolute } from 'node:path'
+
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
@@ -112,6 +114,14 @@ declare module '@deepseek-ai/cordis' {
  *  tool registration a startup requirement was wrong: the flag was unset AND the
  *  mount ran before `tools` existed, so the bundle registered no research tool at
  *  all. See `toolsReady`. */
+/**
+ * The `prose` row as a deployment writes it in `cordis.yml`. The session working
+ * directory is deliberately absent — {@link ResearchEngine} resolves it once from
+ * `Config.workspace`, so it is stated in one place per deployment instead of once
+ * per row.
+ */
+export type ProseChannelConfig = Omit<LlmProseWriterConfig, 'cwd'>
+
 export interface Config {
   readonly requireResearchTools?: boolean
   /**
@@ -136,8 +146,23 @@ export interface Config {
    * Real-model channel for prose steps (A1 gap analysis, D2 outline, D3 writing,
    * D4 rebuttal). Omitted, those steps emit their fixture text and the deployment
    * stays fully offline — the same posture as an omitted `literatureSearch`.
+   *
+   * The session's working directory is NOT set here: this engine resolves it once
+   * from {@link Config.workspace} and supplies it to the writer.
    */
-  readonly prose?: LlmProseWriterConfig
+  readonly prose?: ProseChannelConfig
+  /**
+   * Absolute working directory for every agent session this engine creates (prose
+   * writes and model-ready tool invocations). Omitted, it resolves to the
+   * deployment's `process.cwd()`.
+   *
+   * This is the deployment's choice of where research sessions run, and it is not
+   * optional in effect: `{{cwd}}` is a strict system-prompt variable that every
+   * shipped bundle's persona references, so a session created without one fails at
+   * prompt ASSEMBLY and its request never reaches the provider. A relative value is
+   * rejected here rather than by the session layer.
+   */
+  readonly workspace?: string
 }
 
 /**
@@ -148,6 +173,29 @@ export interface Config {
  * unload by [Service.init] (singleton service — module scope ≡ instance scope).
  */
 const runs: ResearchRunStore = new Map()
+
+/**
+ * Resolve the deployment's session working directory.
+ *
+ * An explicit resolution step, in the owning implementation — the same posture as
+ * the runner's own output-directory resolution — rather than a `?? process.cwd()`
+ * buried in each call site that creates a session.
+ *
+ * @param configured - the deployment's `workspace` value, if it stated one.
+ * @returns an absolute path.
+ * @throws {Error} when the configured value is not absolute, which the session layer
+ *   would otherwise reject much later and with less context.
+ */
+function resolveWorkspace(configured: string | undefined): string {
+  const cwd = configured ?? process.cwd()
+  if (!isAbsolute(cwd)) {
+    throw new Error(
+      `[research] \`workspace\` must be an absolute path, got "${cwd}" — every session this `
+      + 'engine creates needs one because `{{cwd}}` is a strict system-prompt variable',
+    )
+  }
+  return cwd
+}
 
 export class ResearchEngine extends Service {
   static Config: z<Config> = z.object({})
@@ -173,6 +221,12 @@ export class ResearchEngine extends Service {
    */
   readonly toolDeps: ResearchToolDeps
   /**
+   * The resolved absolute working directory for every session this engine creates.
+   * Resolved once here (not defaulted at each call site) so the prose writer and any
+   * model-ready tool invoker cannot disagree about it.
+   */
+  readonly sessionCwd: string
+  /**
    * The real-model prose writer when `config.prose` names a route, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the team service
    * reads it so one deployment-level choice governs every prose step.
@@ -183,7 +237,10 @@ export class ResearchEngine extends Service {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
     this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
-    this.proseWriter = config.prose !== undefined ? new LlmProseWriter(ctx, config.prose) : undefined
+    this.sessionCwd = resolveWorkspace(config.workspace)
+    this.proseWriter = config.prose !== undefined
+      ? new LlmProseWriter(ctx, { ...config.prose, cwd: this.sessionCwd })
+      : undefined
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
@@ -352,5 +409,5 @@ export { OpenAlexCitationResolver } from './openalex-citation-resolver.ts'
 export type { OpenAlexCitationResolverOptions } from './openalex-citation-resolver.ts'
 
 /** Real-model prose channel for the runner's text-producing steps. */
-export { LlmProseWriter } from './llm-prose-writer.ts'
+export { LlmProseWriter, assistantTextOf, turnErrorOf } from './llm-prose-writer.ts'
 export type { LlmProseWriterConfig, ProseRequestLike, ProseResultLike } from './llm-prose-writer.ts'

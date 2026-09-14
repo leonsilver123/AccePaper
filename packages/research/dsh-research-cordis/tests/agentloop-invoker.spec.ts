@@ -16,6 +16,8 @@ import { ResearchEngine } from '../src/index.ts'
 import { AgentLoopResearchToolInvoker } from '../src/agent-loop-invoker.ts'
 
 const TS = 1_720_000_000_000
+/** The session working directory every invoker must state (the `{{cwd}}` source). */
+const CWD = process.cwd()
 
 async function loadHost() {
   const llm = await import('@deepseek-ai/' + 'dsh-llm')
@@ -62,7 +64,7 @@ const TABLE_INPUT = {
 describe('AgentLoopResearchToolInvoker', () => {
   it('rejects pipeline_only ids with a stable code, without touching the loop', async () => {
     const ctx = await setupRuntime()
-    const invoker = new AgentLoopResearchToolInvoker(ctx)
+    const invoker = new AgentLoopResearchToolInvoker(ctx, { cwd: CWD })
     const result = await invoker.invoke('literature-search', { topic: 'traffic' }, { timestamp: TS })
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -75,7 +77,7 @@ describe('AgentLoopResearchToolInvoker', () => {
 
   it('executes a model_ready tool through the REAL agent-loop and returns its artifact', async () => {
     const ctx = await setupRuntime()
-    const invoker = new AgentLoopResearchToolInvoker(ctx)
+    const invoker = new AgentLoopResearchToolInvoker(ctx, { cwd: CWD })
     const result = await invoker.invoke('three-line-table', TABLE_INPUT, { timestamp: TS })
     expect(result, JSON.stringify(result)).toBeTruthy()
     if (!result.ok) throw new Error('invoke failed: ' + JSON.stringify(result))
@@ -92,7 +94,7 @@ describe('AgentLoopResearchToolInvoker', () => {
     const directResult = await direct.invoke('three-line-table', TABLE_INPUT, { timestamp: TS })
     expect(directResult.ok).toBe(true)
     const ctx = await setupRuntime()
-    const loopInvoker = new AgentLoopResearchToolInvoker(ctx)
+    const loopInvoker = new AgentLoopResearchToolInvoker(ctx, { cwd: CWD })
     const loopResult = await loopInvoker.invoke('three-line-table', TABLE_INPUT, { timestamp: TS })
     expect(loopResult.ok).toBe(true)
     if (directResult.ok && loopResult.ok) {
