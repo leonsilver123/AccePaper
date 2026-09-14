@@ -1262,8 +1262,9 @@ export function evaluatePrediction(
   // POSITIVITY CLAUSE — `typeof === number && Number.isFinite`, without `> 0` — because a finite
   // non-positive number is printed as itself: it is a number the claim did declare, and the doors
   // are what refuse it. What this guard is, exactly: MESSAGE HYGIENE, not a second line of boundary
-  // defence. A value that got past those readers would be wrong in the graded comparison too, and
-  // not only in this string.
+  // defence — a value that bypassed those readers is refused by the percentage check below
+  // (`statedPercentages[0] !== thresholdPct` holds, so the function returns `unbindable`), and it
+  // never reaches the graded comparison. This decides only what the message says.
   const declaredThreshold =
     typeof thresholdPct === 'number' && Number.isFinite(thresholdPct)
       ? `${String(thresholdPct)}%`
