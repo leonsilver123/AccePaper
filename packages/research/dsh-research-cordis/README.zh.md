@@ -4,7 +4,7 @@
 
 `dsh-research-core` 的 Cordis 适配器:把 16 步引擎暴露为 `ctx.research` 服务,并把七个研究工具注册到宿主真实的 `ctx.tools`。
 
-本包是**薄适配层**:状态机委托给它,工具注册连同事务性回滚、可撤销句柄与模块私有能力 一起在此实现。服务同时委托 T07/T08/T09 的纯结果面(`classifyL0` / `verifyCitation` / `evaluateGate` / `getGateIntent`),这些方法不触碰任何 run 状态。
+本包是**薄适配层**:状态机委托给它,工具注册连同事务性回滚、可撤销句柄与模块私有能力一起在此实现。服务同时委托 T07/T08/T09 的纯结果面(`classifyL0` / `verifyCitation` / `evaluateGate` / `getGateIntent`),这些方法不触碰任何 run 状态。
 
 ## 部署级配置
 
@@ -16,7 +16,7 @@
 | `prose` | 正文步骤走哪个提供方路由 | 正文步骤输出其 fixture 文本,不调模型 |
 | `workspace` | 引擎创建的**每个** agent 会话的绝对工作目录 | `process.cwd()` |
 
-`workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达提供方 **之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
+`workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达提供方**之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
 
 ## 已知限制与延期工作
 
