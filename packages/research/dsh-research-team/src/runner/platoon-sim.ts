@@ -854,6 +854,15 @@ export interface PredictionCommitment {
    *   at-least : met when the change in `direction` is `>= threshold`  ("by at least 20%")
    *   at-most  : met when it is `<= threshold`                          ("by no more than 20%")
    *   within   : met when `|change| <= threshold`                       ("within 20%")
+   *
+   * `direction` IS A SIGN HERE, NOT A REQUIREMENT, and the three lines above are the whole of what
+   * is graded. `at-most` and `within` compare a signed or an absolute value, so a change in the
+   * OPPOSITE direction can satisfy the bound, and the prose is still REQUIRED to state a direction
+   * word that the verdict then does not read. Measured by an audit on one −38.20% measurement:
+   * declared `{increase, at-most, 20}` grades `supportsPrediction: true`, and under `within` the
+   * direction word has no effect at all — "shall rise within 40%" and "shall fall within 40%" grade
+   * identically. A claim that means "shall increase by at most 20%" cannot be expressed here; the
+   * recording of that is this paragraph, not an implementation.
    */
   readonly bound: 'at-least' | 'at-most' | 'within'
   /**
@@ -921,7 +930,9 @@ const ANCHOR_TOKENS: ReadonlyArray<{
  * THE CONSEQUENCE, stated rather than discovered: the cap anchors written as negations
  * (`no more than`, `not exceed`) are no longer reachable and are gone from the table. A claim has
  * to be a POSITIVE directional statement — "shall rise by at most 20%", not "shall not exceed
- * 20%" — and this model cannot express a prohibition at all.
+ * 20%" — and a prohibition cannot be written in the GRADED path. Two forms carry no listed
+ * negation word and still reach a verdict; they are recorded under `anchorForms.prohibitionLimits`
+ * on the claim artifact rather than left to be rediscovered.
  */
 const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['’]t/iu
 
@@ -932,8 +943,8 @@ const POLARITY_WORDS = /\b(?:not|no|never|without)\b|n['’]t/iu
  * here rather than keeping a second copy of the word list. Scoping it to the clause that names the
  * measured quantity was tried and refuted: a prohibition keeps the required shape inside that clause
  * ("…shall fall by at least 20%") and can put its negation anywhere else, which reached a verdict of
- * SUPPORTED on a measured 38.20% fall. See `POLARITY_WORDS` for the word list and the reachability
- * this costs.
+ * SUPPORTED on a measured 38.20% fall. See `POLARITY_WORDS` for the word list, and
+ * `evaluatePrediction` for the honest sentences this whole-sentence read refuses.
  *
  * @param predictionText - the falsifiable prediction, whole.
  * @returns true when any listed negation word appears in it.
@@ -1236,11 +1247,17 @@ export function evaluatePrediction(
   // A prose number that differs contradicts the declaration; none at all means the claim never
   // committed in writing.
   const statedPercentages = percentagesIn(clause)
+  // The declared number as the sentence may state it. A commitment that reached here without one
+  // would otherwise be described as "a threshold of undefined%" — a sentence about a number the run
+  // never had. The parameter type says that cannot happen; this is what the message reads if a value
+  // off the durable boundary ever gets past the reader that validates it.
+  const declaredThreshold =
+    typeof thresholdPct === 'number' ? `${String(thresholdPct)}%` : 'no usable threshold'
   if (statedPercentages.length !== 1 || statedPercentages[0] !== thresholdPct) {
     return {
       kind: 'unbindable',
       reason:
-        `the claim declares a threshold of ${String(thresholdPct)}%, while its own prediction states `
+        `the claim declares ${declaredThreshold}, while its own prediction states `
         + `${statedPercentages.length === 0 ? 'none' : `${statedPercentages.map(String).join(', ')}%`} `
         + '— the declaration and the sentence contradict each other, so the claim is not gradeable as stated',
     }

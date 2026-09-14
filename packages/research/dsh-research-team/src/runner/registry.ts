@@ -1282,7 +1282,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           id: contribution.id,
           claimRef,
           claim: contribution.statement,
-          expectedEvidence: `platoon minimum-TTC gain ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
+          expectedEvidence: `platoon minimum-TTC change ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
         })),
         agendaSource,
         note: agendaSource === 'fixture'
@@ -2074,7 +2074,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       { id: 'baseline-input', label: 'Homogeneous platoon (HV-HV-HV)', kind: 'input' },
       { id: 'adaptive-policy', label: 'Mixed platoon (HV-AV-HV)', kind: 'process' },
       { id: 'delay-experiment', label: 'Platoon experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: `Minimum TTC gain ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
+      { id: 'reduction-outcome', label: `Minimum TTC change ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
     ],
     edges: [
       { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },
