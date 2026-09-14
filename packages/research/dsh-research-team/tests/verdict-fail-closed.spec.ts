@@ -53,11 +53,11 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     // ...and its OWN declared quantity. Both are needed: a prediction about the quantity the
     // experiment measures is what makes the comparison a comparison. Without the key the gate
     // holds, which is what the two tests above and below assert.
+    // The key alone is self-attestation: a claim about collision risk reaches a verdict by
+    // declaring the delay key, which an auditor showed reaching E2 before this check existed. The
+    // PREDICTION is the sentence checked, because the graded number is read out of it — and
+    // CANONICAL.prediction names the measured quantity, so it binds.
     runCtx.metricKey = MEASURED_METRIC_KEY
-    // ...and its own words must name that quantity. The key alone is self-attestation: a claim
-    // about collision risk reaches a verdict by declaring the delay key, which an auditor showed
-    // reaching E2 before this check existed.
-    runCtx.claimText = CANONICAL.prediction
     const ctx: VerdictBuildCtx = { step: C2, attemptId: 1, runCtx, abstain: new Set() }
 
     const built = await buildStepVerdicts(ctx)
@@ -76,16 +76,37 @@ describe('T19-S — C-channel fail-closed symmetry with C1-mvp', () => {
     // `mean-delay-seconds-per-vehicle` passed all sixteen steps. The declaration must agree with
     // the claim's own text, and this asserts that it is checked rather than trusted.
     const adjudication = evaluatePrediction(
+      // The prediction the number would be read out of says nothing about delay. It used to bind
+      // by naming the phrase anywhere in the claim, which an auditor demonstrated with a
+      // subordinate clause mentioning "mean delay" while the claim was about collision risk.
       'the all-HV platoon TTC<1.5s rate exceeds the adaptive variant rate by at least 5%',
       experimentScenario(),
       MEASURED_METRIC_KEY,
-      'Inserting an AV reduces the platoon aggregate car-following risk (TTC<1.5s rate).',
     )
     expect(adjudication.kind).toBe('unbindable')
     if (adjudication.kind === 'unbindable') {
-      expect(adjudication.reason).toContain('its own words do not name that quantity')
+      expect(adjudication.reason).toContain('the prediction it commits to does not name that quantity')
       expect(adjudication.reason).toContain('unverified')
     }
+  })
+
+  it('DOCUMENTS the limit: a claim that merely MENTIONS the phrasing still binds', () => {
+    // The false-positive direction, which the phrase check CANNOT close and this test pins so that
+    // a future change is visible rather than silent.
+    //
+    // An auditor demonstrated it with the clause in the assertion; checking the prediction instead
+    // was their suggested fix, and it does not close the case — the phrase binds from anywhere in
+    // the prediction too, as below. No keyword test can establish that a claim is ABOUT a quantity;
+    // it can only establish that the claim used the words. That is the honest limit, and it is
+    // recorded rather than papered over: the check is a NECESSARY condition (a claim that never
+    // names the quantity is refused) and not a sufficient one.
+    const adjudication = evaluatePrediction(
+      'the all-HV platoon TTC<1.5s rate exceeds the adaptive variant rate by at least 5%, unlike '
+      + 'prior work on mean delay that assumed uniform arrivals',
+      experimentScenario(),
+      MEASURED_METRIC_KEY,
+    )
+    expect(adjudication.kind).toBe('adjudicated')
   })
 
   it('HOLDS a claim about a quantity this study never measures, however confident it reads', () => {

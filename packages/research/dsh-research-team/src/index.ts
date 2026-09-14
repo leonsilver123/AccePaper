@@ -463,20 +463,26 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
     })
     const packageExport = this.exportRunPackage(store, run)
-    const superseded = await this.supersedeStoredRun()
-    const persistence = await this.persistRun(store, run, 0)
-    if (superseded !== null) {
-      // Visible, not silent. The snapshot directory holds ONE run, so starting a new one discards
-      // whatever was stored — and that could be a run sitting at the human gate, waiting for
-      // someone. `discard()` returns nothing and emits nothing, so without this line an operator
-      // would never learn which run a new one replaced.
-      this.ctx.logger.warn(
-        `research: starting run ${run.runId} discarded the stored run ${superseded.runId} `
-        + `(revision ${String(superseded.revision)}); it can no longer be resumed`,
-      )
-    }
-    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, persistence))
-    return snapshotOf(run, store, packageExport, persistence)
+    // READ the stored run, then let `save` REPLACE it under its own version guard. An earlier
+    // version deleted the file first and saved with `baseRevision: 0`; that made the guard pass on
+    // every run (it compares against an absent file), left a window in which the predecessor was
+    // gone and nothing had replaced it, and lost the stored run even when the new save then failed.
+    // `save` already writes a temp file and renames over the target, so nothing needs deleting.
+    // Read-then-save SERIALIZED. `save` compares the persisted revision and then writes, and two
+    // runs started at once both read the same predecessor before either writes, so both pass a
+    // guard that was meant to refuse one of them — which surfaced as a filesystem rename error
+    // rather than the conflict it is. Chaining the two steps removes the window inside this
+    // process; a cross-process race is still the store's to refuse, and now has a correct
+    // revision to compare against.
+    const { previous, persistence } = await this.serialized(async () => {
+      const stored = await this.readStoredRun()
+      return { previous: stored, persistence: await this.persistRun(store, run, stored?.revision ?? 0) }
+    })
+    const reported = previous === null
+      ? persistence
+      : persistence === null ? null : { ...persistence, superseded: previous }
+    rememberRun(run.runId, store, () => snapshotOf(run, store, packageExport, reported))
+    return snapshotOf(run, store, packageExport, reported)
   }
 
   /**
@@ -507,21 +513,32 @@ export class ResearchTeamService extends TypertRemoteService {
    *
    * @returns the run that was discarded, or null when the directory held nothing.
    */
-  private async supersedeStoredRun(): Promise<{ readonly runId: string; readonly revision: number } | null> {
+  /**
+   * Serialize the read-then-save pair against other calls in this process.
+   *
+   * @param work - the section to run with no other persist section in flight.
+   * @returns whatever the section returned.
+   */
+  private async serialized<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.persistChain.then(work, work)
+    // The chain must not reject: a failure is reported through `lastPersistence`, and a rejected
+    // link would make every later save reject without running.
+    this.persistChain = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  private async readStoredRun(): Promise<{ readonly runId: string; readonly revision: number } | null> {
     const persistence = this.hostRunPersistence()
     if (persistence === undefined) return null
-    let previous: { readonly runId: string; readonly revision: number } | null = null
     try {
       const payload = await persistence.read()
-      previous = { runId: payload.run.runId, revision: payload.revision }
+      return { runId: payload.run.runId, revision: payload.revision }
     } catch {
       // Nothing readable is stored. `tryLoad` documents the same distinction: a corrupt or
       // version-incompatible snapshot is not "nothing to resume", so it is reported rather than
       // silently overwritten — `save` will refuse it and the failure surfaces there.
       return null
     }
-    await persistence.discard()
-    return previous
   }
 
   /**
@@ -550,6 +567,9 @@ export class ResearchTeamService extends TypertRemoteService {
       return { runId: run.runId, revision: null, interrupted: [], error: errorMessage(error) }
     }
   }
+
+  /** Serializes the read-then-save pair; see {@link ResearchTeamService.serialized}. */
+  private persistChain: Promise<void> = Promise.resolve()
 
   /**
    * Restore the persisted run and drive it to completion.
@@ -589,9 +609,6 @@ export class ResearchTeamService extends TypertRemoteService {
     if (typeof restoredKey === 'string') runCtx.metricKey = restoredKey
     const restoredMetricKey = (prediction as { measuredMetricKey?: unknown } | undefined)?.measuredMetricKey
     if (typeof restoredMetricKey === 'string' && runCtx.metricKey === '') runCtx.metricKey = restoredMetricKey
-    if (typeof claim?.assertion === 'string' && typeof prediction?.text === 'string') {
-      runCtx.claimText = `${claim.assertion} ${prediction.text}`
-    }
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,

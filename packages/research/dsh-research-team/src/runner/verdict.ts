@@ -168,7 +168,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
-  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey, ctx.runCtx.claimText)
+  const experiment = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
   if (experiment.kind === 'unbindable') {
     // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
     // at all, so the gate abstains instead of comparing an unrelated number to a threshold.
@@ -211,7 +211,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
       `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
       + '(the experiment ran here over the measured demand profile: '
       + `measured ${experiment.reductionPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
-      + `of ${MEASURED_METRIC_LABEL})`,
+      + `of ${MEASURED_METRIC_LABEL}, which the claim names as "${experiment.matchedPhrase}")`,
     rationale: rec.summary,
     timestamp: ctx.runCtx.timestamp,
   }

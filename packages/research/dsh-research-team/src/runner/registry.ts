@@ -214,13 +214,6 @@ export interface RunContext {
    * unbindable, and an unbindable claim HOLDS rather than being graded.
    */
   metricKey: string
-  /**
-   * The claim's own words (assertion + prediction), set by the A2-claim executor.
-   *
-   * The C channel checks that the declared metric key agrees with this text. Without it the key
-   * is self-attestation: a claim about one quantity declares the key of another and is graded.
-   */
-  claimText: string
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -265,8 +258,9 @@ function proseKindOf(source: 'model' | 'deterministic' | 'fixture'): Truthfulnes
 /**
  * How a prose product is labelled, given the channel that produced it.
  *
- * One rule, one place. `'model'` means the deployment's configured model route produced the text;
- * the deterministic offline route calls no model at all, and saying otherwise would put a claim in
+ * One rule, one place. `'model'` means the deployment CONFIGURED a model route and that route
+ * produced the text — not that a real external system was reached, which the writer cannot know.
+ * The deterministic offline route calls no model at all, and saying otherwise would put a claim in
  * the artifact that the artifact's own text contradicts ("No model was called").
  *
  * @param writer - the writer this executor was handed, or undefined.
@@ -1079,8 +1073,6 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
-  ctx.runCtx.claimText = `${assertion}
-${prediction}`
   return {
     claim: tagArtifact({ ...artifact.claim, claimSource, metricKey: metricKey === '' ? null : metricKey }, A2_PRODUCER, 'real_tool_fixture_input', { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness }),
     'falsifiable-prediction': tagArtifact(
@@ -1649,7 +1641,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey, ctx.runCtx.claimText)
+  const verdict = evaluatePrediction(predictionText, experimentScenario(), ctx.runCtx.metricKey)
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
     // because there is no measurement that could adjudicate it.

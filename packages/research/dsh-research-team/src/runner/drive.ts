@@ -298,9 +298,9 @@ export async function runT19B(
 
 /** Build a fresh cross-step context (claim / prediction wiring) for a run. */
 export function createRunContext(timestamp: number = FIXED_TS): RunContext {
-  // `metricKey` and `claimText` start empty: nothing has declared what the claim is about yet, and
-  // the C channel treats an empty key as unbindable rather than assuming a quantity.
-  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', claimText: '', timestamp }
+  // `metricKey` starts empty: nothing has declared what the claim is about yet, and the C channel
+  // treats an empty key as unbindable rather than assuming a quantity.
+  return { predictionText: '', claimId: '', claimRef: '', metricKey: '', timestamp }
 }
 
 /** Drive every step from `fromStepId` (inclusive) through E2. */

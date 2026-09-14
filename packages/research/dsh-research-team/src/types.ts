@@ -435,6 +435,14 @@ export interface ResearchRunPersistence {
   readonly interrupted: ReadonlyArray<string>
   /** Set when the write failed; `revision` is then null. */
   readonly error?: string
+  /**
+   * The run this save replaced in the snapshot directory, when one was stored.
+   *
+   * The directory holds ONE run, so a new one takes its place. Reported here because this is
+   * where a reader actually looks — the service's own logger goes to a sink that the shipped
+   * profile attaches no exporter to, so a warning written there is not visibility.
+   */
+  readonly superseded?: { readonly runId: string; readonly revision: number }
 }
 
 /** What a run's package export produced, or why it produced nothing. */

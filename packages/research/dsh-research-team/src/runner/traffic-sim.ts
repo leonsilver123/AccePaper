@@ -372,15 +372,30 @@ export const MEASURED_METRIC_LABEL = 'demand-weighted mean vehicle delay (s/veh)
  * version of the binding did exactly that — an auditor showed a platoon-risk claim declaring
  * `mean-delay-seconds-per-vehicle` reaching E2, the original defect with one extra field.
  *
- * So the key and the claim's own words must agree. This is a CONSISTENCY check, not an
- * understanding of the claim: it cannot tell whether the claim is any good, only whether it is
- * about what it says it is about. That is the honest limit, and the evidence says which check ran.
+ * So the key and the claim's own words must agree — but a keyword test cannot establish that a claim
+ * is ABOUT a quantity, only that it USED the words. The check is NECESSARY and not sufficient, in
+ * both directions:
+ *   - it refuses a claim that never names the measured quantity (an auditor's first counterexample);
+ *   - it still ADMITS a claim that names the quantity in passing while being about something else.
+ *     An auditor demonstrated that with the phrase in the assertion; moving the check to the
+ *     prediction — the sentence the graded number is read out of — does not close it either, because
+ *     the phrase binds from there too. A spec pins the limit so a change to it is visible.
+ *
+ * Judging relevance would take a reader or a model, and this repository will not let a model's
+ * judgement of a claim stand as the standard for that same claim. The limit stays, and is stated.
  */
 export const MEASURED_METRIC_PHRASES: ReadonlyArray<string> = [
+  'mean vehicle delay',
+  'average vehicle delay',
   'mean delay',
   'average delay',
+  'demand-weighted delay',
+  'demand weighted delay',
   'delay per vehicle',
-  'mean vehicle delay',
+  // The shortest phrasing that still names the measured quantity rather than delay in general.
+  // "but the average queue length" must not bind, and neither must a claim about anything else
+  // that happens to contain the word; the phrase carries the noun the experiment measures.
+  'vehicle delay',
 ]
 
 /** The phrasings each supported metric key requires. Closed: an unlisted key has no phrasings. */
@@ -389,17 +404,17 @@ const METRIC_PHRASES: Readonly<Record<string, ReadonlyArray<string>>> = {
 }
 
 /**
- * Whether a claim's own text names the quantity it declares.
+ * The phrasing a claim about `metricKey` uses, if it uses one.
  *
- * @param text - the claim's assertion and prediction, as written.
+ * @param text - the claim's PREDICTION, as written.
  * @param metricKey - the key the claim declares.
- * @returns true when the text contains one of that key's phrasings.
+ * @returns the matched phrase, or undefined when the text names no phrasing of that quantity.
  */
-export function claimTextNamesQuantity(text: string, metricKey: string): boolean {
+export function claimTextNamesQuantity(text: string, metricKey: string): string | undefined {
   const phrases = METRIC_PHRASES[metricKey]
-  if (phrases === undefined) return false
+  if (phrases === undefined) return undefined
   const lowered = text.toLowerCase()
-  return phrases.some(phrase => lowered.includes(phrase))
+  return phrases.find(phrase => lowered.includes(phrase))
 }
 
 /**
@@ -415,6 +430,8 @@ export type PredictionAdjudication =
     readonly reductionPct: number
     readonly thresholdPct: number
     readonly detail: string
+    /** The claim's own phrasing that binds it to the measured quantity. */
+    readonly matchedPhrase: string
   }
   | { readonly kind: 'unbindable'; readonly reason: string }
 
@@ -453,7 +470,6 @@ export function evaluatePrediction(
   predictionText: string,
   scenario: TrafficScenario = experimentScenario(),
   metricKey?: string,
-  claimText: string = predictionText,
 ): PredictionAdjudication {
   // The binding is checked FIRST. A prediction about a quantity this study does not measure
   // cannot be adjudicated however many percentages it states, and grading it would report an
@@ -468,15 +484,17 @@ export function evaluatePrediction(
         : `the claim is about "${metricKey}" while this study measures "${MEASURED_METRIC_KEY}" (${MEASURED_METRIC_LABEL}), so the measurement cannot adjudicate it`,
     }
   }
-  // The key must agree with the claim's own words. Without this the binding is self-attestation:
-  // a claim about anything at all reaches a verdict by declaring the measured key.
-  if (!claimTextNamesQuantity(claimText, metricKey)) {
+  // The key must agree with the claim's words, and the sentence checked is the PREDICTION — the
+  // one the graded number is read out of. Checking the assertion as well let a phrase mentioned in
+  // passing bind a claim that is about something else, which an auditor demonstrated.
+  const matched = claimTextNamesQuantity(predictionText, metricKey)
+  if (matched === undefined) {
     return {
       kind: 'unbindable',
       reason:
-        `the claim declares the metric "${metricKey}" but its own words do not name that quantity `
-        + `(none of ${MEASURED_METRIC_PHRASES.map(p => `"${p}"`).join(', ')} appears in it), so the `
-        + 'declaration is unverified and the measurement cannot adjudicate it',
+        `the claim declares the metric "${metricKey}" but the prediction it commits to does not name `
+        + `that quantity (no phrasing of ${MEASURED_METRIC_LABEL} appears in it), so the declaration `
+        + 'is unverified and the measurement cannot adjudicate it',
     }
   }
   const thresholdPct = thresholdFromPrediction(predictionText)
@@ -492,6 +510,7 @@ export function evaluatePrediction(
   const supportsPrediction = comparison.meetsThreshold(thresholdPct)
   return {
     kind: 'adjudicated',
+    matchedPhrase: matched,
     supportsPrediction,
     reductionPct,
     thresholdPct,
