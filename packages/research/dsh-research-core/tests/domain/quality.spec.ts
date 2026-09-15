@@ -297,16 +297,15 @@ describe('parseGateReportIngress accepts a report whose checks agree with its di
     expect(held.disposition).toBe('needs_human_decision')
   })
 
-  it('accepts any non-empty string as a target contentHash — believed WRONG, pinned as it behaves', () => {
-    // This parser is the same kind of boundary as artifact.ts's, which requires 64 lower-case hex
-    // (`isContentHash`). Here the test is only `typeof contentHash === 'string' && length > 0`, so a
-    // report naming a target whose hash is not a hash is read as a report about a version. It is
-    // harmless for `reportAnswers`, which compares the strings it was given, but the stored record
-    // is then not checkable against a store's content. Reported rather than fixed.
-    const report = acceptReport(
+  it('refuses a target contentHash that is not a hash, the same way the artifact reader does', () => {
+    // This parser is the same kind of boundary as artifact.ts's, so it applies the same rule. A
+    // "hash" that is any non-empty string cannot be checked against a store's content, and the
+    // record it appears in would then name a revision without naming what that revision held.
+    const refused = refusalOf(
       withField('targetRefs', [{ artifactId: 'method', version: 3, contentHash: 'not-a-hash' }]),
     )
-    expect(report.targetRefs[0]?.contentHash).toBe('not-a-hash')
+    expect(refused.code).toBe('DSH_DOMAIN_BAD_REFERENCE')
+    expect(refused.reason).toContain('contentHash')
   })
 })
 
@@ -377,17 +376,37 @@ describe('aggregateDisposition: silence is not a pass', () => {
     expect(failedExtra.disposition).toBe('block')
   })
 
-  it('ALLOWS while a required check reported not_evaluated — believed WRONG, pinned as it behaves', () => {
+  it('BLOCKS when a required check REPORTED not_evaluated, exactly as when it is absent', () => {
     // `not_evaluated` "means a required check did not run, and is never a soft warning" (module
-    // doc), and the aggregate's own doc says "a check that was never executed has found nothing,
-    // and its silence is not a pass". But the function blocks only on an id absent from the array
-    // and on `failed`, so a required check that is present and says it did not run yields `allow`.
-    // The ingress parser accepts that same report, so a stored report can allow while a required
-    // check never ran. Reported rather than fixed.
+    // doc). A check that says so in the report is the same fact as one missing from it, and it is
+    // refused for the same reason. It was allowed until 2026-09-16; the two spellings of one fact
+    // were then treated as different, which made the disposition decorative.
     const result = aggregateDisposition([{ checkId: 'red-team', disposition: 'not_evaluated' }], ['red-team'])
+    expect(result.disposition).toBe('block')
+    expect(result.reason).toContain('red-team')
+    expect(result.reason).toContain('not_evaluated')
+  })
+
+  it('still ALLOWS a required check that reported not_applicable, with its reason', () => {
+    // The other side of the same rule: `not_applicable` is a finding about the work ("this check
+    // does not apply here"), not a report of silence, so it may pass. A gate that blocked on both
+    // would make the exemption unusable and push authors to delete the check instead.
+    const result = aggregateDisposition(
+      [{ checkId: 'red-team', disposition: 'not_applicable', detail: 'this study has no co-authors to review' }],
+      ['red-team'],
+    )
     expect(result.disposition).toBe('allow')
-    const report = acceptReport(withChecks([{ checkId: 'red-team', disposition: 'not_evaluated' }]))
-    expect(report.disposition).toBe('allow')
+  })
+
+  it('does not block on a NON-required check that reported not_evaluated', () => {
+    // Only the policy's required set decides. A check the policy did not require may report
+    // anything, including that it did not run.
+    const result = aggregateDisposition(
+      [{ checkId: 'optional-extra', disposition: 'not_evaluated' }],
+      ['required-one'],
+    )
+    expect(result.disposition).toBe('block')
+    expect(result.reason).toContain('required-one')
   })
 })
 

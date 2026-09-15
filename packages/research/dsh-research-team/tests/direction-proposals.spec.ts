@@ -8,10 +8,11 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
 import type { ProposalRequest } from '../src/runner/direction-proposals.ts'
-import { parseDirectionProposals, planFromProposal, proposalInstruction } from '../src/runner/direction-proposals.ts'
+import { claimIdFor, parseDirectionProposals, planFromProposal, proposalInstruction } from '../src/runner/direction-proposals.ts'
 import { MEASURED_METRIC } from '../src/runner/platoon-sim.ts'
-import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
+import { DEFAULT_PLAN, requirePlan } from '../src/runner/study-plan.ts'
 
 const request: ProposalRequest = {
   field: 'road transport safety',
@@ -180,5 +181,57 @@ describe('planFromProposal', () => {
     expect(plan.title).toBe(proposal?.title)
     expect(plan.direction).toBe(proposal?.direction)
     expect(plan.commitment).toEqual(proposal?.commitment)
+  })
+})
+
+describe('a derived claim id fits the tool that consumes it', () => {
+  // The defect: `claimIdFor` slugged the whole direction with no bound, so a model-proposed
+  // direction over 58 characters produced a claim id the `claim-construct` tool refused. The plan
+  // passed `requirePlan`, the run reached A2, and A2 failed with a schema violation — a plan
+  // problem surfacing as an execution failure two steps in, which is what an unbounded derivation
+  // costs. Measured against a real run, not constructed: the run's A2 error was
+  // `claim-construct.claimId: longer than maxLength 64`.
+  const LONG_DIRECTION =
+    'Compensating for vehicle-to-vehicle communication delay in a cooperative adaptive cruise control platoon'
+
+  it('bounds an id derived from a long direction', () => {
+    const id = claimIdFor(LONG_DIRECTION)
+    expect(id.length).toBeLessThanOrEqual(INPUT_LIMITS.maxClaimIdChars)
+    expect(id.startsWith('claim-')).toBe(true)
+  })
+
+  it('keeps two long directions that share a prefix apart', () => {
+    // Truncation alone would collide them onto one id, and two studies on one claim id is worse
+    // than a long one: nothing downstream could tell their artifacts apart.
+    const twin = `${LONG_DIRECTION} under mixed traffic`
+    expect(claimIdFor(LONG_DIRECTION)).not.toBe(claimIdFor(twin))
+  })
+
+  it('is stable for the same direction', () => {
+    expect(claimIdFor(LONG_DIRECTION)).toBe(claimIdFor(LONG_DIRECTION))
+  })
+
+  it('leaves a short direction alone', () => {
+    expect(claimIdFor('mixed platoon car-following')).toBe('claim-mixed-platoon-car-following')
+  })
+
+  it('refuses a plan whose claim id the tool would reject, at the boundary', () => {
+    const plan = {
+      ...DEFAULT_PLAN,
+      claim: { ...DEFAULT_PLAN.claim, id: 'c'.repeat(INPUT_LIMITS.maxClaimIdChars + 1) },
+    }
+    const validated = requirePlan(plan, MEASURED_METRIC)
+    expect(validated.ok).toBe(false)
+    if (validated.ok) throw new Error('unreachable')
+    expect(validated.reason).toContain('claim.id')
+    expect(validated.reason).toContain(String(INPUT_LIMITS.maxClaimIdChars))
+  })
+
+  it('accepts an id exactly at the limit', () => {
+    const plan = {
+      ...DEFAULT_PLAN,
+      claim: { ...DEFAULT_PLAN.claim, id: 'c'.repeat(INPUT_LIMITS.maxClaimIdChars) },
+    }
+    expect(requirePlan(plan, MEASURED_METRIC).ok).toBe(true)
   })
 })

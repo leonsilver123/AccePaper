@@ -85,25 +85,6 @@ export function stringField(source: Record<string, unknown>, field: string): str
 }
 
 /**
- * Read an optional non-empty string field, refusing a present-but-empty one.
- *
- * @param source - the record to read from.
- * @param field - the field name.
- * @returns the string when present and usable, undefined when absent, or a refusal.
- */
-export function optionalStringField(
-  source: Record<string, unknown>,
-  field: string,
-): Parsed<string | undefined> {
-  const value = source[field]
-  if (value === undefined) return accept(undefined)
-  if (typeof value !== 'string' || value.length === 0) {
-    return refuse(`${DOMAIN_ERROR_PREFIX}BAD_FIELD`, `field '${field}' is present but is not a non-empty string`)
-  }
-  return accept(value)
-}
-
-/**
  * Read a required finite number field.
  *
  * @param source - the record to read from.

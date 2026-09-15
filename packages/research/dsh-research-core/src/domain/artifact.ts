@@ -153,7 +153,7 @@ export function contentHashOf(value: unknown): Parsed<ContentHash> {
   if (text === undefined) {
     return refuse(
       `${DOMAIN_ERROR_PREFIX}BAD_FIELD`,
-      'value has no canonical JSON encoding (it holds a function, symbol, undefined, non-finite number, bigint, or cycle) — refusing to hash a value that is not the one the producer made',
+      'value has no canonical JSON encoding — it holds a function, symbol, undefined, non-finite number, bigint or cycle, or an object whose own enumerable keys do not describe it (a Map, Set, Date, RegExp, typed array, ArrayBuffer or class instance) — refusing to hash a value that is not the one the producer made',
     )
   }
   return accept(createHash('sha256').update(text, 'utf8').digest('hex') as ContentHash)

@@ -18,6 +18,7 @@
  * rather than in advance of it.
  */
 
+import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, commitmentFrom } from './prediction-gate.ts'
 import { MEASURED_METRIC } from './platoon-sim.ts'
@@ -202,6 +203,18 @@ export function requirePlan(
   }
   for (const [key, entry] of Object.entries(claimFields)) {
     if (entry === undefined) missing.push(`claim.${key}`)
+  }
+  // The claim id is not free text: `claim-construct` declares how long one may be, and a plan
+  // carrying a longer one is refused HERE rather than at A2, where it surfaces as a step that
+  // could not execute. That is how a model-proposed direction over the limit ended a run: the plan
+  // passed this check, the tool refused the id, and the run died two steps in with a schema error
+  // instead of a plan problem.
+  if (claimFields.id !== undefined && claimFields.id.length > INPUT_LIMITS.maxClaimIdChars) {
+    return {
+      ok: false,
+      reason: `the plan's claim.id is ${String(claimFields.id.length)} characters, over the `
+        + `${String(INPUT_LIMITS.maxClaimIdChars)} the claim-construct tool accepts`,
+    }
   }
 
   if (missing.length > 0) {

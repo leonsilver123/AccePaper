@@ -32,6 +32,15 @@ export const INPUT_LIMITS = {
   maxDepth: 16,
   maxPayloadChars: 262_144, // 256 KiB serialized budget
   maxTopLevelKeys: 32,
+  /**
+   * Longest claim id `claim-construct` accepts.
+   *
+   * Exported because the id is DERIVED — a study plan turns a direction into one — and a producer
+   * that does not know the consumer's limit produces ids that fail at the tool, which surfaces as
+   * a step that could not execute rather than as a plan that was refused. One number, read by the
+   * schema and by the derivation.
+   */
+  maxClaimIdChars: 64,
 } as const
 
 /** Max structural depth scanned by the JSON-safety walk (bounds recursion so a
@@ -304,7 +313,7 @@ export const RESEARCH_TOOL_INPUT_SCHEMAS: Readonly<Record<string, FieldRule>> = 
     required: true,
     properties: {
       assertion: { type: 'string', required: true, minLength: 1, maxLength: 2000 },
-      claimId: { type: 'string', minLength: 1, maxLength: 64 },
+      claimId: { type: 'string', minLength: 1, maxLength: INPUT_LIMITS.maxClaimIdChars },
       falsifiability: {
         type: 'object',
         open: true, // core-owned ClaimFalsifiability scaffold

@@ -24,6 +24,7 @@ import {
   arrayField,
   asRecord,
   countField,
+  isContentHash,
   isInputDigest,
   numberField,
   refuse,
@@ -81,13 +82,18 @@ export interface GateAggregate {
  * Decide a gate from its checks, requiring every check the policy declares.
  *
  * A required check that is absent is not the same as one that passed, and a check that ran as
- * `not_applicable` is not absent either — it reported, with a reason. The two ways to fail are
- * therefore "a required check did not run" and "a check found something", and both block.
+ * `not_applicable` is not absent either — it reported, with a reason.
+ *
+ * `not_evaluated` IS the same as absent, and saying so is the point of this function. A check
+ * that reported `not_evaluated` has told the gate it did not run; reading that as anything but a
+ * block would make the distinction between the two dispositions decorative, which is the failure
+ * the dispositions exist to prevent. `not_applicable` is the one that may pass, because it is a
+ * finding about the work ("this check does not apply here") rather than a report of silence.
  *
  * @param checks - the checks that ran.
  * @param requiredCheckIds - the check ids this gate's policy requires.
- * @returns the decision. `allow` requires every required check to have reported, and none of
- *   them to have failed.
+ * @returns the decision. `allow` requires every required check to have reported a finding, and
+ *   none of them to have failed.
  */
 export function aggregateDisposition(
   checks: ReadonlyArray<GateCheck>,
@@ -102,6 +108,16 @@ export function aggregateDisposition(
       reason: `required check(s) did not run: ${missing.join(', ')} — a check that was never executed has found nothing, and its silence is not a pass`,
     }
   }
+  // A required check that REPORTED `not_evaluated` is the same fact as one that is absent, and
+  // it is refused for the same reason. It was allowed here until 2026-09-16, which made this
+  // function accept a report whose own checks said they had not run.
+  const unevaluated = requiredCheckIds.filter(id => byId.get(id)?.disposition === 'not_evaluated')
+  if (unevaluated.length > 0) {
+    return {
+      disposition: 'block',
+      reason: `required check(s) reported not_evaluated: ${unevaluated.join(', ')} — a check that did not run has found nothing, whether it is absent from the report or says so in it`,
+    }
+  }
   const failed = checks.filter(check => check.disposition === 'failed')
   if (failed.length > 0) {
     return {
@@ -109,7 +125,7 @@ export function aggregateDisposition(
       reason: `check(s) failed: ${failed.map(check => `${check.checkId}${check.detail === undefined ? '' : ` (${check.detail})`}`).join('; ')}`,
     }
   }
-  return { disposition: 'allow', reason: `every required check reported and none failed (${requiredCheckIds.length} required)` }
+  return { disposition: 'allow', reason: `every required check reported a finding and none failed (${requiredCheckIds.length} required)` }
 }
 
 /**
@@ -157,16 +173,19 @@ function parseRefArray(raw: ReadonlyArray<unknown>): Parsed<ArtifactRef[]> {
     const artifactId = stringField(record, 'artifactId')
     const version = countField(record, 'version')
     const contentHash = record['contentHash']
-    if (artifactId === undefined || version === undefined || typeof contentHash !== 'string' || contentHash.length === 0) {
+    // The same strictness the artifact reader applies to the same field: a "hash" that is any
+    // non-empty string cannot be checked against the store's content, so a report carrying one
+    // could not be verified against the revision it names.
+    if (artifactId === undefined || version === undefined || !isContentHash(contentHash)) {
       return refuse(
         `${DOMAIN_ERROR_PREFIX}BAD_REFERENCE`,
-        'gate report target reference needs a non-empty artifactId, a non-negative integer version, and a contentHash',
+        'gate report target reference needs a non-empty artifactId, a non-negative integer version, and a 64-character lower-case hex contentHash',
       )
     }
     refs.push({
       artifactId: artifactId as ArtifactRef['artifactId'],
       version: version as ArtifactRef['version'],
-      contentHash: contentHash as ArtifactRef['contentHash'],
+      contentHash,
     })
   }
   return accept(refs)

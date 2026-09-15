@@ -197,7 +197,6 @@ export {
   refuse,
   asRecord,
   stringField,
-  optionalStringField,
   numberField,
   countField,
   arrayField,

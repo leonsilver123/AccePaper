@@ -23,6 +23,8 @@
  * checked against its own sentence.
  */
 
+import { createHash } from 'node:crypto'
+import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, percentagesIn, requirementDirectionIn } from './prediction-gate.ts'
 import type { PlanClaim, PlanSection, StudyPlan } from './study-plan.ts'
@@ -116,13 +118,31 @@ function labelled(block: string, label: string): string | undefined {
   return value === undefined || value.length === 0 ? undefined : value
 }
 
-/** A stable id for a proposed claim, derived from its own direction. */
-function claimIdFor(direction: string): string {
+/**
+ * A stable id for a proposed claim, derived from its own direction.
+ *
+ * Bounded by the limit `claim-construct` declares, because this id travels into that tool's input
+ * and an id over the limit is refused THERE — as a step that could not execute, which says nothing
+ * about the plan that produced it.
+ *
+ * @param direction - the proposal's direction, whose slug becomes the id.
+ * @returns the id, at most {@link INPUT_LIMITS.maxClaimIdChars} characters.
+ */
+export function claimIdFor(direction: string): string {
   const slug = direction
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, '-')
     .replace(/^-+|-+$/gu, '')
-  return slug.length === 0 ? 'claim-proposed' : `claim-${slug}`
+  if (slug.length === 0) return 'claim-proposed'
+  const id = `claim-${slug}`
+  if (id.length <= INPUT_LIMITS.maxClaimIdChars) return id
+  // A direction longer than the tool's limit used to produce an id the tool refused, so the run
+  // died at A2 with a schema error instead of a plan problem. Truncating alone would let two
+  // directions that share a prefix collide on one claim id, so the tail carries a digest of the
+  // WHOLE direction: distinct directions keep distinct ids, and the same direction keeps its own.
+  const digest = createHash('sha256').update(direction, 'utf8').digest('hex').slice(0, 8)
+  const room = INPUT_LIMITS.maxClaimIdChars - 'claim-'.length - '-'.length - digest.length
+  return `claim-${slug.slice(0, room)}-${digest}`
 }
 
 /**
