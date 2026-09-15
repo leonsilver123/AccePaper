@@ -59,16 +59,40 @@
         citationResolver:
           kind: fixture
         # Prose steps (A1 gap analysis, B1 method, D2 outline, D3 writing, D4
-        # rebuttal) route through the REAL agent loop on a provider whose response
-        # is derived from the request rather than generated. Same request, same text.
+        # rebuttal) route through the REAL agent loop on this provider route, so the
+        # manuscript text is written by a model rather than by the offline stand-in.
+        #
+        # The key resolves per request through the credential seam (`DEEPSEEK_API_KEY`
+        # by default), so a rotated key reaches the next request without a restart. With
+        # no key the first prose step FAILS rather than falling back: the route is a
+        # deployment decision, and a run that quietly wrote demo text would be the
+        # failure this configuration exists to remove.
+        #
+        # The trade this makes: the deterministic route produced the same text for the
+        # same request, so two runs were byte-identical. A model route does not, and a
+        # snapshot replayed against it is no longer comparable.
         prose:
-          kind: deterministic
+          kind: llm
+          provider: deepseek-official
+          model: deepseek-v4-pro
+          # Milliseconds one write may wait for its loop to go idle. D3-writing drafts every
+          # section in ONE step — one call per section, issued together — so the ceiling has to
+          # cover the slowest of them under that concurrency, not a single call. At the 120 s
+          # default the step died with `agent loop idle timeout after 120000ms` and the run
+          # stopped there.
+          idleTimeoutMs: 600000
         # The Case Pack this deployment runs against: the seven versioned JSON files that
         # supply the research question, the central claim, the experiment configuration and
         # its scenario parameters. They are synthetic fixture content and carry that label
         # through every value derived from them. Relative paths resolve against the
         # engine's `workspace`. Point this at a different directory to run a different case.
         casePackDirectory: plan/overnight/2026-09-09/case-pack-traffic-v2
+        # Milliseconds one step may run. The registry declares 5 s for a tool step and 2 s for a
+        # fixture step, which is a budget for the offline prose route — it answers in
+        # milliseconds. This deployment routes prose to a model, where one step takes seconds, so
+        # the per-step budget is raised for the whole run. Without this the first prose step is
+        # recorded `timeout` and the run never leaves phase A, with no error to say why.
+        stepTimeoutMs: 900000
         # Where a finished run's reproducible package is written. Every file the manifest
         # names is really written, with its byte count and content digest. This default is
         # the repository's gitignored scratch area, so a demo run leaves the tree clean;

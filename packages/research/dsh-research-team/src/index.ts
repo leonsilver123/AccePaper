@@ -475,12 +475,14 @@ export class ResearchTeamService extends TypertRemoteService {
     const toolDeps = this.hostToolDeps()
     const proseWriter = this.hostProseWriter()
     const casePackInputs = this.hostCasePackInputs()
+    const stepTimeoutMs = this.hostStepTimeoutMs()
     const run = await runT19B(store, {
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
+      ...(stepTimeoutMs !== undefined ? { timeoutMs: stepTimeoutMs } : {}),
     })
     // READ the stored run, then let `save` REPLACE it under its own version guard. An earlier
     // version deleted the file first and saved with `baseRevision: 0`; that made the guard pass on
@@ -869,6 +871,20 @@ export class ResearchTeamService extends TypertRemoteService {
    * configured. Read alongside {@link ResearchTeamService.hostToolDeps} so one
    * deployment decision governs both the retrieval channel and the prose channel.
    */
+  /**
+   * The per-step time budget this deployment configured, or undefined when it configured none.
+   *
+   * Read from the engine beside the channels, because the right budget follows from which
+   * channels are configured: the offline prose route answers in milliseconds and the registry
+   * budget fits it, while a model route needs orders of magnitude more for the same step.
+   *
+   * @returns the budget in milliseconds, or undefined for the registry's per-step values.
+   */
+  private hostStepTimeoutMs(): number | undefined {
+    const research = this.ctx.get('research') as { stepTimeoutMs?: number } | undefined
+    return research?.stepTimeoutMs
+  }
+
   private hostProseWriter(): ResearchProseWriter | undefined {
     const research = this.ctx.get('research') as { proseWriter?: ResearchProseWriter } | undefined
     return research?.proseWriter

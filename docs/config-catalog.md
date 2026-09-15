@@ -1791,6 +1791,20 @@ export interface Config {
    * rejected here rather than by the session layer.
    */
   readonly workspace?: string
+  /**
+   * Milliseconds one step may run before the driver aborts it, applied to every step.
+   *
+   * A DEPLOYMENT setting, because the right budget is a property of the channels the deployment
+   * configured and not of the step: the offline prose route answers in milliseconds, while a
+   * model route takes seconds to minutes for the same step. The registry declares a per-step
+   * budget for the offline case, and this overrides it for the whole run when set. Omitted, the
+   * registry budget applies unchanged.
+   *
+   * A step that exceeds it does NOT fail with an error: the driver records `timeout` and leaves
+   * the step `in_progress`, so a budget set too low looks like a run that stopped for no stated
+   * reason. Set it from the slowest channel the deployment reaches.
+   */
+  readonly stepTimeoutMs?: number
 }
 
 /** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */

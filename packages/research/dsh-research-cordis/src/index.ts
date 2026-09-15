@@ -241,6 +241,20 @@ export interface Config {
    * rejected here rather than by the session layer.
    */
   readonly workspace?: string
+  /**
+   * Milliseconds one step may run before the driver aborts it, applied to every step.
+   *
+   * A DEPLOYMENT setting, because the right budget is a property of the channels the deployment
+   * configured and not of the step: the offline prose route answers in milliseconds, while a
+   * model route takes seconds to minutes for the same step. The registry declares a per-step
+   * budget for the offline case, and this overrides it for the whole run when set. Omitted, the
+   * registry budget applies unchanged.
+   *
+   * A step that exceeds it does NOT fail with an error: the driver records `timeout` and leaves
+   * the step `in_progress`, so a budget set too low looks like a run that stopped for no stated
+   * reason. Set it from the slowest channel the deployment reaches.
+   */
+  readonly stepTimeoutMs?: number
 }
 
 /**
@@ -347,6 +361,12 @@ export class ResearchEngine extends Service {
    * reads it so one deployment-level choice governs every prose step.
    */
   readonly proseWriter: LlmProseWriter | undefined
+  /**
+   * Milliseconds one step may run, when the deployment names a budget, else undefined.
+   * Public for the same reason {@link ResearchEngine.toolDeps} is: the runner-side service
+   * reads it so one deployment decision governs every step of every run.
+   */
+  readonly stepTimeoutMs: number | undefined
 
   /**
    * The deterministic provider to register at load, when the deployment selected that
@@ -371,6 +391,14 @@ export class ResearchEngine extends Service {
     this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
     this.packageDirectory = resolveCasePackDirectory(config.packageDirectory, this.sessionCwd)
     this.snapshotDirectory = resolveCasePackDirectory(config.snapshotDirectory, this.sessionCwd)
+    this.stepTimeoutMs = config.stepTimeoutMs
+    // Refused here, where the value enters, rather than at the first step it would abort: a
+    // zero or negative budget is a misconfiguration that reads as "the run stopped for no reason".
+    if (this.stepTimeoutMs !== undefined && (!Number.isFinite(this.stepTimeoutMs) || this.stepTimeoutMs <= 0)) {
+      throw new Error(
+        `[research] \`stepTimeoutMs\` must be a positive finite number of milliseconds, got ${String(this.stepTimeoutMs)}`,
+      )
+    }
 
     const prose = config.prose
     if (prose?.kind === 'deterministic') {

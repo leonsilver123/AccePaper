@@ -49,7 +49,13 @@ export interface RunResult {
 /** Per-step override / scenario hooks for the driver. */
 export interface DriveOptions {
   readonly domainDirection?: string
-  /** Overrides the per-step `timeoutMs` declared in the registry (fault injection). */
+  /**
+   * Milliseconds one step may run, overriding the per-step value the registry declares.
+   *
+   * The registry value fits the offline channels, which answer in milliseconds; a deployment
+   * that configures a model route sets this, because the same step then takes seconds and a
+   * step that overruns is recorded `timeout` rather than as a failure with a cause.
+   */
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
   /** Override the executor for selected steps (recovery / fault injection). */
