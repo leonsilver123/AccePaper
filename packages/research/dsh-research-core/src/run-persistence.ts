@@ -41,6 +41,7 @@ import {
 } from './snapshot-store.ts'
 import type { SnapshotStore } from './snapshot-store.ts'
 import { ResearchError, ResearchRunError } from './engine/state-machine.ts'
+import type { CommitReceipt } from './engine/commit.ts'
 import { getStepDefinitionById } from './engine/steps-accessor.ts'
 import type { ProjectRevision } from './domain/ids.ts'
 import type {
@@ -58,7 +59,7 @@ import type {
 } from './engine/types.ts'
 
 /** Schema version of a run snapshot. A file stamped with another version is rejected on load. */
-export const RUN_SNAPSHOT_SCHEMA_VERSION = 2
+export const RUN_SNAPSHOT_SCHEMA_VERSION = 3
 
 /** Error codes added by the run persistence layer (all carried on a {@link SnapshotStoreError}). */
 export const RUN_SNAPSHOT_ERROR_CODES = {
@@ -188,6 +189,13 @@ export interface PersistedRunHeader {
    * against the wrong number, which refuses honest commits and admits stale ones.
    */
   readonly projectRevision: number
+  /**
+   * The resolved configuration the run was driven with — its study plan, evidence profile and
+   * per-step budget. Recorded so a restart drives the run that was running rather than the one
+   * the deployment's current configuration describes; the two are the same only until a
+   * deployment changes.
+   */
+  readonly spec: Record<string, unknown>
 }
 
 /**
@@ -208,6 +216,12 @@ export interface PersistedStepState {
   readonly startedAt?: number
   readonly finishedAt?: number
   readonly outputs: ReadonlyArray<string>
+  /**
+   * What this attempt's commit wrote, when it committed. Persisted so the idempotency key survives
+   * a restart: without it a replay after a crash would be read as a first commit and, were the
+   * revision fence not also against it, would write a second revision of the same work.
+   */
+  readonly commit?: CommitReceipt
 }
 
 /** The complete persisted record of one run. */
@@ -347,6 +361,7 @@ const TRINITY_COMPONENTS: ReadonlySet<string> = new Set<string>([
 /** Audit event kinds accepted at the load boundary (mirrors `AuditEventKind`). */
 const AUDIT_EVENT_KINDS: ReadonlySet<string> = new Set<string>([
   'run-created',
+  'run-spec-set',
   'input-seeded',
   'step-started',
   'artifact-recorded',
@@ -562,6 +577,36 @@ function parseStep(raw: unknown, index: number): PersistedStepState {
       ? { finishedAt: asNumber(o.finishedAt, `${what}.finishedAt`) }
       : {}),
     outputs,
+    ...(o.commit !== undefined ? { commit: parseCommitReceipt(o.commit, `${what}.commit`) } : {}),
+  }
+}
+
+/**
+ * Read one attempt's commit receipt.
+ *
+ * @param raw - the receipt as stored.
+ * @param what - the field path, for the refusal message.
+ * @returns the receipt.
+ * @throws {SnapshotInvalidError} when a field is absent or malformed.
+ */
+function parseCommitReceipt(raw: unknown, what: string): CommitReceipt {
+  const o = asRecord(raw, what)
+  const artifacts = asArray(o.artifacts, `${what}.artifacts`).map((entry, i) => {
+    const item = asRecord(entry, `${what}.artifacts[${i}]`)
+    const slug = asString(item.slug, `${what}.artifacts[${i}].slug`)
+    return {
+      slug,
+      ref: parseArtifactRef(item.ref, `${what}.artifacts[${i}].ref`, slug),
+    }
+  })
+  return {
+    stepId: asString(o.stepId, `${what}.stepId`),
+    attemptId: asCount(o.attemptId, `${what}.attemptId`),
+    revision: asCount(o.revision, `${what}.revision`) as CommitReceipt['revision'],
+    idempotencyKey: asString(o.idempotencyKey, `${what}.idempotencyKey`),
+    artifacts,
+    inputDigest: asString(o.inputDigest, `${what}.inputDigest`) as CommitReceipt['inputDigest'],
+    committedAt: asNumber(o.committedAt, `${what}.committedAt`),
   }
 }
 
@@ -684,6 +729,7 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
     headerRaw.projectRevision,
     'snapshot.run.projectRevision',
   )
+  const spec = asRecord(headerRaw.spec, 'snapshot.run.spec')
   const steps = asArray(o.steps, 'snapshot.steps').map((s, i) =>
     parseStep(s, i),
   )
@@ -700,7 +746,7 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
     schemaVersion: asCount(o.schemaVersion, 'snapshot.schemaVersion'),
     savedAtIso: asString(o.savedAtIso, 'snapshot.savedAtIso'),
     revision: asCount(o.revision, 'snapshot.revision'),
-    run: { runId, inputs, projectRevision },
+    run: { runId, inputs, projectRevision, spec },
     steps,
     registry: parseRegistry(o.registry),
     events: parseEvents(o.events, runId),
@@ -857,6 +903,7 @@ export function captureRunSnapshot(
         ? { finishedAt: state.finishedAt }
         : {}),
       outputs: [...state.outputs],
+      ...(state.commit !== undefined ? { commit: state.commit } : {}),
     })
   }
   const registry: Record<string, ArtifactRecord> = {}
@@ -872,6 +919,7 @@ export function captureRunSnapshot(
       runId,
       inputs: persistable({ ...run.inputs }, `run '${runId}' inputs`),
       projectRevision: run.revision,
+      spec: persistable({ ...run.spec }, `run '${runId}' spec`),
     },
     steps,
     registry,
@@ -931,6 +979,9 @@ export function restoreRun<C>(
       finishedAt: persisted.finishedAt,
       // Declared outputs come from the record, which parse checked against the live definition.
       outputs: [...persisted.outputs],
+      // The attempt's commit, so its idempotency key survives: without it a replay after a crash
+      // reads as a first commit and writes a second revision of work that is already stored.
+      ...(persisted.commit !== undefined ? { commit: persisted.commit } : {}),
     })
   }
   const run: RunState = {
@@ -941,6 +992,7 @@ export function restoreRun<C>(
     events: [...payload.events],
     consumedApprovals: new Set<string>(payload.consumedApprovalEventIds),
     revision: payload.run.projectRevision as ProjectRevision,
+    spec: { ...payload.run.spec },
   }
   const store: ResearchRunStore = new Map([[run.runId, run]])
 

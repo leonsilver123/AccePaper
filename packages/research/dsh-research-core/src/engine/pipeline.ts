@@ -23,6 +23,7 @@
  * No Cordis import — the engine is portable and unit-testable in isolation.
  */
 
+import type { ArtifactRef } from '../domain/artifact.ts'
 import type { AuditEventKind, ResearchRunStore, StepExecutedRecord } from './types.ts'
 import { ResearchError, appendAuditEvent, ensureRun, getRunSnapshot } from './state-machine.ts'
 import { commitStepOutputs, throwCommitRefusal } from './commit.ts'
@@ -58,6 +59,14 @@ export interface RunStepOptions {
   timeoutMs?: number
   /** Cancellation signal; abort → a deterministic `cancelled` failure is recorded (no hang). */
   signal?: AbortSignal
+  /**
+   * The versions this attempt read, resolved when the commit runs.
+   *
+   * A thunk, not a list: the executor does the reading, so the caller can only answer this after
+   * the executor has returned. It is called once, at commit time, and its value becomes the
+   * receipt's input digest — which is what lets a report say which inputs it judged.
+   */
+  inputRefs?: () => ReadonlyArray<ArtifactRef>
 }
 
 /** How one execution of a step ended. Only `success` writes artifacts; the other three
@@ -212,6 +221,7 @@ export function runStep(
           // different attempt gets a different key without the caller having to mint one.
           idempotencyKey: `${stepId}#${String(attemptId)}`,
           outputs: slugs.map(slug => ({ slug, value: arts[slug] })),
+          ...(opts.inputRefs === undefined ? {} : { inputRefs: opts.inputRefs() }),
         })
         if (!outcome.ok) throwCommitRefusal(outcome)
         finish(emit(store, buildRecord(runId, stepId, attemptId, 'success', slugs, Date.now() - startedAt)))

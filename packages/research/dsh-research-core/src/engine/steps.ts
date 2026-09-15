@@ -125,7 +125,11 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D2-framework', index: 12, phase: 'D', name: '框架',
     purpose: '论文框架/大纲',
-    inputs: ['claim', 'agenda', 'converged-verdict'],
+    // `method-spec` is read by this step's executor and was not declared, so the dependency graph
+    // did not contain the edge. That is the difference between "the closure is complete" and "the
+    // closure happens to cover this case": with the edge undeclared, nothing could prove that
+    // re-running B1 must also invalidate this step's output. It is declared now.
+    inputs: ['claim', 'agenda', 'converged-verdict', 'method-spec'],
     outputs: ['paper-outline'],
     gate: ['A'],
     falsifiable: null,
@@ -153,7 +157,9 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'E1-format', index: 15, phase: 'E', name: '格式',
     purpose: '按目标期刊格式化(版式/引用样式)',
-    inputs: ['revised-draft', 'venue', 'venue-scope'],
+    // `paper-outline` is read by this step's executor and was not declared — see D2-framework for
+    // what an undeclared read costs.
+    inputs: ['revised-draft', 'venue', 'venue-scope', 'paper-outline'],
     outputs: ['formatted-manuscript'],
     gate: ['B'],
     falsifiable: null,

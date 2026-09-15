@@ -37,6 +37,15 @@ export interface StepOutcome {
   readonly verdicts: Readonly<Record<string, GateOutcome>>
   /** True iff the executor was `real_tool_fixture_input` (a real tool function ran). */
   readonly usedRealTool: boolean
+  /**
+   * The input slugs the executor asked for, in the order it asked, as observed while it ran.
+   *
+   * Recorded rather than declared. A step's definition lists the edges the engine uses to decide
+   * when it may run and what a rollback invalidates; an executor that reads something else takes a
+   * dependency the engine cannot see, and re-declaring the same list by hand would repeat whatever
+   * mistake the definition made. This is what a run actually did.
+   */
+  readonly readSlugs: ReadonlyArray<string>
   /** Core `runStep` outcome of the execute phase. Absent when no executor ran (E2). */
   readonly executeStatus?: RunStepStatus
   readonly executeError?: string
@@ -46,6 +55,15 @@ export interface StepOutcome {
 export interface RunResult {
   readonly runId: string
   readonly steps: ReadonlyArray<StepOutcome>
+  /**
+   * Failures of the per-step checkpoint, in the order they happened.
+   *
+   * A checkpoint that fails is REPORTED rather than thrown: the step it followed has already
+   * committed and the run can continue, so stopping it would trade real work for a durability
+   * warning. What must not happen is the failure going unsaid — a run whose intermediate state was
+   * never written looks exactly like one that was, until the process dies.
+   */
+  readonly checkpointErrors?: ReadonlyArray<string>
 }
 
 /** Per-step override / scenario hooks for the driver. */
@@ -102,6 +120,15 @@ export interface DriveOptions {
    * a fixture anchor holds the gate rather than being replaced by something that passes.
    */
   readonly evidenceProfile?: EvidenceProfile
+  /**
+   * Called after each step that reached a terminal outcome, so a driver can persist the run's
+   * state as it goes instead of only once at the end. A run that saved only when it finished lost
+   * every step it had completed when the process died — including the ones that cost model calls.
+   *
+   * A throw is collected into {@link RunResult.checkpointErrors} and the run continues; see that
+   * field for why.
+   */
+  readonly checkpointAfterStep?: (runId: string, outcome: StepOutcome) => Promise<void> | void
 }
 
 /** Options for driving exactly one step. */

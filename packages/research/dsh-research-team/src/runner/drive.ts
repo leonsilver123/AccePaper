@@ -23,6 +23,7 @@
 // event would duplicate the audit trail.
 
 import type {
+  ArtifactRef,
   GateOutcome,
   ResearchRunStore,
   StepDefinition,
@@ -41,6 +42,7 @@ import {
   rollback,
   runStep,
   setRunInput,
+  setRunSpec,
   startStep,
   submitGateVerdict,
 } from '@deepseek-ai/dsh-research-core'
@@ -159,6 +161,7 @@ export async function driveStep(
       artifacts: [],
       verdicts: {},
       usedRealTool: false,
+      readSlugs: [],
     }
   }
 
@@ -166,14 +169,33 @@ export async function driveStep(
   // The timeout comes from the registry declaration unless the caller overrides it.
   const myExec = opts.executorOverride?.(stepId) ?? entry.executor
   const effectiveTimeoutMs = opts.timeoutMs ?? entry.timeoutMs
+  // Every slug the executor asks for, in the order it asks. Recorded so the run can state what it
+  // actually read — the declared inputs are what the engine schedules on, and the two are only the
+  // same when nobody has made a mistake.
+  const readSlugs: string[] = []
   const res = await runStep(store, runId, stepId, {
+    // The versions this attempt consumed, resolved at commit time from the slugs the executor
+    // asked for. This is what makes the receipt's `inputDigest` name a state rather than a
+    // placeholder.
+    inputRefs: () => {
+      const registry = getRunSnapshot(store, runId).registry
+      const refs: ArtifactRef[] = []
+      for (const slug of readSlugs) {
+        const meta = registry[slug]
+        if (meta !== undefined) refs.push(meta.ref)
+      }
+      return refs
+    },
     executor: (coreCtx: StepExecContext) =>
       myExec({
         runId: coreCtx.runId,
         stepId: coreCtx.stepId,
         attemptId: coreCtx.attemptId,
         ...(coreCtx.signal !== undefined ? { signal: coreCtx.signal } : {}),
-        getInput: (slug: string) => resolveStepInput(store, runId, slug),
+        getInput: (slug: string) => {
+          readSlugs.push(slug)
+          return resolveStepInput(store, runId, slug)
+        },
         runCtx: opts.runCtx,
         ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
         ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
@@ -196,6 +218,7 @@ export async function driveStep(
       artifacts: [],
       verdicts: {},
       usedRealTool,
+      readSlugs: [...readSlugs],
       executeStatus: res.status,
       ...(res.error !== undefined ? { executeError: res.error.message } : {}),
     }
@@ -266,6 +289,7 @@ export async function driveStep(
     artifacts,
     verdicts,
     usedRealTool: effectiveKind === 'real_tool_fixture_input',
+    readSlugs: [...readSlugs],
     executeStatus: res.status,
   }
 }
@@ -326,13 +350,20 @@ export async function runT19B(
   // The seeded direction IS the plan's, because it is also A1's retrieval topic: two values for
   // one fact is how a run's literature came to be about something its measurement was not.
   setRunInput(store, runId, 'domain-direction', plan.direction)
+  // The RESOLVED configuration, recorded on the run before it starts. A resume that rebuilt any of
+  // this from the deployment's CURRENT settings would drive a different run from the one whose
+  // artifacts it is holding — the plan's title, field, direction and outline are in no artifact,
+  // so without this record they can only be re-defaulted.
+  setRunSpec(store, runId, runSpecOf(plan, planSourceOf(opts), opts))
 
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
+  const checkpointErrors: string[] = []
   for (const step of getStepDefinitions()) {
     if (opts.stopBefore !== undefined && step.id === opts.stopBefore) break
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
+    await checkpoint(store, opts, outcome, checkpointErrors)
     // STOP AT THE FIRST STEP THAT DID NOT PASS. Driving on would make the NEXT
     // step's `canStart` guard throw "dependency order violated", which reports the
     // consequence and hides the cause: a real run stopped at A1 because its retrieval
@@ -348,7 +379,72 @@ export async function runT19B(
     // `kind` distinguishes them, because the driver sets `humanGate` for the human gate only.
     if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
-  return { runId, steps: outcomes }
+  return { runId, steps: outcomes, ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }) }
+}
+
+/**
+ * The resolved configuration a run is driven with, as the run records it.
+ *
+ * @param plan - the research this run carries.
+ * @param planSource - whether that plan is a caller's or the deployment's default.
+ * @param opts - the driver options the run was given.
+ * @returns the record. A budget the caller did not set is absent rather than zero, because
+ *   "the registry's per-step value applies" and "the budget is zero" are different facts.
+ */
+function runSpecOf(plan: StudyPlan, planSource: 'caller' | 'default', opts: DriveOptions): Record<string, unknown> {
+  return {
+    studyPlan: plan,
+    planSource,
+    evidenceProfile: opts.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE,
+    ...(opts.timeoutMs !== undefined ? { stepTimeoutMs: opts.timeoutMs } : {}),
+  }
+}
+
+/** Whether the driver was handed a plan or fell back to the deployment's default. */
+function planSourceOf(opts: DriveOptions): 'caller' | 'default' {
+  return opts.studyPlan === undefined ? 'default' : 'caller'
+}
+
+/**
+ * Hand one finished step to the caller's checkpoint, collecting a failure rather than raising it.
+ *
+ * @param store - the run store, so a hook that wants to persist can reach the run.
+ * @param opts - the driver options carrying the hook.
+ * @param outcome - the step that just finished.
+ * @param errors - the accumulator the failure is recorded in.
+ * @returns nothing; the run continues either way.
+ */
+async function checkpoint(
+  store: ResearchRunStore,
+  opts: DriveOptions,
+  outcome: StepOutcome,
+  errors: string[],
+): Promise<void> {
+  const hook = opts.checkpointAfterStep
+  if (hook === undefined) return
+  try {
+    await hook(runIdOf(store), outcome)
+  } catch (error) {
+    // Reported, not raised. The step has already committed; stopping the run here would throw
+    // away work that exists in order to complain that a copy of it does not.
+    errors.push(`checkpoint after '${outcome.stepId}' (attempt ${String(outcome.attemptId)}) failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/**
+ * The id of the run a store holds.
+ *
+ * The driver's checkpoint hook is handed the run id because the hook is installed before the run
+ * exists: `runT19B` mints the id, so a caller cannot close over it. A store driving more than one
+ * run would make this ambiguous, which the driver never does — every entry point here receives a
+ * store it owns.
+ *
+ * @param store - the run store.
+ * @returns the first run id, or an empty string when the store holds none.
+ */
+function runIdOf(store: ResearchRunStore): string {
+  for (const id of store.keys()) return id
+  return ''
 }
 
 /**
@@ -391,6 +487,7 @@ export async function driveRemaining(
 ): Promise<RunResult> {
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
+  const checkpointErrors: string[] = []
   let started = false
   for (const step of getStepDefinitions()) {
     if (!started) {
@@ -399,12 +496,13 @@ export async function driveRemaining(
     }
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
+    await checkpoint(store, opts, outcome, checkpointErrors)
     // Same rule as runT19B, including the human-gate distinction: stop at the first step that did
     // not pass, and continue through `gated` only when it is the human gate rather than a hold.
     if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
   if (!started) throw new Error(`T19B drive: unknown fromStepId '${fromStepId}'`)
-  return { runId, steps: outcomes }
+  return { runId, steps: outcomes, ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }) }
 }
 
 export { rollback }

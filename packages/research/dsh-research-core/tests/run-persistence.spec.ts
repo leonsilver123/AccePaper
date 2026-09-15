@@ -39,9 +39,11 @@ import {
   getRunSnapshot,
   recordArtifact,
   rollback,
+  setRunSpec,
   startStep,
   submitGateVerdict,
 } from '../src/engine/state-machine.ts'
+import { commitStepOutputs } from '../src/engine/commit.ts'
 import { runStep } from '../src/engine/pipeline.ts'
 import type { ResearchRunStore } from '../src/engine/types.ts'
 import { _resetApprovalChannelForTests, createHostApprovalChannel } from '../src/host.ts'
@@ -733,6 +735,89 @@ describe('run-persistence: approval replay protection survives restore', () => {
     expect(thrownBy(() => channel.submit(restored.store, runId, 'A1-landscape', 'approved', principal))).toMatchObject({
       code: 'DSH_ABSTENTION_REQUIRES_ROLLBACK',
     })
+  })
+})
+
+describe('run-persistence: the resolved configuration survives a cold start', () => {
+  it('round-trips the spec a run was driven with', async () => {
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    setRunSpec(store, runId, {
+      studyPlan: { title: 'A study nobody defaulted', field: 'queueing', direction: 'priority queues' },
+      planSource: 'caller',
+      evidenceProfile: 'production',
+      stepTimeoutMs: 1234,
+    })
+    await persistence.save(store, runId, { baseRevision: 0 })
+
+    const restored = await createRunPersistence({ dir }).load(freshCapability())
+    expect(getRunSnapshot(restored.store, runId).spec).toEqual({
+      studyPlan: { title: 'A study nobody defaulted', field: 'queueing', direction: 'priority queues' },
+      planSource: 'caller',
+      evidenceProfile: 'production',
+      stepTimeoutMs: 1234,
+    })
+  })
+
+  it('freezes the spec once the run has started, like the run inputs', () => {
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    startStep(store, runId, 'A1-landscape')
+    expect(thrownBy(() => setRunSpec(store, runId, { studyPlan: {} }))).toMatchObject({
+      code: 'DSH_INPUT_FROZEN',
+    })
+  })
+
+  it('records only the keys the caller set, and audits that it happened', () => {
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    setRunSpec(store, runId, { evidenceProfile: 'evaluation' })
+    const snap = getRunSnapshot(store, runId)
+    expect(Object.keys(snap.spec)).toEqual(['evidenceProfile'])
+    const events = snap.events.filter(e => e.kind === 'run-spec-set')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.detail).toEqual({ keys: ['evidenceProfile'] })
+  })
+})
+
+describe('run-persistence: a committed attempt keeps its receipt across a restart', () => {
+  it('restores the receipt, so a replay of the same key is not a second commit', async () => {
+    const store = freshStore()
+    const runId = seedRun(store, RUN_ID)
+    startStep(store, runId, 'A1-landscape')
+    const committed = commitStepOutputs(store, runId, 'A1-landscape', {
+      attemptId: 1,
+      expectedRevision: 0 as never,
+      idempotencyKey: 'A1-landscape#1',
+      outputs: [
+        { slug: 'landscape-map', value: { hits: 3 } },
+        { slug: 'gap-list', value: ['gap'] },
+      ],
+    })
+    if (!committed.ok) throw new Error(committed.reason)
+    const revisionAfter = getRunSnapshot(store, runId).revision
+    await persistence.save(store, runId, { baseRevision: 0 })
+
+    const restored = await createRunPersistence({ dir }).load(freshCapability())
+    // The run revision survives too: a restored run that came back at 0 would measure every later
+    // commit's fence against a number that never existed.
+    expect(getRunSnapshot(restored.store, runId).revision).toBe(revisionAfter)
+
+    const replay = commitStepOutputs(restored.store, runId, 'A1-landscape', {
+      attemptId: 1,
+      expectedRevision: revisionAfter,
+      idempotencyKey: 'A1-landscape#1',
+      outputs: [
+        { slug: 'landscape-map', value: { hits: 999 } },
+        { slug: 'gap-list', value: ['other'] },
+      ],
+    })
+    expect(replay.ok).toBe(true)
+    if (!replay.ok) throw new Error('unreachable')
+    expect(replay.receipt).toEqual(committed.receipt)
+    // The replay wrote nothing: the value is still the first commit's.
+    expect(getArtifact(restored.store, runId, 'landscape-map')).toEqual({ hits: 3 })
+    expect(getRunSnapshot(restored.store, runId).revision).toBe(revisionAfter)
   })
 })
 

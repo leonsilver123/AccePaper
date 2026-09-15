@@ -88,6 +88,7 @@ import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestr
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   DEFAULT_EVIDENCE_PROFILE,
+  isEvidenceProfile,
   createRunPersistence,
   getArtifact,
   getRunSnapshot,
@@ -535,6 +536,10 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),
       ...(stepTimeoutMs !== undefined ? { timeoutMs: stepTimeoutMs } : {}),
+      // Persist as the run goes. Saving only when it finished lost every completed step to a
+      // process death — including the steps that cost model calls — and the snapshot store's own
+      // lock cannot compensate for a checkpoint that never happened.
+      checkpointAfterStep: async (checkpointRunId: string) => { await this.checkpointRun(store, checkpointRunId) },
     })
     // READ the stored run, then let `save` REPLACE it under its own version guard. An earlier
     // version deleted the file first and saved with `baseRevision: 0`; that made the guard pass on
@@ -818,15 +823,19 @@ export class ResearchTeamService extends TypertRemoteService {
     // persisted none.
     const persistedScenario = getRunSnapshot(restored.store, restored.runId).inputs[CASE_PACK_INPUT_SLUGS.scenario]
     runCtx.study = studyFromPack(persistedScenario) ?? studyFromPack(this.hostCasePackScenario()) ?? experimentStudy()
-    // The plan's CLAIM half, rebuilt from the same artifacts. Without this a resumed run would
-    // write prose about the default plan's claim while its own gates had already graded the one
-    // its artifacts record — the manuscript contradicting its own verdicts.
-    //
-    // WHAT IS NOT REBUILT, stated rather than implied: the title, the field, the retrieval
-    // direction and the section skeleton. No artifact carries them, so a resumed run takes them
-    // from the plan THIS deployment supplies. For the default plan that is exact; a deployment
-    // that states its own plan and resumes a run started under another would use its own for
-    // those four. Persisting the plan belongs with the change that lets a person supply one.
+    // The plan the run was DRIVEN with, read back from the run's own record of it. This used to
+    // take the title, the field, the retrieval direction and the section skeleton from the plan
+    // THIS deployment supplies, because no artifact carries them — so a resume after a deployment
+    // changed its plan (or after one deployment resumed another's run) wrote a manuscript about a
+    // study its own gates had not graded. `setRunSpec` records the resolved configuration before
+    // the first step; a record that fails to parse falls back to the deployment's plan and SAYS so
+    // in the returned snapshot's spec, rather than resolving silently.
+    const recordedSpec = getRunSnapshot(restored.store, restored.runId).spec
+    const recordedPlan = requirePlan(recordedSpec['studyPlan'], MEASURED_METRIC)
+    if (recordedPlan.ok) runCtx.studyPlan = recordedPlan.plan
+    // The plan's CLAIM half is then overlaid from the artifacts, which are the authority for what
+    // the gates actually graded: a run whose claim was re-derived mid-flight would otherwise have
+    // its gates' verdicts describe one claim and its prose another.
     runCtx.studyPlan = {
       ...runCtx.studyPlan,
       claim: {
@@ -865,12 +874,27 @@ export class ResearchTeamService extends TypertRemoteService {
       // stopped attempt left registered.
       rollback(restored.store, restored.runId, from)
     }
-    const evidenceProfile = this.hostEvidenceProfile()
+    // The profile the run was driven under, from its own record; the deployment's current one is
+    // the fallback for a record that carries none, and is never a silent promotion of an
+    // evaluation run to production.
+    const recordedProfile = recordedSpec['evidenceProfile']
+    const evidenceProfile = isEvidenceProfile(recordedProfile)
+      ? recordedProfile
+      : this.hostEvidenceProfile()
+    const recordedTimeout = recordedSpec['stepTimeoutMs']
+    const recordedTimeoutMs = typeof recordedTimeout === 'number' && Number.isFinite(recordedTimeout) && recordedTimeout > 0
+      ? recordedTimeout
+      : undefined
     const run = await driveRemaining(restored.store, restored.runId, runCtx, from, {
       evidenceProfile,
+      // The budget the run was started with, for the same reason as the plan: the registry's
+      // per-step value fits the offline channels, and a run driven through a model route that
+      // resumed under the registry budget would record `timeout` on its first long step.
+      ...(recordedTimeoutMs === undefined ? {} : { timeoutMs: recordedTimeoutMs }),
       ...(capability.toolDeps !== undefined ? { toolDeps: capability.toolDeps } : {}),
       ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      checkpointAfterStep: async (checkpointRunId: string) => { await this.checkpointRun(restored.store, checkpointRunId) },
     })
     const { persistence: persisted } = await this.recordRun(run, restored.store)
     // Remembered like a fresh run: a resumed run that reaches E2 must be approvable, and the
@@ -883,6 +907,30 @@ export class ResearchTeamService extends TypertRemoteService {
       () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
     )
     return snapshotOf(run, restored.store, evidenceProfile, null, persisted)
+  }
+
+  /**
+   * Write the run's current state to its durable snapshot, mid-run.
+   *
+   * The snapshot only: the reproducible package is a finished run's product, and re-exporting it
+   * after every step would write a directory of partial artifacts sixteen times over. What a
+   * checkpoint is for is the state — which steps committed, at which attempts and revisions — so a
+   * process that dies mid-run resumes instead of starting over.
+   *
+   * A failure is thrown to the caller (the driver's checkpoint hook), which records it and lets
+   * the run continue. The revision guard is the store's, not this method's: a conflicting save is
+   * a real signal and must not be papered over by retrying blind.
+   *
+   * @param store - the run store, still live at this point.
+   * @param runId - the run to checkpoint.
+   */
+  private async checkpointRun(store: ResearchRunStore, runId: string): Promise<void> {
+    const persistence = this.hostRunPersistence(runId)
+    if (persistence === undefined) return
+    await this.serialized(async () => {
+      const stored = await this.readStoredRun(runId)
+      await persistence.save(store, runId, { baseRevision: stored?.revision ?? 0 })
+    })
   }
 
   /**

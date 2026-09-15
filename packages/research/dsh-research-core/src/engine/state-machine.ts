@@ -360,6 +360,7 @@ export function createRun(store: ResearchRunStore, runId?: string): string {
   const run: RunState = {
     runId: id,
     inputs: {},
+    spec: {},
     steps: new Map(),
     registry: {},
     events: [],
@@ -408,6 +409,38 @@ export function setRunInput(store: ResearchRunStore, runId: string, slug: string
   pushEvent(run, 'input-seeded', undefined, undefined, { slug })
 }
 
+/**
+ * Record the RESOLVED configuration a run is being driven with: the study plan, the evidence
+ * profile, the per-step budget, and anything else the driver settled before the first step.
+ *
+ * It freezes with the inputs, for the same reason: both are decisions made once, before the run
+ * means anything, and a decision changed mid-run would describe a run that never happened. Core
+ * does not interpret the value — it stores it, refuses a run that has already started, and hands
+ * it back on restore, so a restart can drive the run it was actually running instead of the one
+ * the deployment's current configuration describes.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to describe; it must already exist in `store` (RUN_NOT_FOUND) and must
+ *   not have started (DSH_INPUT_FROZEN — the same freeze the run's inputs obey).
+ * @param spec - the resolved configuration, as a JSON-representable record. Deep-cloned at this
+ *   boundary, so a caller editing its own object afterwards changes nothing here.
+ */
+export function setRunSpec(store: ResearchRunStore, runId: string, spec: Record<string, unknown>): void {
+  const run = ensureRun(store, runId)
+  for (const s of run.steps.values()) {
+    if (s.status !== 'pending' || s.attempts > 0) {
+      throw new ResearchError(
+        'DSH_INPUT_FROZEN',
+        `setRunSpec: run '${runId}' has started (step '${s.stepId}' status='${s.status}'`
+          + ` attempts=${s.attempts}); the resolved configuration is frozen — a run whose plan`
+          + ' changed under it would describe a run that never happened',
+      )
+    }
+  }
+  run.spec = cloneValue(spec) as Record<string, unknown>
+  pushEvent(run, 'run-spec-set', undefined, undefined, { keys: Object.keys(spec).sort() })
+}
+
 /** Read-only run snapshot (deep-cloned; artifact values excluded — fetch via getArtifact — HOLE-4).
  *
  * @param store - the caller-owned run store that holds the run.
@@ -437,6 +470,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
   const snapshot: RunSnapshot = {
     runId: run.runId,
     inputs: cloneValue(run.inputs) as Record<string, unknown>,
+    spec: cloneValue(run.spec) as Record<string, unknown>,
     steps,
     registry,
     events: run.events.map(e => cloneValue(e) as AuditEvent),
@@ -676,7 +710,7 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
   // still holds the abandoned attempt's entries, marked invalidated, and a step that has not yet
   // re-run must not pass on them.
   {
-    const missing = step.outputs.filter(slug => {
+    const missing = step.outputs.filter((slug) => {
       const record = run.registry[slug]
       return (
         record === undefined ||

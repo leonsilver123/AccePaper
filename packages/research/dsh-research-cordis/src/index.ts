@@ -337,7 +337,7 @@ function resolveEvidenceProfile(declared: unknown): EvidenceProfile {
   if (declared === undefined) return DEFAULT_EVIDENCE_PROFILE
   if (!isEvidenceProfile(declared)) {
     throw new Error(
-      `[research] \`evidenceProfile\` must be one of ${EVIDENCE_PROFILES.join(' | ')}, got ${JSON.stringify(declared) ?? 'undefined'}`,
+      `[research] \`evidenceProfile\` must be one of ${EVIDENCE_PROFILES.join(' | ')}, got ${JSON.stringify(declared)}`,
     )
   }
   return declared

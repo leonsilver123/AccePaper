@@ -119,6 +119,7 @@ export interface ArtifactRecord {
  *  execution pipeline appends without changing step status. */
 export type AuditEventKind =
   | 'run-created'
+  | 'run-spec-set'
   | 'input-seeded'
   | 'step-started'
   | 'artifact-recorded'
@@ -240,6 +241,15 @@ export type StepStore = Map<string, StepState>
 export interface RunState {
   readonly runId: string
   inputs: Record<string, unknown>
+  /**
+   * The RESOLVED configuration this run was driven with: the study plan, the evidence profile,
+   * the per-step budget, and whatever else the driver settled before the first step started.
+   *
+   * It is not a step's input and no step reads it — it exists so that a restart can drive the run
+   * it was actually running. Rebuilding any of it from a deployment's CURRENT configuration is
+   * how a resumed run came to measure something its own artifacts do not describe.
+   */
+  spec: Record<string, unknown>
   steps: StepStore
   registry: Record<string, ArtifactRecord>
   events: AuditEvent[]
@@ -287,6 +297,8 @@ export interface ArtifactRecordMeta {
 export interface RunSnapshot {
   readonly runId: string
   readonly inputs: Readonly<Record<string, unknown>>
+  /** The resolved configuration the run was driven with; see {@link RunState.spec}. */
+  readonly spec: Readonly<Record<string, unknown>>
   readonly steps: Readonly<Record<string, StepSnapshot>>
   readonly registry: Readonly<Record<string, ArtifactRecordMeta>>
   readonly events: ReadonlyArray<Readonly<AuditEvent>>

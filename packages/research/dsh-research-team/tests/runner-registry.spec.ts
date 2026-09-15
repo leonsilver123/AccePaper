@@ -146,7 +146,8 @@ describe('the Remote snapshot shape is frozen', () => {
     >()
     expectTypeOf<keyof RunResult['steps'][number]>().toEqualTypeOf<
       'stepId' | 'status' | 'attemptId' | 'kind' | 'producer' | 'outputSlugs'
-      | 'artifacts' | 'verdicts' | 'usedRealTool' | 'executeStatus' | 'executeError'
+      | 'artifacts' | 'verdicts' | 'usedRealTool' | 'readSlugs'
+      | 'executeStatus' | 'executeError'
     >()
   })
 })

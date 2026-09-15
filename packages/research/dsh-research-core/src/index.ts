@@ -57,6 +57,7 @@ export type {
 export {
   createRun,
   setRunInput,
+  setRunSpec,
   getRunSnapshot,
   getArtifact,
   canStart,
@@ -237,6 +238,13 @@ export {
 
 export type { PaperType, ProjectStatus, ResearchProject } from './domain/project.ts'
 export { PAPER_TYPES, nextProjectRevision, parseProjectIngress } from './domain/project.ts'
+
+// ── Workflow: the declared dependency graph ──────────────────────────────────
+// The engine schedules on `step.inputs` and cascades rollbacks along them, so an executor reading
+// a slug its definition does not declare takes a dependency nothing can see. These functions state
+// what that closure is, and compare it with the reads a run actually made.
+export { directConsumers, forwardEdges, transitiveDependents, undeclaredReads } from './workflow/dependency-graph.ts'
+export type { UndeclaredRead } from './workflow/dependency-graph.ts'
 
 // ── T19-B orchestration (Wave 2, additive + audited) ─────────────────────────
 // `runStep` is the execute-phase pipeline (T19-A). It NEVER adjudicates gates and
