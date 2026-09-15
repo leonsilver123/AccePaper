@@ -46,5 +46,5 @@ The second was found by an independent reader of the module, not by its tests â€
 
 - A model-proposed direction of any length now yields a usable claim id, and a plan carrying one the tool would reject is refused at `requirePlan` with the two numbers.
 - `tests/direction-proposals.spec.ts` pins the bound, the prefix-collision case, stability, and the boundary refusal; `tests/domain/quality.spec.ts` pins that a required `not_evaluated` blocks, that a required `not_applicable` still passes, and that a query about a non-required check does not decide the gate.
-- The browser probe's run reached A2 and stopped there on 2026-09-16; that failure is what surfaced this. The probe is re-run against the fix.
+- The browser probe's run reached A2 and stopped there on 2026-09-16; that failure is what surfaced this. Re-run against the fix, the probe is **41/41** against commit `a447203d`: the shipped app boots through its own profile, a person confirms a model-proposed plan, the run reaches the human gate with all 16 steps (`{"a2":"passed","e2":"gated","steps":16}`), the approval moves E2 to `passed` at the backend, and the exported package cites 24 catalogue DOIs.
 - `packages/research` is 1648 passing across 91 files.

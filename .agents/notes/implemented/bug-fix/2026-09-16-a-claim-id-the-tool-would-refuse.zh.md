@@ -46,5 +46,5 @@ Status: implemented
 
 - 任意长度的模型候选方向现在都产出可用的 claim id;携带工具会拒绝的 id 的方案在 `requirePlan` 被拒,并报出那两个数。
 - `tests/direction-proposals.spec.ts` 钉住上界、前缀撞车、稳定性与边界拒绝;`tests/domain/quality.spec.ts` 钉住"必需的 `not_evaluated` 会 block"、"必需的 `not_applicable` 仍可通过",以及"关于非必需检查的查询不决定这个门"。
-- 浏览器探针在 2026-09-16 的那次运行到了 A2 就停在那里;正是那次失败暴露了这件事。探针会对着修复重跑。
+- 浏览器探针在 2026-09-16 的那次运行到了 A2 就停在那里;正是那次失败暴露了这件事。对着修复重跑之后,探针在提交 `a447203d` 上是 **41/41**:出货应用从它自己的 profile 启动,人确认一份模型提出的方案,运行以 16 步全部到达人工门(`{"a2":"passed","e2":"gated","steps":16}`),批准在后端把 E2 变成 `passed`,导出的包里引用了 24 条目录 DOI。
 - `packages/research` 在 91 个文件上 **1648 通过**。

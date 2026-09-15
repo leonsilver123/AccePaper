@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-a-claim-id-the-tool-would-refuse.md
-2026-09-16-a-claim-id-the-tool-would-refuse.md: 7b676eb7ca39b4330e5ff9513b11bb023aee511a
-2026-09-16-a-claim-id-the-tool-would-refuse.zh.md: 013dff7755a917f1930a7d634dced78ae4786bee
+2026-09-16-a-claim-id-the-tool-would-refuse.md: 82371d5d7a3889e2f7bc85236b5cfa56159f9724
+2026-09-16-a-claim-id-the-tool-would-refuse.zh.md: 1367d9148d2e53a7c1edf5fed73b1c549156431b
