@@ -10,6 +10,9 @@
 
 ## 已知限制与延期工作
 
+- **修订仍是一个标志,不是一份 Patch**(2026-09-16,实测):`D4-rebuttal` 把每一节都映射成 `{ ...section, revised: record.hasRevisions }`,于是一条"要求改稿"的意见会把**每一节**都标成已修订,而没有任何正文改变。一个离线探针比对 D3 与 D4 的正文,量到 `unchangedBodies: true, revisedFlags: [true, true]`。审查要的是一个 Issue–Patch–Verify 循环:只有在正文**确实**变过之后才置 `revised`,而要求改稿的意见在拿不出 diff 时不许关闭。**这是剩下最大的一个 P0,且尚未开工** —— 要做的是 D4 散文请求上的逐节 patch 格式、一步纯逻辑的"应用并验证",以及每条意见的 `disposition`(`patched` / `accepted_explanation` / `open`)。
+- **A 门禁审的是 claim 材料,不是手稿**(2026-09-16,实测):`verdictA` 调的是 `reviewClaim(runCtx.claimMaterial)`,所以那三本离线规则手册判的是主张自己的字段,与 D3/D4 写了什么无关。一个离线探针改掉正文里的一个数字、删掉一节方法、跳过修订,三项都没有让 A 的票动一下。审查要的是一个绑定到 `targetVersion`、真的去读手稿及其证据的审稿任务。**尚未开工。**
+- **写作者的上下文带的是标签,不是证据**(2026-09-16,实测):D3 请求的 context 键是 `field, direction, sectionId, claimRef, figureCount, citable`,最后一个是标签清单。方法规范、结果表、图数据和文献记录都在这次运行里,却一条都没有到达写作者,所以一个忠实的模型仍然写不出真实的 Results 一节。**尚未开工**;它与上面 A 门禁那条是同一个缺口的两半。
 - **运行把它被解析时依据的配置记下来,重启读那条记录**(2026-09-16):`setRunSpec` 在第一步之前把研究方案、方案的来源、证据 profile 与每步预算存到运行上,受与运行输入相同的冻结约束。`resumeRunPipeline` 读那条记录,而不是从执行恢复的部署当下提供的东西里取标题、领域、方向、大纲与预算 —— 后者正是让"被恢复的运行"变成另一个研究的原因。主张那一半仍从工件覆盖,因为工件才是门禁裁断了什么的权威。**解析不出来的记录会静默回落到部署的方案**,除了快照自己的 spec 会与实际的驱动不一致 —— 格式现在要求这条记录,所以这只描述这次改动之前写下的记录。
 - **运行每步之后做 checkpoint**(2026-09-16):`DriveOptions.checkpointAfterStep` 每完成一步就持久化一次快照,于是中途死掉的进程是恢复而不是从头再来。产物包仍然只在结束时导一次。失败的 checkpoint 收进 `RunResult.checkpointErrors`、运行继续 —— 那一步已经提交,失败是被**报告**而不是被抛出。
 - **依赖图要对着步骤实际读的东西检查**(2026-09-16):`StepOutcome.readSlugs` 记下执行器运行时向 `getInput` 要过的每一个 slug,`tests/dependency-closure.spec.ts` 把它与声明的输入比对。两条未声明的读取是这样找出来的,现在已声明(`D2-framework` 读 `method-spec`,`E1-format` 读 `paper-outline`)。**`readSlugs` 只覆盖执行器直接调用的 `getInput`** —— 通过工具依赖去够工件的步骤不在其中,而目前没有这样的读取。
