@@ -8,7 +8,7 @@ import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-co
 import type { RestoredRun, StepStatus } from '@deepseek-ai/dsh-research-core'
 
 import type { ClaimMaterial } from './redteam-review.ts'
-import type { PredictionCommitment } from './platoon-sim.ts'
+import type { PredictionCommitment } from './prediction-gate.ts'
 
 /**
  * The first step of a restored run that is not in a terminal state.

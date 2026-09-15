@@ -20,7 +20,8 @@ import type { StepDefinition } from '@deepseek-ai/dsh-research-core'
 import { createRunContext } from '../src/runner/drive.ts'
 import { CANONICAL } from '../src/runner/registry.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
-import { MEASURED_METRIC_KEY, evaluatePrediction, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { evaluatePrediction } from '../src/runner/prediction-gate.ts'
+import { MEASURED_METRIC, experimentStudy, measureStudy } from '../src/runner/platoon-sim.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
 
 const C2: StepDefinition | undefined = getStepDefinitionById('C2-trinity-loop')
@@ -77,16 +78,17 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
     // The P0 this guards (audit, 2026-09-14): the gate took the first percentage in the
     // claim's prose and compared it to a number the experiment had measured for a DIFFERENT
     // quantity, so an untested claim reached E2 reported as supported.
-    const adjudication = evaluatePrediction(
-      'the platoon string-instability index shall rise by at least 20%',
-      experimentStudy(),
-      'platoon-string-stability-index',
-      { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
-    )
+    const adjudication = evaluatePrediction({
+      predictionText: 'the platoon string-instability index shall rise by at least 20%',
+      metric: MEASURED_METRIC,
+      declaredMetricKey: 'platoon-string-stability-index',
+      commitment: { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
+      measure: () => measureStudy(experimentStudy()),
+    })
     expect(adjudication.kind).toBe('unbindable')
     if (adjudication.kind === 'unbindable') {
       expect(adjudication.reason).toContain('platoon-string-stability-index')
-      expect(adjudication.reason).toContain(MEASURED_METRIC_KEY)
+      expect(adjudication.reason).toContain(MEASURED_METRIC.key)
     }
   })
 
@@ -94,12 +96,13 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
     // The key alone is self-attestation: a claim about something else passes every check if it
     // simply declares the key of the quantity this study measures. The declaration must agree
     // with the prediction's own text, and this asserts that it is checked rather than trusted.
-    const adjudication = evaluatePrediction(
-      'the platoon string-instability index shall rise by at least 20%',
-      experimentStudy(),
-      MEASURED_METRIC_KEY,
-      { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
-    )
+    const adjudication = evaluatePrediction({
+      predictionText: 'the platoon string-instability index shall rise by at least 20%',
+      metric: MEASURED_METRIC,
+      declaredMetricKey: MEASURED_METRIC.key,
+      commitment: { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
+      measure: () => measureStudy(experimentStudy()),
+    })
     expect(adjudication.kind).toBe('unbindable')
     if (adjudication.kind === 'unbindable') {
       expect(adjudication.reason).toContain('does not name that quantity')
@@ -111,7 +114,7 @@ describe('C gate — fail-closed on everything that is not a measurement', () =>
     // Regression: `verdictC` used to fall back to `CANONICAL.prediction` whenever the run
     // stated none, so a run that stated no prediction was adjudicated against the fixture one
     // and reported — while the C1 executor threw on the very same emptiness.
-    const built = await buildStepVerdicts(ctxWith('', MEASURED_METRIC_KEY))
+    const built = await buildStepVerdicts(ctxWith('', MEASURED_METRIC.key))
     const c = built.find(v => v.component === 'C')
     expect(c?.outcome).toBe('blocked')
     expect(c?.passed).toBe(false)
@@ -123,13 +126,18 @@ describe('C gate — a decisive negation advances the run', () => {
   it('PASSES the step and records the claim as refuted when the experiment negates it', async () => {
     // The shipped configuration: the AV's declared 1.2 s headway costs more margin than its
     // 150 ms reaction buys, so the canonical prediction is refuted. That is a RESULT.
-    const verdict = evaluatePrediction(CANONICAL.prediction, experimentStudy(), MEASURED_METRIC_KEY,
-      { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
+    const verdict = evaluatePrediction({
+      predictionText: CANONICAL.prediction,
+      metric: MEASURED_METRIC,
+      declaredMetricKey: MEASURED_METRIC.key,
+      commitment: { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
+      measure: () => measureStudy(experimentStudy()),
+    })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(false)
 
-    const built = await buildStepVerdicts(ctxWith(CANONICAL.prediction, MEASURED_METRIC_KEY))
+    const built = await buildStepVerdicts(ctxWith(CANONICAL.prediction, MEASURED_METRIC.key))
     const c = built.find(v => v.component === 'C')
     // Passed, because the step's question is whether the claim met a falsifiable test this
     // study could run — not whether the hypothesis won.
@@ -145,13 +153,18 @@ describe('C gate — a decisive negation advances the run', () => {
     // The prediction sentence is identical; only the study's AV headway differs, and that is
     // what changes the measurement's sign.
     const prediction = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
-    const verdict = evaluatePrediction(prediction, studyWhereThePredictionHolds(), MEASURED_METRIC_KEY,
-      { direction: 'increase', bound: 'at-least', thresholdPct: 20 })
+    const verdict = evaluatePrediction({
+      predictionText: prediction,
+      metric: MEASURED_METRIC,
+      declaredMetricKey: MEASURED_METRIC.key,
+      commitment: { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
+      measure: () => measureStudy(studyWhereThePredictionHolds()),
+    })
     expect(verdict.kind).toBe('adjudicated')
     if (verdict.kind !== 'adjudicated') return
     expect(verdict.supportsPrediction).toBe(true)
 
-    const built = await buildStepVerdicts(ctxWith(prediction, MEASURED_METRIC_KEY, studyWhereThePredictionHolds()))
+    const built = await buildStepVerdicts(ctxWith(prediction, MEASURED_METRIC.key, studyWhereThePredictionHolds()))
     const c = built.find(v => v.component === 'C')
     expect(c?.outcome).toBe('passed')
     expect(String(c?.evidence)).toContain('verdict=supported')

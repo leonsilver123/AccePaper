@@ -41,8 +41,9 @@
 
 import type { ResearchRebuttalPosition } from '../types.ts'
 
-import type { PredictionCommitment } from './platoon-sim.ts'
-import { anchorBoundIn, carriesNegation, measuringClause, percentagesIn, requirementDirectionIn } from './platoon-sim.ts'
+import type { PredictionCommitment } from './prediction-gate.ts'
+import { anchorBoundIn, carriesNegation, measuringClause, percentagesIn, phrasingsFor, requirementDirectionIn } from './prediction-gate.ts'
+import { MEASURED_METRIC } from './platoon-sim.ts'
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -90,7 +91,7 @@ export interface ClaimMaterial {
    *
    * Declared rather than inferred. The reviewer used to read a direction out of the prediction's
    * prose, and three rounds of audit dismantled that reader — see `PredictionCommitment` in
-   * `./platoon-sim.ts` for the six independent ways it reached a wrong verdict on the shipped
+   * `./prediction-gate.ts` for the six independent ways it reached a wrong verdict on the shipped
    * study. Absent means the claim declared none, which is a gap the reviewer reports.
    */
   readonly commitment?: PredictionCommitment
@@ -211,7 +212,7 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
   // and the C verdict grades it, so a number the prose attached elsewhere no longer reaches the
   // verdict; what is left here is whether the claim's own words agree with its declaration. See
   // `measuringClause` for what the scoping does and does not establish.
-  const clause = measuringClause(prediction, material.metricKey)
+  const clause = measuringClause(prediction, phrasingsFor(material.metricKey, MEASURED_METRIC))
   const statedAnchor = clause === undefined ? undefined : anchorBoundIn(clause)
   const statedDirection = clause === undefined ? undefined : requirementDirectionIn(clause)
   const statedPercentages = clause === undefined ? [] : percentagesIn(clause)

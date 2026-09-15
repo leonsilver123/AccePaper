@@ -19,7 +19,7 @@ import type { AdjudicationInput, StepDefinition } from '@deepseek-ai/dsh-researc
 
 import { createRunContext } from '../src/runner/drive.ts'
 import { B_CHANNEL_ANCHOR_REF, B_CHANNEL_CONTRADICT_REF, buildBChannelAnchors } from '../src/runner/anchor-fixture.ts'
-import { MEASURED_METRIC_KEY, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
 import { EMPTY_CLAIM_MATERIAL, reviewClaim } from '../src/runner/redteam-review.ts'
 import type { ClaimMaterial } from '../src/runner/redteam-review.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
@@ -36,9 +36,9 @@ const SUPPORTING: ClaimMaterial = {
   scope: 'three vehicles, one lane, steady free flow under the declared periodic disturbance',
   dataSource: 'mock-experiment.json',
   essentialDifference: 'a single autonomous vehicle in the middle position rather than a fully autonomous platoon',
-  metricKey: MEASURED_METRIC_KEY,
+  metricKey: MEASURED_METRIC.key,
   truthfulness: 'fixture',
-  measuredMetricKey: MEASURED_METRIC_KEY,
+  measuredMetricKey: MEASURED_METRIC.key,
   declaredSources: ['case-pack.json', 'mock-experiment.json', 'claim.json'],
   commitment: { direction: 'increase', bound: 'at-least', thresholdPct: 20 },
 }

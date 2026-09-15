@@ -40,7 +40,7 @@ import {
 import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.ts'
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import type { RunResult } from '../src/runner/types.ts'
-import { MEASURED_METRIC_KEY, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 
 const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
@@ -559,7 +559,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       predictionText: 'no such experiment row',
       claimId: 'mock-claim-999',
       claimRef: 'missing row',
-      metricKey: MEASURED_METRIC_KEY,
+      metricKey: MEASURED_METRIC.key,
       claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
       study: experimentStudy(),
       timestamp: FIXED_TS,

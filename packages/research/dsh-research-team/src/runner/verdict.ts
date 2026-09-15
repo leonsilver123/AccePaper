@@ -38,7 +38,8 @@ import { adjudicateClaimSupport } from '../experiment/support.ts'
 
 import { B_CHANNEL_INCONCLUSIVE_REF, buildBChannelAnchors } from './anchor-fixture.ts'
 import { REVIEW_ROLES, reviewClaim } from './redteam-review.ts'
-import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC_LABEL, evaluatePrediction } from './platoon-sim.ts'
+import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC, measureStudy } from './platoon-sim.ts'
+import { evaluatePrediction } from './prediction-gate.ts'
 import { CANONICAL } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
@@ -193,7 +194,13 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
-  const experiment = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey, ctx.runCtx.commitment)
+  const experiment = evaluatePrediction({
+    predictionText,
+    metric: MEASURED_METRIC,
+    declaredMetricKey: ctx.runCtx.metricKey,
+    commitment: ctx.runCtx.commitment,
+    measure: () => measureStudy(ctx.runCtx.study),
+  })
   if (experiment.kind === 'unbindable') {
     // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
     // at all, so the gate abstains instead of comparing an unrelated number to a threshold.
@@ -243,7 +250,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
       `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
       + `verdict=${rec.verdict} (the experiment ran here: `
       + `measured ${experiment.improvementPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
-      + `of ${MEASURED_METRIC_LABEL}, which the claim names as "${experiment.matchedPhrase}"; `
+      + `of ${MEASURED_METRIC.label}, which the claim names as "${experiment.matchedPhrase}"; `
       + (negated
         ? 'the measurement NEGATED the prediction — recorded as refuted, and the step advances on a decisive test rather than failing)'
         : 'the measurement supports the prediction)'),

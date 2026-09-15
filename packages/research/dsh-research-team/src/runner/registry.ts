@@ -77,7 +77,8 @@ import { readFileSync, statSync } from 'node:fs'
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
 import { commitmentFrom } from './resume.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
-import type { PlatoonStudy, PredictionCommitment } from './platoon-sim.ts'
+import type { PredictionCommitment } from './prediction-gate.ts'
+import type { PlatoonStudy } from './platoon-sim.ts'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
@@ -157,17 +158,18 @@ import type {
 import {
   ABLATION_MODULES,
   EXPERIMENT_RULE_VERSION,
-  MEASURED_METRIC_KEY,
+  MEASURED_METRIC,
   SIMULATION_INPUTS,
   ablationStudy,
   boundaryTest,
   comparePlatoons,
-  evaluatePrediction,
+  measureStudy,
   MODEL_EQUATIONS,
   experimentStudy,
   runPlatoon,
   studyFromPack,
 } from './platoon-sim.ts'
+import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
 export type Truthfulness =
@@ -490,7 +492,7 @@ const CANONICAL_PREDICTION = 'the HV-AV-HV platoon shall exceed the all-HV plato
  * ("demand-weighted mean delay"). A claim whose text is about something else must declare
  * something else, and then the C channel holds instead of grading it.
  */
-const CANONICAL_METRIC_KEY = MEASURED_METRIC_KEY
+const CANONICAL_METRIC_KEY = MEASURED_METRIC.key
 
 /**
  * The study's identity fields: what is being compared, and under which name.
@@ -505,7 +507,7 @@ const CANONICAL_METRIC_KEY = MEASURED_METRIC_KEY
 export const SCENARIO = {
   baselineIdentity: 'homogeneous-HV-HV-HV',
   variantIdentity: 'mixed-HV-AV-HV',
-  metric: MEASURED_METRIC_KEY,
+  metric: MEASURED_METRIC.key,
   metricDirection: 'higher_is_better',
   venueId: 'syn-venue-trc-001',
   venueName: 'Synthetic TRC-style Transport Venue',
@@ -1200,7 +1202,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     essentialDifference,
     metricKey,
     truthfulness: typeof claimRoute.truthfulness === 'string' ? claimRoute.truthfulness : '',
-    measuredMetricKey: MEASURED_METRIC_KEY,
+    measuredMetricKey: MEASURED_METRIC.key,
     ...(commitment === undefined ? {} : { commitment }),
     declaredSources: packClaim !== undefined && Array.isArray(packClaim.declaredSources)
       ? (packClaim.declaredSources as ReadonlyArray<string>)
@@ -1232,7 +1234,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // the experiment measures, so it is the field that decides whether the number below was
         // ever a test of this claim.
         metricKey: metricKey === '' ? null : metricKey,
-        measuredMetricKey: MEASURED_METRIC_KEY,
+        measuredMetricKey: MEASURED_METRIC.key,
         claimRoute,
       },
       A2_PRODUCER,
@@ -1630,7 +1632,7 @@ function studyEvidence(study: PlatoonStudy = experimentStudy()): Record<string, 
     // experiment ran" invites the reader to assume it tested the claim; naming both is what
     // lets them check, and the previous study's artifact had to say its measurement was
     // about an intersection while its claim was about a platoon.
-    measures: MEASURED_METRIC_KEY,
+    measures: MEASURED_METRIC.key,
     alsoMeasured: ['ttc-lt-1.5s-rate-pct', 'mean-time-headway-seconds', 'mean-jerk-mps3', 'string-stability-index'],
     doesNotMeasure: 'field crash frequency, any external SOTA, or any quantity outside the declared simulation',
     note:
@@ -1740,7 +1742,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         baseline: {
           identity: SCENARIO.baselineIdentity,
           protocol: 'simulate the homogeneous platoon under the study’s declared disturbance and read its minimum time-to-collision',
-          metric: { name: MEASURED_METRIC_KEY, direction: 'higher is better' },
+          metric: { name: MEASURED_METRIC.key, direction: 'higher is better' },
           // The input this NUMBER came from. The baseline is measured by running the
           // simulation over the Case Pack's declared scenario, which is not the dataset B2
           // registered; naming B2's descriptor here would attribute the measurement to a
@@ -1769,7 +1771,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         fixture: false,
         stepId: 'B3-baseline',
         slug: 'sota-comparison',
-        targetMetric: MEASURED_METRIC_KEY,
+        targetMetric: MEASURED_METRIC.key,
         rows: [
           { method: 'HV-HV-HV (this study baseline)', minTtcSeconds: comparison.baseline.minTtcSeconds, source: 'measured by platoon-sim' },
           { method: 'HV-AV-HV (this study variant)', minTtcSeconds: comparison.variant.minTtcSeconds, measuredImprovementPct, source: 'measured by platoon-sim' },
@@ -1798,7 +1800,13 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // study's demand profile and the prediction is adjudicated against the measured
   // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
   // verdict are the same measurement rather than two tables that might disagree.
-  const verdict = evaluatePrediction(predictionText, ctx.runCtx.study, ctx.runCtx.metricKey, ctx.runCtx.commitment)
+  const verdict = evaluatePrediction({
+    predictionText,
+    metric: MEASURED_METRIC,
+    declaredMetricKey: ctx.runCtx.metricKey,
+    commitment: ctx.runCtx.commitment,
+    measure: () => measureStudy(ctx.runCtx.study),
+  })
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
     // because there is no measurement that could adjudicate it.
@@ -1822,7 +1830,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
           // What this experiment measures and what it does NOT. An artifact that states only
           // "an experiment ran" invites the reader to assume it tested the claim; naming the
           // quantity is what lets them check.
-          measures: MEASURED_METRIC_KEY,
+          measures: MEASURED_METRIC.key,
           doesNotMeasure: 'field crash frequency, any external SOTA, or any road layout beyond one lane',
           ruleVersion: EXPERIMENT_RULE_VERSION,
           study: studyEvidence(ctx.runCtx.study),
@@ -1973,7 +1981,7 @@ const ABLATION_DEFINITION: AblationDefinition = {
     { component: 'platoon-composition', action: 'replaced', replacement: SCENARIO.variantIdentity },
   ],
   dataset: { version: 'case-pack-traffic.v2', split: 'declared-scenario', seed: 20260909 },
-  metric: { name: MEASURED_METRIC_KEY, direction: 'higher_is_better' },
+  metric: { name: MEASURED_METRIC.key, direction: 'higher_is_better' },
   repetitions: 4,
 }
 
