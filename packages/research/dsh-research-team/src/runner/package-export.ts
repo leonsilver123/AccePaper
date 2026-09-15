@@ -197,7 +197,13 @@ export function planRunPackage(
   files.push({
     path: 'citations.json',
     content: jsonFile({
-      ledger: landscape?.records ?? landscape ?? null,
+      // THE RECORDS, not the artifact that carries them. This read `landscape?.records ?? landscape`,
+      // and A1's field is `hits` — so `records` never existed, the fallback always won, and the file
+      // shipped the whole LABELLED artifact (`__producer`, `__kind`, `__provenance`, the corpus note)
+      // under a key that says "ledger". A consumer had to know that to find a DOI, and nothing in the
+      // file said so. An export that has to be read with the producer's source in hand is not an
+      // export.
+      ledger: landscape?.hits ?? null,
       note: 'Retrieved records as they appear on the A1 artifact. Each record carries its own source field.',
     }),
   })

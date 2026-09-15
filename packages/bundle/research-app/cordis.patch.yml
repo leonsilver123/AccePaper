@@ -43,21 +43,35 @@
         # which is the failure mode this flag exists to remove. Verified against a
         # real 1120 boot: the profile starts with all seven tools registered.
         requireResearchTools: true
-        # ── OFFLINE POSTURE (the shipped default) ──────────────────────────────
-        # This bundle is the offline research product: it boots and runs a full
-        # pipeline with no model credential and no network, and every artifact it
-        # produces is reproducible. Deterministic prose is LABELLED as a demo draft
-        # wherever it appears and must never be read as a model-written finding.
+        # ── WHAT THIS BUNDLE REACHES ───────────────────────────────────────────
+        # Retrieval and citation resolution reach the network (OpenAlex); the prose
+        # route reaches the provider configured below. What it does NOT need is a
+        # credential for the prose provider to boot and run: with the deterministic
+        # route, the manuscript text is produced in-process and is LABELLED as a demo
+        # draft wherever it appears, and must never be read as a model-written
+        # finding. A run with no network fails A1-landscape rather than downgrading to
+        # fixture evidence (fail-closed, no silent substitution).
         #
-        # To run against the real catalogue and a real model, replace the three
-        # lines below with the block at the end of this file. That is a deployment
-        # decision, not a default: `openalex` makes A1-landscape retrieve genuine
-        # literature and a fabricated DOI an authoritative `not_found` (a hard
-        # block), and a real prose route needs a credential for its provider route.
+        # RETRIEVAL AND CITATION RESOLUTION ARE REAL. A1-landscape searches the
+        # OpenAlex catalogue and the citation identity chain resolves against it, so
+        # the records in the artifacts are genuine papers and a fabricated DOI is an
+        # authoritative `not_found` (a hard block) rather than a fixture verdict.
+        # Measured from this repository: a bare request with no contact address
+        # answers (HTTP 200, thousands of hits), so nothing here is required for it
+        # to work; OpenAlex asks for a contact address only to route the caller into
+        # its "polite pool", and a deployment that sets its own gets better
+        # reliability. Add `mailto: <address>` to either row to do that — the value
+        # is a fact about the deployment, so this file does not invent one.
+        #
+        # WHAT IS STILL NOT REAL, stated here because the two now travel together in
+        # one artifact: the B channel's ANCHOR reads a simulated resolver over a
+        # synthetic DOI (`runner/anchor-fixture.ts`), and its own basis string says
+        # so on every verdict. Real retrieval beside a labelled synthetic anchor is
+        # the current state, not a finished one.
         literatureSearch:
-          kind: fixture
+          kind: openalex
         citationResolver:
-          kind: fixture
+          kind: openalex
         # Prose steps (A1 gap analysis, B1 method, D2 outline, D3 writing, D4
         # rebuttal) route through the REAL agent loop on this provider route, so the
         # manuscript text is written by a model rather than by the offline stand-in.
@@ -115,19 +129,14 @@
     - id: research-web
       name: '@deepseek-ai/dsh-research-web'
 
-# ── OPT-IN: the live channels ─────────────────────────────────────────────────
-# Replace the three `literatureSearch` / `citationResolver` / `prose` lines in the
-# research-cordis row above with this block to run against a real model vendor and
-# the real OpenAlex catalogue. It requires a credential for the prose provider route
-# and network egress; without either, A1-landscape fails the step rather than
-# downgrading to fixture evidence (fail-closed, no silent substitution).
+# ── OPT-IN: a real model vendor for the prose route ───────────────────────────
+# Retrieval and citation resolution are already real (see the research-cordis row).
+# What is still opt-in is the PROSE route: replace the `prose` line in that row with
+# this block to write the manuscript through a real provider instead of the
+# deterministic stand-in. It needs a credential for the provider route; without one
+# the step fails rather than downgrading to fixture text (fail-closed, no silent
+# substitution).
 #
-#        literatureSearch:
-#          kind: openalex
-#          mailto: <contact address — OpenAlex's polite pool rejects unidentified callers>
-#        citationResolver:
-#          kind: openalex
-#          mailto: <contact address>
 #        prose:
 #          kind: llm
 #          provider: deepseek-official
