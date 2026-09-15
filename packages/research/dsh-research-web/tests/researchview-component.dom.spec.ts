@@ -24,7 +24,8 @@ import {
   type RunSummaryInput,
   type StepView,
 } from '../src/summary.ts'
-import { loadFixtureSummary } from '../src/loader.ts'
+import { buildSummary } from '../src/loader.ts'
+import { RESEARCH_FIXTURE } from './support/fixture.ts'
 import { ResearchView } from '../src/client/ResearchView.tsx'
 import { ResearchWorkbench } from '../src/client/workbench/ResearchWorkbench.tsx'
 import { apply } from '../src/client/index.ts'
@@ -58,7 +59,7 @@ const t = makeTranslate(en)
 /** Convenience: render a React component with the `t` double via createElement (no JSX). */
 /** A minimal summary input with one step, used to exercise the source labelling. */
 function fixtureInput(): RunSummaryInput {
-  const fixture = loadFixtureSummary()
+  const fixture = buildSummary(RESEARCH_FIXTURE)
   return {
     runId: fixture.runId,
     source: 'fixture',
@@ -178,7 +179,7 @@ describe('research tab registration (plugin lifecycle)', () => {
 describe('research workbench DOM', () => {
   // 2. Clicking the tab mounts ResearchView (container present).
   it('mounts ResearchView with a container when the research view renders', () => {
-    renderComp(createElement(ResearchView, { t, summary: loadFixtureSummary() }))
+    renderComp(createElement(ResearchView, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
     // The summary root heading + MOCK badge prove the view mounted (container present).
     expect(screen.getByRole('heading', { name: en['view.research'] })).toBeTruthy()
@@ -187,7 +188,7 @@ describe('research workbench DOM', () => {
 
   // 3. Nine workbench panels present and switchable (only one visible at a time).
   it('renders nine switchable panels with exactly one visible at a time', () => {
-    renderComp(createElement(ResearchWorkbench, { t }))
+    renderComp(createElement(ResearchWorkbench, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
     const tabLabels = [
       'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',
@@ -245,14 +246,14 @@ describe('research workbench DOM', () => {
 
   // 5. Mock/Fixture badge visible on fixture-sourced artifacts.
   it('shows the MOCK/ fixture badge for fixture-sourced data', () => {
-    renderComp(createElement(ResearchView, { t, summary: loadFixtureSummary() }))
+    renderComp(createElement(ResearchView, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
     expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
   })
 
   // 6. Artifact summary link/text present for a run with artifacts.
   it('renders artifact summaries for a run that produced artifacts', () => {
-    renderComp(createElement(ResearchView, { t, summary: loadFixtureSummary() }))
+    renderComp(createElement(ResearchView, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
     // Fixture artifact slug + its human-readable summary text are both present.
     expect(screen.getByText('problem_statement')).toBeTruthy()
@@ -410,24 +411,20 @@ function buildStatusFixture(): RunSummaryInput {
 // 10. Host summary injection (T34 / B6) — the workbench data seam.
 // ===========================================================================
 describe('research workbench summary injection', () => {
-  it('renders the host-injected summary instead of the bundled fixture', () => {
-    const fixture = loadFixtureSummary()
-    // Control: the fixture drives the step list, so it must be non-empty.
-    expect(fixture.steps.length).toBeGreaterThan(0)
+  it('invents no run: with nothing supplied it renders no step rows at all', () => {
+    const run = buildSummary(RESEARCH_FIXTURE)
+    // Control: a supplied run does render its steps, so the assertion below is about absence
+    // rather than about a list that would be empty either way.
+    expect(run.steps.length).toBeGreaterThan(0)
 
-    // Baseline: no prop → the component materializes the bundled fixture.
     renderComp(createElement(ResearchWorkbench, { t }))
-    const fixtureRows = screen.queryAllByRole('listitem').length
+    expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en['tab.summary'] })).toBeNull()
     cleanup()
 
-    // Inject the same summary with its step list emptied. A component that honours
-    // the prop drops the step rows; one that ignored it would fall back to the
-    // fixture and render the identical count.
-    renderComp(createElement(ResearchWorkbench, { t, summary: { ...fixture, steps: [] } }))
-    const injectedRows = screen.queryAllByRole('listitem').length
-
-    expect(fixtureRows).toBeGreaterThan(0)
-    expect(injectedRows).toBeLessThan(fixtureRows)
+    renderComp(createElement(ResearchWorkbench, { t, summary: run }))
+    expect(screen.getByRole('button', { name: en['tab.summary'] })).toBeTruthy()
+    expect(screen.getByText(/Step progress/)).toBeTruthy()
   })
 })
 
@@ -462,12 +459,13 @@ describe('research workbench run control', () => {
     const onRun = vi.fn().mockResolvedValue(live)
     renderComp(createElement(ResearchWorkbench, { t, onRun }))
 
-    expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
+    // Before the run there is nothing to label: no badge, and the page says so.
+    expect(screen.queryByText(en['source.live'])).toBeNull()
+    expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
 
     expect(onRun).toHaveBeenCalledTimes(1)
-    // The run replaced the fixture: the badge follows the new summary's source.
-    expect(screen.queryAllByText(en['mock.badge'])).toHaveLength(0)
+    expect(screen.queryByText(en['intro.noRun'])).toBeNull()
     expect(screen.getAllByText(en['source.live']).length).toBeGreaterThan(0)
   })
 
@@ -477,9 +475,10 @@ describe('research workbench run control', () => {
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
 
-    // The failure is stated with its cause; the fixture is NOT passed off as the run.
+    // The failure is stated with its cause, and no run is passed off as the result.
     expect(screen.getByText(en['run.error'].replace('{message}', 'gateway refused the call'))).toBeTruthy()
-    expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
+    expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en['tab.summary'] })).toBeNull()
   })
 })
 
@@ -503,11 +502,13 @@ describe('research workbench orientation', () => {
     }
   })
 
-  it('tells a reader the page is demo data BEFORE a run, not only in the manuscript', () => {
+  it('says nothing has been run, rather than showing a run that did not happen', () => {
     renderComp(createElement(ResearchWorkbench, { t }))
 
     expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
-    expect(screen.getByText(en['intro.next'].replace('{action}', en['next.notStarted']))).toBeTruthy()
+    // No run means no next action to derive and no panel to derive it from.
+    expect(screen.queryByText(/^Next:/)).toBeNull()
+    expect(screen.queryByRole('button', { name: en['tab.summary'] })).toBeNull()
   })
 
   it('names the channel a live run\'s manuscript prose came from', () => {
@@ -555,7 +556,7 @@ describe('research workbench tab coverage', () => {
   it('renders all nine tabs without logging a console error', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      renderComp(createElement(ResearchWorkbench, { t }))
+      renderComp(createElement(ResearchWorkbench, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
       const tabLabels = [
         'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',

@@ -18,6 +18,10 @@
     // realpath semantics vary by host. Load package CSS declarations directly.
     "packages/client/*/src/css-modules.d.ts",
     "packages/research/dsh-research-web/src/client/css-modules.d.ts",
+    // Test-support data the research web package's client-program specs import. The
+    // package's own tests directory is in the host aggregate, so a file the client
+    // program also reads has to be named here.
+    "packages/research/dsh-research-web/tests/support/**/*.ts",
     "packages/client/*/tests/**/*.ts",
     "packages/client/*/tests/**/*.tsx",
     "packages/*/*/tests/**/*.client.spec.ts",

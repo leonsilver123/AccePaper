@@ -1,20 +1,20 @@
-/** Session-recovery panel (会话恢复): shows the run snapshot and a mock restore gesture. */
-import { useState } from 'react'
-import { loadFixtureSummary } from '../../loader.ts'
+/**
+ * Session-recovery panel (会话恢复): reports the run currently on screen.
+ *
+ * READ-ONLY, and it says so. The panel used to offer a "restore from snapshot" button whose handler
+ * reloaded a bundled demo run — a control that looked like it recovered a run and in fact replaced
+ * whatever the reader was looking at with invented data.
+ */
 import { selectRecovery } from '../../panels.ts'
 import type { PanelProps } from './shared.ts'
 import css from './ResearchWorkbench.module.css'
 
-/** Render the run snapshot descriptor with a local-only "restore from snapshot" action. */
+/**
+ * Render the current run's snapshot descriptor.
+ * @param props - the flattened run summary and the `research` translate `t`.
+ */
 export function RecoveryPanel({ summary, t }: PanelProps) {
-  const [local, setLocal] = useState(summary)
-  const [restored, setRestored] = useState(false)
-  const view = selectRecovery(local)
-
-  const onRestore = () => {
-    setLocal(loadFixtureSummary())
-    setRestored(true)
-  }
+  const view = selectRecovery(summary)
 
   return (
     <section className={css.panel}>
@@ -34,10 +34,6 @@ export function RecoveryPanel({ summary, t }: PanelProps) {
         <span className={css.recoveryKey}>{t('recovery.degradation')}</span>
         <span className={css.recoveryVal}>{view.hasDegradation ? t('recovery.yes') : t('recovery.no')}</span>
       </div>
-      <button type="button" className={css.reloadBtn} onClick={onRestore}>
-        {t('recovery.reload')}
-      </button>
-      {restored && <p className={css.mockNote}>{t('recovery.restored')}</p>}
     </section>
   )
 }

@@ -1,18 +1,17 @@
 /**
- * Demo research-run summary fixture.
+ * A synthetic run summary, used by the specs only.
  *
- * Drives the {@link ResearchView} with a realistic 16-step run snapshot so the
- * panel renders truthful, structured data instead of a blank placeholder. Every
- * field here is MOCK data: the live T19-B runner output, when wired, maps into
- * {@link RunSummaryInput} by an adapter; this fixture stands in for that output
- * for demonstration and for the unit tests (given summary JSON → derived model).
+ * TEST DATA, AND IT LIVES WITH THE TESTS. This file used to sit in , where the view fell back
+ * to it whenever a session had not run anything — so an unstarted session rendered these sixteen
+ * invented steps and their invented artifacts as a result. The specs still need a shaped run to
+ * render, so it moved here, where no production import can reach it.
  *
  * Designed to exercise every required surface: run status, 16-step progress
  * (with `gated`/`human_gate` hold and attempt counts), artifact counts +
  * summaries, gate history with an `abstained` outcome, an abstention record,
  * degradation annotations, and an E2 human-pending step (not auto-completed).
  */
-import type { RunSummaryInput } from './summary.ts'
+import type { RunSummaryInput } from '../../src/summary.ts'
 
 /** The demo run id; surfaced in the header and labelled MOCK. */
 export const FIXTURE_RUN_ID = 'run_demo_2026_0903_a1b2c3'

@@ -14,7 +14,7 @@ export type {
   TrinityComponent,
 } from './summary.ts'
 export { toRunSummary } from './summary.ts'
-export { buildSummary, loadFixtureSummary } from './loader.ts'
+export { buildSummary } from './loader.ts'
 
 /**
  * Host registration. No Host-side services are consumed — the view is mounted by

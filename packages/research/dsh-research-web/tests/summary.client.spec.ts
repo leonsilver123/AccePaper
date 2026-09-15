@@ -10,13 +10,13 @@
  * tsconfig program when the package is wired in.
  */
 import { describe, expect, it } from 'vitest'
-import { RESEARCH_FIXTURE, FIXTURE_RUN_ID } from '../src/fixture.ts'
-import { loadFixtureSummary, buildSummary } from '../src/loader.ts'
+import { RESEARCH_FIXTURE, FIXTURE_RUN_ID } from './support/fixture.ts'
+import { buildSummary } from '../src/loader.ts'
 import { proseChannelOf, toRunSummary, type RunSummaryInput, type StepView } from '../src/summary.ts'
 import { summaryInputFrom } from '../src/run-source.ts'
 
 describe('toRunSummary — derived counters', () => {
-  const summary = loadFixtureSummary()
+  const summary = buildSummary(RESEARCH_FIXTURE)
 
   it('surfaces the run id and mock flag', () => {
     expect(summary.runId).toBe(FIXTURE_RUN_ID)
@@ -59,7 +59,7 @@ describe('toRunSummary — derived counters', () => {
 })
 
 describe('toRunSummary — gate history & abstention shape', () => {
-  const summary = loadFixtureSummary()
+  const summary = buildSummary(RESEARCH_FIXTURE)
 
   it('carries every gate verdict with its outcome', () => {
     const outcomes = summary.gates.map(g => `${g.stepId}:${g.component}=${g.outcome}`)
@@ -308,13 +308,13 @@ describe('the prose channel a run reports', () => {
     expect(live.proseChannel).toBe('deterministic')
     // The bundled snapshot records no step kinds at all, so the view says it cannot tell rather
     // than naming a channel the demo never used.
-    expect(loadFixtureSummary().proseChannel).toBe('unknown')
+    expect(buildSummary(RESEARCH_FIXTURE).proseChannel).toBe('unknown')
   })
 })
 
 describe('loadFixtureSummary — determinism', () => {
   it('returns an equal model on repeated calls (pure)', () => {
-    expect(loadFixtureSummary()).toEqual(loadFixtureSummary())
+    expect(buildSummary(RESEARCH_FIXTURE)).toEqual(buildSummary(RESEARCH_FIXTURE))
     expect(RESEARCH_FIXTURE.runId).toBe(FIXTURE_RUN_ID)
   })
 })
