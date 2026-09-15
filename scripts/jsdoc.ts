@@ -34,7 +34,7 @@ export function parseJsDoc(raw: string): { doc: string; mode: Mode | null; hasMo
     .replace(/^\/\*\*/, '')
     .replace(/\*\/$/, '')
     .split('\n')
-    .map(l => l.replace(/^\s*\*?\s?/, '').replace(/\s+$/, ''))
+    .map(l => l.replace(/^\s*\*?\s*/, '').replace(/\s+$/, ''))
   let mode: Mode | null = null
   let hasMode = false
   let inTags = false
@@ -93,7 +93,7 @@ export function parseTags(raw: string): { params: Map<string, string>; returns: 
     .replace(/^\/\*\*/, '')
     .replace(/\*\/$/, '')
     .split('\n')
-    .map(l => l.replace(/^\s*\*?\s?/, '').replace(/\s+$/, ''))
+    .map(l => l.replace(/^\s*\*?\s*/, '').replace(/\s+$/, ''))
   const params = new Map<string, string>()
   let returns: string | null = null
   let sink: ((text: string) => void) | null = null
