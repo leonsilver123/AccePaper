@@ -1884,6 +1884,7 @@ Source: [`packages/research/dsh-research-cordis/src/index.ts:152`](../packages/r
 Requires: `agents` · `sessions` · `sessionPersistence` · `sessionProjections` · `subagents` · `tools`
 
 ```ts config-catalog
+/** Deployment configuration for the research-team service. */
 export interface ResearchTeamServiceConfig {
   /**
    * Write-tool allowlist whose writes are expressible as one path argument and

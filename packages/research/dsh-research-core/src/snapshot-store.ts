@@ -81,6 +81,8 @@ export const SNAPSHOT_ERROR_CODES = {
  * can branch on the failure kind without string-matching messages.
  */
 export class SnapshotStoreError extends Error {
+  /** One of {@link SNAPSHOT_ERROR_CODES}, so a caller branches on the failure kind
+   *  instead of matching message text. */
   readonly code: string
   constructor(code: string, message: string, options?: { cause?: unknown }) {
     super(message, options)
@@ -118,6 +120,7 @@ export class SnapshotVersionError extends SnapshotStoreError {
   }
 }
 
+/** Where a file-backed store reads and writes, and which schema version it accepts. */
 export interface FileSnapshotStoreOptions {
   /** Directory that holds (or will hold) the snapshot file. */
   dir: string
@@ -190,6 +193,12 @@ export function createFileSnapshotStore<P extends VersionedSnapshot = SnapshotPa
  * Returns `true` when `candidateId` has already been consumed (i.e. it must be
  * rejected to prevent an approval from being replayed after a restart), `false`
  * otherwise. The matching is exact-string.
+ *
+ * @param consumedIds - the approval event ids already consumed by this run, as
+ *   restored from the snapshot; the caller owns this list and updates it on apply.
+ * @param candidateId - the approval event id about to be applied.
+ * @returns true when the id is already in `consumedIds`, in which case the caller must
+ *   refuse the approval rather than apply it a second time (INV-REPLAY).
  */
 export function replayProtection(consumedIds: Array<string>, candidateId: string): boolean {
   return consumedIds.includes(candidateId)

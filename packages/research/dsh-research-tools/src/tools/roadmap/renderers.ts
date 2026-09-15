@@ -15,7 +15,16 @@ function escapeMermaid(s: string): string {
   return s.replaceAll('"', "'").replace(/[\[\]{}|]/g, ' ')
 }
 
-/** Render as Mermaid flowchart source (preview / degradation-friendly). */
+/** Render as Mermaid flowchart source (preview / degradation-friendly).
+ *
+ * @param graph the roadmap model; node ids are rewritten to Mermaid-safe
+ *  identifiers, so two distinct ids may map to the same base and be
+ *  disambiguated by a trailing underscore.
+ * @param title optional caption, emitted as a Mermaid comment; a blank or
+ *  omitted title emits no comment line.
+ * @returns the `flowchart LR` source. Labels and titles are stripped of the
+ *  characters that would break Mermaid syntax rather than escaped, so a label
+ *  containing `[` `]` `{` `}` `|` or `"` renders altered. */
 export function renderMermaid(graph: RoadmapGraph, title?: string): string {
   const lines: string[] = ['flowchart LR']
   if (title !== undefined && title.trim().length > 0) lines.push(`  %% ${escapeMermaid(title)}`)
@@ -43,7 +52,13 @@ const NODE_H = 46
 const GAP_X = 90
 const GAP_Y = 66
 
-/** Render a layered SVG (deterministic; no file writes, no randomness). */
+/** Render a layered SVG (deterministic; no file writes, no randomness).
+ *
+ * @param graph the roadmap model; layers come from `topoLayers`, so a graph
+ *  with a cycle is laid out with the unvisited nodes in a trailing layer
+ *  instead of failing. Labels are XML-escaped and cut to 26 characters.
+ * @returns the complete SVG document. An edge whose endpoint is not a node is
+ *  skipped rather than drawn to a guessed position. */
 export function renderSvg(graph: RoadmapGraph): string {
   const layers = topoLayers(graph)
   const labelById = new Map(graph.nodes.map(n => [n.id, n.label]))

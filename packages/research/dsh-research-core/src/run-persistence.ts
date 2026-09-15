@@ -254,6 +254,7 @@ export interface RestoredRun<C = unknown> {
   readonly interrupted: ReadonlyArray<InterruptedStep>
 }
 
+/** Where one run's snapshot lives and which schema version this opener accepts. */
 export interface RunPersistenceOptions {
   /**
    * Directory holding the snapshot file. It must exist: the store never creates it, so a missing
@@ -626,8 +627,12 @@ function parseEvents(raw: unknown, runId: string): ReadonlyArray<AuditEvent> {
 
 /**
  * Validate a durable value as a run snapshot record. Throws {@link SnapshotInvalidError} on any
- * contradiction with the run model or the live 16-step graph; never returns partial state. The
- * returned record is freshly built — it shares no container with `raw`.
+ * contradiction with the run model or the live 16-step graph; never returns partial state.
+ *
+ * @param raw - the parsed JSON value read from the snapshot file — the durable-file
+ *   boundary, where a value's static type carries no guarantee.
+ * @returns the accepted record, built fresh: it shares no container with `raw`, so the
+ *   caller may retain it after releasing the parsed value.
  */
 export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
   const o = asRecord(raw, 'snapshot')
@@ -752,6 +757,13 @@ function persistable<T>(value: T, what: string): T {
  *
  * The returned record references the run's values (it is consumed synchronously by
  * {@link RunPersistence.save}, which serializes it immediately) and does not own them.
+ *
+ * @param store - the caller-owned run store that holds the run; the run is read, never
+ *   mutated, so an abandoned save leaves the live run untouched.
+ * @param runId - the run to capture; the record is built from this run's live state.
+ * @param revision - the revision this record is stamped with, which
+ *   {@link RunPersistence.save} makes the accepted write's `baseRevision + 1`.
+ * @returns the complete persisted record of the run.
  */
 export function captureRunSnapshot(
   store: ResearchRunStore,
@@ -839,6 +851,15 @@ function executedStatusOf(detail: unknown): string | undefined {
  * pipeline never reach here — {@link parseRunSnapshotPayload} rejects them. `capability` is not
  * read, copied from the record, or otherwise inspected; it is carried on the handle so the
  * resumed run executes through the capability THIS process built.
+ *
+ * @param payload - a record that already passed {@link parseRunSnapshotPayload}; this
+ *   function rebuilds containers but does not re-validate, so an unvalidated value here
+ *   would carry its contradictions into the restored run.
+ * @param capability - the capability of the CURRENT process. The caller must pass the
+ *   one it intends the resumed run to execute through; passing another process's
+ *   capability would attach the run to a capability this process does not own.
+ * @returns a fresh run store holding exactly this run, plus the interrupted steps and the
+ *   facts the caller needs to continue it.
  */
 export function restoreRun<C>(
   payload: RunSnapshotPayload,
@@ -915,6 +936,12 @@ export function restoreRun<C>(
  * Create the persistence for one snapshot directory. Each call opens its own view of the file;
  * two processes may hold one apiece and are kept consistent by the revision guard, not by shared
  * memory.
+ *
+ * @param options - the directory to persist into and, optionally, the schema version to
+ *   accept; the directory must already exist, so a missing one fails at the first save
+ *   rather than being created silently.
+ * @returns the persistence handle: `save` is revision-guarded and lock-serialized across
+ *   processes, and every load path throws rather than returning partial state.
  */
 export function createRunPersistence(
   options: RunPersistenceOptions,

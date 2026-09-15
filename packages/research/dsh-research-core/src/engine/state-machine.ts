@@ -39,9 +39,10 @@ import { lookupStep, SEEDABLE_INPUTS, STEPS } from './steps.ts'
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
-/** Base error for the research state machine (carries a stable `code`, also prefixed into the
- *  message so `toThrow(/CODE/)` assertions can match the code, not just the prose). */
+/** Base error for the research state machine; every code it carries is a DSH_* string. */
 export class ResearchError extends Error {
+  /** The stable DSH_* failure code, also prefixed into the message so a caller can
+   *  branch on the failure kind and `toThrow(/CODE/)` matches the code, not the prose. */
   readonly code: string
   constructor(code: string, message: string, cause?: unknown) {
     super(`[${code}] ${message}`)
@@ -307,7 +308,14 @@ function _adjudicate(state: StepState, step: StepDefinition): StepStatus {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Create a new run. Throws RUN_EXISTS on explicit-runId collision (never clobbers). */
+/** Create a new run. Throws RUN_EXISTS on explicit-runId collision (never clobbers).
+ *
+ * @param store - the caller-owned run store to create the run in; the state machine
+ *   keeps no registry of its own.
+ * @param runId - the id to create, or omitted to generate one (crypto.randomUUID,
+ *   falling back to a timestamp+counter when the runtime has no crypto).
+ * @returns the new run's id, which every later call names.
+ */
 export function createRun(store: ResearchRunStore, runId?: string): string {
   const id = runId ?? generateRunId()
   if (store.has(id)) throw new ResearchRunError('RUN_EXISTS', `createRun: run '${id}' already exists (refusing to clobber existing run state + audit log)`)
@@ -320,7 +328,16 @@ export function createRun(store: ResearchRunStore, runId?: string): string {
 /** Seed a run-level input (T0 human authorization). Slug must be in SEEDABLE_INPUTS;
  *  value must be present; run must not have any started step — neither a non-pending status
  *  nor a prior attempt (rollback resets status to 'pending' but preserves attempts/history,
- *  so the guard checks both — INV-INPUT-FROZEN, RC-D). Value deep-cloned. */
+ *  so the guard checks both — INV-INPUT-FROZEN, RC-D). Value deep-cloned.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to seed; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created) and must not have started (INV-INPUT-FROZEN).
+ * @param slug - the run-level input to set; must be one of SEEDABLE_INPUTS
+ *   (DSH_INPUT_NOT_SEEDABLE).
+ * @param value - the input value; must not be undefined/null (DSH_INPUT_EMPTY) and must
+ *   survive structuredClone (DSH_VALUE_NOT_CLONEABLE).
+ */
 export function setRunInput(store: ResearchRunStore, runId: string, slug: string, value: unknown): void {
   const run = ensureRun(store, runId)
   if (SEEDABLE_INPUTS.indexOf(slug) === -1) {
@@ -342,7 +359,15 @@ export function setRunInput(store: ResearchRunStore, runId: string, slug: string
   pushEvent(run, 'input-seeded', undefined, undefined, { slug })
 }
 
-/** Read-only run snapshot (deep-cloned; artifact values excluded — fetch via getArtifact — HOLE-4). */
+/** Read-only run snapshot (deep-cloned; artifact values excluded — fetch via getArtifact — HOLE-4).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @returns a deep-cloned, deep-frozen snapshot: the run's inputs, every created step's
+ *   snapshot, the registry index, and the audit log. The freeze is what makes a
+ *   caller's attempt to edit the returned timeline fail rather than mislead.
+ */
 export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnapshot {
   const run = ensureRun(store, runId)
   const steps: Record<string, StepSnapshot> = {}
@@ -397,7 +422,16 @@ function deepFreezeSnapshot(value: unknown): void {
   for (const key of Object.keys(obj)) deepFreezeSnapshot(obj[key])
 }
 
-/** Deep-cloned value of one artifact (undefined if missing/invalidated). */
+/** Deep-cloned value of one artifact (undefined if missing/invalidated).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param slug - the artifact slug to read.
+ * @returns a deep clone of the artifact's value, or undefined. An invalidated record
+ *   yields undefined rather than its superseded value, so a rolled-back artifact's data
+ *   can never be read back as current.
+ */
 export function getArtifact(store: ResearchRunStore, runId: string, slug: string): unknown {
   const run = ensureRun(store, runId)
   const rec = run.registry[slug]
@@ -417,7 +451,16 @@ function isInputSatisfied(run: RunState, slug: string): boolean {
   return slug in run.inputs // DEP-7: seedable run input (permanent across rollback)
 }
 
-/** True iff the step is pending and every input is satisfied by a passed-producer artifact or a seed. */
+/** True iff the step is pending and every input is satisfied by a passed-producer artifact or a seed.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to test; an id outside the pipeline is not an error here.
+ * @returns true when the step may be started now. An unknown step id is false rather
+ *   than an error, so a caller probing an id cannot tell it from a step that is merely
+ *   not ready — {@link startStep} is the call that names the difference.
+ */
 export function canStart(store: ResearchRunStore, runId: string, stepId: string): boolean {
   const run = ensureRun(store, runId)
   const step = lookupStep(stepId)
@@ -431,7 +474,16 @@ export function canStart(store: ResearchRunStore, runId: string, stepId: string)
 }
 
 /** Move a pending step whose inputs are ready to in_progress. Throws if it cannot start.
- *  Returns a deep-cloned StepSnapshot (never the internal ref — INV-SNAPSHOT). */
+ *  Returns a deep-cloned StepSnapshot (never the internal ref — INV-SNAPSHOT).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to start; must be a pipeline step (DSH_UNKNOWN_STEP) whose
+ *   inputs are ready and which is not already started (DSH_CANNOT_START).
+ * @returns a deep-cloned snapshot of the step after it moved to in_progress, whose
+ *   `attemptId` names the attempt the caller is now executing.
+ */
 export function startStep(store: ResearchRunStore, runId: string, stepId: string): StepSnapshot {
   const run = ensureRun(store, runId)
   const step = lookupStep(stepId)
@@ -448,14 +500,33 @@ export function startStep(store: ResearchRunStore, runId: string, stepId: string
   return snapshotStep(state)
 }
 
-/** Atomic check+transition (C-9 TOCTOU-safe): returns the snapshot, or null if it cannot start. */
+/** Atomic check+transition (C-9 TOCTOU-safe): returns the snapshot, or null if it cannot start.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to start.
+ * @returns the started step's snapshot, or null when the step cannot start — the
+ *   caller gets the same verdict `canStart` would give, with no separate call.
+ */
 export function startIfCan(store: ResearchRunStore, runId: string, stepId: string): StepSnapshot | null {
   if (!canStart(store, runId, stepId)) return null
   return startStep(store, runId, stepId)
 }
 
 /** Record a produced output artifact. Slug must be declared in step.outputs (INV-OUTPUT-CONTRACT);
- *  step must be in_progress. Value deep-cloned; registry entry REPLACED fresh (invalidated=false — DEP-4). */
+ *  step must be in_progress. Value deep-cloned; registry entry REPLACED fresh (invalidated=false — DEP-4).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the producing step; must be a pipeline step (DSH_UNKNOWN_STEP) that
+ *   is in_progress (DSH_NOT_IN_PROGRESS).
+ * @param outputSlug - the artifact's slug; must be declared in that step's outputs
+ *   (DSH_OUTPUT_NOT_DECLARED).
+ * @param value - the artifact value; deep-cloned at this boundary, so a non-cloneable
+ *   value is rejected (DSH_VALUE_NOT_CLONEABLE) rather than stored.
+ */
 export function recordArtifact(store: ResearchRunStore, runId: string, stepId: string, outputSlug: string, value: unknown): void {
   const run = ensureRun(store, runId)
   const step = lookupStep(stepId)
@@ -486,6 +557,18 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
  * step must be in_progress (INV-VERDICT-STATUS); one verdict per component per attempt
  * (INV-VERDICT-IMMUTABLE). Auto-adjudicates via the shared `_adjudicate` on the last verdict
  * (INV-SOLE-ADJUDICATOR). Verdict deep-cloned before storage (INV-WRITE-ISOLATION).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step being adjudicated; must be a pipeline step with a non-empty
+ *   gate (DSH_EMPTY_GATE) that is in_progress (DSH_VERDICT_BAD_STATUS).
+ * @param verdict - the verdict for one component of that gate; `outcome` must be one of
+ *   the four gate outcomes and is the only field read to decide it
+ *   (DSH_GATEVERDICT_MISSING_OUTCOME), and a component may be given only one verdict per
+ *   attempt (DSH_VERDICT_ALREADY_SET).
+ * @returns the step's status after this submission — still in_progress while components
+ *   are outstanding, otherwise the status adjudication reached.
  */
 export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId: string, verdict: GateVerdict): StepStatus {
   const run = ensureRun(store, runId)
@@ -584,6 +667,15 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
  * Finalize an empty-gate step (INV-COMPLETESTEP-EMPTY — throws on non-empty gates, which are
  * adjudicated solely by submitGateVerdict; INV-SOLE-ADJUDICATOR). Step must be in_progress.
  * Non-humanGate empty gate → 'passed'; humanGate empty gate → 'gated' (await human approval).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to finalize; must be a pipeline step with an empty gate
+ *   (DSH_NON_EMPTY_GATE) that is in_progress (DSH_COMPLETE_BAD_STATUS).
+ * @returns 'passed' for a non-humanGate step, 'gated' for one awaiting human approval.
+ *   A humanGate step reaches 'passed' only through the host approval channel, so that
+ *   status is never this call's outcome.
  */
 export function completeStep(store: ResearchRunStore, runId: string, stepId: string): StepStatus {
   const run = ensureRun(store, runId)
@@ -609,6 +701,12 @@ export function completeStep(store: ResearchRunStore, runId: string, stepId: str
  * invalidates its artifacts, then transitively cascade-resets every dependent downstream step
  * (visited, once — DEP-3; including blocked/failed — C-5), snapshotting + invalidating each.
  * History is preserved (append-only — INV-HISTORY-IMMUTABLE).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to roll back; must be a pipeline step (DSH_UNKNOWN_STEP).
+ *   Rolling back a step that was never started is a no-op, not an error (DEP-6).
  */
 export function rollback(store: ResearchRunStore, runId: string, stepId: string): void {
   const run = ensureRun(store, runId)
@@ -632,7 +730,15 @@ export function rollback(store: ResearchRunStore, runId: string, stepId: string)
 }
 
 /** True iff the step has reached 'passed' (and, for humanGate steps, holds an approved
- *  human approval for the CURRENT attempt — INV-COMPLETE-ATTEMPT). */
+ *  human approval for the CURRENT attempt — INV-COMPLETE-ATTEMPT).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to test; an id with no state is not an error here.
+ * @returns true only when the step is passed and, for a humanGate step, its approval
+ *   names the current attempt — an approval from an earlier attempt does not complete it.
+ */
 export function isComplete(store: ResearchRunStore, runId: string, stepId: string): boolean {
   const run = ensureRun(store, runId)
   const state = run.steps.get(stepId)
@@ -644,7 +750,16 @@ export function isComplete(store: ResearchRunStore, runId: string, stepId: strin
   return true
 }
 
-/** Audit view: superseded snapshots followed by the current attempt snapshot, all deep-cloned. */
+/** Audit view: superseded snapshots followed by the current attempt snapshot, all deep-cloned.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step whose attempts to read; an id with no state yields an empty
+ *   array, so a never-started step and an unknown one are indistinguishable here.
+ * @returns the attempts oldest-first, the current attempt last. Never empty for a step
+ *   that has state: an empty array means no entry was ever created for this id.
+ */
 export function getAuditHistory(store: ResearchRunStore, runId: string, stepId: string): AuditEntry[] {
   const run = ensureRun(store, runId)
   const state = run.steps.get(stepId)

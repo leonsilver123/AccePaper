@@ -48,6 +48,8 @@ export interface StepExecContext {
  */
 export type StepExecutor = (ctx: StepExecContext) => Promise<Record<string, unknown>> | Record<string, unknown>
 
+/** The knobs one {@link runStep} call runs under: the executor to drive, and the two
+ *  bounds that keep a step from being left hanging in `in_progress`. */
 export interface RunStepOptions {
   executor: StepExecutor
   /** Milliseconds; if the executor exceeds it, a deterministic `timeout` failure is recorded (no hang). 0/undefined disables. */
@@ -56,6 +58,9 @@ export interface RunStepOptions {
   signal?: AbortSignal
 }
 
+/** How one execution of a step ended. Only `success` writes artifacts; the other three
+ *  dispositions are of the ATTEMPT, not the step — the step stays `in_progress` and
+ *  remains rollback-able. */
 export type RunStepStatus = 'success' | 'error' | 'timeout' | 'cancelled'
 
 /** Result of one {@link runStep} invocation. `ok` is true only for `success`. */
@@ -118,6 +123,18 @@ function emit(store: ResearchRunStore, rec: StepExecutedRecord, error?: Error): 
  * may interleave artifact writes / audit appends. The `DSH_STEP_ALREADY_EXECUTED` guard catches
  * a second call only after the first has landed its `step-executed` audit; callers MUST
  * serialize (await the first before issuing the next).
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to act on; it must already exist in `store` (RUN_NOT_FOUND —
+ *   runs are never auto-created).
+ * @param stepId - the step to execute; must be a pipeline step currently `in_progress`
+ *   (DSH_NOT_IN_PROGRESS) with no `step-executed` record for this attempt yet
+ *   (DSH_STEP_ALREADY_EXECUTED).
+ * @param opts - the executor to drive, plus the timeout and cancellation bounds it runs
+ *   under; a result that has already been decided is not overwritten by a late one.
+ * @returns the terminal disposition of this attempt. `ok` is true only for `success`;
+ *   on every other status no artifact was written, so the caller must roll the step back
+ *   before retrying it.
  */
 export function runStep(
   store: ResearchRunStore,

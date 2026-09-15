@@ -20,7 +20,12 @@
 
 /** Deep-freeze a structured-cloneable artifact (INV-IMMUTABLE, same semantics
  *  as the core engine snapshots). Non-cloneable input throws TypeError from
- *  structuredClone — tool inputs/results are plain data by contract. */
+ *  structuredClone — tool inputs/results are plain data by contract.
+ *
+ * @param value - Artifact to clone and freeze; it is not mutated, and no
+ *  reference from it reaches the caller's returned value.
+ * @returns A frozen deep clone typed `Readonly<T>`: `T`'s shape is unchanged,
+ *  so a caller relying on mutation must copy before writing. */
 export function freezeArtifact<T>(value: T): Readonly<T> {
   const clone: T = structuredClone(value)
   return deepFreeze(clone) as Readonly<T>

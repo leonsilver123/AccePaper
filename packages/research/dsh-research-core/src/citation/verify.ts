@@ -47,18 +47,51 @@ import { ResearchError } from '../engine/state-machine.ts'
 import type { CitationResolverAdapter, ResolverOutcome, ResolvedCitationMetadata } from './adapter.ts'
 
 // ── Reason codes (DSH_CITATION_* — stable, grep-able, auditable) ─────────────
+// Each code accompanies exactly one (conclusion, redLineTriggered) pair, so it is
+// the code — not the conclusion alone — that names which defect the result reports.
+
+/** The #6 red line: the claim asserted `supported`/`partially_supported` while the
+ *  original text was not accessed. Conclusion `blocked`, `redLineTriggered` true. */
 export const CITATION_CODE_RED_LINE_NO_ORIGINAL = `${CITATION_ERROR_PREFIX}RED_LINE_NO_ORIGINAL`
+/** The resolver authoritatively confirmed the identifier resolves to nothing —
+ *  fabricated literature. Conclusion `blocked` with `redLineTriggered`; it is
+ *  deliberately NOT `unverified`, so a fabrication never reads as "not yet checked". */
 export const CITATION_CODE_NOT_FOUND = `${CITATION_ERROR_PREFIX}NOT_FOUND`
+/** The resolver was unreachable or faulted, so no identity judgment was possible.
+ *  Conclusion `unverified` with no red line — an outage is not evidence about the
+ *  literature, and must not be misread as fabrication. */
 export const CITATION_CODE_TEMPORARILY_UNAVAILABLE = `${CITATION_ERROR_PREFIX}TEMPORARILY_UNAVAILABLE`
+/** The resolver returned several candidate records and none is uniquely the cited
+ *  work. Conclusion `unverified` with no red line. */
 export const CITATION_CODE_AMBIGUOUS = `${CITATION_ERROR_PREFIX}AMBIGUOUS`
+/** The source is retracted and does not itself say so. Conclusion `retracted` with
+ *  `redLineTriggered` — the absence of the mark is what raises the #4 red line. */
 export const CITATION_CODE_REDACTED_UNMARKED = `${CITATION_ERROR_PREFIX}REDACTED_UNMARKED`
+/** The retraction is explicit — either the source marks it or the caller's claim
+ *  asserts it. Conclusion `retracted` with no red line; the unmarked case above is
+ *  the one that blocks. */
 export const CITATION_CODE_RETRACTED_MARKED = `${CITATION_ERROR_PREFIX}RETRACTED_MARKED`
+/** The claimed title or authors disagree with the resolved record, so the citation
+ *  does not identify the work it is attached to. Conclusion `identity_mismatch`,
+ *  no red line. */
 export const CITATION_CODE_IDENTITY_MISMATCH = `${CITATION_ERROR_PREFIX}IDENTITY_MISMATCH`
+/** The claim states a correlation as a causal result (#5). Conclusion `unsupported`
+ *  with `redLineTriggered`; the caller must drop or rewrite the claim. */
 export const CITATION_CODE_CORRELATION_AS_CAUSATION = `${CITATION_ERROR_PREFIX}CORRELATION_AS_CAUSATION`
+/** The accessed original text does not support the claim. Conclusion `unsupported`,
+ *  no red line — the chain is intact, the content is the problem. */
 export const CITATION_CODE_UNSUPPORTED = `${CITATION_ERROR_PREFIX}UNSUPPORTED`
+/** Every chain check passed for a claim asserting `supported`. Conclusion
+ *  `supported`, no red line. */
 export const CITATION_CODE_SUPPORTED = `${CITATION_ERROR_PREFIX}SUPPORTED`
+/** Every chain check passed for a claim asserting `partially_supported`. Conclusion
+ *  `partially_supported`, no red line. */
 export const CITATION_CODE_PARTIALLY_SUPPORTED = `${CITATION_ERROR_PREFIX}PARTIALLY_SUPPORTED`
+/** The claim asserted `unverified` and no chain check contradicted it — the chain
+ *  reached no positive finding either. Conclusion `unverified`, no red line. */
 export const CITATION_CODE_UNVERIFIED = `${CITATION_ERROR_PREFIX}UNVERIFIED`
+/** The claim asserted `blocked` and no chain check contradicted it, so a block the
+ *  caller brought in stays a block. Conclusion `blocked`, no red line. */
 export const CITATION_CODE_BLOCKED = `${CITATION_ERROR_PREFIX}BLOCKED`
 const CODE_VALUE_NOT_CLONEABLE = `${CITATION_ERROR_PREFIX}VALUE_NOT_CLONEABLE`
 const CODE_INVALID_REF = `${CITATION_ERROR_PREFIX}INVALID_REF`
@@ -317,6 +350,26 @@ function makeResult(params: {
  *  6. #3 content gap — claimed supported but contentSupportsClaim=false => unsupported.
  *  7. otherwise honor claimedConclusion (all chain checks passed for supportive
  *     claims; non-supportive claims pass through).
+ *
+ * @param claimId - the claim the citation is attached to; must be a non-empty string.
+ * @param citationId - the citation's id within that claim; must be a non-empty string.
+ * @param ref - the citation as the claim asserts it (kind, id, and any claimed
+ *   title/authors, which are the only oracle for identity mismatch).
+ * @param evidence - how the original text was accessed; a supportive claim on
+ *   evidence with `method: 'none'` or `originalTextAccessed: false` is the #6 red line.
+ * @param resolverAdapter - the adapter that resolves the citation's identity; a
+ *   ResearchError it throws propagates unchanged, any other throw becomes
+ *   DSH_CITATION_RESOLVER_FAILED.
+ * @param timestamp - caller-injected epoch ms; must be a finite, non-negative
+ *   number, and is echoed into the result so the audit log and the result reconcile.
+ * @param options - the conclusion the claim asserts plus the caller-injected
+ *   integrity signals (#3 content support, #4 retraction mark, #5 causation) the
+ *   chain cannot derive on its own.
+ * @returns the frozen result for this pair. `conclusion` is the single value
+ *   downstream consumers may read, and any result with `redLineTriggered` is
+ *   non-passing evidence whichever conclusion it carries.
+ * @throws {ResearchError} with a DSH_CITATION_* code when an input is malformed
+ *   (non-cloneable value, empty id, invalid ref/evidence/options/adapter).
  */
 export async function verifyCitation(
   claimId: ClaimId,

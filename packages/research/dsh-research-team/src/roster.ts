@@ -44,7 +44,10 @@ const MAX_NAME_LENGTH = 64
 const MAX_DESCRIPTION_LENGTH = 16_384
 const MAX_PROVIDER_LENGTH = 200
 
-/** Error message text extracted from one arbitrary rejection. */
+/** Error message text extracted from one arbitrary rejection.
+ * @param error - the caught value; a rejection need not be an `Error`.
+ * @returns the `Error` message, or the value rendered as text when it is not one.
+ */
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -231,6 +234,8 @@ export class ResearchRoster {
    * recorded in the frozen design decisions).
    * @param memberId - the member whose claims are consulted.
    * @param path - normalized write path to test against the claim scopes.
+   * @returns true when an in-progress task the member owns scopes this path;
+   *   false otherwise, including every lookup that cannot be resolved.
    */
   memberMayWrite(memberId: ResearchMember['id'], path: string): boolean {
     const root = this.rootOfMember(memberId)

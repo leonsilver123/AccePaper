@@ -54,14 +54,25 @@ import type { TrinityComponent } from './engine/types.ts'
 // ── IDs (branded strings: opaque, immutable, mistype-resistant) ───────────────
 // Construct at the boundary via `as ClaimId` etc. (a branded string is just a
 // string at runtime; structuredClone + JSON preserve it).
+/** Identifies one claim under adjudication. The brand makes it non-interchangeable
+ *  with any other id brand, so a citation id cannot be passed where a claim id is due. */
 export type ClaimId = string & { readonly __brand: 'ClaimId' }
+/** Identifies one citation attached to a claim — the pair (claim, citation) is what
+ *  the identity chain verifies, so one citation used by two claims is two pairs. */
 export type CitationId = string & { readonly __brand: 'CitationId' }
+/** Identifies one literature source submitted to L0 routing. */
 export type L0SourceId = string & { readonly __brand: 'L0SourceId' }
 
 // ── Error-code prefixes (globally unique + grep-able; assigned here so the three
 //    modules never collide. Agents throw ResearchError('<PREFIX>_<NAME>', msg).) ──
+/** Namespace of the L0 router's codes. The router only throws them: an
+ *  {@link L0Classification} reports its reasoning in `rationale`, not a code. */
 export const L0_ERROR_PREFIX = 'DSH_L0_'
+/** Namespace of the citation chain's codes, which appear both on a thrown
+ *  ResearchError and as the `reasonCode` of a returned {@link VerificationResult}. */
 export const CITATION_ERROR_PREFIX = 'DSH_CITATION_'
+/** Namespace of the gate's codes, which appear both on a thrown ResearchError and as
+ *  the `reasonCode` of a returned {@link AdjudicationResult}. */
 export const GATE_ERROR_PREFIX = 'DSH_GATE_'
 
 // ── T07: L0 configurable literature routing ───────────────────────────────────
@@ -110,6 +121,9 @@ export type L0Tier =
  *  Downstream MUST treat anything other than `classified` as non-passing. */
 export type L0ClassificationStatus = 'classified' | 'abstained' | 'failed'
 
+/** The L0 verdict for one literature source: the type it was recognized as, the
+ *  venue-quality tier the routing rule assigned it, and the status of that
+ *  assignment. `status`, not `tier`, says whether a judgment was produced at all. */
 export interface L0Classification {
   readonly sourceType: L0SourceType
   readonly tier: L0Tier
@@ -129,8 +143,14 @@ export interface L0Classification {
 // Chain: claim_id → citation_id → DOI/arXiv/ISBN/standard → original-text evidence
 //        → page/chapter/table/figure → verification method → verification conclusion
 
+/** Which identifier namespace {@link CitationRef.id} is written in. The kind keys
+ *  the resolver lookup, so the same string under two kinds is two distinct
+ *  citations; `unknown` means the caller established no namespace. */
 export type CitationIdKind = 'doi' | 'arxiv' | 'isbn' | 'standard' | 'unknown'
 
+/** One citation as the CLAIM asserts it, before any resolver contact. `title` and
+ *  `authors` are the claimed values compared against the resolved record, so
+ *  omitting them leaves the identity check with nothing to contradict. */
 export interface CitationRef {
   readonly kind: CitationIdKind
   /** The DOI / arXiv id / ISBN / standard number. */
@@ -150,6 +170,11 @@ export type VerificationMethod =
   | 'specialist_agent'
   | 'none'
 
+/** Whether the cited original text was actually accessed, by what method, and what
+ *  version of it was read. `originalTextAccessed` and `method` are read as a
+ *  conjunction — `method: 'none'` counts as no access even when the boolean is
+ *  true — and the #6 red line blocks any conclusion that asserts support on a
+ *  record with no access. */
 export interface CitationEvidence {
   readonly originalTextAccessed: boolean
   readonly method: VerificationMethod
@@ -181,6 +206,9 @@ export interface CitationEvidence {
   readonly retrievedAt?: string
 }
 
+/** Closed set of conclusions one (claim, citation) pair can reach. Only
+ *  `supported` and `partially_supported` assert that the source backs the claim;
+ *  every other value is non-passing evidence, and a gate must read it as such. */
 export type VerificationConclusion =
   | 'supported'
   | 'partially_supported'
@@ -230,6 +258,10 @@ export interface VerificationResult {
 // B = external anchoring (external evidence — typically T08 VerificationResults)
 // C = falsifiable claim → experiment verdict
 
+/** Closed set of dispositions one trinity component's adjudication can reach.
+ *  `passed` records that the configured bar for this component was cleared — it is
+ *  never a claim that the literature is real or the hypothesis won; every other
+ *  value is non-passing. */
 export type AdjudicationOutcome = 'passed' | 'blocked' | 'failed' | 'abstained'
 
 /** One voter's position for the A-channel. `voterRole` is a ROLE (e.g.
@@ -269,6 +301,9 @@ export interface FalsifiablePrediction {
   }
 }
 
+/** Caller-injected calibration for one gate adjudication. Every field is a
+ *  decision the caller makes, never a built-in default: a threshold left
+ *  undefined makes the gate abstain instead of applying a number of its own. */
 export interface AdjudicationConfig {
   /** Golden Set calibration = undefined → the gate MUST abstain (no hardcoded
    *  formal threshold like "2 votes passes" before calibration). */
@@ -282,6 +317,10 @@ export interface AdjudicationConfig {
   // configured to bypass NO DEFAULT PASS (Q1 gap-fill removed the inert field).
 }
 
+/** Everything one gate adjudication reads: the claim, which trinity component to
+ *  adjudicate, that component's evidence, and the caller-injected config and
+ *  timestamp. Only the selected component's channel is read — evidence supplied
+ *  for the other components is ignored, not rejected. */
 export interface AdjudicationInput {
   readonly claimId: ClaimId
   readonly component: TrinityComponent // which of A/B/C this gate adjudicates
@@ -298,6 +337,9 @@ export interface AdjudicationInput {
   readonly timestamp: number
 }
 
+/** The frozen verdict of one gate adjudication: its outcome, the DSH_GATE_* code
+ *  naming why, the evidence it rests on, and — for a refusal to decide — the
+ *  reason. `abstentionReason` is present exactly when `outcome === 'abstained'`. */
 export interface AdjudicationResult {
   readonly claimId: ClaimId
   readonly component: TrinityComponent
@@ -343,8 +385,15 @@ export interface AdjudicationResult {
 //   - 'missing external anchor' freely reinterpreted by the caller as
 //     blocked / failed — gate B returns 'abstained' and the intent below is
 //     'hold_abstained'; the mapping is the SINGLE interpretation point.
+/** What one gate outcome means to the state machine — the four dispositions a step
+ *  may take from a verdict, including the hold that is not a pass. A consumer must
+ *  obtain one through {@link GATE_OUTCOME_TO_INTENT}, never derive it from the
+ *  outcome itself. */
 export type StateMachineGateIntent = 'pass' | 'rework' | 'hard_fail' | 'hold_abstained'
 
+/** The single point at which a gate outcome becomes a state-machine intent: total
+ *  over {@link AdjudicationOutcome}, so no outcome reaches a caller uninterpreted,
+ *  and frozen, so a caller cannot re-map one. */
 export const GATE_OUTCOME_TO_INTENT: Readonly<
   Record<AdjudicationOutcome, StateMachineGateIntent>
 > = Object.freeze({

@@ -115,6 +115,15 @@ function cloneValue<T>(x: T, code: string, what: string): T {
  * `preprintNotPeerReviewed` is a deterministic risk flag (sourceType ===
  * 'preprint'); it NEVER asserts the preprint is real or sound.
  *
+ * @param source - the literature source to classify: its type, its identifier, and any
+ *   injected external tier signals (venue name, CCF rating, CORE rank, CAS partition).
+ *   An unknown type or a missing identifier is classified, not rejected.
+ * @param adapter - the versioned routing adapter that decides the tier. Its output is
+ *   untrusted: every rule above either accepts it or clamps it down.
+ * @returns the frozen classification. `status` — not `tier` — is the authority on
+ *   whether a judgment was produced, so anything other than 'classified' is non-passing
+ *   whatever tier it carries.
+ *
  * @throws {ResearchError} 'DSH_L0_INVALID_SOURCE_INPUT' if source is not a
  *   non-null object.
  * @throws {ResearchError} 'DSH_L0_MISSING_ADAPTER' if adapter is missing / not
@@ -416,7 +425,12 @@ function mockRoute(source: L0SourceInput): L0RoutingDecision {
 }
 
 /** Build a fresh mock L0 routing adapter (fixture; NOT real partition data).
- *  Pure + stateless — each instance is independent (no shared mutable state). */
+ *  Pure + stateless — each instance is independent (no shared mutable state).
+ *
+ * @returns an adapter stamped with {@link MOCK_L0_RULE_VERSION} whose `route` applies
+ *   the synthetic venue/signal table below; it reaches no network and holds no real
+ *   partition data (D16).
+ */
 export function createMockL0Adapter(): L0RoutingAdapter {
   return {
     ruleVersion: MOCK_L0_RULE_VERSION,

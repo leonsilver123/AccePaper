@@ -8,6 +8,10 @@ import type { RoadmapGraph, RoadmapValidation } from './model.ts'
  * produce-nothing-not-output checks are NOT yet implemented — they require a
  * root/output declaration; tracked as follow-up). Returns errors (never throws
  * on structure — malformed input reports ok:false).
+ *
+ * @param graph the roadmap model to check.
+ * @returns every distinct structural fault found; `ok` is true only when that
+ *   list is empty, and the caller must not render otherwise.
  */
 export function validateRoadmap(graph: RoadmapGraph): Readonly<RoadmapValidation> {
   const errors: string[] = []
@@ -55,6 +59,11 @@ export function validateRoadmap(graph: RoadmapGraph): Readonly<RoadmapValidation
 /**
  * Kahn topological ordering. Caller must have ok:true (acyclic). Node ids not
  * visited (unreachable) are appended in declaration order (they still render).
+ *
+ * @param graph a graph that already passed {@link validateRoadmap}; a cyclic
+ *   graph does not fail here, it pushes its unvisited nodes into a final layer.
+ * @returns one frozen array of node ids per layer, each layer holding the nodes
+ *   whose predecessors all sit in an earlier layer.
  */
 export function topoLayers(graph: RoadmapGraph): ReadonlyArray<readonly string[]> {
   const indeg = new Map<string, number>()

@@ -46,7 +46,12 @@ interface Koffi {
  * the failure surface and the fix removes the original error.
  */
 export class Win32BindingsLoadError extends Error {
+  /** Which of the two load failures this is; callers branch on it rather than on the message. */
   readonly code: 'DSH_NATIVE_KOFFI_IMPORT_FAILED' | 'DSH_NATIVE_DLL_LOAD_FAILED'
+  /**
+   * The DLL whose load failed, when the failure was a DLL load. Absent for a failure to import the
+   * bindings module at all, where no DLL was named yet.
+   */
   readonly dllName?: string
   constructor(
     code: Win32BindingsLoadError['code'],

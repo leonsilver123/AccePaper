@@ -32,7 +32,10 @@ export type SessionId = string & { readonly [DSH_RESEARCH_TEAM_BRAND]: 'SessionI
 /** Branded task id carried by {@link ResearchTask} and its events. */
 export type TeamTaskId = string & { readonly [DSH_RESEARCH_TEAM_BRAND]: 'TeamTaskId' }
 
-/** Brand a root session id into a {@link TeamId}. Empty input is rejected. */
+/** Brand a root session id into a {@link TeamId}. Empty input is rejected.
+ * @param rootSessionId - the Lead session id the team is identified by; blank input is refused.
+ * @returns the same id branded {@link TeamId}, so it cannot be passed where a task or member id is expected.
+ */
 export function TeamId(rootSessionId: string): TeamId {
   if (rootSessionId.trim().length === 0) {
     throw new ResearchTeamError(
@@ -43,7 +46,10 @@ export function TeamId(rootSessionId: string): TeamId {
   return rootSessionId as TeamId
 }
 
-/** Brand an agent/session id string into a {@link SessionId}. */
+/** Brand an agent/session id string into a {@link SessionId}.
+ * @param value - identity of a live or durable Session; blank input is refused.
+ * @returns the same id branded {@link SessionId}.
+ */
 export function sessionId(value: string): SessionId {
   if (value.trim().length === 0) {
     throw new ResearchTeamError(
@@ -54,7 +60,10 @@ export function sessionId(value: string): SessionId {
   return value as SessionId
 }
 
-/** Brand a task id string into a {@link TeamTaskId}. */
+/** Brand a task id string into a {@link TeamTaskId}.
+ * @param value - team-local task identity; blank input is refused.
+ * @returns the same id branded {@link TeamTaskId}.
+ */
 export function taskId(value: string): TeamTaskId {
   if (value.trim().length === 0) {
     throw new ResearchTeamError(
@@ -102,6 +111,7 @@ export type ResearchTeamErrorCode = `${typeof DSH_RESEARCH_TEAM_ERROR_PREFIX}${R
 /** Error thrown on any pure-logic domain violation (stale CAS revision,
  *  authorization denial, illegal claim, dependency cycle, malformed scope…). */
 export class ResearchTeamError extends Error {
+  /** The failure's stable code; the same value is bracketed into the message. */
   readonly code: ResearchTeamErrorCode
 
   constructor(code: ResearchTeamErrorCode, message: string, cause?: unknown) {
@@ -112,7 +122,11 @@ export class ResearchTeamError extends Error {
   }
 }
 
-/** Throw a {@link ResearchTeamError} with a {@link ResearchTeamErrorSuffix}. */
+/** Throw a {@link ResearchTeamError} with a {@link ResearchTeamErrorSuffix}.
+ * @param suffix - the failure kind, without the package prefix.
+ * @param detail - human-readable specifics of the violation.
+ * @returns never — the throw is the whole effect.
+ */
 export function researchTeamError(
   suffix: ResearchTeamErrorSuffix,
   detail: string,
@@ -136,7 +150,10 @@ function deepFreeze<T>(value: T): T {
 }
 
 /** Deep-freeze a structured-cloneable value into an independent Readonly
- *  snapshot (clone-first, freeze-second — no live reference escapes). */
+ *  snapshot (clone-first, freeze-second — no live reference escapes).
+ * @param value - the value to snapshot.
+ * @returns a frozen deep copy; later mutation of the original cannot reach it.
+ */
 export function freezeValue<T>(value: T): Readonly<T> {
   return deepFreeze(structuredClone(value))
 }
@@ -231,6 +248,8 @@ export type TeamMutationResult<T = ResearchTask> =
 // the future SessionEventMap payload version; the adapter round maps between
 // these and the injected session event types (session-events.ts).
 
+/** One whole member record as the `research/member` event carries it; the fold
+ *  replaces that member's entry by id, so a later event supersedes an earlier one. */
 export interface ResearchMemberEvent {
   readonly type: 'research/member'
   readonly version: 1
@@ -238,6 +257,8 @@ export interface ResearchMemberEvent {
   readonly member: ResearchMember
 }
 
+/** One whole task snapshot as the `research/task` event carries it. The fold
+ *  applies only a strictly newer revision, and a deleted id stays retired. */
 export interface ResearchTaskEvent {
   readonly type: 'research/task'
   readonly version: 1
@@ -245,6 +266,8 @@ export interface ResearchTaskEvent {
   readonly task: ResearchTask
 }
 
+/** One artifact's compare-and-set revision as the `research/rev` event carries
+ *  it; the fold keeps the highest revision seen per artifact id. */
 export interface ResearchRevEvent {
   readonly type: 'research/rev'
   readonly version: 1
@@ -286,6 +309,8 @@ export interface ResearchRebuttal {
   readonly modelFamily?: string
 }
 
+/** One accepted fleet vote as the `research/rebuttal` event carries it; the
+ *  research Lead is its only writer. */
 export interface ResearchRebuttalEvent {
   readonly type: 'research/rebuttal'
   readonly version: 1
@@ -293,6 +318,8 @@ export interface ResearchRebuttalEvent {
   readonly rebuttal: ResearchRebuttal
 }
 
+/** Every event shape the fold accepts. A `research/rebuttal` still crosses the
+ *  validation seam before the fold, but contributes nothing to {@link TeamState}. */
 export type ResearchEvent =
   | ResearchMemberEvent
   | ResearchTaskEvent

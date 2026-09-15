@@ -19,6 +19,13 @@ export { validateRoadmap, topoLayers } from './validate.ts'
  * Validate then render a roadmap graph. Never throws on structure problems:
  * an invalid graph returns an artifact with validation.ok=false and a short
  * reason (renderers are only invoked on ok:true graphs).
+ *
+ * @param graph the roadmap model to validate and render.
+ * @param options the target format plus an optional title.
+ * @param _timestamp reserved for artifact metadata; the roadmap model carries no
+ *   producedAt field, so this argument is deliberately unused.
+ * @returns the frozen artifact — empty `content` with `validation.ok: false`
+ *   when the graph is structurally invalid, otherwise the rendered document.
  */
 export function renderRoadmap(
   graph: RoadmapGraph,

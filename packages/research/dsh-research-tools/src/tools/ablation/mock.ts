@@ -161,7 +161,13 @@ export class MockAblationExecutor implements AblationExecutor {
 }
 
 /** Build a fresh mock executor instance (deterministic; seeds are read once at
- *  construction). */
+ *  construction).
+ *
+ * @param options - Failure seeds; omitted, every planned run is reported
+ *  'executed'. The key lists are copied, so mutating the array afterwards does
+ *  not change the instance's behaviour.
+ * @returns An executor whose `execute` never throws for a legitimate request
+ *  and never reports a real-model measurement. */
 export function createMockAblationExecutor(
   options: MockAblationExecutorOptions = {},
 ): AblationExecutor {

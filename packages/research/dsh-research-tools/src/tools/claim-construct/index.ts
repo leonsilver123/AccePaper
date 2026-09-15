@@ -44,6 +44,9 @@ export interface ClaimFalsifiability {
   readonly experimentToFalsify?: string
 }
 
+/** Construction request for {@link constructClaim}. Only `assertion` is
+ *  required; every other field is optional, and `null` is a legal value for
+ *  those that accept it rather than a gap the tool fills in. */
 export interface ClaimConstructInput {
   /** The claim's assertion (normalized: trimmed). Required, non-empty. */
   readonly assertion: string
@@ -76,6 +79,8 @@ export interface ClaimDraft {
   readonly note?: string
 }
 
+/** The frozen result of one construction: the tool artifact envelope plus the
+ *  constructed draft. */
 export interface ClaimConstructArtifact {
   readonly meta: ToolArtifactMeta
   readonly claim: ClaimDraft
@@ -148,6 +153,15 @@ function resolveClaimId(assertion: string, suppliedClaimId: string | undefined):
  * Pure: same input (including the injected `now`) always yields the same
  * frozen artifact. The artifact carries `supportStatus: 'not_claimed'` — this
  * constructor NEVER asserts literature support; verification is out of scope.
+ *
+ * @param input - Construction request. A non-object input, or an assertion that
+ *  is empty after trimming or longer than `MAX_CLAIM_ASSERTION_LENGTH`, throws
+ *  rather than yielding a degraded claim; a supplied `claimId` that trims to
+ *  the empty string throws too.
+ * @returns The deeply frozen artifact. `claim.claimId` is the supplied id
+ *  trimmed, or derived from the trimmed assertion, so identical inputs give the
+ *  identical id; `claim.supportStatus` is 'not_claimed' and cannot be anything
+ *  else.
  */
 export function constructClaim(input: ClaimConstructInput): ClaimConstructArtifact {
   if (typeof input !== 'object' || input === null) {

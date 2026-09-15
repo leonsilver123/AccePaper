@@ -59,6 +59,8 @@ export const THREE_LINE_TABLE_DEFAULT_SIGNIFICANCE: Readonly<ThreeLineTableSigni
 
 // ────────────────────────── Public type surface ─────────────────────────────
 
+/** Which markup dialect a render targets. Both are pure-string outputs; no
+ *  external formatter is involved. */
 export type ThreeLineTableTarget = 'markdown' | 'latex'
 
 /** How a numeric column's values compare ("which end is better"). Purely
@@ -76,6 +78,9 @@ export type ThreeLineTableCellScale = 'percent' | 'fraction'
 /** Emphasis markers rendered bold; only 'best' is understood. */
 export type ThreeLineTableCellEmphasis = 'best'
 
+/** Star-marker policy: the p-value thresholds a cell's authored star count is
+ *  cross-checked against. A model may supply its own set in place of
+ *  {@link THREE_LINE_TABLE_DEFAULT_SIGNIFICANCE}. */
 export interface ThreeLineTableSignificance {
   /** p-value thresholds for 1..N significance stars (ascending order is
    *  conventional but the count check is order-independent). */
@@ -96,26 +101,35 @@ export interface ThreeLineTableCellCommon {
   readonly emphasis?: ThreeLineTableCellEmphasis
 }
 
+/** A cell with no value: renders the model's one missing token and contributes
+ *  no scalar to the snapshot or to any column check. */
 export interface ThreeLineMissingCell extends ThreeLineTableCellCommon {
   readonly kind: 'missing'
 }
 
+/** Free descriptive text; rendered as authored, with no column formatting rule
+ *  applied. */
 export interface ThreeLineTextCell extends ThreeLineTableCellCommon {
   readonly kind: 'text'
   readonly text: string
 }
 
+/** Text the author already formatted; rendered verbatim. It carries no scalar,
+ *  so the column's decimals, scale and precision rules never touch it. */
 export interface ThreeLineFormattedCell extends ThreeLineTableCellCommon {
   readonly kind: 'formatted'
   /** Already-formatted string rendered verbatim (never re-formatted). */
   readonly text: string
 }
 
+/** A single numeric value, formatted by the owning column's decimals and
+ *  precision rule. */
 export interface ThreeLineNumberCell extends ThreeLineTableCellCommon {
   readonly kind: 'number'
   readonly value: number
 }
 
+/** A mean with its standard deviation, both formatted by the owning column. */
 export interface ThreeLineMeanSdCell extends ThreeLineTableCellCommon {
   readonly kind: 'meanSd'
   /** Rendered as "mean ± sd". */
@@ -123,6 +137,8 @@ export interface ThreeLineMeanSdCell extends ThreeLineTableCellCommon {
   readonly sd: number
 }
 
+/** The parenthesised variant of {@link ThreeLineMeanSdCell}, for tables that
+ *  reserve the ± form for something else. */
 export interface ThreeLineMeanSdParenCell extends ThreeLineTableCellCommon {
   readonly kind: 'meanSdParen'
   /** Rendered as "mean (sd)". */
@@ -130,6 +146,8 @@ export interface ThreeLineMeanSdParenCell extends ThreeLineTableCellCommon {
   readonly sd: number
 }
 
+/** An interval with optional point estimate. `lo` must not exceed `hi`, and
+ *  when `point` is given it is the cell's primary scalar for column checks. */
 export interface ThreeLineConfidenceIntervalCell extends ThreeLineTableCellCommon {
   readonly kind: 'ci'
   /** Rendered as "lo–hi", or "point (lo–hi)" when a point estimate is given. */
@@ -138,6 +156,8 @@ export interface ThreeLineConfidenceIntervalCell extends ThreeLineTableCellCommo
   readonly point?: number
 }
 
+/** A p-value with optional authored stars. The star count is metadata the
+ *  author asserts; validation rejects one the p-value does not support. */
 export interface ThreeLinePValueCell extends ThreeLineTableCellCommon {
   readonly kind: 'pValue'
   readonly value: number
@@ -146,6 +166,8 @@ export interface ThreeLinePValueCell extends ThreeLineTableCellCommon {
   readonly stars?: number
 }
 
+/** Any cell a body row may carry. `kind` selects which value fields the
+ *  renderers read; fields belonging to other kinds are never consulted. */
 export type ThreeLineTableCell =
   | ThreeLineMissingCell
   | ThreeLineTextCell
@@ -183,6 +205,10 @@ export interface ThreeLineTableGroupedHeaderCell {
 /** A row of grouped headers. Multiple group rows give a multi-level header. */
 export type ThreeLineTableGroupedHeaderRow = ReadonlyArray<ThreeLineTableGroupedHeaderCell>
 
+/** Which scalar of a structured cell one snapshot record binds: 'value' for a
+ *  number or p-value cell, 'mean'/'sd' for the two mean-with-dispersion kinds,
+ *  and 'lo'/'hi'/'point' for an interval. Text, formatted and missing cells
+ *  contribute no part and cannot be bound. */
 export type ThreeLineTableSnapshotPart = 'value' | 'mean' | 'sd' | 'lo' | 'hi' | 'point'
 
 /** One bound data-snapshot record. Addresses a cell by row index / leaf column
@@ -194,6 +220,9 @@ export interface ThreeLineTableSnapshotValue {
   readonly recorded: number
 }
 
+/** A bound data snapshot the model is cross-checked against: every record
+ *  asserts that one cell scalar equals a previously recorded value. A record
+ *  the model contradicts is a SNAPSHOT_CONTRADICTION error, not a warning. */
 export interface ThreeLineTableDataSnapshot {
   /** Free-text provenance of the bound snapshot (audit only). */
   readonly source?: string
@@ -224,12 +253,15 @@ export interface ThreeLineTableModel {
   readonly dataSnapshot?: ThreeLineTableDataSnapshot
 }
 
+/** One rendered output: the dialect rendered and the text produced for it. */
 export interface ThreeLineTableRender {
   readonly target: ThreeLineTableTarget
   /** Byte-deterministic rendered text (same model + target always identical). */
   readonly text: string
 }
 
+/** The frozen result of one render: the snapshot the text was produced from,
+ *  the hash binding the two, and the render itself. */
 export interface ThreeLineTableArtifact {
   readonly meta: ToolArtifactMeta
   /** NORMALIZED MODEL SNAPSHOT (deeply frozen) — the exact model the rendered
@@ -269,6 +301,8 @@ export type ThreeLineTableErrorCode =
 
 /** Error thrown on invalid model / target / timestamp / model semantics. */
 export class ThreeLineTableError extends Error {
+  /** The prefixed code, repeated as the leading bracketed token of `message`;
+   *  callers branch on this field rather than parsing the message text. */
   readonly code: ThreeLineTableErrorCode
 
   constructor(code: ThreeLineTableErrorCode, message: string) {
@@ -434,7 +468,15 @@ function escapeLatex(text: string): string {
 
 /** Build the plain logical text of a cell (before emphasis/bold decoration and
  *  target-specific escaping). Numeric cells follow the owning column's
- *  decimals / precisionRule; formatted and text cells are verbatim. */
+ *  decimals / precisionRule; formatted and text cells are verbatim.
+ *
+ * @param cell the cell to render.
+ * @param column the leaf column owning the cell; only a numeric cell reads its
+ *  `decimals` and `precisionRule`.
+ * @param missingToken the model's one missing token, returned for a 'missing'
+ *  cell and unused by every other kind.
+ * @returns the cell's plain text, before emphasis decoration and the target's
+ *  escaping. */
 export function threeLineTableCellText(
   cell: ThreeLineTableCell,
   column: ThreeLineTableColumn,
@@ -1115,7 +1157,15 @@ function renderMdLine(
 }
 
 /** Render the model as a three-line plain-text Markdown table (exactly three
- *  horizontal rules: top, header-bottom, bottom; no vertical rules anywhere). */
+ *  horizontal rules: top, header-bottom, bottom; no vertical rules anywhere).
+ *
+ * @param model a model that already passed validation. This renderer checks
+ *  nothing and corrects nothing: it assumes the body rows and grouped-header
+ *  spans cover the leaf columns exactly, because {@link renderThreeLineTable}
+ *  is what enforces that before calling it.
+ * @returns the table text. A model that omits `missingToken` gets
+ *  {@link THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN} here, matching the snapshot
+ *  the validating entry point materializes. */
 export function renderThreeLineTableMarkdown(model: ThreeLineTableModel): string {
   const missingToken =
     model.missingToken ?? THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN
@@ -1183,7 +1233,14 @@ function latexCell(cell: ThreeLineTableCell, column: ThreeLineTableColumn, missi
 
 /** Render the model as a LaTeX booktabs three-line table. Exactly three
  *  horizontal rules (\toprule / \midrule / \bottomrule) and no vertical rules
- *  (no `|` in the column spec). */
+ *  (no `|` in the column spec).
+ *
+ * @param model a model that already passed validation; like the Markdown
+ *  renderer, this one checks nothing and corrects nothing. Every column is
+ *  rendered centred, and the column spec is built from the leaf column count
+ *  alone.
+ * @returns the `table` environment source, with `\toprule`, `\midrule` and
+ *  `\bottomrule` the only rules. Text and labels are LaTeX-escaped. */
 export function renderThreeLineTableLatex(model: ThreeLineTableModel): string {
   const missingToken =
     model.missingToken ?? THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN
@@ -1269,6 +1326,9 @@ function validateTimestamp(timestamp: number): void {
  * @param timestamp caller-injected epoch-ms timestamp (auditable).
  * @throws {ThreeLineTableError} on invalid input or on detection of any of the
  *   six traffic-paper anti-patterns (see module header).
+ * @returns the frozen artifact: `table` is the normalized snapshot with
+ *   defaults materialized, `bindingHash` covers that snapshot plus the target,
+ *   and `render.text` is the byte-identical output for this model and target.
  */
 export function renderThreeLineTable(
   model: ThreeLineTableModel,

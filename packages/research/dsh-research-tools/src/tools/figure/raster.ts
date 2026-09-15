@@ -13,6 +13,8 @@ import { parseColor, type Rgb } from './color.ts'
 import { glyphRowsFor, textWidth } from './font5x7.ts'
 import { formatTick, type YScale } from './scale.ts'
 
+/** A fully drawn canvas: the dimensions the caller asked for and their
+ *  `width*height*4` RGBA pixels, top row first, ready for the PNG encoder. */
 export interface RasterResult {
   readonly width: number
   readonly height: number
@@ -205,6 +207,15 @@ function axisLabelText(label: string | undefined, unit: string | undefined): str
   return parts.length === 0 ? undefined : parts.join(' ')
 }
 
+/** Draw a validated spec onto a fresh RGBA canvas.
+ *
+ * @param spec - Normalized spec snapshot; its `width`/`height` fix the canvas
+ *  size, and its `title`, `kind`, `series`, `axes` and `legend` supply every
+ *  mark drawn.
+ * @param scale - The shared y scale (`computeYScale`), so the raster and the
+ *  SVG place the same value at the same height.
+ * @returns The opaque, white-backed canvas; a legend the spec marks invisible is
+ *  omitted, and no statistic the caller did not supply is ever drawn. */
 export function rasterizeFigure(spec: FigureSpecSnapshot, scale: YScale): RasterResult {
   const width = spec.width
   const height = spec.height

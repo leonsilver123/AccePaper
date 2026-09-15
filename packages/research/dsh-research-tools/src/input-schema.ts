@@ -39,7 +39,17 @@ export const INPUT_LIMITS = {
  *  deeper inputs are rejected as unsafe). */
 const JSON_SAFE_MAX_DEPTH = 64
 
-/** True for values that can never be part of a JSON-safe input payload. */
+/** Whether `value` may appear in a JSON-safe input payload: finite numbers,
+ *  plain objects/arrays, no `undefined`/`function`/`symbol`/`bigint`, no
+ *  `Buffer`/`Date`, and no reference back to an ancestor. A reference shared
+ *  between siblings is not a cycle and passes. Recursion stops at
+ *  `JSON_SAFE_MAX_DEPTH`; a deeper value is rejected, not walked.
+ *
+ * @param value - Candidate payload, or a sub-value of one.
+ * @param seen - Ancestors to treat as already visited, for a caller that walks
+ *  an outer payload and checks each sub-value; a value referencing anything in
+ *  this set counts as a cycle. Omit at the payload root.
+ * @returns True when no part of the value rules it out of a JSON payload. */
 export function isJsonSafe(value: unknown, seen?: Set<object>): boolean {
   const ancestors = seen ?? new Set<object>()
   const visit = (item: unknown, path: Set<object>, depth: number): boolean => {
@@ -85,7 +95,11 @@ export function isJsonSafe(value: unknown, seen?: Set<object>): boolean {
   return visit(value, ancestors, 0)
 }
 
-/** Reject windows/posix absolute paths, `..`, NUL, UNC, and drive letters. */
+/** Reject windows/posix absolute paths, `..`, NUL, UNC, and drive letters.
+ *
+ * @param value - Candidate path-like field value.
+ * @returns True when the value is forbidden, i.e. a NUL byte, a drive-letter,
+ *  UNC or rooted path, or a `..` segment under either separator. */
 export function isForbiddenPath(value: string): boolean {
   if (value.includes('\0')) return true
   if (/^([a-zA-Z]:[\\/]|[\\/][\\/]|\\\\|\/)/.test(value)) return true // drive/UNC/absolute
@@ -222,7 +236,14 @@ function topLevelKeyCount(value: unknown): number {
   return Object.keys(value).length
 }
 
-/** Validate one tool input against its strict schema. Returns violations. */
+/** Validate one tool input against its strict schema. Returns violations.
+ *
+ * @param toolId - Registered tool id; an unregistered id is itself the single
+ *  violation, so this never throws on unknown input.
+ * @param input - Candidate input, screened for JSON-safety, top-level key
+ *  count and serialized size before its tool's schema rules are walked.
+ * @returns One message per violation, in walk order. An empty array is the only
+ *  signal that the tool's business function may be called. */
 export function validateResearchToolInput(toolId: string, input: unknown): string[] {
   const schema = RESEARCH_TOOL_INPUT_SCHEMAS[toolId]
   if (schema === undefined) return [`unknown research tool '${toolId}'`]
@@ -242,6 +263,10 @@ export function validateResearchToolInput(toolId: string, input: unknown): strin
 const FIGURE_KIND: readonly string[] = ['bar', 'line', 'scatter', 'area', 'pie', 'donut']
 const NUMBER_LIMIT: FieldRule = { type: 'number', minimum: -1e15, maximum: 1e15 }
 
+/** The strict input schema of every registered tool, keyed by tool id. A
+ *  `citation-verify`, `claim-construct` or `roadmap` payload sub-object marked
+ *  `open: true` delegates its content rules to the owning core type and checks
+ *  only the outer shape. */
 export const RESEARCH_TOOL_INPUT_SCHEMAS: Readonly<Record<string, FieldRule>> = {
   'literature-search': {
     type: 'object',

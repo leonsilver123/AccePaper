@@ -29,10 +29,12 @@ import { requirePersonaName } from './personas.ts'
 
 /** The three allowed vote positions (runtime mirror of the domain union). */
 export const REBUTTAL_POSITION_VALUES = ['support', 'refute', 'abstain'] as const
+/** One allowed vote position; see {@link REBUTTAL_POSITION_VALUES}. */
 export type RebuttalPositionValue = (typeof REBUTTAL_POSITION_VALUES)[number]
 
 /** Lifecycle of one rebuttal round. */
 export const REBUTTAL_ROUND_STATUSES = ['pending', 'submitted', 'completed'] as const
+/** One rebuttal round lifecycle state; see {@link REBUTTAL_ROUND_STATUSES}. */
 export type RebuttalRoundStatus = (typeof REBUTTAL_ROUND_STATUSES)[number]
 
 /** A single round of red-team rebuttal over one claim at one judgment point. */
@@ -69,7 +71,10 @@ export interface ParsedRebuttalVote {
   readonly modelFamily?: string
 }
 
-/** Parse a raw position value against the runtime position list. */
+/** Parse a raw position value against the runtime position list.
+ * @param value - an untrusted candidate, typically one field of a member's returned message.
+ * @returns the position when it is one of the three, or undefined so the caller owns the refusal.
+ */
 export function parseRebuttalPosition(value: unknown): RebuttalPositionValue | undefined {
   return REBUTTAL_POSITION_VALUES.find(position => position === value)
 }
@@ -77,7 +82,9 @@ export function parseRebuttalPosition(value: unknown): RebuttalPositionValue | u
 /** Parse + validate the STRUCTURAL fields of one raw vote message (object
  *  shape / non-empty rationale / legal position / clean modelFamily). Role
  *  membership and duplication are round concerns, not message concerns.
- *  @throws {@link DSH_RESEARCH_TEAM_INVALID_REBUTTAL} on a malformed message. */
+ * @param message - the raw payload a fleet member returned.
+ * @returns the trimmed vote fields, with an absent or empty `modelFamily` dropped.
+ * @throws {@link DSH_RESEARCH_TEAM_INVALID_REBUTTAL} on a malformed message. */
 export function parseRebuttalVote(message: unknown): ParsedRebuttalVote {
   if (typeof message !== 'object' || message === null) {
     researchTeamError('INVALID_REBUTTAL', `rebuttal vote message must be an object (got ${String(message)})`)
@@ -97,7 +104,9 @@ export function parseRebuttalVote(message: unknown): ParsedRebuttalVote {
 }
 
 /** Open one round for an ordered expected-role set.
- *  @throws {@link DSH_RESEARCH_TEAM_INVALID_REBUTTAL} on empty/malformed input. */
+ * @param input - round identity, claim reference, judgment point, and the roles that must each vote.
+ * @returns the round, pending, frozen, with distinct expected roles in the order given.
+ * @throws {@link DSH_RESEARCH_TEAM_INVALID_REBUTTAL} on empty/malformed input. */
 export function createRebuttalRound(input: {
   readonly roundId: string
   readonly claimRef: string
@@ -134,7 +143,11 @@ export function createRebuttalRound(input: {
  *  same role ({@link DSH_RESEARCH_TEAM_DUPLICATE_VOTE}), a vote on a completed
  *  round, and a structurally malformed vote
  *  ({@link DSH_RESEARCH_TEAM_INVALID_REBUTTAL}). Accepting the first vote
- *  moves the round pending → submitted. */
+ *  moves the round pending → submitted.
+ * @param round - the open round the vote belongs to.
+ * @param vote - the member's vote; its role must be one the round expects.
+ * @returns a new round carrying the accepted vote, marked submitted.
+ */
 export function castRebuttalVote(round: RebuttalRound, vote: RebuttalVoteInput): RebuttalRound {
   if (round.status === 'completed') {
     researchTeamError('INVALID_REBUTTAL', `rebuttal round "${round.roundId}" is completed and accepts no more votes`)
@@ -173,7 +186,10 @@ export function castRebuttalVote(round: RebuttalRound, vote: RebuttalVoteInput):
 /** Close a round once it has accepted votes (submitted → completed). Completed
  *  is terminal and idempotent: closing an already-completed round returns it
  *  unchanged. A round with no accepted vote cannot close — the fleet output is
- *  insufficient and the round must stay blocked (never entered into judge). */
+ *  insufficient and the round must stay blocked (never entered into judge).
+ * @param round - the round to close.
+ * @returns the completed round, or `round` itself when it was already completed.
+ */
 export function closeRebuttalRound(round: RebuttalRound): RebuttalRound {
   if (round.status === 'completed') return round
   if (round.votes.length === 0) {
@@ -185,14 +201,20 @@ export function closeRebuttalRound(round: RebuttalRound): RebuttalRound {
   return freezeValue({ ...round, status: 'completed' })
 }
 
-/** Whether every expected role has already voted (round is fully populated). */
+/** Whether every expected role has already voted (round is fully populated).
+ * @param round - the round to inspect.
+ * @returns true once each expected role has a vote, false while any is still to vote.
+ */
 export function allRolesVoted(round: RebuttalRound): boolean {
   return round.expectedRoles.every(role => round.votes.some(vote => vote.voterRole === role))
 }
 
 /** The adjudication-vote projection of a round's accepted votes — the exact
  *  field contract the future T22/judge gate consumes (voterRole / modelFamily?
- *  / position / rationale). Round bookkeeping fields are dropped. */
+ *  / position / rationale). Round bookkeeping fields are dropped.
+ * @param round - the round whose accepted votes are projected.
+ * @returns one entry per accepted vote, in cast order.
+ */
 export function adjudicationVotes(round: RebuttalRound): ReadonlyArray<{
   readonly voterRole: string
   readonly modelFamily?: string

@@ -20,8 +20,9 @@ export function experimentFixtureKey(claimRef: string, predictionText: string, p
   return `${claimRef}|${predictionRef ?? predictionText}`
 }
 
-// Synthetic example entries (explicitly synthetic — never real scientific
-// support). Rehearses keep/refute/abstain(miss) paths for the framework.
+/** Synthetic example rows keyed by {@link experimentFixtureKey}: one keep path and one
+ *  refute path, so the framework's branches stay rehearsed. Explicitly synthetic — never
+ *  real scientific support, and the only mock path that may answer `supportsPrediction`. */
 const FIXTURE_TABLE: ReadonlyMap<string, ExperimentFixtureOutcome> = new Map([
   // keep path: the (synthetic) experiment supports the (synthetic) prediction.
   ['mock-claim-001|peak-hour delay falls by at least 8% under adaptive control', {

@@ -56,7 +56,13 @@ function hexByte(token: string, start: number): number {
 
 /**
  * Validate + canonicalize one color token.
- * @throws {RangeError} when the token is not a valid hex or allowlisted name.
+ *
+ * @param rawToken - Untrusted token from a figure spec: a `#rgb`/`#rrggbb`
+ *   string in any case, or an allowlisted color name. Surrounding whitespace is
+ *   trimmed before matching.
+ * @returns The lowercase `#rrggbb` form, with `#rgb` expanded. A non-string,
+ *   an empty token, a malformed hex, or a name outside the allowlist throws
+ *   {@link RangeError} instead of falling back to a default color.
  */
 export function canonicalizeColor(rawToken: unknown): string {
   if (typeof rawToken !== 'string') {
@@ -96,6 +102,7 @@ export function canonicalizeColor(rawToken: unknown): string {
     .padStart(2, '0')}`
 }
 
+/** An 8-bit-per-channel color, as the PNG raster stores it. */
 export interface Rgb {
   readonly r: number
   readonly g: number
@@ -107,6 +114,10 @@ export interface Rgb {
  * {r,g,b} triple for the PNG raster. Throws RangeError for tokens that never
  * passed canonicalization (internal misuse — the tool only calls this on
  * canonical output).
+ *
+ * @param canonicalHex - A token produced by {@link canonicalizeColor} in its
+ *   `#rrggbb` form; any other string is internal misuse and throws.
+ * @returns The three channels as integers in 0–255.
  */
 export function parseColor(canonicalHex: string): Rgb {
   if (!/^#[0-9a-f]{6}$/.test(canonicalHex)) {

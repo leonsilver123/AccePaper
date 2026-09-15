@@ -190,7 +190,6 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Deployment configuration for the research-team service. */
 /**
  * Project one finished run into the shape the Remote boundary and the browser view consume.
  *
@@ -263,6 +262,7 @@ export interface ResearchPipelineOptions {
 }
 
 
+/** Deployment configuration for the research-team service. */
 export interface ResearchTeamServiceConfig {
   /**
    * Write-tool allowlist whose writes are expressible as one path argument and
@@ -335,6 +335,8 @@ export class ResearchTeamService extends TypertRemoteService {
   /**
    * Resolve one exact live Agent's research-team role, throwing when it has
    * none. The Agent handle is the authority credential.
+   * @param agent - exact live Agent used as the authority credential.
+   * @returns its Lead, durable identity, role, and model-facing name.
    */
   membership(agent: Agent): ResearchMembership {
     return this.roster.membership(agent)
@@ -342,7 +344,11 @@ export class ResearchTeamService extends TypertRemoteService {
 
   /** Resolve a caller without throwing (observers and legacy membership
    *  paths; the write-scope guard consumes the roster's three-way
-   *  classification directly so unprovable lineages fail closed, P2-2). */
+   *  classification directly so unprovable lineages fail closed, P2-2).
+   * @param agent - candidate exact live Agent.
+   * @returns the membership, or undefined for a non-member and for a lineage
+   *  this package cannot prove.
+   */
   tryMembership(agent: Agent): ResearchMembership | undefined {
     return this.roster.tryMembership(agent)
   }
@@ -370,14 +376,17 @@ export class ResearchTeamService extends TypertRemoteService {
   /**
    * Return one task snapshot, including a deleted tombstone.
    * @param caller - exact live research-team member.
-   * @param id - team-local task identity.
+   * @param id - team-local task identity; an id this team never created is refused.
+   * @returns the task's whole-value snapshot at its current revision.
    */
   getTask(caller: Agent, id: TeamTaskId): ResearchTask {
     return this.tasks.get(this.roster.membership(caller), id)
   }
 
   /** List current non-deleted task snapshots.
-   *  @param caller - exact live research-team member. */
+   * @param caller - exact live research-team member.
+   * @returns every live task snapshot; order is the board's, not an ordering contract.
+   */
   listTasks(caller: Agent): ResearchTask[] {
     return this.tasks.list(this.roster.membership(caller))
   }
@@ -388,22 +397,25 @@ export class ResearchTeamService extends TypertRemoteService {
    * `{ ok: false, error }` envelope; unexpected failures still throw.
    * @param caller - exact live research-team member authorizing the mutation.
    * @param request - CAS intent (task id, expected revision, action).
+   * @returns the committed snapshot on success, or the rejection envelope naming why the transition was refused.
    */
   async updateTask(caller: Agent, request: UpdateResearchTaskRequest): Promise<TeamMutationResult> {
     return await this.tasks.update(this.roster.membership(caller), request)
   }
 
   /** Read the member identity that backs one exact live Agent, if any.
-   *  @param memberId - durable member Session identity.
-   *  @returns the member's live Lead Agent, or undefined when not resolvable. */
+   * @param memberId - durable member Session identity.
+   * @returns the member's live Lead Agent, or undefined when not resolvable. */
   rootOfMember(memberId: SessionId): Agent | undefined {
     return this.roster.rootOfMember(memberId)
   }
 
   /** Deploy the red-team fleet personas as continuable members (T21).
-   *  @param caller - exact live research Lead Agent.
-   *  @param config - fleet config (defaults to the frozen five personas).
-   *  @param provider - continuation provider name ('spawn' default). */
+   * @param caller - exact live research Lead Agent.
+   * @param config - fleet config (defaults to the frozen five personas).
+   * @param provider - continuation provider name ('spawn' default).
+   * @returns the live member views, in deployment order.
+   */
   async deployFleet(
     caller: Agent,
     config: Parameters<ResearchFleetOrchestrator['deploy']>[1] = {},
@@ -413,8 +425,10 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /** Open one red-team rebuttal round over a (claim × judgment point) (T21).
-   *  @param caller - exact live research Lead Agent.
-   *  @param input - claim reference, judgment point, and optional role subset. */
+   * @param caller - exact live research Lead Agent.
+   * @param input - claim reference, judgment point, and optional role subset.
+   * @returns the pending round plus its board tasks and delivered message ids.
+   */
   startRebuttal(
     caller: Agent,
     input: RebuttalStartInput,
@@ -423,8 +437,10 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /** Commit one fleet vote returned to the research Lead (T21).
-   *  @param caller - exact live research Lead Agent.
-   *  @param input - the round, the voting member, and the returned payload. */
+   * @param caller - exact live research Lead Agent.
+   * @param input - the round, the voting member, and the returned payload.
+   * @returns the updated round (submitted, or completed when the last role voted).
+   */
   submitRebuttal(
     caller: Agent,
     input: RebuttalSubmitInput,
@@ -433,7 +449,9 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /** The gate-facing adjudication-vote projection of one round (T21).
-   *  @param roundId - the open or closed round identity. */
+   * @param roundId - identity of a round this service opened; an unknown id is refused.
+   * @returns the round's accepted votes in cast order, with round bookkeeping dropped.
+   */
   roundVotes(roundId: string): ReturnType<ResearchFleetOrchestrator['roundVotes']> {
     return this.fleet.roundVotes(roundId)
   }

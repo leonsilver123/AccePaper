@@ -5,6 +5,8 @@
 // no randomness, no clocks, no state. All arithmetic is plain IEEE-754 double
 // math on finite, pre-validated inputs (NaN/Infinity never reach this module).
 
+/** The shared data-to-pixel mapping for one figure's y axis, derived once so
+ *  the SVG builder and the rasterizer cannot disagree on where a value sits. */
 export interface YScale {
   /** Data value at the bottom of the plot (<= 0). */
   readonly min: number
@@ -54,6 +56,12 @@ function stepDecimals(step: number): number {
 /**
  * Build a y scale covering [min(data,0), max(data,0)] with a nice step. When
  * every value is zero (or the range collapses) the axis falls back to [0,1].
+ *
+ * @param dataValues - Every plotted value across all series. The axis bounds
+ *   always include zero and snap outward to a multiple of the step, so no mark
+ *   is clipped; an empty array collapses the range and takes the [0,1] fallback.
+ * @returns The scale, whose `decimals` is the single precision every tick label
+ *   of this figure is formatted with.
  */
 export function computeYScale(dataValues: ReadonlyArray<number>): YScale {
   let dataMin = Number.POSITIVE_INFINITY
@@ -95,7 +103,15 @@ export function computeYScale(dataValues: ReadonlyArray<number>): YScale {
   return { min: axisMin, max: axisMax, step, decimals, ticks }
 }
 
-/** Linearly map a data value into the plot band [plotTop..plotBottom]. */
+/** Linearly map a data value into the plot band [plotTop..plotBottom].
+ *
+ * @param value - Data value to place; values outside the scale's range map
+ *  outside the band rather than being clamped.
+ * @param scale - The scale supplying the data range the ratio is taken over.
+ * @param plotTop - Pixel y of the band's top edge (the scale's `max`).
+ * @param plotBottom - Pixel y of the band's bottom edge (the scale's `min`);
+ *  y grows downward, so this is the larger pixel coordinate.
+ * @returns The pixel y for the value. */
 export function valueToPixelY(
   value: number,
   scale: YScale,
@@ -106,7 +122,13 @@ export function valueToPixelY(
   return plotBottom - ratio * (plotBottom - plotTop)
 }
 
-/** Format one tick value with the scale's fixed decimals, trimming zeros. */
+/** Format one tick value with the scale's fixed decimals, trimming zeros.
+ *
+ * @param value - Tick value; one below half of the last kept decimal place
+ *  renders as `0` instead of a signed zero or a rounded non-zero.
+ * @param decimals - Decimal places from the scale; 0 yields an integer string.
+ * @returns The label text, with trailing zeros and a bare decimal point
+ *  trimmed. */
 export function formatTick(value: number, decimals: number): string {
   if (Math.abs(value) < Math.pow(10, -Math.max(decimals, 0)) / 2) {
     return '0'

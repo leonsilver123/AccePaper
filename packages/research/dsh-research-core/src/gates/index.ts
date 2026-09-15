@@ -69,6 +69,11 @@ import { ResearchError, ResearchValueError } from '../engine/state-machine.ts'
  * frozen {@link GATE_OUTCOME_TO_INTENT} table from contracts.ts. Pure + total
  * (every outcome has an intent). Cordis / hosts MUST consume this function and
  * MUST NOT reinterpret an outcome themselves.
+ *
+ * @param outcome - the outcome a gate adjudication reached.
+ * @returns the intent the state machine acts on. `abstained` maps to
+ *   'hold_abstained', so an abstention reaches the machine as a hold and never
+ *   as a pass.
  */
 export function gateToStateMachineIntent(
   outcome: AdjudicationOutcome,

@@ -47,11 +47,11 @@ import type {
   AblationVariantKind,
 } from './adapter.ts'
 
-/** Stable tool id used in every artifact's meta. */
 // The run-key convention, so a real executor outside this package can implement the
 // contract without re-declaring the key format.
 export { ABLATION_VARIANT_KINDS, ablationRunKey, ablationRunSeed } from './adapter.ts'
 
+/** Stable tool id used in every artifact's meta. */
 export const ABLATION_TOOL_ID = 'ablation'
 
 /** Version of this tool's artifact schema / implementation. Kept in lockstep
@@ -87,6 +87,8 @@ export type AblationErrorCode =
 /** Error thrown on invalid tool input or structurally-invalid executor output.
  *  Executor exceptions themselves are surfaced as-is, NOT wrapped here. */
 export class AblationError extends Error {
+  /** The prefixed code, repeated as the leading bracketed token of `message`;
+   *  callers branch on this field rather than parsing the message text. */
   readonly code: AblationErrorCode
 
   constructor(code: AblationErrorCode, message: string) {
@@ -114,19 +116,29 @@ export interface AblationRunRecordBase {
   readonly seed: number
 }
 
+/** A run the definition plans that the executor did not report on. It stays
+ *  planned by design — never guessed at, never filled in with a measurement. */
 export type AblationPlannedRun = AblationRunRecordBase & { readonly status: 'planned' }
+
+/** A run the executor reported as completed, carrying its one usable
+ *  measurement. */
 export type AblationExecutedRun = AblationRunRecordBase & {
   readonly status: 'executed'
   /** ONE usable measurement for this completed run. Present ONLY on
    *  'executed' records — failed/partial runs carry no measurement at all. */
   readonly measurement: number
 }
+/** A run the executor reported as errored, carrying the executor's reason and
+ *  no measurement; it is excluded from every aggregate. */
 export type AblationFailedRun = AblationRunRecordBase & {
   readonly status: 'failed'
   /** Why the executor declared the run failed (audit text; never a model
    *  judgment by this tool). */
   readonly reason: string
 }
+/** A run the executor reported as not cleanly completed, carrying the
+ *  executor's reason and no measurement. Partial data is never aggregated, so
+ *  it has no usable position to occupy here. */
 export type AblationPartialRun = AblationRunRecordBase & {
   readonly status: 'partial'
   /** Why the executor declared the run partial (audit text). */
@@ -604,6 +616,9 @@ function buildCounts(runs: ReadonlyArray<AblationRunRecord>): AblationRunCounts 
  * @param timestamp caller-injected epoch ms (auditable; lands in meta.producedAt).
  * @throws {AblationError} on invalid definition / missing executor / invalid
  *   timestamp / structurally-invalid executor output or run result.
+ * @returns The frozen artifact: `runs` in definition order, `counts` over the
+ *   four statuses, and a per-arm aggregate that is `no-executed-runs` rather
+ *   than zeros when the executor reported no executed run.
  */
 export function runAblation(
   definition: AblationDefinition,

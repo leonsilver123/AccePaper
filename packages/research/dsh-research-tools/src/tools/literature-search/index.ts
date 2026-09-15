@@ -57,6 +57,8 @@ export type LiteratureSearchErrorCode =
 /** Error thrown on invalid tool input or structurally-invalid adapter output.
  *  Adapter exceptions themselves are surfaced as-is, NOT wrapped here. */
 export class LiteratureSearchError extends Error {
+  /** The prefixed code, repeated as the leading bracketed token of `message`;
+   *  callers branch on this field rather than parsing the message text. */
   readonly code: LiteratureSearchErrorCode
 
   constructor(code: LiteratureSearchErrorCode, message: string) {
@@ -266,6 +268,9 @@ function buildArtifact(
  * @param timestamp caller-injected epoch ms (auditable; lands in meta.producedAt).
  * @throws {LiteratureSearchError} on invalid query / maxResults / venueTierFilter
  *   / missing adapter / invalid timestamp / structurally-invalid adapter output.
+ * @returns the frozen artifact. `truncated` reports whether the pre-cap total
+ *   exceeded the returned hits, so an 'ok' outcome with an empty `hits` is
+ *   distinguishable from an 'unavailable' adapter outage.
  */
 export async function runLiteratureSearch(
   query: LiteratureQuery,

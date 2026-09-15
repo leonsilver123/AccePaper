@@ -83,6 +83,8 @@ export type FigureErrorCode =
 /** Error thrown on invalid tool input / structurally-invalid adapter output.
  *  Adapter exceptions themselves are surfaced as-is, NOT wrapped here. */
 export class FigureError extends Error {
+  /** The prefixed code, repeated as the leading bracketed token of `message`;
+   *  callers branch on this field rather than parsing the message text. */
   readonly code: FigureErrorCode
 
   constructor(code: FigureErrorCode, message: string) {
@@ -531,6 +533,8 @@ function verifyAdapterPng(bytes: unknown, width: number, height: number): Uint8A
   return bytes
 }
 
+/** The vector rendering of one figure: SVG markup plus the canvas it was
+ *  authored at. */
 export interface FigureSvgView {
   readonly content: string
   readonly width: number
@@ -538,6 +542,8 @@ export interface FigureSvgView {
   readonly byteLength: number
 }
 
+/** The raster rendering of the same figure: real encoded PNG bytes of the same
+ *  canvas, with a text view for callers that cannot carry a typed array. */
 export interface FigurePngView {
   /** Real encoded PNG bytes (typed array; detached private copy). */
   readonly bytes: Uint8Array
@@ -548,6 +554,8 @@ export interface FigurePngView {
   readonly byteLength: number
 }
 
+/** The deeply frozen result of one render: the spec echo, the derived config,
+ *  and both renderings of the same canvas. */
 export interface FigureArtifact {
   readonly meta: ToolArtifactMeta
   /** Normalized spec snapshot (echo of series/axes/units) — same input to the
@@ -565,6 +573,8 @@ export interface FigureArtifact {
  *
  * @param spec the validated figure request.
  * @param timestamp caller-injected epoch ms (auditable; lands in meta.producedAt).
+ * @returns the frozen artifact carrying both renderings; `png.bytes` holds the
+ *  encoded bytes and `svg.content` the markup.
  */
 export function renderFigure(spec: FigureSpec, timestamp: number): FigureArtifact {
   return renderFigureWithDeps(spec, DEFAULT_FIGURE_DEPS, timestamp)
@@ -576,6 +586,15 @@ export function renderFigure(spec: FigureSpec, timestamp: number): FigureArtifac
  * as-is; structurally-invalid output is a DSH_FIGURE_INVALID_ADAPTER_OUTPUT
  * fault). Renders byte-identically to {@link renderFigure} when deps carry the
  * default adapter.
+ *
+ * @param spec the figure request; an invalid one fails validation before any
+ *  rendering work starts.
+ * @param deps the PNG encoder seam. A missing or malformed bundle is a
+ *  DSH_FIGURE_MISSING_DEPS fault rather than a silent default; `pngAdapter`'s
+ *  output is checked against the requested canvas.
+ * @param timestamp caller-injected epoch ms (auditable; lands in meta.producedAt).
+ * @returns the frozen artifact. Rendering performs no I/O — persisting
+ *  `png.bytes` is the caller's job, through {@link guardFigureOutputPath}.
  */
 export function renderFigureWithDeps(
   spec: FigureSpec,
@@ -637,6 +656,12 @@ export function renderFigureWithDeps(
  * accepts an output/asset path. Throws {@link FigureError} with code
  * DSH_FIGURE_PATH_INVALID / DSH_FIGURE_PATH_TRAVERSAL /
  * DSH_FIGURE_PATH_OUTSIDE_ALLOWLIST.
+ *
+ * @param rawPath untrusted relative output target.
+ * @param allowlistRoots roots the target must stay inside; resolution is
+ *  textual and performs no filesystem access.
+ * @returns the resolved absolute target. A rejection throws instead of
+ *  returning a substitute path.
  */
 export function guardFigureOutputPath(
   rawPath: string,

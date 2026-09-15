@@ -87,15 +87,19 @@ const MINT_TOKEN: unique symbol = Symbol('dsh-host-mint')
  * (object identity + owning channel — RC-E E1), NOT `instanceof`: `Object.create(
  * TrustedHumanPrincipal.prototype)` sets [[Prototype]] without invoking the ctor, so
  * `instanceof` would return true, but the forged object is never added to any channel's
- * WeakSet → rejected. `principalId` is host-attested (not an arbitrary caller string);
- * `approvalEventId` is the host-channel event id recorded as provenance (single-use per run,
- * INV-REPLAY). `runId`/`stepId` bind the principal to the specific run+step it was minted for
- * (cross-run/cross-step use rejected).
+ * WeakSet → rejected.
  */
 export class TrustedHumanPrincipal {
+  /** Host-attested identity of the approving human — never an arbitrary caller string,
+   *  and checked against the channel's registered principals on submit. */
   readonly principalId: string
+  /** Id of the host-channel event this approval is recorded under; single-use per run
+   *  (INV-REPLAY), so a replayed approval is rejected rather than applied twice. */
   readonly approvalEventId: string
+  /** Run this principal was minted for; a submission naming another run is rejected. */
   readonly runId: string
+  /** Step this principal was minted for; a submission naming another step is rejected,
+   *  so an approval cannot be moved to a step it was not granted for. */
   readonly stepId: string
   constructor(token: symbol, principalId: string, approvalEventId: string, runId: string, stepId: string) {
     if (token !== MINT_TOKEN) {
@@ -133,6 +137,13 @@ let activeChannel: HostApprovalChannel | undefined
  * load-bearing defense against Agent self-approval of host runs — that is RC-C module-scoped
  * store isolation (`submit` takes the run store as its first parameter; the host store is not
  * obtainable by an Agent), which is code-enforced today regardless of startup ordering.
+ *
+ * @param hostSecret - the host's approval secret, minted from
+ *   `process.env.DSH_APPROVAL_SECRET`; an empty value is refused
+ *   (DSH_APPROVAL_SECRET_REQUIRED).
+ * @returns the process's single approval channel. A second call throws
+ *   DSH_APPROVAL_CHANNEL_EXISTS, so a pre-empting caller cannot replace the host's
+ *   channel once the host has minted it.
  */
 export function createHostApprovalChannel(hostSecret: string): HostApprovalChannel {
   if (activeChannel !== undefined) {

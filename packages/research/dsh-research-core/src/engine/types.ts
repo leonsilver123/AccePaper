@@ -104,6 +104,9 @@ export interface ArtifactRecord {
   readonly invalidated: boolean
 }
 
+/** The kinds of record the run's append-only audit log holds. Every state-machine
+ *  mutation kind a caller may replay is here, plus `step-executed`, which the
+ *  execution pipeline appends without changing step status. */
 export type AuditEventKind =
   | 'run-created'
   | 'input-seeded'

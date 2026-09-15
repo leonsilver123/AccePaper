@@ -18,10 +18,12 @@ import { freezeValue, researchTeamError } from '../types.ts'
  *  concrete host model per tier is resolved by `fleet-config.ts`; this package
  *  never invents a cross-family provider (D8/D12). */
 export const RED_TEAM_MODEL_TIERS = ['pro', 'flash'] as const
+/** One abstract tier a persona may request; see {@link RED_TEAM_MODEL_TIERS}. */
 export type RedTeamModelTier = (typeof RED_TEAM_MODEL_TIERS)[number]
 
 /** Default voting stance: 'skeptic' leans refute (red-skeptic); 'balanced' weighs both. */
 export const RED_TEAM_STANCES = ['skeptic', 'balanced'] as const
+/** One persona's default voting stance; see {@link RED_TEAM_STANCES}. */
 export type RedTeamStance = (typeof RED_TEAM_STANCES)[number]
 
 /** One static, deployment-agnostic fleet persona (spec §2 role table). */
@@ -112,12 +114,18 @@ function buildDefaultPersonas(): ReadonlyArray<RedTeamPersona> {
   ]
 }
 
-/** The immutable default persona set (fresh frozen copy; deterministic order). */
+/** The immutable default persona set (fresh frozen copy; deterministic order).
+ * @returns a new frozen copy, so a caller cannot mutate the catalog other callers receive.
+ */
 export function defaultFleetPersonas(): ReadonlyArray<RedTeamPersona> {
   return freezeValue(buildDefaultPersonas())
 }
 
-/** Look up one persona by role name in an arbitrary persona list. */
+/** Look up one persona by role name in an arbitrary persona list.
+ * @param personas - the list to search.
+ * @param name - the role name to match, compared exactly.
+ * @returns the matching persona, or undefined when the list holds no such role.
+ */
 export function personaByRole(
   personas: ReadonlyArray<RedTeamPersona>,
   name: string,
@@ -125,7 +133,10 @@ export function personaByRole(
   return personas.find(persona => persona.name === name)
 }
 
-/** Validate a persona role name: lower-kebab, bounded, and not 'lead'. */
+/** Validate a persona role name: lower-kebab, bounded, and not 'lead'.
+ * @param name - the candidate role name.
+ * @returns the name unchanged, so a validated name can be used inline.
+ */
 export function requirePersonaName(name: string): string {
   if (typeof name !== 'string'
     || name === 'lead'
@@ -139,7 +150,9 @@ export function requirePersonaName(name: string): string {
   return name
 }
 
-/** Validate one canonical persona record (structural + read-only filter). */
+/** Validate one canonical persona record (structural + read-only filter).
+ * @param persona - the record to validate.
+ */
 export function validatePersona(persona: RedTeamPersona): void {
   requirePersonaName(persona.name)
   if (typeof persona.title !== 'string' || persona.title.trim().length === 0) {
@@ -154,7 +167,9 @@ export function validatePersona(persona: RedTeamPersona): void {
   validateReadOnlyTools(persona.name, persona.toolFilter)
 }
 
-/** Validate a whole persona set: non-empty, names unique, each persona valid. */
+/** Validate a whole persona set: non-empty, names unique, each persona valid.
+ * @param personas - the set to validate.
+ */
 export function validatePersonas(personas: ReadonlyArray<RedTeamPersona>): void {
   if (personas.length === 0) {
     researchTeamError('INVALID_PERSONA', 'a fleet must declare at least one persona')
@@ -169,7 +184,10 @@ export function validatePersonas(personas: ReadonlyArray<RedTeamPersona>): void 
   }
 }
 
-/** Validate one read-only tool allow-list (non-empty, whitespace-free entries). */
+/** Validate one read-only tool allow-list (non-empty, whitespace-free entries).
+ * @param roleName - the persona the list belongs to, named in any rejection.
+ * @param tools - the tool names to validate.
+ */
 export function validateReadOnlyTools(roleName: string, tools: ReadonlyArray<string>): void {
   if (tools.length > MAX_TOOL_LIST) {
     researchTeamError('INVALID_PERSONA', `persona "${roleName}" read-only tool list exceeds ${String(MAX_TOOL_LIST)} entries`)
@@ -186,14 +204,20 @@ export function validateReadOnlyTools(roleName: string, tools: ReadonlyArray<str
   }
 }
 
-/** The canonical read-only tool list for one persona (deduped + sorted). */
+/** The canonical read-only tool list for one persona (deduped + sorted).
+ * @param tools - the tool names to canonicalize.
+ * @returns the deduped names in sorted order, frozen.
+ */
 export function normalizeReadOnlyTools(tools: ReadonlyArray<string>): ReadonlyArray<string> {
   const unique = [...new Set(tools)]
   validateReadOnlyTools('fleet', unique)
   return freezeValue(unique.sort())
 }
 
-/** Build the member charter (description/label + first delegation text). */
+/** Build the member charter (description/label + first delegation text).
+ * @param persona - the persona the charter is written for.
+ * @returns the charter text: a role/stance header line, then the persona prompt.
+ */
 export function personaCharter(persona: RedTeamPersona): string {
   const stance = persona.stance === 'skeptic' ? '默认反驳立场' : '平衡立场'
   return `[red-team:${persona.name}] ${persona.title}(${stance})\n${persona.persona}`

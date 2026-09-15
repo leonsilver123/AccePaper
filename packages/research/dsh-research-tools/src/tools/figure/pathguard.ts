@@ -26,6 +26,8 @@
 //   DSH_FIGURE_PATH_OUTSIDE_ALLOWLIST  -> allowed shape but no allowlisted root
 //                                         contains the resolved target.
 
+/** Guard configuration: the working-directory roots a resolved output target
+ *  must stay inside. */
 export interface PathGuardOptions {
   /** Working-directory roots the target may live under. Non-empty. */
   readonly allowlistRoots: ReadonlyArray<string>
@@ -64,6 +66,14 @@ function hasForbiddenSegment(segments: ReadonlyArray<string>): boolean {
  * Both arguments are declared `unknown` because this guard runs at a trust
  * boundary: it re-validates the runtime shape of everything it receives even
  * when a statically-typed caller passes a string / {@link PathGuardOptions}.
+ *
+ * @param rawPath - Untrusted relative target, in either separator style; a
+ *   non-string, empty, or control/NUL-bearing value is rejected, as is any
+ *   shape that escapes the roots.
+ * @param options - Object carrying a non-empty `allowlistRoots`; a blank root
+ *   entry is skipped rather than rejected.
+ * @returns `resolved`, the matching root joined with the relative path, and
+ *   the `root` that matched. The first usable root in array order wins.
  */
 export function resolveFigureOutputPath(
   rawPath: unknown,
@@ -164,6 +174,8 @@ export function resolveFigureOutputPath(
   )
 }
 
+/** Rejection codes {@link resolveFigureOutputPath} throws. The public
+ *  FigureError in ./index.ts carries these same three values. */
 export type FigurePathErrorCode =
   | 'DSH_FIGURE_PATH_INVALID'
   | 'DSH_FIGURE_PATH_TRAVERSAL'
@@ -172,6 +184,8 @@ export type FigurePathErrorCode =
 /** Minimal self-contained path error. The tool wraps/aliases this to the
  *  public FigureError class (same `code` values) in ./index.ts. */
 export class FigurePathError extends Error {
+  /** The rejection code, repeated as the leading bracketed token of `message`;
+   *  callers branch on this field rather than parsing the message text. */
   readonly code: FigurePathErrorCode
 
   constructor(code: FigurePathErrorCode, message: string) {

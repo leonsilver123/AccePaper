@@ -49,6 +49,9 @@ export interface AblationDatasetSpec {
  *  provenance only — the tool does not interpret it. */
 export type AblationMetricDirection = 'lower_is_better' | 'higher_is_better'
 
+/** The one metric an ablation definition reports, fixed by the caller. The tool
+ *  records `direction` as provenance and never reads it to rank or compare
+ *  arms. */
 export interface AblationMetricSpec {
   readonly name: string
   readonly direction: AblationMetricDirection
@@ -65,6 +68,8 @@ export const ABLATION_VARIANT_KINDS: ReadonlyArray<AblationVariantKind> = ['base
  *  definition. A future pipeline could inject other origins through the same
  *  seam without changing the run-record shape. */
 export type AblationRunOrigin = 'definition'
+/** The run origin stamped on every planned run: the validated tool input
+ *  definition. */
 export const ABLATION_RUN_ORIGIN: AblationRunOrigin = 'definition'
 
 /**
@@ -96,14 +101,24 @@ export interface AblationRunRequest {
 
 /** Stable, deterministic identifier of one planned run: `<variant>:<rep>`.
  *  Shared by the tool (plan/audit) and the mock executor so both sides can
- *  never disagree on run identity. */
+ *  never disagree on run identity.
+ *
+ * @param variant - The arm the run belongs to.
+ * @param repetitionIndex - 0-based repetition of that arm, below the
+ *  definition's `repetitions`.
+ * @returns The run key, `<variant>:<repetitionIndex>`; the tool matches each
+ *  executor result to a planned run by comparing this string. */
 export function ablationRunKey(variant: AblationVariantKind, repetitionIndex: number): string {
   return `${variant}:${repetitionIndex}`
 }
 
 /** Deterministic evaluation seed assigned to one repetition of an arm:
  *  dataset.seed + repetitionIndex (0-based). Pure audit metadata on each run
- *  record; the tool itself never uses it to compare arms. */
+ *  record; the tool itself never uses it to compare arms.
+ *
+ * @param datasetSeed - The definition's dataset seed, shared by every run.
+ * @param repetitionIndex - 0-based repetition of that arm.
+ * @returns The seed for that run; equal arguments always yield an equal seed. */
 export function ablationRunSeed(datasetSeed: number, repetitionIndex: number): number {
   return datasetSeed + repetitionIndex
 }

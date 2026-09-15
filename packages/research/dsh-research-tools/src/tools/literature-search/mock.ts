@@ -149,7 +149,12 @@ export class MockLiteratureSearchAdapter implements LiteratureSearchAdapter {
 }
 
 /** Build a fresh mock adapter instance (deterministic; each instance owns its
- *  own frozen corpus clone). */
+ *  own frozen corpus clone).
+ *
+ * @param options - Outage seed; omitted, the adapter answers from the synthetic
+ *   corpus. No external service is contacted either way.
+ * @returns An adapter that never throws from `search` and reports
+ *   'unavailable' only when `unavailable` was seeded. */
 export function createMockLiteratureSearchAdapter(
   options: MockLiteratureSearchAdapterOptions = {},
 ): LiteratureSearchAdapter {

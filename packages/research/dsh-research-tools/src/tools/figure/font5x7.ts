@@ -73,6 +73,9 @@ const GLYPH_ART: Readonly<Record<string, GlyphArt>> = {
 
 /** Character-cell advance (glyph 5px wide + 1px spacing) at scale 1. */
 export const FONT_ADVANCE = 6
+
+/** Glyph cell height in rows at scale 1 — the vertical counterpart of
+ *  {@link FONT_ADVANCE}. */
 export const FONT_HEIGHT = 7
 
 function artToRows(art: GlyphArt): ReadonlyArray<number> {
@@ -103,7 +106,12 @@ export const GLYPHS: Readonly<Record<string, ReadonlyArray<number>>> = (() => {
 const QUESTION_ROWS = GLYPHS['?'] as ReadonlyArray<number>
 
 /** Raster-time glyph for a character: uppercase letters, exact glyph match, or
- *  '?' for any printable-ASCII char outside the face. */
+ *  '?' for any printable-ASCII char outside the face.
+ *
+ * @param ch - One character; a lowercase ASCII letter resolves through its
+ *  uppercase glyph.
+ * @returns Seven row bitmasks, bit 4 the leftmost column, shared by every
+ *  caller asking for the same character. */
 export function glyphRowsFor(ch: string): ReadonlyArray<number> {
   const ascii = ch.charCodeAt(0)
   if (ascii >= 0x61 && ascii <= 0x7a) {
@@ -114,7 +122,11 @@ export function glyphRowsFor(ch: string): ReadonlyArray<number> {
   return GLYPHS[ch] ?? QUESTION_ROWS
 }
 
-/** Width in px (at scale 1) of `text` drawn with this face. */
+/** Width in px (at scale 1) of `text` drawn with this face.
+ *
+ * @param text - Text to measure; length is counted in UTF-16 code units, so one
+ *  astral character counts as two cells.
+ * @returns Width in px at scale 1; the caller multiplies by the render scale. */
 export function textWidth(text: string): number {
   return text.length * FONT_ADVANCE
 }

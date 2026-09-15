@@ -22,6 +22,8 @@ import { deflateSync } from 'node:zlib'
 /** PNG magic signature bytes (89 50 4E 47 0D 0A 1A 0A). */
 export const PNG_SIGNATURE: ReadonlyArray<number> = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
+/** The same magic signature in lowercase hex, for text comparison and
+ *  diagnostics. */
 export const PNG_SIGNATURE_HEX = '89504e470d0a1a0a'
 
 /** PNG colour type for RGBA truecolor (used in IHDR). */
@@ -106,6 +108,7 @@ function iendChunk(): Uint8Array {
   return chunk('IEND', new Uint8Array(0))
 }
 
+/** One uncompressed RGBA bitmap to encode, top row first. */
 export interface PngBitmapInput {
   readonly width: number
   readonly height: number
@@ -117,6 +120,12 @@ export interface PngBitmapInput {
  * Encode an RGBA bitmap as a real PNG (byte-valid). Throws a plain Error on
  * impossible internal misuse (adapter-throw propagates as-is by contract — the
  * tool pre-validates all inputs so these branches are defensive only).
+ *
+ * @param bitmap - Canvas dimensions and exactly `width*height*4` RGBA bytes,
+ *   top row first. A length that disagrees with the dimensions throws rather
+ *   than encoding a truncated image.
+ * @returns The complete PNG byte stream: signature, IHDR, one deflated IDAT and
+ *   IEND, laid out per the PNG spec.
  */
 export function encodePng(bitmap: PngBitmapInput): Uint8Array {
   const { width, height, rgba } = bitmap
@@ -176,6 +185,7 @@ export function encodePng(bitmap: PngBitmapInput): Uint8Array {
 // ── Structural inspection (used by the tool for adapter-output validation and
 //    by tests to verify the PNG is REAL — signature/IHDR/IDAT/IEND/dims). ─────
 
+/** Header and chunk facts read back out of a PNG byte stream. */
 export interface PngInspectInfo {
   readonly width: number
   readonly height: number
@@ -185,11 +195,18 @@ export interface PngInspectInfo {
   readonly chunkCount: number
 }
 
+/** Outcome of {@link inspectPng}: the parsed facts, or the first structural
+ *  fault found. */
 export type PngInspectResult =
   | { readonly ok: true; readonly info: PngInspectInfo }
   | { readonly ok: false; readonly reason: string }
 
-/** Parse a PNG byte stream and report whether it is structurally valid. */
+/** Parse a PNG byte stream and report whether it is structurally valid.
+ *
+ * @param bytes - Candidate PNG stream, in practice an adapter's returned
+ *  output.
+ * @returns The parsed facts when the stream is a well-formed PNG, otherwise the
+ *  first fault found. A malformed stream is reported, never thrown. */
 export function inspectPng(bytes: Uint8Array): PngInspectResult {
   if (!(bytes instanceof Uint8Array)) {
     return { ok: false, reason: 'input is not a Uint8Array' }

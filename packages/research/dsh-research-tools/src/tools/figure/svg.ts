@@ -17,7 +17,11 @@
 import type { FigureSpecSnapshot } from './adapter.ts'
 import { computeYScale, formatTick, type YScale } from './scale.ts'
 
-/** XML-escape a text/attribute value (& < > " '). */
+/** XML-escape a text/attribute value (& < > " ').
+ *
+ * @param value - Value about to be written into an SVG text node or attribute.
+ * @returns The same text with `&`, `<`, `>`, `"` and `'` replaced by their
+ *  entity references; `&` first, so no replacement is escaped twice. */
 export function escapeXml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -119,6 +123,15 @@ function computeLayout(spec: FigureSpecSnapshot, fs: number): SvgLayout {
   return { plotLeft, plotRight, plotTop, plotBottom }
 }
 
+/** Build the SVG document for a validated spec.
+ *
+ * @param spec - Normalized spec snapshot. The builder reads `width`, `height`,
+ *  `title`, `kind`, `series`, `axes`, `legend` and `tokens`; nothing outside it
+ *  reaches the markup, and every dynamic text, colour and font value is escaped
+ *  or pre-validated before it is written into an attribute.
+ * @returns The complete SVG document as a string, byte-identical for the same
+ *  spec. No script, event attribute, hyperlink or external URL is ever
+ *  emitted. */
 export function buildSvg(spec: FigureSpecSnapshot): string {
   const width = spec.width
   const height = spec.height

@@ -90,6 +90,7 @@ export type CasePackErrorCode =
 
 /** A refusal to load or use a case pack, carrying which file and datum caused it. */
 export class CasePackError extends Error {
+  /** The refusal's stable code; the message names the file and field behind it. */
   readonly code: CasePackErrorCode
 
   constructor(code: CasePackErrorCode, message: string) {

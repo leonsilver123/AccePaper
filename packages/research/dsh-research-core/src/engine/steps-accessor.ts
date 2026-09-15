@@ -52,6 +52,9 @@ function cloneFrozen(def: StepDefinition): StepDefinition {
 /**
  * All 16 step definitions in canonical pipeline order, as structurally independent,
  * deep-frozen clones. Read-only: every nested level is Object.freeze-d.
+ *
+ * @returns the definitions in the order the pipeline runs them; mutating one (which
+ *   throws in strict mode) cannot affect the internals or a later caller's copy.
  */
 export function getStepDefinitions(): readonly StepDefinition[] {
   return Object.freeze(STEPS.map(cloneFrozen))
@@ -60,6 +63,10 @@ export function getStepDefinitions(): readonly StepDefinition[] {
 /**
  * One step definition by id (deep-frozen clone), or undefined when the id is not a
  * known pipeline step. Never returns the internal object.
+ *
+ * @param stepId - the step to look up.
+ * @returns the deep-frozen clone of that step's definition, or undefined for an id
+ *   outside the pipeline — this accessor is the sanctioned way to tell the two apart.
  */
 export function getStepDefinitionById(stepId: string): StepDefinition | undefined {
   // Same source as `getStepDefinitions()` (the frozen STEPS array) — audit P1-1:

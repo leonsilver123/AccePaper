@@ -244,7 +244,9 @@ export class ResearchFleetOrchestrator {
   }
 
   /** The gate-facing adjudication-vote projection of one round.
-   *  @param roundId - the open or closed round identity. */
+   * @param roundId - identity of a round this orchestrator opened; an unknown id is refused.
+   * @returns the accepted votes in cast order, with round bookkeeping dropped.
+   */
   roundVotes(roundId: string): ReadonlyArray<{
     readonly voterRole: string
     readonly modelFamily?: string

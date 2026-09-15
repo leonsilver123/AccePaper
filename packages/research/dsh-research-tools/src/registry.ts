@@ -163,12 +163,19 @@ export const RESEARCH_TOOL_DIRECTORY: ReadonlyArray<ResearchToolDirectoryEntry> 
   },
 ]
 
-/** Lookup one directory row by canonical tool id. */
+/** Lookup one directory row by canonical tool id.
+ *
+ * @param toolId - Canonical tool id to match exactly.
+ * @returns The row, or undefined for an id no row claims; callers deciding
+ *  exposure must treat undefined as "not a research tool", not as pipeline-only. */
 export function getResearchToolDirectoryEntry(toolId: string): ResearchToolDirectoryEntry | undefined {
   return RESEARCH_TOOL_DIRECTORY.find(entry => entry.toolId === toolId)
 }
 
-/** Tool ids of the tools an agent loop could call today without a live gateway. */
+/** Tool ids of the tools an agent loop could call today without a live gateway.
+ *
+ * @returns Ids of the `model_ready` rows in canonical batch order. A
+ *  `pipeline_only` tool is absent by design, not missing. */
 export function modelReadyToolIds(): ReadonlyArray<string> {
   return RESEARCH_TOOL_DIRECTORY
     .filter(entry => entry.modelExposure === 'model_ready')

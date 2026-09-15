@@ -62,7 +62,10 @@ export interface ResolvedRedTeamFleet {
   readonly modelRoute: Readonly<Partial<Record<RedTeamModelTier, string>>>
 }
 
-/** Validate one tier→model route; returns the canonical deep-frozen route. */
+/** Validate one tier→model route; returns the canonical deep-frozen route.
+ * @param modelRoute - concrete host model per abstract tier; an unknown tier key or a blank model is refused.
+ * @returns the same route with every model trimmed, frozen, and omitting unrouted tiers.
+ */
 export function validateModelRoute(
   modelRoute: Readonly<Partial<Record<RedTeamModelTier, string>>> = {},
 ): Readonly<Partial<Record<RedTeamModelTier, string>>> {
@@ -84,7 +87,11 @@ export function validateModelRoute(
   return freezeValue(canonical)
 }
 
-/** Resolve the model for one tier out of a canonical route (undefined = unrouted). */
+/** Resolve the model for one tier out of a canonical route (undefined = unrouted).
+ * @param modelRoute - a route already canonicalized by {@link validateModelRoute}.
+ * @param tier - the tier whose host model is wanted.
+ * @returns the routed host model, or undefined so the caller falls back to the host default.
+ */
 export function routedModel(
   modelRoute: Readonly<Partial<Record<RedTeamModelTier, string>>>,
   tier: RedTeamModelTier,
@@ -92,7 +99,11 @@ export function routedModel(
   return modelRoute[tier]
 }
 
-/** Select the ordered role subset from a catalog (throws on empty/unknown/duplicate). */
+/** Select the ordered role subset from a catalog (throws on empty/unknown/duplicate).
+ * @param personas - the catalog the roles are looked up in.
+ * @param roles - the roles to deploy, in deployment order; omitted deploys the whole catalog.
+ * @returns the selected personas, frozen, in the order `roles` named them.
+ */
 export function resolveFleetRoles(
   personas: ReadonlyArray<RedTeamPersona>,
   roles: ReadonlyArray<string> | undefined,
@@ -119,7 +130,10 @@ export function resolveFleetRoles(
 
 /** Resolve a full fleet config into deployable rows + canonical route. Throws
  *  {@link ResearchTeamError} on any violation; the result is deep-frozen and
- *  deterministic for a given input. */
+ *  deterministic for a given input.
+ * @param config - the deployment config; omitted resolves the frozen default fleet.
+ * @returns the deployable rows in deployment order, plus the route they were resolved against.
+ */
 export function resolveFleet(config: RedTeamFleetConfig = {}): ResolvedRedTeamFleet {
   const personas = config.personas === undefined
     ? defaultFleetPersonas()
