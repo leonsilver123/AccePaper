@@ -110,13 +110,17 @@ import {
 
 import { assembleManuscript } from './manuscript.ts'
 import {
+  citedFloats,
   equationBlock,
+  equationNumber,
   figureBlock,
   formatReference,
   markdownPipeTable,
+  numberFloats,
   numberedReferences,
   tableBlock,
 } from './paper-format.ts'
+import type { CitableFloat } from './paper-format.ts'
 
 /**
  * The caption a rendered figure already carries in its own content.
@@ -136,6 +140,7 @@ function figureCaptionFrom(content: string, fallback: string): string {
   if (mermaidTitle !== null && (mermaidTitle[1] ?? '').trim().length > 0) return (mermaidTitle[1] ?? '').trim()
   return fallback
 }
+
 import { evaluateConvergence, summarizeConvergence } from './convergence.ts'
 import type { ChannelVerdict } from './convergence.ts'
 import { buildRevisionRecord } from './rebuttal.ts'
@@ -2071,6 +2076,72 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
 }
 
+/** One figure-plan entry as an artifact carries it, before {@link planFloats} narrows it. */
+interface FigurePlanEntry {
+  /** Which renderer produced it: `data-figure`, `three-line-table` or `roadmap`. */
+  readonly kind?: unknown
+  /** The number the plan gave it, e.g. `Figure 1`. */
+  readonly label?: unknown
+  /** The caption the plan gave it. */
+  readonly title?: unknown
+  /** The rendered SVG, for a data figure. */
+  readonly svg?: unknown
+  /** The rendered diagram source, for a roadmap. */
+  readonly content?: unknown
+  /** The diagram format, for a roadmap. */
+  readonly format?: unknown
+  /** The tool's own rendering, for a table. */
+  readonly tableMarkdown?: unknown
+}
+
+/**
+ * The floats a figure plan declared, with the label and caption the plan gave each one.
+ *
+ * An entry carrying neither is REFUSED rather than dropped. D1 numbers a float when it decides the
+ * float exists, so an unnumbered entry means the plan and this reader disagree about what the
+ * manuscript holds — and dropping it would print a figure no caption and no sentence can name.
+ *
+ * @param plan - the figure-plan entries, as the artifact carries them.
+ * @returns the same entries, with `label` and `title` narrowed to strings.
+ * @throws {Error} when an entry carries no label or no title.
+ */
+function planFloats(
+  plan: ReadonlyArray<FigurePlanEntry>,
+): ReadonlyArray<FigurePlanEntry & { readonly label: string; readonly title: string }> {
+  return plan.map((entry, index) => {
+    if (typeof entry.label !== 'string' || typeof entry.title !== 'string') {
+      throw new Error(
+        `[figure-plan] entry ${String(index)} (kind ${String(entry.kind)}) carries no label/title — `
+        + 'D1-figure-map numbers a float when it decides the float exists, and a caption nothing can '
+        + 'refer to is the defect that numbering prevents',
+      )
+    }
+    return { ...entry, label: entry.label, title: entry.title }
+  })
+}
+
+/**
+ * The numbered items a manuscript's prose can cite: its labelled floats, then its equations.
+ *
+ * The equations come last because the manuscript states them inside the method section, which the
+ * outline's own sections precede; the order here is the order a reader meets them.
+ *
+ * @param floats - the labelled floats the manuscript renders.
+ * @param equations - the equations the method section states.
+ * @returns one citable item per float and per equation.
+ */
+function citableFloats(
+  floats: ReadonlyArray<CitableFloat>,
+  equations: ReadonlyArray<{ readonly name: string }>,
+): ReadonlyArray<CitableFloat> {
+  return [
+    ...floats,
+    ...equations.map((equation, index) => ({
+      label: equationNumber(index),
+      title: equation.name,
+    })),
+  ]
+}
 /** D1-figure-map: real renders for ALL THREE figure families its canonical
  *  purpose names (数据图/三线表/路线图). figure-plan lists each figure with the
  *  evidence produced by its real tool execution. */
@@ -2135,38 +2206,46 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const figure = figureInv.artifact as ReturnType<typeof renderFigure>
   const table = tableInv.artifact as ReturnType<typeof renderThreeLineTable>
   const roadmap = roadmapInv.artifact as ReturnType<typeof renderRoadmap>
+  // THE FLOATS ARE NUMBERED HERE, ONCE. This step decides which floats exist, so it also decides
+  // what they are called: D3 hands these labels to the prose channel (a section may then cite
+  // `Table 1`) and E1 renders the captions from them. A counter in the assembler and a roster in the
+  // draft are two authorities that can disagree; one pure function over one array cannot.
+  const figures = numberFloats([
+    {
+      kind: 'data-figure',
+      title: figureCaptionFrom(figure.svg.content, 'Measured comparison'),
+      toolId: FIGURE_TOOL_ID,
+      svgByteLength: figure.svg.byteLength,
+      pngByteLength: figure.png.byteLength,
+      // The FULL svg, not a preview. D3 carries it into the draft and E1 embeds
+      // it, so the manuscript holds the figure the tool actually rendered
+      // instead of pointing at one.
+      svg: figure.svg.content,
+    },
+    {
+      kind: 'three-line-table',
+      title: tableModel.title,
+      toolId: THREE_LINE_TABLE_TOOL_ID,
+      tableMarkdown: table.render.text,
+      bindingHash: table.bindingHash,
+    },
+    {
+      kind: 'roadmap',
+      title: figureCaptionFrom(roadmap.content, 'Research roadmap'),
+      toolId: ROADMAP_TOOL_ID,
+      format: roadmap.format,
+      nodeCount: roadmap.nodeCount,
+      validationOk: roadmap.validation.ok,
+      // Full content, for the same reason as the svg above. The roadmap renders
+      // as mermaid, which a markdown reader draws natively.
+      content: roadmap.content,
+    },
+  ])
   return {
     'figure-plan': tagArtifact(
       {
-        figures: [
-          {
-            kind: 'data-figure',
-            toolId: FIGURE_TOOL_ID,
-            svgByteLength: figure.svg.byteLength,
-            pngByteLength: figure.png.byteLength,
-            // The FULL svg, not a preview. D3 carries it into the draft and E1 embeds
-            // it, so the manuscript holds the figure the tool actually rendered
-            // instead of pointing at one.
-            svg: figure.svg.content,
-          },
-          {
-            kind: 'three-line-table',
-            toolId: THREE_LINE_TABLE_TOOL_ID,
-            tableMarkdown: table.render.text,
-            bindingHash: table.bindingHash,
-          },
-          {
-            kind: 'roadmap',
-            toolId: ROADMAP_TOOL_ID,
-            format: roadmap.format,
-            nodeCount: roadmap.nodeCount,
-            validationOk: roadmap.validation.ok,
-            // Full content, for the same reason as the svg above. The roadmap renders
-            // as mermaid, which a markdown reader draws natively.
-            content: roadmap.content,
-          },
-        ],
-        totalFigures: 3,
+        figures,
+        totalFigures: figures.length,
         note: 'figure-plan derived from REAL figure + three-line-table + roadmap tool executions; the rendered svg and mermaid travel with the draft so the assembled manuscript EMBEDS the figures rather than pointing at them',
       },
       D1_PRODUCER,
@@ -2310,7 +2389,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // The rendered figures travel with the draft so E1 can embed them. D1 owns the
   // render; the manuscript is where a reader meets it.
   const renderedFigures = Array.isArray(figurePlan?.figures)
-    ? (figurePlan.figures as ReadonlyArray<{ kind?: unknown; svg?: unknown; content?: unknown; format?: unknown; tableMarkdown?: unknown }>)
+    ? (figurePlan.figures as ReadonlyArray<FigurePlanEntry>)
     : []
   // D3's canonical purpose includes adding the references, so the draft builds them
   // from the records A1 actually retrieved rather than reporting a count of them.
@@ -2323,6 +2402,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     return { id, heading }
   })
 
+  // WHAT THE PROSE MAY CITE. These are the plan's own labels, so a section that names `Figure 1`
+  // names the caption E1 renders. Handed to the writer rather than inserted afterwards: a sentence
+  // this pipeline added on its own would be prose no step wrote, and it would land in whichever
+  // section happened to come last rather than in the one the figure is about.
+  const citable = citableFloats(planFloats(renderedFigures), MODEL_EQUATIONS)
   // Prose path (T34): when the runner injected a prose writer, each section body comes
   // from it; otherwise the built-in fixture sentences are used so the offline pipeline
   // stays deterministic. `proseSource` records which path ran, and `proseRoute` names the
@@ -2342,8 +2426,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       headings.map(h =>
         writer.write({
           stepId: 'D3-writing',
-          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary.`,
-          context: { sectionId: h.id, claimRef, figureCount: figures ?? 0 },
+          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it.`,
+          // The roster travels as DATA as well as in the instruction: a label the model has to
+          // recover from a sentence is one it can get wrong, and a wrong number in a paper reads as
+          // a citation of something this manuscript does not contain.
+          context: { sectionId: h.id, claimRef, figureCount: figures ?? 0, citable },
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
         }),
       ),
@@ -2619,7 +2706,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // table. Until this, the Figures section held the table alone and the rendered
   // figure and roadmap were emitted as artifacts the paper never mentioned.
   const rendered = Array.isArray(revised?.renderedFigures)
-    ? (revised.renderedFigures as ReadonlyArray<{ kind?: unknown; svg?: unknown; content?: unknown; format?: unknown }>)
+    ? (revised.renderedFigures as ReadonlyArray<FigurePlanEntry>)
     : []
   const figureBlocks: string[] = []
   // Kept separately as well as inline: the package writes each part as its own file with its
@@ -2630,28 +2717,42 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // raw inline SVG with no number and no caption, and the roadmap as an unlabelled mermaid block, so
   // nothing in the prose could refer to either. A figure is a file or an inline diagram, never both;
   // `figureBlock` refuses the other cases rather than rendering a broken image.
-  let figureNumber = 0
-  // Tables number independently of figures: a paper's Table 1 does not become Table 3 because two
-  // figures came first.
-  let tableNumber = 0
-  for (const entry of rendered) {
+  //
+  // THE NUMBER AND THE CAPTION COME FROM THE PLAN, not from a counter here: D1 assigned them when it
+  // decided which floats exist and D3 offered the same labels to the prose channel, so a caption
+  // reading `Figure 1` and a sentence citing `Figure 1` cannot name different things.
+  const floats = planFloats(rendered)
+  // Floats the plan declares that this manuscript will not carry, named rather than passed over: a
+  // reader comparing the plan with the paper would otherwise find a figure with no explanation.
+  const floatsNotRendered: string[] = []
+  // What the manuscript really holds, for the cross-reference report below.
+  const renderedFloats: CitableFloat[] = []
+  for (const entry of floats) {
     if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
       figureSvg = entry.svg
-      figureNumber += 1
-      figureBlocks.push(figureBlock(figureNumber, {
-        title: figureCaptionFrom(entry.svg, 'Measured comparison'),
+      figureBlocks.push(figureBlock({
+        label: entry.label,
+        title: entry.title,
         path: 'figures/figure-1.svg',
         note: 'Rendered by the figure tool from the measurements this run produced.',
       }))
+      renderedFloats.push({ label: entry.label, title: entry.title })
+      continue
     }
     if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
       roadmapMermaid = entry.content.trim()
-      figureNumber += 1
-      figureBlocks.push(figureBlock(figureNumber, {
-        title: figureCaptionFrom(roadmapMermaid, 'Research roadmap'),
+      figureBlocks.push(figureBlock({
+        label: entry.label,
+        title: entry.title,
         mermaid: roadmapMermaid,
       }))
+      renderedFloats.push({ label: entry.label, title: entry.title })
+      continue
     }
+    // The table is laid out after this loop, from the structured model the tool returned rather than
+    // from the plan's rendered text, so it is not a miss here.
+    if (entry.kind === 'three-line-table') continue
+    floatsNotRendered.push(entry.label)
   }
   // THE TABLE, AS A TABLE. The tool's own "markdown" rendering draws box-drawing rules, which a
   // Markdown reader shows as a code block; a paper needs a pipe table. Built from the structured
@@ -2676,20 +2777,30 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const tableMarkdown = tableHeader.length > 0 && tableRows.every(row => row.length === tableHeader.length)
     ? markdownPipeTable(tableHeader, tableRows)
     : undefined
+  // The plan is where this step learns what the table it renders is called, so a plan that declares
+  // no table means the two disagree about what the manuscript holds — reported rather than papered
+  // over with a number this step made up.
+  const plannedTable = floats.find(entry => entry.kind === 'three-line-table')
+  if (plannedTable === undefined) {
+    throw new Error(
+      '[E1-format] the figure-plan declares no three-line-table, so the results table this step '
+      + 'renders would carry a number no plan assigned',
+    )
+  }
   if (tableMarkdown === undefined) {
     // A table whose rows do not cover its columns is one this renderer cannot lay out, so the tool's
     // own rendering is used. Stated here rather than passed over, because the reader would otherwise
     // see a code block where the paper should have a table.
     figureBlocks.push(artifact.render.text)
+    floatsNotRendered.push(plannedTable.label)
   } else {
-    tableNumber += 1
-    figureBlocks.push(tableBlock(tableNumber, {
-      title: tableModel.title === undefined || tableModel.title.length === 0
-        ? 'Measured results'
-        : tableModel.title,
+    figureBlocks.push(tableBlock({
+      label: plannedTable.label,
+      title: plannedTable.title.length === 0 ? 'Measured results' : plannedTable.title,
       markdown: tableMarkdown,
       note: 'Measured by simulating both platoons under the same declared disturbance.',
     }))
+    renderedFloats.push({ label: plannedTable.label, title: plannedTable.title })
   }
   const assembled = assembleManuscript({
     title,
@@ -2697,6 +2808,17 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     figures: figureBlocks,
     references: numberedReferences(referenceEntries),
   })
+  // WHICH NUMBERED ITEMS THE PROSE ACTUALLY NAMES. The captions are rendered by this step, so a
+  // manuscript can carry Table 1 and never refer to it — a fact about the draft, which this records
+  // rather than repairs: a sentence inserted here would be prose no step wrote.
+  //
+  // READ THE DRAFT'S OWN SECTIONS, not the assembled ones. This step appends the equations to the
+  // method section, so scanning the assembled body would count each equation's own label as a
+  // reference to it and report a manuscript that cites every equation it states.
+  const crossReferences = citedFloats(
+    sections.map(section => section.bodyText).join('\n\n'),
+    citableFloats(renderedFloats, MODEL_EQUATIONS),
+  )
   // The package's OWN files, as CONTENT. E1 produces these; the run exporter adds the
   // run-level files (summary, step record, claim-evidence, citations, experiment,
   // reproducibility, manifest) and writes the whole set to disk. A path whose upstream step
@@ -2737,6 +2859,10 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           figures: assembled.figureCount,
           references: assembled.referenceCount,
         },
+        // Which numbered items the prose names, and which it leaves unmentioned.
+        crossReferences,
+        // Floats the plan declares that this manuscript does not carry, by label.
+        floatsNotRendered,
         sectionHeadings: sections.map(s => s.heading),
         tableMarkdown: artifact.render.text,
         bindingHash: artifact.bindingHash,

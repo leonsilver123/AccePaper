@@ -2,18 +2,21 @@
  * The paper layer's renderers, pinned on the shapes a reader of the exported manuscript depends on.
  *
  * The cases that matter are the ones a plausible implementation gets wrong: a cell containing the
- * pipe that ends a Markdown cell, a row whose width disagrees with its header, and a caption that
- * must be numbered from 1 rather than from 0. Each was a real possibility in the code that produced
- * the exported package this module replaces.
+ * pipe that ends a Markdown cell, a row whose width disagrees with its header, tables and figures
+ * that must not share a counter, and a reference to `Figure 1` that must not be satisfied by
+ * `Figure 10`. Each was a real possibility in the code that produced the exported package this
+ * module replaces.
  */
 
 import { describe, expect, it } from 'vitest'
 
 import {
+  citedFloats,
   equationBlock,
   figureBlock,
   formatReference,
   markdownPipeTable,
+  numberFloats,
   numberedReferences,
   tableBlock,
 } from '../src/runner/paper-format.ts'
@@ -51,8 +54,9 @@ describe('the paper formatting layer', () => {
     expect(() => markdownPipeTable([], [])).toThrow(/no columns/)
   })
 
-  it('numbers figures from one and links the exported file', () => {
-    const block = figureBlock(1, {
+  it('renders a figure under the label the plan assigned, and links the exported file', () => {
+    const block = figureBlock({
+      label: 'Figure 1',
       title: 'Platoon minimum TTC by composition',
       path: 'figures/figure-1.svg',
     })
@@ -63,7 +67,8 @@ describe('the paper formatting layer', () => {
   })
 
   it('renders an inline diagram as a mermaid figure, and refuses a figure that is both or neither', () => {
-    const roadmap = figureBlock(2, {
+    const roadmap = figureBlock({
+      label: 'Figure 2',
       title: 'Research roadmap',
       mermaid: 'flowchart LR\n  a --> b',
     })
@@ -71,14 +76,15 @@ describe('the paper formatting layer', () => {
     expect(roadmap).toContain('**Figure 2.** Research roadmap')
     // A figure is a file or a diagram; without that rule a caller that omits the path renders
     // `![Figure 3: t](undefined)`, which is a broken image that looks like a real one.
-    expect(() => figureBlock(3, { title: 't' })).toThrow(/exactly one of/)
+    expect(() => figureBlock({ label: 'Figure 3', title: 't' })).toThrow(/exactly one of/)
     expect(() =>
-      figureBlock(3, { title: 't', path: 'a.svg', mermaid: 'flowchart LR' }),
+      figureBlock({ label: 'Figure 3', title: 't', path: 'a.svg', mermaid: 'flowchart LR' }),
     ).toThrow(/exactly one of/)
   })
 
-  it('numbers tables and puts the caption above them, where a reader looks for it', () => {
-    const block = tableBlock(2, {
+  it('renders a table under its label, with the caption above it where a reader looks for it', () => {
+    const block = tableBlock({
+      label: 'Table 2',
       title: 'Results',
       markdown: '| a |\n| --- |\n| 1 |\n',
     })
@@ -96,6 +102,34 @@ describe('the paper formatting layer', () => {
     expect(block).toContain('$$\n\\dot{v}')
     // No equation means no block, not an empty numbered heading.
     expect(equationBlock([])).toBe('')
+  })
+
+  it("numbers a plan's floats: figures and tables number independently, in plan order", () => {
+    const floats = numberFloats([
+      { kind: 'data-figure', title: 'Platoon minimum TTC by composition' },
+      { kind: 'three-line-table', title: 'Platoon Minimum Time-to-Collision Comparison' },
+      { kind: 'roadmap', title: 'Research roadmap' },
+    ])
+    expect(floats.map(float => float.label)).toEqual(['Figure 1', 'Table 1', 'Figure 2'])
+    expect(floats[1]?.title).toBe('Platoon Minimum Time-to-Collision Comparison')
+    // A kind this manuscript does not number would render a caption nothing can refer to.
+    expect(() => numberFloats([{ kind: 'photograph', title: 't' }])).toThrow(
+      /not a kind this manuscript numbers/,
+    )
+  })
+
+  it('reports which numbered items the prose names, and which it leaves unmentioned', () => {
+    const floats = [
+      { label: 'Figure 1', title: 'Measured comparison' },
+      { label: 'Table 1', title: 'Results' },
+      { label: 'Equation 1', title: 'IDM acceleration' },
+    ]
+    const report = citedFloats('Table 1 reports the change; see Equation 1.', floats)
+    expect(report.cited).toEqual(['Table 1', 'Equation 1'])
+    expect(report.uncited).toEqual(['Figure 1'])
+    // `Figure 1` inside `Figure 10` names a different float: a prefix match would report an
+    // uncited figure as cited.
+    expect(citedFloats('as Figure 10 shows', [floats[0]!]).uncited).toEqual(['Figure 1'])
   })
 
   it('numbers references so an in-text marker can mean something', () => {

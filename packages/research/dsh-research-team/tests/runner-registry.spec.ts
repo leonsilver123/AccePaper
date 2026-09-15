@@ -69,6 +69,36 @@ function execCtx(stepId: string, runCtx: RunContext = freshRunCtx()): ExecCtx {
   }
 }
 
+/** One executor context whose declared inputs resolve to `inputs`. */
+function execCtxWith(stepId: string, inputs: Readonly<Record<string, unknown>>): ExecCtx {
+  return { ...execCtx(stepId), getInput: slug => inputs[slug] }
+}
+
+/**
+ * The figure plan D1 really produced.
+ *
+ * E1-format and D3-writing both read the plan's LABELLED floats — the numbers the prose channel is
+ * offered and the captions the manuscript prints — so driving either with no inputs drives it
+ * outside its declared preconditions.
+ *
+ * @returns the plan artifact.
+ */
+async function figurePlan(): Promise<Record<string, unknown>> {
+  const entry = STEP_EXECUTOR_REGISTRY.get('D1-figure-map')
+  const out = (await entry?.executor(execCtx('D1-figure-map'))) as Record<string, unknown>
+  return out['figure-plan'] as Record<string, unknown>
+}
+
+/**
+ * The `revised-draft` input E1-format declares, carrying the plan D1 really produced.
+ *
+ * @returns one entry per declared input slug.
+ */
+async function revisedDraftInputs(): Promise<Record<string, unknown>> {
+  const plan = await figurePlan()
+  return { 'revised-draft': { renderedFigures: plan.figures } }
+}
+
 describe('T19-B registry — 16-step coverage derived from core', () => {
   it('registers exactly the core step set, no more and no less', () => {
     expect(CORE_STEPS.length).toBe(16)
@@ -306,7 +336,8 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     async (stepId) => {
       const entry = STEP_EXECUTOR_REGISTRY.get(stepId)
       expect(entry).toBeDefined()
-      const out = await entry?.executor(execCtx(stepId))
+      const inputs = stepId === 'E1-format' ? await revisedDraftInputs() : {}
+      const out = await entry?.executor(execCtxWith(stepId, inputs))
       const declared = STEP_OUTPUT_MAP[stepId] ?? []
       expect(Object.keys(out ?? {}).sort()).toEqual([...declared].sort())
       for (const slug of declared) {
@@ -324,6 +355,48 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(runCtx.claimId).toBe(CANONICAL.claimId)
     expect(runCtx.claimRef).toBe(CANONICAL.claimRef)
     expect(runCtx.predictionText).toBe(CANONICAL.prediction)
+  })
+
+  it('numbers the manuscript the way the plan did, and reports what the prose never names', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
+    const out = (await entry?.executor(execCtxWith('E1-format', await revisedDraftInputs()))) as Record<string, Record<string, unknown>>
+    const doc = out['formatted-manuscript']!
+    const manuscript = String(doc.manuscript)
+    // The captions carry the labels the plan assigned, so a sentence citing `Table 1` names the
+    // caption printed here rather than one this step made up.
+    expect(manuscript).toContain('**Figure 1.**')
+    expect(manuscript).toContain('**Figure 2.**')
+    expect(manuscript).toContain('**Table 1.**')
+    expect(manuscript).toContain('**Equation 1 — ')
+    // The fixture prose names none of them. The artifact says so instead of the assembler adding a
+    // sentence no step wrote.
+    const cross = doc.crossReferences as { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
+    expect(cross.cited).toEqual([])
+    expect(cross.uncited).toEqual(['Figure 1', 'Figure 2', 'Table 1', 'Equation 1', 'Equation 2', 'Equation 3'])
+    expect(doc.floatsNotRendered).toEqual([])
+  })
+
+  it('offers the prose channel the labels the plan assigned, so a section can cite the caption it prints', async () => {
+    const requests: Array<{ readonly context: Readonly<Record<string, unknown>>; readonly instruction: string }> = []
+    const ctx: ExecCtx = {
+      ...execCtxWith('D3-writing', { 'figure-plan': await figurePlan() }),
+      proseWriter: {
+        channel: 'deterministic',
+        write: (request) => {
+          requests.push({ context: request.context, instruction: request.instruction })
+          return Promise.resolve({ text: 'The measured change is reported in Table 1.', provider: 'spec', model: 'spec' })
+        },
+      },
+    }
+    await STEP_EXECUTOR_REGISTRY.get('D3-writing')?.executor(ctx)
+    expect(requests.length).toBeGreaterThan(0)
+    for (const request of requests) {
+      // The roster is the plan's own numbering: figures and tables numbered independently, then
+      // the equations the method section states.
+      expect((request.context.citable as ReadonlyArray<{ label: string }>).map(float => float.label))
+        .toEqual(['Figure 1', 'Table 1', 'Figure 2', 'Equation 1', 'Equation 2', 'Equation 3'])
+      expect(request.instruction).toContain('citable')
+    }
   })
 
   it('D1-figure-map really rendered all three figure families (figure/table/roadmap)', async () => {
@@ -350,7 +423,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
 
   it('E1-format really assembled a manuscript WITH a three-line table sub-render', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
-    const out = (await entry?.executor(execCtx('E1-format'))) as Record<string, Record<string, unknown>>
+    const out = (await entry?.executor(execCtxWith('E1-format', await revisedDraftInputs()))) as Record<string, Record<string, unknown>>
     const doc = out['formatted-manuscript']!
     // The E1 artifact is the FORMATTED MANUSCRIPT, not merely the table (T19-S):
     // the table is a sub-capability embedded inside a longer assembled manuscript.

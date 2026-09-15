@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-15-one-numbering-authority-for-floats.md
+2026-09-15-one-numbering-authority-for-floats.md: 2eedc80a0e94969e64e36ad1b9f953c4bb2f9490
+2026-09-15-one-numbering-authority-for-floats.zh.md: c4345272ac65539a8626dfe9c7aa23c797a06cf1

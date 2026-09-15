@@ -13,6 +13,12 @@
  * EVERY RENDERER HERE IS PURE and its output is Markdown, so the shape of the exported artifact is
  * testable without running the pipeline.
  *
+ * THE NUMBERING LIVES HERE TOO, and for the same reason: a caption's number and an in-text
+ * reference to it are one fact. The figure plan numbers its floats through {@link numberFloats} and
+ * hands those labels to both the prose channel (which may then cite `Figure 1`) and the assembler
+ * (which renders the captions through {@link figureBlock} / {@link tableBlock}), and
+ * {@link citedFloats} reports which of them a manuscript's prose actually names.
+ *
  * @module @deepseek-ai/dsh-research-team/runner/paper-format
  */
 
@@ -24,7 +30,9 @@
  * file at all. Passing both, or neither, is refused rather than guessed at.
  */
 export interface PaperFigure {
-  /** Caption text, rendered as `**Figure N.** <title>`. */
+  /** The figure's number in the manuscript, e.g. `Figure 1`, from {@link numberFloats}. */
+  readonly label: string
+  /** Caption text, rendered as `**<label>.** <title>`. */
   readonly title: string
   /** Package-relative path to the exported image, e.g. `figures/figure-1.svg`. */
   readonly path?: string
@@ -36,7 +44,9 @@ export interface PaperFigure {
 
 /** A table the manuscript embeds, already rendered as a Markdown pipe table. */
 export interface PaperTable {
-  /** Caption text, rendered as `**Table N.** <title>`. */
+  /** The table's number in the manuscript, e.g. `Table 1`, from {@link numberFloats}. */
+  readonly label: string
+  /** Caption text, rendered as `**<label>.** <title>`. */
   readonly title: string
   /** The pipe table itself, from {@link markdownPipeTable}. */
   readonly markdown: string
@@ -52,6 +62,121 @@ export interface PaperEquation {
   readonly latex: string
   /** Optional sentence saying what the symbols are bound to in this study. */
   readonly note?: string
+}
+
+/**
+ * One float the figure plan declares, in the order the plan lists it.
+ *
+ * The kind is the PLAN's vocabulary (`data-figure`, `roadmap`, `three-line-table`), because that
+ * is what the plan carries; {@link numberFloats} maps it to the label a manuscript uses.
+ */
+export interface PlannedFloat {
+  /** The plan's kind for this float. */
+  readonly kind: string
+  /** The float's caption title, as the reader will meet it. */
+  readonly title: string
+}
+
+/** One numbered item the manuscript's prose can refer to. */
+export interface CitableFloat {
+  /** The label as the prose writes it, e.g. `Figure 1`. */
+  readonly label: string
+  /** What it carries, so a writer can tell whether the section is about it. */
+  readonly title: string
+}
+
+/** Which citable items the prose refers to, and which it leaves unmentioned. */
+export interface CrossReferenceReport {
+  /** Labels the section bodies mention. */
+  readonly cited: ReadonlyArray<string>
+  /** Labels no section body mentions. */
+  readonly uncited: ReadonlyArray<string>
+}
+
+/** Plan kinds a manuscript numbers as figures, in the order they take numbers. */
+const FIGURE_KINDS: ReadonlyArray<string> = ['data-figure', 'roadmap']
+
+/** Plan kinds a manuscript numbers as tables. */
+const TABLE_KINDS: ReadonlyArray<string> = ['three-line-table']
+
+/**
+ * Number a plan's floats the way the manuscript does.
+ *
+ * FIGURES AND TABLES NUMBER INDEPENDENTLY: a paper's Table 1 does not become Table 3 because two
+ * figures came before it. The numbering is a pure function of the plan and its order, so two
+ * callers that pass the same plan get the same labels without sharing a counter.
+ *
+ * The entry the plan declared is carried through, so a caller keeps its payload and gains the
+ * label rather than having to match two lists up afterwards.
+ *
+ * @param floats - the plan's floats, in plan order.
+ * @returns one labelled float per input, in the same order.
+ * @throws {Error} when a float's kind is not one this manuscript numbers — an unnumbered float
+ *   would render a caption no cross-reference can name.
+ */
+export function numberFloats<T extends PlannedFloat>(
+  floats: ReadonlyArray<T>,
+): ReadonlyArray<T & { readonly label: string }> {
+  let figureCount = 0
+  let tableCount = 0
+  return floats.map((float) => {
+    if (FIGURE_KINDS.includes(float.kind)) {
+      figureCount += 1
+      return { ...float, label: `Figure ${String(figureCount)}` }
+    }
+    if (TABLE_KINDS.includes(float.kind)) {
+      tableCount += 1
+      return { ...float, label: `Table ${String(tableCount)}` }
+    }
+    throw new Error(
+      `numberFloats: \`${float.kind}\` is not a kind this manuscript numbers — expected one of `
+      + [...FIGURE_KINDS, ...TABLE_KINDS].join(', '),
+    )
+  })
+}
+
+/**
+ * The number an equation carries, as the prose cites it.
+ *
+ * One place decides it: {@link equationBlock} renders the label this returns, and
+ * {@link citableFloats} offers the same string to the prose channel.
+ *
+ * @param index - the equation's position in the list, starting at 0.
+ * @returns the label, e.g. `Equation 2`.
+ */
+export function equationNumber(index: number): string {
+  return `Equation ${String(index + 1)}`
+}
+
+/** A literal string as a regular expression that matches exactly it. */
+function literalPattern(text: string): string {
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/**
+ * Split the citable items by whether the prose refers to them.
+ *
+ * A CAPTION IS NOT A REFERENCE. This reads the section bodies — the prose a writer produced — and
+ * never the caption block the assembler renders, so a float whose caption the manuscript prints is
+ * still reported here as uncited until a sentence points at it.
+ *
+ * @param prose - the manuscript's section bodies, joined.
+ * @param floats - the citable items.
+ * @returns the labels the prose mentions, and the labels it does not.
+ */
+export function citedFloats(
+  prose: string,
+  floats: ReadonlyArray<CitableFloat>,
+): CrossReferenceReport {
+  const cited: string[] = []
+  const uncited: string[] = []
+  for (const float of floats) {
+    // `Figure 1` inside `Figure 10` names a different float, so a trailing digit refuses a match.
+    const pattern = new RegExp(`${literalPattern(float.label)}(?![0-9])`, 'u')
+    if (pattern.test(prose)) cited.push(float.label)
+    else uncited.push(float.label)
+  }
+  return { cited, uncited }
 }
 
 /** Escape the one character that ends a Markdown table cell. */
@@ -98,23 +223,21 @@ export function markdownPipeTable(
  * The link is relative to the manuscript, which the package exports beside `figures/`, so the
  * rendered document resolves the image rather than carrying an SVG the reader cannot caption.
  *
- * @param number - the figure's number within the manuscript, starting at 1.
- * @param figure - the figure to render.
+ * @param figure - the figure to render, carrying the label {@link numberFloats} gave it.
  * @returns the figure block, without a trailing newline.
  */
-export function figureBlock(number: number, figure: PaperFigure): string {
+export function figureBlock(figure: PaperFigure): string {
   const hasPath = figure.path !== undefined && figure.path.length > 0
   const hasMermaid =
     figure.mermaid !== undefined && figure.mermaid.trim().length > 0
   if (hasPath === hasMermaid) {
     throw new Error(
-      `figureBlock: figure ${String(number)} must carry exactly one of \`path\` or \`mermaid\``,
+      `figureBlock: ${figure.label} must carry exactly one of \`path\` or \`mermaid\``,
     )
   }
-  const label = `Figure ${String(number)}`
-  const caption = `**${label}.** ${figure.title}${figure.note === undefined ? '' : ` ${figure.note}`}`
+  const caption = `**${figure.label}.** ${figure.title}${figure.note === undefined ? '' : ` ${figure.note}`}`
   const body = hasPath
-    ? `![${label}: ${figure.title}](${figure.path})`
+    ? `![${figure.label}: ${figure.title}](${figure.path})`
     : ['```mermaid', figure.mermaid?.trim(), '```'].join('\n')
   return `${body}\n\n${caption}`
 }
@@ -122,13 +245,11 @@ export function figureBlock(number: number, figure: PaperFigure): string {
 /**
  * Render one numbered table: its caption, then the table.
  *
- * @param number - the table's number within the manuscript, starting at 1.
- * @param table - the table to render.
+ * @param table - the table to render, carrying the label {@link numberFloats} gave it.
  * @returns the table block, without a trailing newline.
  */
-export function tableBlock(number: number, table: PaperTable): string {
-  const label = `Table ${String(number)}`
-  const caption = `**${label}.** ${table.title}${table.note === undefined ? '' : ` ${table.note}`}`
+export function tableBlock(table: PaperTable): string {
+  const caption = `**${table.label}.** ${table.title}${table.note === undefined ? '' : ` ${table.note}`}`
   return `${caption}\n\n${table.markdown.trimEnd()}`
 }
 
@@ -144,7 +265,7 @@ export function tableBlock(number: number, table: PaperTable): string {
 export function equationBlock(equations: ReadonlyArray<PaperEquation>): string {
   return equations
     .map((equation, index) => {
-      const label = `Equation ${String(index + 1)} — ${equation.name}`
+      const label = `${equationNumber(index)} — ${equation.name}`
       const note = equation.note === undefined ? '' : `\n\n${equation.note}`
       return `**${label}**\n\n$$\n${equation.latex.trim()}\n$$${note}`
     })
