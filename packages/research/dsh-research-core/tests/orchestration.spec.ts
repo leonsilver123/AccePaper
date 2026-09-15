@@ -178,7 +178,7 @@ describe('orchestration surface — runStep (run/step/attempt validation + resul
     })
     expect(res.ok).toBe(false)
     expect(res.status).toBe('error')
-    expect(res.error?.message).toMatch(/DSH_OUTPUT_NOT_DECLARED/)
+    expect(res.error?.message).toMatch(/DSH_COMMIT_OUTPUT_NOT_DECLARED/)
     expect(getArtifact(store, runId, 'landscape-map')).toBeUndefined()
   })
 
@@ -186,10 +186,10 @@ describe('orchestration surface — runStep (run/step/attempt validation + resul
     const store = freshStore()
     const { runId } = seedAndStart(store, 'A1-landscape')
     await runStep(store, runId, 'A1-landscape', {
-      executor: () => ({ 'landscape-map': { v: 1 } }),
+      executor: () => ({ 'landscape-map': { v: 1 }, 'gap-list': ['g'] }),
     })
     await expect(async () => {
-      await runStep(store, runId, 'A1-landscape', { executor: () => ({ 'landscape-map': { v: 2 } }) })
+      await runStep(store, runId, 'A1-landscape', { executor: () => ({ 'landscape-map': { v: 2 }, 'gap-list': ['g'] }) })
     }).rejects.toThrow(/DSH_STEP_ALREADY_EXECUTED/)
     const snap = getRunSnapshot(store, runId)
     const exec = snap.events.filter(e => e.kind === 'step-executed' && e.stepId === 'A1-landscape' && e.attemptId === 1)
@@ -201,13 +201,13 @@ describe('orchestration surface — runStep (run/step/attempt validation + resul
     const store = freshStore()
     const { runId } = seedAndStart(store, 'A1-landscape')
     await runStep(store, runId, 'A1-landscape', {
-      executor: () => ({ 'landscape-map': { attempt: 1 } }),
+      executor: () => ({ 'landscape-map': { attempt: 1 }, 'gap-list': ['g'] }),
     })
     rollback(store, runId, 'A1-landscape')
     const snap2 = startStep(store, runId, 'A1-landscape')
     expect(snap2.attemptId).toBe(2)
     const res = await runStep(store, runId, 'A1-landscape', {
-      executor: () => ({ 'landscape-map': { attempt: 2 } }),
+      executor: () => ({ 'landscape-map': { attempt: 2 }, 'gap-list': ['g'] }),
     })
     expect(res.ok).toBe(true)
     expect(getArtifact(store, runId, 'landscape-map')).toEqual({ attempt: 2 })
@@ -286,7 +286,7 @@ describe('orchestration surface — plain built-package smoke (name-based entry)
     built.setRunInput(store, runId, 'domain-direction', 'seed')
     built.startStep(store, runId, 'A1-landscape')
     const res = await built.runStep(store, runId, 'A1-landscape', {
-      executor: () => ({ 'landscape-map': { hits: 1 } }),
+      executor: () => ({ 'landscape-map': { hits: 1 }, 'gap-list': ['g'] }),
     })
     expect(res.ok).toBe(true)
     expect(built.getArtifact(store, runId, 'landscape-map')).toEqual({ hits: 1 })

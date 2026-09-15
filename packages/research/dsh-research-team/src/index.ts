@@ -86,7 +86,16 @@ import type { SessionId } from './types.ts'
 import { ResearchFleetOrchestrator } from './redteam/orchestrator.ts'
 import type { RebuttalStartInput, RebuttalSubmitInput } from './redteam/orchestrator.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
-import { createRunPersistence, getArtifact, getRunSnapshot, getStepDefinitions, rollback } from '@deepseek-ai/dsh-research-core'
+import {
+  DEFAULT_EVIDENCE_PROFILE,
+  createRunPersistence,
+  getArtifact,
+  getRunSnapshot,
+  getStepDefinitions,
+  rollback,
+  submittabilityOf,
+} from '@deepseek-ai/dsh-research-core'
+import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
 import type { RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
@@ -222,10 +231,12 @@ declare module '@deepseek-ai/cordis' {
 function snapshotOf(
   run: RunResult,
   store: ResearchRunStore,
+  evidenceProfile: EvidenceProfile,
   packageExport: ResearchPackageExport | null = null,
   runPersistence: ResearchRunPersistence | null = null,
 ): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, run.runId)
+  const submittability = submittabilityOf(evidenceProfile)
   const catalog: ReadonlyArray<ResearchStepCatalogEntry> = getStepDefinitions().map(step => ({
     id: step.id,
     index: step.index,
@@ -269,7 +280,18 @@ function snapshotOf(
     invalidated: meta.invalidated,
   }))
 
-  return { run, catalog, gates, artifacts, steps, packageExport, runPersistence }
+  return {
+    run,
+    catalog,
+    gates,
+    artifacts,
+    steps,
+    evidenceProfile,
+    submittable: submittability.submittable,
+    submittabilityNote: submittability.reason,
+    packageExport,
+    runPersistence,
+  }
 }
 
 /** Options for one {@link ResearchTeamService.runPipeline} invocation. */
@@ -503,7 +525,9 @@ export class ResearchTeamService extends TypertRemoteService {
     const proseWriter = this.hostProseWriter()
     const casePackInputs = this.hostCasePackInputs()
     const stepTimeoutMs = this.hostStepTimeoutMs()
+    const evidenceProfile = this.hostEvidenceProfile()
     const run = await runT19B(store, {
+      evidenceProfile,
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.studyPlan !== undefined ? { studyPlan: options.studyPlan } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -530,14 +554,14 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       run.runId,
       store,
-      () => snapshotOf(run, store, packageExport, persistence),
+      () => snapshotOf(run, store, evidenceProfile, packageExport, persistence),
       // The approval persists through the SAME writer the run did, so a decision is as durable as
       // the run that produced it — and only the persistence half is wanted here. Handing the
       // decision to memory alone left the snapshot saying E2 `gated` after a person had approved
       // it, so a restart asked them to approve what they already had.
       () => this.recordRun(run, store).then(recorded => recorded.persistence),
     )
-    return snapshotOf(run, store, packageExport, persistence)
+    return snapshotOf(run, store, evidenceProfile, packageExport, persistence)
   }
 
   /**
@@ -561,6 +585,20 @@ export class ResearchTeamService extends TypertRemoteService {
       return this.persistRun(store, run, stored?.revision ?? 0)
     })
     return { persistence, packageExport: this.exportRunPackage(store, run) }
+  }
+
+  /**
+   * The evidence profile this deployment declared, or the demo default when it declared none.
+   *
+   * Read off the research engine the way the snapshot and package directories are, because it is
+   * a deployment fact recorded in `cordis.yml` and never a request field: `runPipeline` is
+   * reachable from a browser, and a client must not be able to promote its own run to production.
+   *
+   * @returns the declared profile, or {@link DEFAULT_EVIDENCE_PROFILE}.
+   */
+  private hostEvidenceProfile(): EvidenceProfile {
+    const research = this.ctx.get('research') as { evidenceProfile?: EvidenceProfile } | undefined
+    return research?.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE
   }
 
   /**
@@ -827,7 +865,9 @@ export class ResearchTeamService extends TypertRemoteService {
       // stopped attempt left registered.
       rollback(restored.store, restored.runId, from)
     }
+    const evidenceProfile = this.hostEvidenceProfile()
     const run = await driveRemaining(restored.store, restored.runId, runCtx, from, {
+      evidenceProfile,
       ...(capability.toolDeps !== undefined ? { toolDeps: capability.toolDeps } : {}),
       ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -839,10 +879,10 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       restored.runId,
       restored.store,
-      () => snapshotOf(run, restored.store, null, persisted),
+      () => snapshotOf(run, restored.store, evidenceProfile, null, persisted),
       () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
     )
-    return snapshotOf(run, restored.store, null, persisted)
+    return snapshotOf(run, restored.store, evidenceProfile, null, persisted)
   }
 
   /**
@@ -869,7 +909,7 @@ export class ResearchTeamService extends TypertRemoteService {
     // reads as a bug in something they may copy.
     const directory = join(root, run.runId)
     try {
-      const manifest = writeRunPackage(planRunPackage(store, run), directory)
+      const manifest = writeRunPackage(planRunPackage(store, run, this.hostEvidenceProfile()), directory)
       return {
         files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
         directory,

@@ -59,11 +59,14 @@ import {
   classifyL0,
   completeStep,
   createRun,
+  DEFAULT_EVIDENCE_PROFILE,
+  EVIDENCE_PROFILES,
   gateToStateMachineIntent,
   getArtifact,
   getAuditHistory,
   getRunSnapshot,
   isComplete,
+  isEvidenceProfile,
   recordArtifact,
   rollback,
   setRunInput,
@@ -81,6 +84,7 @@ import type {
   CitationRef,
   CitationResolverAdapter,
   ClaimId,
+  EvidenceProfile,
   GateVerdict,
   L0Classification,
   L0RoutingAdapter,
@@ -166,6 +170,22 @@ export interface Config {
    * bundle registered no research tool at all. See `toolsReady`.
    */
   readonly requireResearchTools?: boolean
+  /**
+   * What this deployment's evidence is allowed to be: `'production'` or `'evaluation'`.
+   *
+   * A DEPLOYMENT claim recorded in `cordis.yml`, never a request parameter, and the two values put
+   * the deployment on record differently. `'production'` states that this deployment's evidence can
+   * carry a submission: only simulated, imported, measured and literature values whose source was
+   * read in full may carry a gate, and a fixture is REFUSED rather than replaced by a value that
+   * would pass. `'evaluation'` admits every class so the pipeline can be exercised, and marks its
+   * ENTIRE output unsubmittable — the permission to run and the permission to publish are separate,
+   * and this field is where they are kept separate.
+   *
+   * Omitted, it resolves to {@link DEFAULT_EVIDENCE_PROFILE} (`'evaluation'`), so an undeclared run
+   * can be driven and can never be submitted; `'production'` is reachable only by stating it. A
+   * value naming no profile is rejected at load rather than silently resolved.
+   */
+  readonly evidenceProfile?: EvidenceProfile
   /**
    * Literature-retrieval channel for the seven research tools. `'fixture'`
    * (default) keeps the synthetic corpus, so an offline deployment behaves exactly
@@ -302,6 +322,28 @@ function resolveWorkspace(configured: string | undefined): string {
 }
 
 /**
+ * Resolve the deployment's evidence profile.
+ *
+ * An explicit resolution step in the owning implementation, like {@link resolveWorkspace}. The
+ * value arrives from `cordis.yml` as untyped YAML, so it is checked here even though `Config`
+ * declares the union: a typo must fail the load, not leave a deployment running under a profile it
+ * did not choose.
+ *
+ * @param declared - the profile the deployment stated, if it stated one.
+ * @returns the declared profile, or {@link DEFAULT_EVIDENCE_PROFILE} when none was declared.
+ * @throws {Error} when the value names no profile, naming the field and the accepted values.
+ */
+function resolveEvidenceProfile(declared: unknown): EvidenceProfile {
+  if (declared === undefined) return DEFAULT_EVIDENCE_PROFILE
+  if (!isEvidenceProfile(declared)) {
+    throw new Error(
+      `[research] \`evidenceProfile\` must be one of ${EVIDENCE_PROFILES.join(' | ')}, got ${JSON.stringify(declared) ?? 'undefined'}`,
+    )
+  }
+  return declared
+}
+
+/**
  * The research engine service (`ctx.research`): the run store the 16-step pipeline drives, the
  * seven-tool surface registered on `ctx.tools`, and the deployment's retrieval and prose channels.
  *
@@ -367,6 +409,13 @@ export class ResearchEngine extends Service {
    * reads it so one deployment decision governs every step of every run.
    */
   readonly stepTimeoutMs: number | undefined
+  /**
+   * What this deployment's evidence is allowed to be, resolved from {@link Config.evidenceProfile}.
+   * Public for the same reason {@link ResearchEngine.toolDeps} is: the runner-side service reads it
+   * so ONE deployment-level claim governs whether evidence may carry a gate and whether the run's
+   * output may be submitted.
+   */
+  readonly evidenceProfile: EvidenceProfile
 
   /**
    * The deterministic provider to register at load, when the deployment selected that
@@ -399,6 +448,7 @@ export class ResearchEngine extends Service {
         `[research] \`stepTimeoutMs\` must be a positive finite number of milliseconds, got ${String(this.stepTimeoutMs)}`,
       )
     }
+    this.evidenceProfile = resolveEvidenceProfile(config.evidenceProfile)
 
     const prose = config.prose
     if (prose?.kind === 'deterministic') {

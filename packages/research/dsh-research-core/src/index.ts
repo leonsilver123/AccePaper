@@ -149,6 +149,95 @@ export type {
   StateMachineGateIntent,
 } from './gates/index.ts'
 
+// ── Domain objects (T00 grain + T01 minimal set) ─────────────────────────────
+// Provenance says what produced a value and how much of its source was read; the profile decides
+// whether that may carry a gate. The four object modules are the commit point's vocabulary:
+// an artifact revision is content-addressed, an attempt carries the lease that authorizes it, a
+// gate report is bound to the versions it judged, and a project header owns the revision counter.
+export type {
+  SourceClass,
+  SourceAccess,
+  Provenance,
+  EvidenceProfile,
+  EvidenceDisposition,
+  EvidenceAdmissionCode,
+  EvidenceAdmission,
+  Submittability,
+} from './domain/provenance.ts'
+export {
+  SOURCE_CLASSES,
+  SOURCE_ACCESS_LEVELS,
+  EVIDENCE_PROFILES,
+  DEFAULT_EVIDENCE_PROFILE,
+  isSourceClass,
+  isSourceAccess,
+  isEvidenceProfile,
+  admitAsEvidence,
+  submittabilityOf,
+} from './domain/provenance.ts'
+
+export type {
+  ProjectId,
+  ArtifactId,
+  ArtifactVersion,
+  ProjectRevision,
+  TaskId,
+  TaskAttemptId,
+  LeaseId,
+  GateReportId,
+  ContentHash,
+  InputDigest,
+} from './domain/ids.ts'
+export { DOMAIN_ERROR_PREFIX } from './domain/ids.ts'
+
+export type { DomainFailureCode, DomainParseFailure, Parsed } from './domain/ingress.ts'
+export {
+  accept,
+  refuse,
+  asRecord,
+  stringField,
+  optionalStringField,
+  numberField,
+  countField,
+  arrayField,
+  isContentHash,
+  isInputDigest,
+} from './domain/ingress.ts'
+
+export type { ArtifactStatus, ArtifactRef, ResearchArtifact } from './domain/artifact.ts'
+export {
+  ARTIFACT_STATUSES,
+  ARTIFACT_SCHEMA_VERSION,
+  artifactRefKey,
+  artifactRefOf,
+  canonicalJson,
+  contentHashOf,
+  parseArtifactIngress,
+  refsResolvable,
+  sameArtifactRef,
+} from './domain/artifact.ts'
+
+export type {
+  TaskAttemptState,
+  TaskLease,
+  TaskBudget,
+  ExecutionReceipt,
+  TaskAttempt,
+} from './domain/task.ts'
+export { attemptMayWrite, leaseHolds, parseTaskAttemptIngress } from './domain/task.ts'
+
+export type { CheckDisposition, GateDisposition, GateCheck, GateReport, GateAggregate } from './domain/quality.ts'
+export {
+  CHECK_DISPOSITIONS,
+  aggregateDisposition,
+  parseGateReportIngress,
+  reportAnswers,
+  sameTarget,
+} from './domain/quality.ts'
+
+export type { PaperType, ProjectStatus, ResearchProject } from './domain/project.ts'
+export { PAPER_TYPES, nextProjectRevision, parseProjectIngress } from './domain/project.ts'
+
 // ── T19-B orchestration (Wave 2, additive + audited) ─────────────────────────
 // `runStep` is the execute-phase pipeline (T19-A). It NEVER adjudicates gates and
 // never reaches a terminal state on its own — see the module docs above. The step
@@ -156,6 +245,19 @@ export type {
 // not exported, and no generic appendAuditEvent is exported (audit events originate
 // only from engine functions).
 export { runStep } from './engine/pipeline.ts'
+// The single commit point. `recordArtifact` remains exported as the low-level one-artifact seam,
+// but a caller that wants the gate to accept its step's work must commit: the gate requires the
+// attempt's declared outputs to be present, and only a commit writes them together with the
+// revision that makes the attempt's state current.
+export { commitStepOutputs, inputDigestOf, throwCommitRefusal } from './engine/commit.ts'
+export type {
+  CommitCandidate,
+  CommitErrorCode,
+  CommitOutcome,
+  CommitReceipt,
+  CommitRequest,
+  CommittedArtifact,
+} from './engine/commit.ts'
 export type {
   StepExecContext,
   StepExecutor,

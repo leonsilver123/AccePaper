@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 import {
+  DEFAULT_EVIDENCE_PROFILE,
   completeStep,
   getRunSnapshot,
   getStepDefinitions,
@@ -108,6 +109,11 @@ function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
     catalog: [],
     gates: [],
     artifacts: [],
+    // This twin exists to keep the wire snapshot's fields honest; the profile trio is part of
+    // what the boundary carries, so it is stated here rather than defaulted.
+    evidenceProfile: DEFAULT_EVIDENCE_PROFILE,
+    submittable: false,
+    submittabilityNote: 'evaluation profile (test twin)',
     steps: getStepDefinitions().flatMap((definition) => {
       const state = snapshot.steps[definition.id]
       return state === undefined

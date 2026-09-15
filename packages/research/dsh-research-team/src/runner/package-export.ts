@@ -17,8 +17,8 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getArtifact, getAuditHistory } from '@deepseek-ai/dsh-research-core'
-import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getAuditHistory, submittabilityOf } from '@deepseek-ai/dsh-research-core'
+import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { RunResult, StepOutcome } from './types.ts'
 
 /** One file the package will contain, as content rather than as a name. */
@@ -53,6 +53,16 @@ export interface RunPackageManifest {
   }>
   /** Where each numeric figure came from, so a reader can trace it. */
   readonly numberSources: Readonly<Record<string, string>>
+  /**
+   * The evidence profile this run was conducted under, and whether its output may be submitted.
+   *
+   * A package outlives the process that wrote it and travels further than the run's own logs, so
+   * the profile is stamped into the manifest rather than left to be inferred from the artifacts
+   * it happens to contain.
+   */
+  readonly evidenceProfile: EvidenceProfile
+  readonly submittable: boolean
+  readonly submittabilityNote: string
   readonly note: string
 }
 
@@ -138,13 +148,17 @@ function stepRecord(outcome: StepOutcome): RunPackageManifest['steps'][number] {
  *
  * @param store - the run store.
  * @param run - the driven run result.
+ * @param evidenceProfile - the profile the run was conducted under, which decides whether the
+ *   package it produced may be submitted.
  * @returns the files, the manifest, and the run id.
  */
 export function planRunPackage(
   store: ResearchRunStore,
   run: RunResult,
+  evidenceProfile: EvidenceProfile,
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
+  const submittability = submittabilityOf(evidenceProfile)
   const manuscript = artifactRecord(store, runId, 'formatted-manuscript')
   const claim = artifactRecord(store, runId, 'claim')
   const landscape = artifactRecord(store, runId, 'landscape-map')
@@ -170,12 +184,16 @@ export function planRunPackage(
       `- runId: \`${runId}\``,
       `- steps driven: ${run.steps.length} of 16`,
       `- final status: \`${run.steps[run.steps.length - 1]?.status ?? 'none'}\``,
+      `- evidence profile: \`${evidenceProfile}\``,
+      `- submittable: ${submittability.submittable ? 'yes' : '**NO**'}`,
       '',
       '## What this package is',
       '',
       'Artifacts of a synthetic research run. The pipeline, its tool calls, its gates and its',
       'session log are real; the measurements are the study\'s own deterministic simulation over a',
       'measured demand profile. Nothing here is a published result.',
+      '',
+      submittability.reason,
       '',
       '## Step outcomes',
       '',
@@ -246,6 +264,9 @@ export function planRunPackage(
       Object.entries(NUMBER_SOURCES).map(([path, source]) =>
         [path, written.has(path) ? source : 'NOT PRODUCED by this run']),
     ),
+    evidenceProfile,
+    submittable: submittability.submittable,
+    submittabilityNote: submittability.reason,
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
       + 'records no absolute directory and no credential.',

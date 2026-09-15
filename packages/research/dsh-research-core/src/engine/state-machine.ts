@@ -16,8 +16,12 @@
  * forward-edge mutator; `_adjudicate` is the sole gate-adjudicator (INV-SOLE-ADJUDICATOR).
  */
 
+import type { ArtifactRef } from '../domain/artifact.ts'
+import { contentHashOf } from '../domain/artifact.ts'
+import type { ProjectRevision } from '../domain/ids.ts'
 import type {
   ApprovalRecord,
+  ArtifactRecordMeta,
   AttemptRecord,
   AuditEntry,
   AuditEvent,
@@ -109,7 +113,19 @@ const OUTCOMES: ReadonlySet<GateOutcome> = new Set<GateOutcome>(['passed', 'bloc
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function ensureRun(store: ResearchRunStore, runId: string): RunState {
+/**
+ * The run named by `runId`, or a refusal. Runs are never auto-created, so a typo in a run id is
+ * an error rather than a second empty run.
+ *
+ * Exported for the sibling engine modules that mutate the same state (the commit point); it is
+ * NOT re-exported from the package entry, so it stays inside this package.
+ *
+ * @param store - the caller-owned run store.
+ * @param runId - the run to look up.
+ * @returns the live run state.
+ * @throws {ResearchRunError} RUN_NOT_FOUND when the store holds no such run.
+ */
+export function ensureRun(store: ResearchRunStore, runId: string): RunState {
   const run = store.get(runId)
   if (!run) throw new ResearchRunError('RUN_NOT_FOUND', `run '${runId}' not found (never auto-created — call createRun first)`)
   return run
@@ -171,6 +187,23 @@ export function appendAuditEvent(
   pushEvent(run, kind, stepId, attemptId, detail)
 }
 
+/**
+ * The revision number a new value for `slug` takes: one past whatever the registry currently
+ * holds, or 1 for a slug this run has never produced.
+ *
+ * A re-run after a rollback therefore takes the next number rather than reusing the first, so a
+ * reference written against the superseded attempt cannot resolve against its replacement — the
+ * hash in the reference would differ, and `refsResolvable` refuses it.
+ *
+ * @param run - the run whose registry to read.
+ * @param slug - the artifact being written.
+ * @returns the version the new value takes.
+ */
+export function nextArtifactVersion(run: RunState, slug: string): number {
+  const record = run.registry[slug]
+  return record === undefined ? 1 : record.ref.version + 1
+}
+
 /** Deep-cloned superseded snapshot of a step's current attempt (INV-HISTORY-IMMUTABLE). */
 function snapshotOf(state: StepState): AttemptRecord {
   return {
@@ -193,6 +226,10 @@ function resetStep(state: StepState): void {
   state.holdReason = undefined
   state.startedAt = undefined
   state.finishedAt = undefined
+  // The commit receipt belongs to the attempt being abandoned. Keeping it would let a later
+  // attempt read a receipt for work it did not do, and would make its own commit look like a
+  // replay of that one.
+  state.commit = undefined
 }
 
 /** Mark all current-attempt artifacts produced by (producerStepId, producerAttemptId) invalidated
@@ -209,6 +246,7 @@ function invalidateArtifactsFor(run: RunState, producerStepId: string, producerA
         value: rec.value,
         producedAt: rec.producedAt,
         invalidated: true,
+        ref: rec.ref,
       }
     }
   }
@@ -319,7 +357,18 @@ function _adjudicate(state: StepState, step: StepDefinition): StepStatus {
 export function createRun(store: ResearchRunStore, runId?: string): string {
   const id = runId ?? generateRunId()
   if (store.has(id)) throw new ResearchRunError('RUN_EXISTS', `createRun: run '${id}' already exists (refusing to clobber existing run state + audit log)`)
-  const run: RunState = { runId: id, inputs: {}, steps: new Map(), registry: {}, events: [], consumedApprovals: new Set<string>() }
+  const run: RunState = {
+    runId: id,
+    inputs: {},
+    steps: new Map(),
+    registry: {},
+    events: [],
+    consumedApprovals: new Set<string>(),
+    // Revision 0 is "nothing has been committed". The first commit produces 1, so a caller that
+    // read a brand-new run commits against 0 and cannot be confused with one that read a state
+    // some earlier commit produced.
+    revision: 0 as ProjectRevision,
+  }
   store.set(id, run)
   pushEvent(run, 'run-created', undefined, undefined, { runId: id })
   return id
@@ -372,13 +421,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
   const run = ensureRun(store, runId)
   const steps: Record<string, StepSnapshot> = {}
   for (const [id, s] of run.steps) steps[id] = snapshotStep(s)
-  const registry: Record<string, {
-    slug: string
-    producerStepId: string
-    producerAttemptId: number
-    producedAt: number
-    invalidated: boolean
-  }> = {}
+  const registry: Record<string, ArtifactRecordMeta> = {}
   for (const slug in run.registry) {
     const r = run.registry[slug]
     if (!r) continue
@@ -388,6 +431,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
       producerAttemptId: r.producerAttemptId,
       producedAt: r.producedAt,
       invalidated: r.invalidated,
+      ref: cloneValue(r.ref) as ArtifactRecordMeta['ref'],
     }
   }
   const snapshot: RunSnapshot = {
@@ -396,6 +440,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
     steps,
     registry,
     events: run.events.map(e => cloneValue(e) as AuditEvent),
+    revision: run.revision,
   }
   // P2-2: the snapshot is the public read-out of a run, so a caller must not be
   // able to edit it. Unfrozen, `snapshot.events.push({kind:'human-approval'})`
@@ -539,6 +584,13 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
     throw new ResearchError('DSH_NOT_IN_PROGRESS', `recordArtifact: step '${stepId}' is not in_progress`)
   }
   const cloned = cloneValue(value)
+  const hashed = contentHashOf(cloned)
+  if (!hashed.ok) {
+    // A value with no canonical encoding cannot be given an identity, and an artifact without one
+    // cannot be referenced, reported on, or checked by a rule that names a version. Refusing here
+    // keeps "every registry entry has a revision" true rather than mostly true.
+    throw new ResearchError('DSH_VALUE_NOT_CANONICAL', `recordArtifact: value for '${outputSlug}' has no canonical encoding (${hashed.reason})`)
+  }
   state.artifacts[outputSlug] = cloned
   run.registry[outputSlug] = {
     slug: outputSlug,
@@ -547,6 +599,11 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
     value: cloned,
     producedAt: Date.now(),
     invalidated: false,
+    ref: {
+      artifactId: outputSlug as ArtifactRef['artifactId'],
+      version: nextArtifactVersion(run, outputSlug) as ArtifactRef['version'],
+      contentHash: hashed.value,
+    },
   }
   pushEvent(run, 'artifact-recorded', stepId, state.attempt_id, { slug: outputSlug })
 }
@@ -577,6 +634,7 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
   if (step.gate.length === 0) {
     throw new ResearchError('DSH_EMPTY_GATE', `submitGateVerdict: step '${stepId}' has an empty gate — use completeStep() (INV-COMPLETESTEP-EMPTY)`)
   }
+  // (the output-binding check below runs once the step's state — and so its attempt — is known)
   // RC-F (single-snapshot): clone the verdict ONCE into `snapshot`, then read component/passed
   // ONLY from `snapshot` for the membership test, the immutability `in`-check, the storage key,
   // the stored object, the audit event, and adjudication. Never re-read the original `verdict`.
@@ -610,6 +668,30 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
   }
   const state = run.steps.get(stepId)
   if (!state) throw new ResearchError('DSH_NO_STATE', `submitGateVerdict: no state for '${stepId}'`)
+  // A GATE CERTIFIES WORK, AND WORK WITH NO OUTPUT IS NOT WORK. This check is what binds the
+  // verdict to the products it claims to be about; without it a step adjudicated `passed` over an
+  // empty registry, which was reproduced (A1, gate B, zero artifacts).
+  //
+  // "This attempt's" is the point of comparing the producer attempt: after a rollback the registry
+  // still holds the abandoned attempt's entries, marked invalidated, and a step that has not yet
+  // re-run must not pass on them.
+  {
+    const missing = step.outputs.filter(slug => {
+      const record = run.registry[slug]
+      return (
+        record === undefined ||
+        record.invalidated ||
+        record.producerStepId !== stepId ||
+        record.producerAttemptId !== state.attempt_id
+      )
+    })
+    if (missing.length > 0) {
+      throw new ResearchError(
+        'DSH_GATE_WITHOUT_OUTPUTS',
+        `submitGateVerdict: step '${stepId}' attempt ${String(state.attempt_id)} has not produced ${missing.join(', ')} of its declared outputs (${step.outputs.join(', ')}) — a verdict for this step would certify work that is not there`,
+      )
+    }
+  }
   // INV-VERDICT-IMMUTABLE (T19 hold_abstained): on a held 'gated' step, re-submitting an
   // already-adjudicated component is rejected as DSH_VERDICT_ALREADY_SET BEFORE the status
   // guard (design §4 — "覆盖路径不存在"). This is the one precedence override: a settled/passed

@@ -8,10 +8,11 @@ This package is a **thin adapter layer**: the state machine is delegated to core
 
 ## Deployment-level configuration
 
-Each of the three fields represents **one** deployment-level choice, decided once by the engine and shared by the whole pipeline:
+Each of the four fields represents **one** deployment-level choice, decided once by the engine and shared by the whole pipeline:
 
 | Field | What it decides | When omitted |
 |---|---|---|
+| `evidenceProfile` | What this deployment's evidence is allowed to be, and whether its output may be submitted (`production` or `evaluation`) | `evaluation`: synthetic evidence is admitted, so the run's output is unsubmittable |
 | `literatureSearch` / `citationResolver` | Which catalogue the retrieval and citation-identity chains read (`fixture` or `openalex`) | fixture (offline) |
 | `prose` | Which provider route the text-producing steps run on | The text-producing steps emit their fixture text and call no model |
 | `workspace` | The absolute working directory of **every** agent session the engine creates | `process.cwd()` |

@@ -4,7 +4,7 @@
  * `runStep` organizes ONE step's execute phase into a verifiable minimal flow:
  *
  *   pre-execute guard → [guard] → execute(executor, timeout, signal) →
- *   [post-execute] → artifact write (via recordArtifact write-boundary) →
+ *   [post-execute] → one atomic commit of the whole output set (engine/commit.ts) →
  *   result → append-only audit (step-executed)
  *
  * It deliberately does NOT re-implement gate adjudication: on a successful execute the
@@ -13,8 +13,8 @@
  *   - guards that the step is `in_progress` and has not already been executed (result-once);
  *   - runs an injected `executor` under a `timeoutMs` + `AbortSignal` discipline that can
  *     NEVER leave the step hanging in `in_progress`;
- *   - writes only declared `step.outputs` slugs through `recordArtifact` (stopping cleanly,
- *     no partial write, when an undeclared slug is returned);
+ *   - commits the returned slugs in ONE call that requires the set to be exactly the step's
+ *     declared outputs, so an undeclared, duplicate or missing slug writes nothing at all;
  *   - appends an append-only `step-executed` audit record for the terminal disposition
  *     (success / error / timeout / cancelled);
  *   - on any failure (executor throw, timeout, cancel) writes NO artifact and leaves the
@@ -24,7 +24,8 @@
  */
 
 import type { AuditEventKind, ResearchRunStore, StepExecutedRecord } from './types.ts'
-import { ResearchError, appendAuditEvent, getRunSnapshot, recordArtifact } from './state-machine.ts'
+import { ResearchError, appendAuditEvent, ensureRun, getRunSnapshot } from './state-machine.ts'
+import { commitStepOutputs, throwCommitRefusal } from './commit.ts'
 
 /** Context handed to the injected executor (its return value is the artifact map). */
 export interface StepExecContext {
@@ -44,7 +45,8 @@ export interface StepExecContext {
 /**
  * Injected executor. May run synchronously or asynchronously, may throw or reject. Its
  * resolved value (or synchronous return) is a slug→value map of artifacts to persist;
- * keys MUST be declared in `step.outputs` (write-boundary enforced via `recordArtifact`).
+ * keys MUST be exactly the step's declared `outputs` — the commit point refuses an undeclared,
+ * duplicated or missing slug and writes nothing.
  */
 export type StepExecutor = (ctx: StepExecContext) => Promise<Record<string, unknown>> | Record<string, unknown>
 
@@ -186,7 +188,11 @@ export function runStep(
     if (signal) signal.addEventListener('abort', onAbort, { once: true })
 
     const startedAt = Date.now()
-    const declared = new Set<string>(stepSnap.outputs)
+
+    // The revision this attempt was started against. A commit prepared against a revision the run
+    // has left behind is refused, so a result that arrives after another commit cannot land on a
+    // state it was not computed from.
+    const expectedRevision = ensureRun(store, runId).revision
 
     Promise.resolve()
       .then(() => opts.executor({ runId, stepId, attemptId, ...(signal !== undefined ? { signal } : {}) }))
@@ -195,20 +201,19 @@ export function runStep(
         const arts: Record<string, unknown> =
           artifacts !== null && typeof artifacts === 'object' ? (artifacts as Record<string, unknown>) : {}
         const slugs = Object.keys(arts)
-        // All-or-nothing write-boundary: validate EVERY returned slug against the declared
-        // `step.outputs` set BEFORE persisting anything. If any slug is undeclared we throw
-        // (→ error audit) with ZERO artifacts written — no partial write (INV-OUTPUT-CONTRACT).
-        for (const slug of slugs) {
-          if (!declared.has(slug)) {
-            throw new ResearchError(
-              'DSH_OUTPUT_NOT_DECLARED',
-              `runStep: slug '${slug}' is not declared in step '${stepId}' outputs — INV-OUTPUT-CONTRACT`,
-            )
-          }
-        }
-        for (const slug of slugs) {
-          recordArtifact(store, runId, stepId, slug, arts[slug])
-        }
+        // ONE commit for the whole output set. The commit point validates every slug, every value
+        // and the attempt fence before it writes anything, so a refusal here leaves the registry
+        // exactly as it was — this replaced a per-slug loop whose first writes survived a later
+        // value failing to clone (INV-OUTPUT-CONTRACT, atomicity).
+        const outcome = commitStepOutputs(store, runId, stepId, {
+          attemptId,
+          expectedRevision,
+          // Deterministic per (step, attempt): a retry of THIS attempt is a replay, and a
+          // different attempt gets a different key without the caller having to mint one.
+          idempotencyKey: `${stepId}#${String(attemptId)}`,
+          outputs: slugs.map(slug => ({ slug, value: arts[slug] })),
+        })
+        if (!outcome.ok) throwCommitRefusal(outcome)
         finish(emit(store, buildRecord(runId, stepId, attemptId, 'success', slugs, Date.now() - startedAt)))
       })
       .catch((err: unknown) => {

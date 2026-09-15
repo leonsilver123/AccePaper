@@ -17,8 +17,8 @@ import { lookupStep } from '../src/engine/steps.ts'
  * T19-A P3 — minimal execution pipeline (src/engine/pipeline.ts).
  *
  * `runStep` is a self-contained, Cordis-free pure-logic module: it executes an injected
- * executor under a timeout + abort-signal discipline, writes declared artifacts via the
- * existing `recordArtifact` write-boundary, appends an append-only `step-executed` audit
+ * executor under a timeout + abort-signal discipline, commits the WHOLE output set through the
+ * single commit point (engine/commit.ts), appends an append-only `step-executed` audit
  * record, and NEVER leaves a step hanging in `in_progress`. It does NOT re-implement gate
  * adjudication — on success the caller continues the gate via `submitGateVerdict` (see the
  * gate-integration block). All state transitions other than artifact writes + audit are the
@@ -67,10 +67,10 @@ describe('P3 guard — unknown step / not in_progress', () => {
   })
 })
 
-// ── Success: artifact validation + write via recordArtifact ───────────────────
+// ── Success: artifact validation + commit ─────────────────────────────────────
 
 describe('P3 success — declared outputs written, step-executed audit', () => {
-  it('writes each declared output slug through recordArtifact and records a success audit', async () => {
+  it('commits each declared output slug and records a success audit', async () => {
     const [store, id] = started()
     const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }) })
     expect(res.ok).toBe(true)
@@ -86,19 +86,36 @@ describe('P3 success — declared outputs written, step-executed audit', () => {
     expect(typeof rec.durationMs).toBe('number')
   })
 
-  it('succeeds with zero outputs (empty artifact map)', async () => {
+  // A step that declares outputs and produces none has not done its work, and the commit point
+  // says so rather than recording a success it cannot back. The old contract accepted an empty
+  // map as `success` with zero artifacts, which is how a step could reach a gate with a certified
+  // pass and an empty registry.
+  it('refuses an empty artifact map for a step that declares outputs', async () => {
     const [store, id] = started()
     const res = await runStep(store, id, STEP, { executor: () => ({}) })
-    expect(res.ok).toBe(true)
-    expect(res.outputSlugs).toEqual([])
-    expect(execRecorded(store, id, 'success').outputSlugs).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(res.status).toBe('error')
+    expect(res.error?.message).toMatch(/DSH_COMMIT_OUTPUTS_INCOMPLETE/)
+    expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual({})
   })
 
-  it('treats a non-object return as zero outputs (no artifacts written)', async () => {
+  it('refuses a non-object return the same way (no artifacts written)', async () => {
     const [store, id] = started()
     const res = await runStep(store, id, STEP, { executor: () => undefined as unknown as Record<string, unknown> })
-    expect(res.ok).toBe(true)
-    expect(res.outputSlugs).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(res.error?.message).toMatch(/DSH_COMMIT_OUTPUTS_INCOMPLETE/)
+    expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual({})
+  })
+
+  it('refuses a PARTIAL declared set, writing none of the outputs it did return', async () => {
+    const [store, id] = started()
+    const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1 }) })
+    expect(res.ok).toBe(false)
+    expect(res.error?.message).toMatch(/DSH_COMMIT_OUTPUTS_INCOMPLETE/)
+    // The one slug that WAS returned must not have landed: a partially written step is the defect
+    // this refusal exists to prevent.
+    expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual({})
+    expect(getArtifact(store, id, 'landscape-map')).toBeUndefined()
   })
 })
 
@@ -114,7 +131,7 @@ describe('P3 artifact validation — undeclared slug rejected, no partial write'
     // no artifact written (all-or-nothing)
     expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual(before)
     const rec = execRecorded(store, id, 'error')
-    expect(rec.errorMessage).toMatch(/DSH_OUTPUT_NOT_DECLARED/)
+    expect(rec.errorMessage).toMatch(/DSH_COMMIT_OUTPUT_NOT_DECLARED/)
   })
 
   it('rejects a MIXED declared+undeclared map with ZERO artifacts written (all-or-nothing — no partial write)', async () => {
@@ -124,10 +141,10 @@ describe('P3 artifact validation — undeclared slug rejected, no partial write'
     expect(res.ok).toBe(false)
     expect(res.status).toBe('error')
     // the declared slug must NOT have been persisted — validation happens before any write
-    expect(res.error?.message).toMatch(/DSH_OUTPUT_NOT_DECLARED/)
+    expect(res.error?.message).toMatch(/DSH_COMMIT_OUTPUT_NOT_DECLARED/)
     expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual(before)
     const rec = execRecorded(store, id, 'error')
-    expect(rec.errorMessage).toMatch(/DSH_OUTPUT_NOT_DECLARED/)
+    expect(rec.errorMessage).toMatch(/DSH_COMMIT_OUTPUT_NOT_DECLARED/)
   })
 })
 
@@ -168,9 +185,9 @@ describe('P3 executor error — error audit, no artifact, step rollback-able', (
 describe('P3 result lands exactly once', () => {
   it('rejects a second runStep on the same attempt with DSH_STEP_ALREADY_EXECUTED', async () => {
     const [store, id] = started()
-    const r1 = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1 }) })
+    const r1 = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }) })
     expect(r1.ok).toBe(true)
-    expect(() => runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 2 }) })).toThrow(/DSH_STEP_ALREADY_EXECUTED/)
+    expect(() => runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 3, 'gap-list': 4 }) })).toThrow(/DSH_STEP_ALREADY_EXECUTED/)
   })
 })
 
@@ -198,7 +215,7 @@ describe('P3 timeout — deterministic failure, no hang, late result ignored', (
 
   it('does not install a timer when timeoutMs is 0', async () => {
     const [store, id] = started()
-    const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1 }), timeoutMs: 0 })
+    const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }), timeoutMs: 0 })
     expect(res.ok).toBe(true)
   })
 })

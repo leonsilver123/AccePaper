@@ -118,6 +118,9 @@
         # abstentions and consumed approval events all survive the boundary, while no service
         # object or credential is persisted. Omitted, runs are not persisted and cannot resume.
         snapshotDirectory: .workbuddy/tmp/research-run-snapshot
+        # EVALUATION, not production: the B channel's anchor still resolves against a simulated
+        # resolver over a synthetic corpus (`runner/anchor-fixture.ts`), so the output is unsubmittable.
+        evidenceProfile: evaluation
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,
     # anchor, experiment adjudication), depending on core + tools.

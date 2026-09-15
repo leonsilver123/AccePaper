@@ -1719,6 +1719,22 @@ export interface Config {
    */
   readonly requireResearchTools?: boolean
   /**
+   * What this deployment's evidence is allowed to be: `'production'` or `'evaluation'`.
+   *
+   * A DEPLOYMENT claim recorded in `cordis.yml`, never a request parameter, and the two values put
+   * the deployment on record differently. `'production'` states that this deployment's evidence can
+   * carry a submission: only simulated, imported, measured and literature values whose source was
+   * read in full may carry a gate, and a fixture is REFUSED rather than replaced by a value that
+   * would pass. `'evaluation'` admits every class so the pipeline can be exercised, and marks its
+   * ENTIRE output unsubmittable — the permission to run and the permission to publish are separate,
+   * and this field is where they are kept separate.
+   *
+   * Omitted, it resolves to {@link DEFAULT_EVIDENCE_PROFILE} (`'evaluation'`), so an undeclared run
+   * can be driven and can never be submitted; `'production'` is reachable only by stating it. A
+   * value naming no profile is rejected at load rather than silently resolved.
+   */
+  readonly evidenceProfile?: EvidenceProfile
+  /**
    * Literature-retrieval channel for the seven research tools. `'fixture'`
    * (default) keeps the synthetic corpus, so an offline deployment behaves exactly
    * as before; `'openalex'` assembles the real catalogue adapter, and every
@@ -1891,7 +1907,9 @@ export interface LlmProseWriterConfig {
 }
 ```
 
-Source: [`packages/research/dsh-research-cordis/src/index.ts:152`](../packages/research/dsh-research-cordis/src/index.ts)
+Depends on: [`EvidenceProfile`](../packages/research/dsh-research-core/src/index.ts)
+
+Source: [`packages/research/dsh-research-cordis/src/index.ts:156`](../packages/research/dsh-research-cordis/src/index.ts)
 
 <a id="deepseek-aidsh-research-team"></a>
 

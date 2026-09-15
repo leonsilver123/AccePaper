@@ -721,6 +721,8 @@ describe('run-persistence: approval replay protection survives restore', () => {
     const store = freshStore()
     const runId = seedRun(store, RUN_ID)
     startStep(store, runId, 'A1-landscape')
+    recordArtifact(store, runId, 'A1-landscape', 'landscape-map', 'm')
+    recordArtifact(store, runId, 'A1-landscape', 'gap-list', 'g')
     submitGateVerdict(store, runId, 'A1-landscape', abstainVerdict('B'))
     await persistence.save(store, runId, { baseRevision: 0 })
 

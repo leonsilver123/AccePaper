@@ -46,7 +46,7 @@ async function realRun(): Promise<{ store: ResearchRunStore; run: RunResult }> {
 describe('planRunPackage', () => {
   it('builds every run-level file plus the ones E1 produced, as content', async () => {
     const { store, run } = await realRun()
-    const plan = planRunPackage(store, run)
+    const plan = planRunPackage(store, run, 'evaluation')
     const paths = plan.files.map(file => file.path).sort()
 
     expect(paths).toContain('manuscript.md')
@@ -67,7 +67,7 @@ describe('planRunPackage', () => {
 
   it('records every driven step with how it was produced, and nothing it did not drive', async () => {
     const { store, run } = await realRun()
-    const plan = planRunPackage(store, run)
+    const plan = planRunPackage(store, run, 'evaluation')
     const stepIds = plan.manifest.steps.map(step => step.stepId)
 
     expect(stepIds).toEqual(run.steps.map(step => step.stepId))
@@ -82,7 +82,7 @@ describe('planRunPackage', () => {
 
   it('names where each number came from instead of restating a measurement', async () => {
     const { store, run } = await realRun()
-    const plan = planRunPackage(store, run)
+    const plan = planRunPackage(store, run, 'evaluation')
     expect(Object.keys(plan.manifest.numberSources)).toContain('experiment-tables.md')
     expect(plan.manifest.numberSources['experiment-tables.md']).toContain('mvp-results')
   })
@@ -106,7 +106,7 @@ describe('writeRunPackage', () => {
   it('writes every declared file, names it in the manifest with its digest, and nothing is empty', async () => {
     const dir = join(tempDir(), 'pkg')
     const { store, run } = await realRun()
-    const plan = planRunPackage(store, run)
+    const plan = planRunPackage(store, run, 'evaluation')
     const manifest = writeRunPackage(plan, dir)
 
     expect(manifest.files.length).toBe(plan.files.length)
@@ -130,7 +130,7 @@ describe('writeRunPackage', () => {
   it('keeps the machine directory and any secret out of the manifest', async () => {
     const dir = join(tempDir(), 'pkg')
     const { store, run } = await realRun()
-    const manifest = writeRunPackage(planRunPackage(store, run), dir)
+    const manifest = writeRunPackage(planRunPackage(store, run, 'evaluation'), dir)
     const serialized = JSON.stringify(manifest)
     expect(serialized).not.toContain(dir)
     expect(serialized).not.toContain('sk-live-123')

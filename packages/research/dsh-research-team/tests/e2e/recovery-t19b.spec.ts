@@ -22,6 +22,7 @@ import {
   completeStep,
   createRun,
   getArtifact,
+  DEFAULT_EVIDENCE_PROFILE,
   getAuditHistory,
   getRunSnapshot,
   rollback,
@@ -92,6 +93,7 @@ describe('T19-B recovery — gate abstention holds the step (no default pass)', 
       attemptId: 1,
       runCtx,
       abstain: new Set(),
+      evidenceProfile: DEFAULT_EVIDENCE_PROFILE,
     })
     expect(better.length).toBe(1)
     expect(() => submitGateVerdict(store, runId, 'A1-landscape', better[0]!)).toThrow(

@@ -14,7 +14,7 @@
 //   run studies that were going to succeed, which is the opposite of what it is for.
 
 import { describe, expect, it } from 'vitest'
-import { getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
+import { DEFAULT_EVIDENCE_PROFILE, getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
 import type { StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
@@ -45,7 +45,7 @@ function ctxWith(
     bound: 'at-least',
     thresholdPct: 20,
   }
-  return { step: C2, attemptId: 1, runCtx, abstain: new Set() }
+  return { step: C2, attemptId: 1, runCtx, abstain: new Set(), evidenceProfile: DEFAULT_EVIDENCE_PROFILE }
 }
 
 /** The shipped study with the AV's headway raised until its fast reaction pays off. */

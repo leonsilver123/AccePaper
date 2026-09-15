@@ -286,6 +286,7 @@ describe('INV-WRITE-ISOLATION — caller values are deep-cloned at write time (H
     const id = seedRun(store)
     startStep(store, id, 'A1-landscape')
     recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')
+    recordArtifact(store, id, 'A1-landscape', 'gap-list', 'g')
     const v = verdict('B', true)
     submitGateVerdict(store, id, 'A1-landscape', v)
     ;(v as unknown as { passed: boolean }).passed = false

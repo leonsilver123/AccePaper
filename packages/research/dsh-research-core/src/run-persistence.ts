@@ -42,6 +42,7 @@ import {
 import type { SnapshotStore } from './snapshot-store.ts'
 import { ResearchError, ResearchRunError } from './engine/state-machine.ts'
 import { getStepDefinitionById } from './engine/steps-accessor.ts'
+import type { ProjectRevision } from './domain/ids.ts'
 import type {
   ApprovalRecord,
   ArtifactRecord,
@@ -57,7 +58,7 @@ import type {
 } from './engine/types.ts'
 
 /** Schema version of a run snapshot. A file stamped with another version is rejected on load. */
-export const RUN_SNAPSHOT_SCHEMA_VERSION = 1
+export const RUN_SNAPSHOT_SCHEMA_VERSION = 2
 
 /** Error codes added by the run persistence layer (all carried on a {@link SnapshotStoreError}). */
 export const RUN_SNAPSHOT_ERROR_CODES = {
@@ -177,10 +178,16 @@ export class SnapshotConflictError extends SnapshotStoreError {
   }
 }
 
-/** Run identity + seeded inputs (the part of the run that is not step-scoped). */
+/** Run identity + seeded inputs + the run revision (the part of the run that is not step-scoped). */
 export interface PersistedRunHeader {
   readonly runId: string
   readonly inputs: Record<string, unknown>
+  /**
+   * The run's revision, so a restored run continues counting from where it stopped. A record
+   * without it would restore at 0 and every later commit's revision fence would be measured
+   * against the wrong number, which refuses honest commits and admits stale ones.
+   */
+  readonly projectRevision: number
 }
 
 /**
@@ -348,6 +355,7 @@ const AUDIT_EVENT_KINDS: ReadonlySet<string> = new Set<string>([
   'human-approval',
   'gate-abstention',
   'step-executed',
+  'step-committed',
   'rollback',
 ])
 
@@ -557,6 +565,38 @@ function parseStep(raw: unknown, index: number): PersistedStepState {
   }
 }
 
+/**
+ * Read one registry entry's artifact reference. Every entry carries one, so a restored run can
+ * name a revision rather than a slug — an artifact whose version was lost across a restart could
+ * not be checked against a reference that named it.
+ *
+ * @param raw - the reference as stored.
+ * @param what - the field path, for the refusal message.
+ * @param slug - the artifact the entry belongs to.
+ * @returns the reference.
+ * @throws {SnapshotInvalidError} when the reference is absent or malformed.
+ */
+function parseArtifactRef(raw: unknown, what: string, slug: string): ArtifactRecord['ref'] {
+  const rec = asRecord(raw, what)
+  const artifactId = asString(rec.artifactId, `${what}.artifactId`)
+  if (artifactId !== slug) {
+    throw new SnapshotInvalidError(
+      `${what}.artifactId '${artifactId}' does not match its registry key '${slug}'.`,
+    )
+  }
+  const contentHash = asString(rec.contentHash, `${what}.contentHash`)
+  if (!/^[0-9a-f]{64}$/u.test(contentHash)) {
+    throw new SnapshotInvalidError(
+      `${what}.contentHash is not a 64-character lower-case hex digest.`,
+    )
+  }
+  return {
+    artifactId: artifactId as ArtifactRecord['ref']['artifactId'],
+    version: asCount(rec.version, `${what}.version`) as ArtifactRecord['ref']['version'],
+    contentHash: contentHash as ArtifactRecord['ref']['contentHash'],
+  }
+}
+
 function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
   const o = asRecord(raw, 'snapshot.registry')
   const registry: Record<string, ArtifactRecord> = {}
@@ -591,6 +631,7 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
       value: rec.value,
       producedAt: asNumber(rec.producedAt, `${what}.producedAt`),
       invalidated: rec.invalidated,
+      ref: parseArtifactRef(rec.ref, `${what}.ref`, slug),
     }
   }
   return registry
@@ -639,6 +680,10 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
   const headerRaw = asRecord(o.run, 'snapshot.run')
   const runId = asString(headerRaw.runId, 'snapshot.run.runId')
   const inputs = asRecord(headerRaw.inputs, 'snapshot.run.inputs')
+  const projectRevision = asCount(
+    headerRaw.projectRevision,
+    'snapshot.run.projectRevision',
+  )
   const steps = asArray(o.steps, 'snapshot.steps').map((s, i) =>
     parseStep(s, i),
   )
@@ -655,7 +700,7 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
     schemaVersion: asCount(o.schemaVersion, 'snapshot.schemaVersion'),
     savedAtIso: asString(o.savedAtIso, 'snapshot.savedAtIso'),
     revision: asCount(o.revision, 'snapshot.revision'),
-    run: { runId, inputs },
+    run: { runId, inputs, projectRevision },
     steps,
     registry: parseRegistry(o.registry),
     events: parseEvents(o.events, runId),
@@ -826,6 +871,7 @@ export function captureRunSnapshot(
     run: {
       runId,
       inputs: persistable({ ...run.inputs }, `run '${runId}' inputs`),
+      projectRevision: run.revision,
     },
     steps,
     registry,
@@ -894,6 +940,7 @@ export function restoreRun<C>(
     registry: { ...payload.registry },
     events: [...payload.events],
     consumedApprovals: new Set<string>(payload.consumedApprovalEventIds),
+    revision: payload.run.projectRevision as ProjectRevision,
   }
   const store: ResearchRunStore = new Map([[run.runId, run]])
 

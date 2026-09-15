@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { SNAPSHOT_FILE_NAME } from '../src/snapshot-store.ts'
+import { RUN_SNAPSHOT_SCHEMA_VERSION } from '../src/run-persistence.ts'
 import { REPORT_SENTINEL } from './fixtures/run-recovery/report.ts'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -221,7 +222,10 @@ describe('run recovery rejects snapshots it cannot trust', () => {
   it('rejects a snapshot written by an incompatible schema version', { timeout: CHILD_TIMEOUT_MS }, async () => {
     writer(dir, 'mid-run', 0)
 
-    const restored = reader(dir, 'mid-run', ['--schema', '2'])
+    // Derived from the constant, not written as a literal: a literal silently stops being the
+    // incompatible version the moment the schema is bumped, and the test then passes while
+    // checking nothing.
+    const restored = reader(dir, 'mid-run', ['--schema', String(RUN_SNAPSHOT_SCHEMA_VERSION + 1)])
     expect(restored.revision).toBeNull()
     expect(restored.errorName).toBe('SnapshotVersionError')
     expect(restored.errorCode).toBe('SNAPSHOT_VERSION_UNSUPPORTED')

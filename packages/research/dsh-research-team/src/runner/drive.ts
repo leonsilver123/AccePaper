@@ -30,6 +30,7 @@ import type {
   StepStatus,
 } from '@deepseek-ai/dsh-research-core'
 import {
+  DEFAULT_EVIDENCE_PROFILE,
   canStart,
   completeStep,
   createRun,
@@ -75,6 +76,7 @@ export type {
 function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions {
   return {
     runCtx,
+    ...(opts.evidenceProfile !== undefined ? { evidenceProfile: opts.evidenceProfile } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     ...(opts.executorOverride !== undefined ? { executorOverride: opts.executorOverride } : {}),
@@ -210,6 +212,9 @@ export async function driveStep(
       attemptId,
       runCtx: opts.runCtx,
       abstain: new Set(comps),
+      // Resolved once, here, so every channel is built under the run's declared profile. The
+      // default is the demo profile: an undeclared run executes and cannot be submitted.
+      evidenceProfile: opts.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE,
     }
     const built = await buildStepVerdicts(vctx)
     for (const v of built) {

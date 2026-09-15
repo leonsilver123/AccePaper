@@ -431,7 +431,11 @@ describe('T19-B happy path — audit timeline is core-owned and duplicate-free',
     expect(kinds.has('run-created')).toBe(true)
     expect(kinds.has('input-seeded')).toBe(true)
     expect(kinds.has('step-started')).toBe(true)
-    expect(kinds.has('artifact-recorded')).toBe(true)
+    // The driven path writes through the single commit point, so a step's outputs arrive as one
+    // `step-committed` record carrying their revisions rather than as one `artifact-recorded`
+    // per slug. The latter is still emitted by the low-level `recordArtifact` seam, which the
+    // driver no longer uses.
+    expect(kinds.has('step-committed')).toBe(true)
     expect(kinds.has('step-completed')).toBe(true)
     expect(kinds.has('rollback')).toBe(false)
     let prev = -1

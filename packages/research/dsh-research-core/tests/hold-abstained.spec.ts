@@ -5,10 +5,12 @@ import {
   getAuditHistory,
   getRunSnapshot,
   isComplete,
+  recordArtifact,
   rollback,
   startStep,
   submitGateVerdict,
 } from '../src/engine/state-machine.ts'
+import { lookupStep } from '../src/engine/steps.ts'
 import { _resetApprovalChannelForTests, createHostApprovalChannel } from '../src/host.ts'
 import type { HostApprovalChannel } from '../src/host.ts'
 import { abstainVerdict, freshStore, passStep, seedRun, verdict } from './helpers.ts'
@@ -26,8 +28,12 @@ function driveAbstained(store: ReturnType<typeof freshStore>, stepId = 'A2-claim
   const id = seedRun(store)
   passStep(store, id, 'A1-landscape') // passed + records landscape-map/gap-list → unlocks A2
   expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('passed')
-  // A2-claim in_progress; submit one component passed, the other abstained → hold.
+  // A2-claim in_progress; its declared outputs are committed, then one component is submitted
+  // passed and the other abstained → hold. The outputs come first because a gate now certifies
+  // the work the step actually produced, and A2 declares two.
   startStep(store, id, stepId)
+  const claim = lookupStep(stepId)
+  for (const out of claim?.outputs ?? []) recordArtifact(store, id, stepId, out, `val:${out}`)
   submitGateVerdict(store, id, stepId, verdict('A', true))
   submitGateVerdict(store, id, stepId, abstainVerdict(abstainComp === 'A' ? 'A' : 'C'))
   return id
@@ -130,6 +136,7 @@ describe('T19 — abstained preempts any terminal (no default pass / no auto ter
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     startStep(store, id, 'A2-claim')
+    for (const out of lookupStep('A2-claim')?.outputs ?? []) recordArtifact(store, id, 'A2-claim', out, `val:${out}`)
     submitGateVerdict(store, id, 'A2-claim', verdict('A', false)) // fail
     submitGateVerdict(store, id, 'A2-claim', abstainVerdict('C')) // abstain → hold wins
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('gated')

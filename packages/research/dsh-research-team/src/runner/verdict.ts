@@ -13,7 +13,12 @@
 //               runs against a SIMULATED resolver (`MockCitationResolverAdapter`)
 //               to produce the anchoring verification; core `adjudicate`
 //               component 'B' decides. Truthfulness: `mock_external`.
-//               See ./anchor-fixture.ts for the full four-stage chain.
+//               The channel DECLARES that provenance (`fixture`; see
+//               ./anchor-fixture.ts), and the run's evidence profile is checked
+//               against it before adjudication: `production` REFUSES it, so the
+//               verifications are withheld and the core B gate abstains on its own
+//               missing-anchor path, while `evaluation` admits it and the run's
+//               whole output is unsubmittable.
 //
 // Discipline (spec §3/§7): this module does NOT re-implement the core gate and
 // does NOT reinterpret an outcome. Every verdict is submitted to the core
@@ -28,7 +33,7 @@ import type {
   GateVerdict,
   VerificationResult,
 } from '@deepseek-ai/dsh-research-core'
-import { adjudicate } from '@deepseek-ai/dsh-research-core'
+import { adjudicate, admitAsEvidence } from '@deepseek-ai/dsh-research-core'
 
 import type { ResearchRebuttal } from '../types.ts'
 import { sessionId } from '../types.ts'
@@ -125,6 +130,11 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
  * Build the B-channel verdict: T23 anchor fixture (stance) + core `verifyCitation`
  * over `MockCitationResolverAdapter` (anchoring evidence) → core `adjudicate('B')`.
  *
+ * The anchor the fixture produces is declared `fixture` provenance, so the run's profile
+ * decides whether it may carry this gate at all. When the policy does not admit it, the
+ * verifications are withheld and core reaches its own missing-anchor abstention — the
+ * adjudication stays in one place, and nothing here reinterprets the outcome.
+ *
  * The abstention scenario is driven by DATA, not by a bypass: it points the T23 lookup at
  * the INCONCLUSIVE fixture row — material that takes no stance — so no anchoring verification
  * is requested and the real core gate abstains on its own. It used to point at the contradict
@@ -140,7 +150,12 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
     timestamp: ctx.runCtx.timestamp,
     ...(useAbstain ? { anchorRef: B_CHANNEL_INCONCLUSIVE_REF } : {}),
   })
-  const verifications: ReadonlyArray<VerificationResult> = anchors.verifications
+  const admission = admitAsEvidence(ctx.evidenceProfile, anchors.provenance)
+  // A policy refusal is a HOLD, not a finding about the claim: the anchor cannot carry this
+  // gate, which says "we cannot judge", never "the claim is wrong". `blocked` and `failed`
+  // are reserved for evidence that was usable and spoke against the claim.
+  const verifications: ReadonlyArray<VerificationResult> =
+    admission.disposition === 'admitted' ? anchors.verifications : []
 
   const input: AdjudicationInput = {
     claimId,
@@ -158,6 +173,9 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
     passed: result.outcome === 'passed',
     evidence:
       `core:adjudicate('B') outcome=${result.outcome}; anchoring=${anchors.anchoring}; ` +
+      (admission.disposition === 'admitted'
+        ? ''
+        : `anchor withheld from adjudication — ${admission.code}: ${admission.reason}; `) +
       anchors.basis,
     rationale: result.reasonCode,
     timestamp: ctx.runCtx.timestamp,

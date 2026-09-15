@@ -19,6 +19,10 @@
  * `./host` subpath.
  */
 
+import type { ArtifactRef } from '../domain/artifact.ts'
+import type { ProjectRevision } from '../domain/ids.ts'
+import type { CommitReceipt } from './commit.ts'
+
 /** Methodology phase (v1.0 design doc). */
 export type Phase = 'A' | 'B' | 'C' | 'D' | 'E'
 
@@ -92,8 +96,8 @@ export interface ApprovalRecord {
 
 /**
  * Registry entry for one produced artifact (current valid record per slug).
- * `invalidated` is set true by rollback/cascade; recordArtifact REPLACES the entry
- * with a fresh `invalidated: false` record on re-run (DEP-4 — never mutated in place).
+ * `invalidated` is set true by rollback/cascade; a commit REPLACES the entry with a fresh
+ * `invalidated: false` record on re-run (DEP-4 — never mutated in place).
  */
 export interface ArtifactRecord {
   readonly slug: string
@@ -102,6 +106,12 @@ export interface ArtifactRecord {
   readonly value: unknown
   readonly producedAt: number
   readonly invalidated: boolean
+  /**
+   * Identity of this revision: which artifact, which revision number, and the hash of the bytes
+   * it held. Every writer sets it, so a consumer can name a revision instead of a slug — which is
+   * what lets a report say which version it judged rather than which name it saw.
+   */
+  readonly ref: ArtifactRef
 }
 
 /** The kinds of record the run's append-only audit log holds. Every state-machine
@@ -117,6 +127,7 @@ export type AuditEventKind =
   | 'human-approval'
   | 'gate-abstention'
   | 'step-executed'
+  | 'step-committed'
   | 'rollback'
 
 /**
@@ -209,6 +220,13 @@ export interface StepState {
   finishedAt: number | undefined
   /** Declared output slugs (mirrors the immutable StepDefinition; used by the execution pipeline's write-boundary). */
   outputs: ReadonlyArray<string>
+  /**
+   * What this attempt's commit wrote, once one has. Its presence is what "this attempt has
+   * already committed" means, and its `idempotencyKey` is what makes a repeated commit request
+   * return the first receipt instead of writing a second revision. Cleared with the rest of the
+   * live fields when the step is reset by a rollback.
+   */
+  commit?: CommitReceipt | undefined
 }
 
 /** Mutable map of step runtime states, keyed by step id (within one run). */
@@ -226,6 +244,12 @@ export interface RunState {
   registry: Record<string, ArtifactRecord>
   events: AuditEvent[]
   consumedApprovals: Set<string>
+  /**
+   * Advances by exactly one per committed change, and only a commit advances it. A commit that
+   * was prepared against an older revision is refused, which is how two writers that both read
+   * revision 7 are prevented from both producing 8.
+   */
+  revision: ProjectRevision
 }
 
 /** Top-level run store keyed by runId. */
@@ -255,6 +279,8 @@ export interface ArtifactRecordMeta {
   readonly producerAttemptId: number
   readonly producedAt: number
   readonly invalidated: boolean
+  /** The revision this entry is: which artifact, which version, and the hash of its bytes. */
+  readonly ref: ArtifactRef
 }
 
 /** Read-only run snapshot (deep-cloned on return; artifact values excluded — fetch via getArtifact). */
@@ -264,6 +290,8 @@ export interface RunSnapshot {
   readonly steps: Readonly<Record<string, StepSnapshot>>
   readonly registry: Readonly<Record<string, ArtifactRecordMeta>>
   readonly events: ReadonlyArray<Readonly<AuditEvent>>
+  /** The run revision a caller passes back to a commit as its `expectedRevision`. */
+  readonly revision: ProjectRevision
 }
 
 /** One audit-history entry (superseded or current), deep-cloned on return. */

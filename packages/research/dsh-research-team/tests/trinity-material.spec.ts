@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getStepDefinitionById, adjudicate } from '@deepseek-ai/dsh-research-core'
+import { DEFAULT_EVIDENCE_PROFILE, getStepDefinitionById, adjudicate } from '@deepseek-ai/dsh-research-core'
 import type { AdjudicationInput, StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
@@ -78,7 +78,7 @@ function ctxFor(material: ClaimMaterial): VerdictBuildCtx {
   runCtx.metricKey = material.metricKey
   runCtx.claimMaterial = material
   runCtx.study = experimentStudy()
-  return { step: C2, attemptId: 1, runCtx, abstain: new Set() }
+  return { step: C2, attemptId: 1, runCtx, abstain: new Set(), evidenceProfile: DEFAULT_EVIDENCE_PROFILE }
 }
 
 describe('A channel — the verdict follows the material', () => {

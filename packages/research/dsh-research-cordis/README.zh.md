@@ -8,10 +8,11 @@
 
 ## 部署级配置
 
-三个字段各代表**一个**部署级选择,由引擎一次决定、全流水线共用:
+四个字段各代表**一个**部署级选择,由引擎一次决定、全流水线共用:
 
 | 字段 | 决定什么 | 省略时 |
 |---|---|---|
+| `evidenceProfile` | 本部署的证据允许属于哪一类,以及其产物能否提交(`production` 或 `evaluation`) | `evaluation`:允许合成证据,因此该 run 的产物不可提交 |
 | `literatureSearch` / `citationResolver` | 检索与引文身份链打哪个目录(`fixture` 或 `openalex`) | fixture(离线) |
 | `prose` | 正文步骤走哪个提供方路由 | 正文步骤输出其 fixture 文本,不调模型 |
 | `workspace` | 引擎创建的**每个** agent 会话的绝对工作目录 | `process.cwd()` |

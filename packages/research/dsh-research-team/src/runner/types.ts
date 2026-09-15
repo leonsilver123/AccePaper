@@ -6,6 +6,7 @@
 // driver's output and the report's input.
 
 import type {
+  EvidenceProfile,
   GateOutcome,
   RunStepStatus,
   StepDefinition,
@@ -94,6 +95,13 @@ export interface DriveOptions {
    * a run in progress. Each entry carries the file and pointer it was derived from.
    */
   readonly casePackInputs?: ReadonlyArray<CasePackRunInput>
+  /**
+   * What this run declares about its own evidence. A run that declares nothing is the
+   * evaluation run: it executes, and its entire output is stamped unsubmittable.
+   * `production` is reached only by declaring it, and it refuses synthetic evidence —
+   * a fixture anchor holds the gate rather than being replaced by something that passes.
+   */
+  readonly evidenceProfile?: EvidenceProfile
 }
 
 /** Options for driving exactly one step. */
@@ -109,6 +117,11 @@ export interface DriveStepOptions {
   readonly proseWriter?: ResearchProseWriter
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
+  /**
+   * The profile this run declares, carried so the gate verdicts are built under the same one the
+   * driver was given; see {@link DriveOptions.evidenceProfile}.
+   */
+  readonly evidenceProfile?: EvidenceProfile
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */
@@ -118,4 +131,10 @@ export interface VerdictBuildCtx {
   readonly runCtx: RunContext
   /** Components that should be injected as `abstained` (recovery scenario). */
   readonly abstain: ReadonlySet<TrinityComponent>
+  /**
+   * The profile the run declares, already resolved by the driver — a channel that consumes
+   * external evidence decides what it may use from this, so the B channel needs it here
+   * rather than inferring a profile of its own.
+   */
+  readonly evidenceProfile: EvidenceProfile
 }

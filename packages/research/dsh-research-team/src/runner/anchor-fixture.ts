@@ -25,13 +25,17 @@
 //      `inconclusive` were indistinguishable at the gate.
 //
 // This is a simulated resolver over a synthetic corpus. It is NEVER real
-// literature verification and must never be reported as such.
+// literature verification and must never be reported as such. That statement is
+// now DECLARED AS DATA rather than only described here: {@link ANCHOR_PROVENANCE}
+// travels with every {@link BChannelAnchors} this module builds, so the evidence
+// policy reads the claim instead of depending on this header being read.
 
 import type {
   CitationEvidence,
   CitationId,
   CitationRef,
   ClaimId,
+  Provenance,
   VerificationResult,
 } from '@deepseek-ai/dsh-research-core'
 import { MockCitationResolverAdapter, verifyCitation } from '@deepseek-ai/dsh-research-core'
@@ -65,6 +69,24 @@ const SYNTHETIC_AUTHORS: ReadonlyArray<string> = ['Fixture, A.', 'Fixture, B.']
 const SYNTHETIC_DOI = '10.0000/synthetic.t19b-anchor'
 
 /**
+ * What produced this channel's anchor, stated by the producer for the evidence policy to read.
+ *
+ * `sourceAccess: 'full-text'` is accurate and deliberate: the simulated resolver does hand back
+ * the text it was seeded with, so a reader must not be able to attribute the refusal below to an
+ * unread source. The CLASS is what makes this unusable as production evidence — the value shows
+ * the program ran and the identity chain executed, never that real literature supports the claim.
+ */
+const ANCHOR_PROVENANCE: Provenance = {
+  sourceClass: 'fixture',
+  producer: 'dsh-research-team/anchor-fixture',
+  ruleVersion: ANCHOR_FIXTURE_RULE_VERSION,
+  sourceAccess: 'full-text',
+  note:
+    'simulated citation resolver over a synthetic corpus (MockCitationResolverAdapter over '
+    + '10.0000/synthetic.t19b-anchor); never real literature verification',
+}
+
+/**
  * The SIMULATED external resolver. One synthetic record, keyed the way
  * `MockCitationResolverAdapter` keys its table (`${kind}:${normalized-id}`).
  */
@@ -95,6 +117,8 @@ export interface BChannelAnchors {
   readonly anchorSignal: AnchorSignal
   /** True when a core-usable external anchor was produced. */
   readonly anchoring: boolean
+  /** What produced this anchor; the B channel admits or refuses it by this and the run's profile. */
+  readonly provenance: Provenance
   /** Human-readable basis for the report / gate evidence string. */
   readonly basis: string
 }
@@ -179,6 +203,7 @@ export async function buildBChannelAnchors(spec: AnchorVerificationSpec): Promis
       verifications: [bridged],
       anchorSignal: signal,
       anchoring: false,
+      provenance: ANCHOR_PROVENANCE,
       basis:
         `T23 anchor '${key}' verdict=inconclusive → no anchoring verification requested ` +
         '(fail-closed; core adjudicate(\'B\') abstains — NO DEFAULT PASS)',
@@ -195,6 +220,7 @@ export async function buildBChannelAnchors(spec: AnchorVerificationSpec): Promis
     verifications: [bridged, verified],
     anchoring,
     anchorSignal: signal,
+    provenance: ANCHOR_PROVENANCE,
     basis:
       `T23 anchor '${key}' verdict=${signal.verdict} → core verifyCitation over ` +
       `MockCitationResolverAdapter returned conclusion=${verified.conclusion} ` +

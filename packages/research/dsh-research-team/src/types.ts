@@ -400,6 +400,7 @@ export interface ResearchProposalAnswer {
   readonly channel: string
 }
 
+import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
 import type { StudyPlan } from './runner/study-plan.ts'
 
 export type { PlanClaim, PlanSection, StudyPlan } from './runner/study-plan.ts'
@@ -490,6 +491,17 @@ export interface ResearchRunSnapshot {
   readonly artifacts: ReadonlyArray<ResearchArtifactMetaView>
   /** Per-step runtime state (attempt, hold reason). */
   readonly steps: ReadonlyArray<ResearchStepStateView>
+  /**
+   * The evidence profile this run was conducted under, and whether what it produced may be
+   * submitted.
+   *
+   * The browser surface reads this to say what kind of run it is showing. A view that rendered
+   * an evaluation run and a production run identically would invite a reader to take the first
+   * for the second.
+   */
+  readonly evidenceProfile: EvidenceProfile
+  readonly submittable: boolean
+  readonly submittabilityNote: string
   /**
    * The export result, when the deployment configured a package directory.
    *
