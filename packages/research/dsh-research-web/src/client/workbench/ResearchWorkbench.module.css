@@ -10,6 +10,40 @@
   line-height: 1.5;
 }
 
+.intro {
+  border: 1px solid #e6e8ec;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafbfc;
+}
+
+.introTitle {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.introSubtitle {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b6470;
+}
+
+.introSteps {
+  margin: 0;
+  padding-left: 18px;
+  color: #5b6470;
+  font-size: 12px;
+}
+
+.nextAction {
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f6feb;
+}
+
 .mockBadge {
   display: inline-block;
   align-self: flex-start;

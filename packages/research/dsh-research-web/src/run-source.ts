@@ -278,6 +278,10 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
       // still working.
       ...(outcome?.executeStatus === undefined ? {} : { executeStatus: outcome.executeStatus }),
       ...(outcome?.executeError === undefined ? {} : { executeError: outcome.executeError }),
+      // The wire has carried `kind` since the driver began recording it; the view read only
+      // `fixture_executor` out of it, so a run whose prose came from the deterministic route was
+      // shown as a live run with nothing to say about its text.
+      ...(outcome?.kind === undefined ? {} : { executionKind: outcome.kind }),
       gateOutcomes: (gatesByStep.get(entry.id) ?? [])
         .map(gate => ({ component: asComponent(gate.component), outcome: gate.outcome }))
         .filter((row): row is { component: TrinityComponent; outcome: GateHistoryEntry['outcome'] } =>

@@ -162,6 +162,16 @@ describe('runStatusOf', () => {
     expect(summary.steps[1]?.humanGate).toBe(true)
   })
 
+  it('carries each step\'s recorded kind, which is what says where a run\'s text came from', () => {
+    const input = summaryInputFrom(snapshot())
+    // `kind` has been on the wire since the driver began recording it. The view used to read only
+    // `fixture_executor` out of it, so a run whose prose came from the offline route was rendered
+    // as a live run with nothing said about its text.
+    expect(input.steps.find(step => step.stepId === 'A1-landscape')?.executionKind)
+      .toBe('real_tool_fixture_input')
+    expect(input.steps.find(step => step.stepId === 'E2-submit')?.executionKind).toBe('humanGate')
+  })
+
   it('reports a fixture step as a degradation rather than letting it pass unremarked', () => {
     const payload = snapshot()
     const withFixture: WireRunSnapshot = {

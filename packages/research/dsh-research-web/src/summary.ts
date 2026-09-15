@@ -81,6 +81,56 @@ export interface StepView {
     readonly component: TrinityComponent
     readonly outcome: GateOutcome
   }>
+  /**
+   * How the run recorded this step's product being produced, e.g. `live_external`, `mock_external`,
+   * `fixture_executor`.
+   *
+   * The view needs it to say WHERE a run's text came from. A run whose drafting steps used the
+   * deployment's deterministic offline route produces demo prose, and a reader who is not told that
+   * has to find it in the manuscript's own notice.
+   */
+  readonly executionKind?: string
+}
+
+/**
+ * Which channel produced a run's manuscript prose, from the run's own per-step records.
+ *
+ * `model` — the deployment configured a model route and that route produced the text;
+ * `deterministic` — the deployment's deterministic offline route, which calls no model;
+ * `fixture` — the built-in sentences, with no prose channel running at all;
+ * `unknown` — the run recorded none of the manuscript's prose steps, so this build cannot say.
+ */
+export type ProseChannel = 'model' | 'deterministic' | 'fixture' | 'unknown'
+
+/**
+ * The steps whose artifact is the manuscript's own narrative text.
+ *
+ * A deployment configures ONE prose route, and these are the steps whose product a reader of the
+ * paper reads as prose. A1-landscape, A3-agenda, A4-venue and B1-method also write prose, but theirs
+ * is evidence for the claim rather than manuscript text, so they are not what a reader is being told
+ * about here.
+ */
+const MANUSCRIPT_PROSE_STEP_IDS: ReadonlyArray<string> = ['D2-framework', 'D3-writing', 'D4-rebuttal']
+
+/**
+ * The channel a run's manuscript prose came from, read from the steps that produced it.
+ *
+ * A `live_external` step outranks the others: one real model call is what makes the text not a demo.
+ * A run that reached none of these steps reports `unknown` rather than a channel it never used.
+ *
+ * @param steps - the run's flattened step rows.
+ * @returns the channel, or `unknown` when no manuscript prose step ran.
+ */
+export function proseChannelOf(steps: ReadonlyArray<StepView>): ProseChannel {
+  const kinds = new Set(
+    steps
+      .filter(step => MANUSCRIPT_PROSE_STEP_IDS.includes(step.stepId))
+      .map(step => step.executionKind),
+  )
+  if (kinds.has('live_external')) return 'model'
+  if (kinds.has('mock_external')) return 'deterministic'
+  if (kinds.has('fixture_executor')) return 'fixture'
+  return 'unknown'
 }
 
 /** One produced artifact's presentation row. */
@@ -202,6 +252,8 @@ export interface RunSummary {
   readonly hasDegradation: boolean
   /** True when this summary came from the bundled fixture rather than a real run. */
   readonly isMock: boolean
+  /** Which channel produced the manuscript prose; see {@link proseChannelOf}. */
+  readonly proseChannel: ProseChannel
 }
 
 const EMPTY_BY_STATUS: Record<StepStatus, number> = {
@@ -255,5 +307,6 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     hasAbstention: input.abstentions.length > 0,
     hasDegradation: input.degradations.length > 0,
     isMock: input.source === 'fixture',
+    proseChannel: proseChannelOf(input.steps),
   }
 }

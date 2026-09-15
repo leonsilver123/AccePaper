@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest'
 import { RESEARCH_FIXTURE, FIXTURE_RUN_ID } from '../src/fixture.ts'
 import { loadFixtureSummary, buildSummary } from '../src/loader.ts'
-import { toRunSummary, type RunSummaryInput } from '../src/summary.ts'
+import { proseChannelOf, toRunSummary, type RunSummaryInput, type StepView } from '../src/summary.ts'
 import { summaryInputFrom } from '../src/run-source.ts'
 
 describe('toRunSummary — derived counters', () => {
@@ -271,6 +271,44 @@ describe('summaryInputFrom — values this build cannot name', () => {
     })
 
     expect(input.abstentions[0]?.component).toBe('unknown')
+  })
+})
+
+/** One manuscript-prose step carrying the kind the run recorded for it. */
+function proseStep(stepId: string, executionKind: string): StepView {
+  return { stepId, index: 1, phase: 'D', name: stepId, status: 'passed', attempt: 1, humanGate: false, gateOutcomes: [], executionKind }
+}
+
+describe('the prose channel a run reports', () => {
+  it('reads it from the manuscript-prose steps, one real model call outranking the rest', () => {
+    expect(proseChannelOf([proseStep('D3-writing', 'mock_external')])).toBe('deterministic')
+    expect(proseChannelOf([proseStep('D3-writing', 'fixture_executor')])).toBe('fixture')
+    expect(proseChannelOf([proseStep('D2-framework', 'live_external')])).toBe('model')
+    // A run that used the offline route for one step and a model for another is a model run: the
+    // question this answers is whether any real model wrote text that reached the manuscript.
+    expect(proseChannelOf([
+      proseStep('D2-framework', 'mock_external'),
+      proseStep('D3-writing', 'live_external'),
+    ])).toBe('model')
+  })
+
+  it('reports unknown rather than a channel no prose step used', () => {
+    expect(proseChannelOf([])).toBe('unknown')
+    // A1 writes prose too, but it is evidence for the claim rather than manuscript text, so a run
+    // that stopped before the drafting steps has no manuscript prose to describe.
+    expect(proseChannelOf([proseStep('A1-landscape', 'live_external')])).toBe('unknown')
+    expect(proseChannelOf([proseStep('D3-writing', 'real_tool_fixture_input')])).toBe('unknown')
+  })
+
+  it('surfaces the channel on the derived summary, and unknown for the fixture', () => {
+    const live = toRunSummary({
+      ...summaryInputFrom({ run: { runId: 'r', steps: [] }, catalog: [], gates: [], artifacts: [], steps: [] }),
+      steps: [proseStep('D3-writing', 'mock_external')],
+    })
+    expect(live.proseChannel).toBe('deterministic')
+    // The bundled snapshot records no step kinds at all, so the view says it cannot tell rather
+    // than naming a channel the demo never used.
+    expect(loadFixtureSummary().proseChannel).toBe('unknown')
   })
 })
 

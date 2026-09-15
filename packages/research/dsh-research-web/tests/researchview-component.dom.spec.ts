@@ -11,7 +11,8 @@
  *
  * Covers: tab registration/guard, tab mount, 9 switchable panels, 16-step
  * status mapping, MOCK badge, artifact summaries, empty/error states, reload
- * re-render, and unload/re-register lifecycle.
+ * re-render, unload/re-register lifecycle, and the U1 orientation block (what
+ * the tab is, how to start a run, where the products go, and what to do next).
  */
 
 import { createElement } from 'react'
@@ -479,6 +480,65 @@ describe('research workbench run control', () => {
     // The failure is stated with its cause; the fixture is NOT passed off as the run.
     expect(screen.getByText(en['run.error'].replace('{message}', 'gateway refused the call'))).toBeTruthy()
     expect(screen.getAllByText(en['mock.badge']).length).toBeGreaterThan(0)
+  })
+})
+
+// ===========================================================================
+// 12. Orientation (U1): what this tab is, what to do with it, and where the
+//     numbers on screen came from.
+//
+// The tab used to be a badge, a run button and nine unlabelled panels. These
+// assertions are what a person who has not read the design documents needs in
+// order to start a run and know what they are looking at.
+// ===========================================================================
+describe('research workbench orientation', () => {
+  it('says what the pipeline is, how to start it, and where the products go', () => {
+    renderComp(createElement(ResearchWorkbench, { t }))
+
+    expect(screen.getByRole('heading', { name: en['intro.title'] })).toBeTruthy()
+    expect(screen.getByText(en['intro.what'])).toBeTruthy()
+    expect(screen.getByRole('heading', { name: en['intro.how'] })).toBeTruthy()
+    for (const key of ['intro.step1', 'intro.step2', 'intro.step3'] as const) {
+      expect(screen.getByText(en[key])).toBeTruthy()
+    }
+  })
+
+  it('tells a reader the page is demo data BEFORE a run, not only in the manuscript', () => {
+    renderComp(createElement(ResearchWorkbench, { t }))
+
+    expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
+    expect(screen.getByText(en['intro.next'].replace('{action}', en['next.notStarted']))).toBeTruthy()
+  })
+
+  it('names the channel a live run\'s manuscript prose came from', () => {
+    const offline = toRunSummary({
+      ...fixtureInput(),
+      source: 'live',
+      steps: [{
+        stepId: 'D3-writing', index: 15, phase: 'D', name: 'Manuscript drafting',
+        status: 'passed', attempt: 1, humanGate: false, gateOutcomes: [], executionKind: 'mock_external',
+      }],
+    })
+    renderComp(createElement(ResearchWorkbench, { t, summary: offline }))
+
+    expect(screen.queryByText(en['intro.noRun'])).toBeNull()
+    expect(screen.getByText(en['channel.deterministic'])).toBeTruthy()
+    expect(screen.getByText(en['intro.next'].replace('{action}', en['next.complete']))).toBeTruthy()
+  })
+
+  it('points at the approval tab when the run is waiting for a person', () => {
+    const waiting = toRunSummary({
+      ...fixtureInput(),
+      source: 'live',
+      steps: [{
+        stepId: 'E2-submit', index: 16, phase: 'E', name: 'Submission',
+        status: 'gated', attempt: 1, humanGate: true, holdReason: 'human_gate', gateOutcomes: [],
+      }],
+    })
+    renderComp(createElement(ResearchWorkbench, { t, summary: waiting }))
+
+    const expected = en['next.awaitingHuman'].replace('{count}', '1')
+    expect(screen.getByText(en['intro.next'].replace('{action}', expected))).toBeTruthy()
   })
 })
 

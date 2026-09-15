@@ -134,6 +134,25 @@ export const zh = {
   'recovery.restored': '已重新载入演示快照（演示）',
   'recovery.yes': '是',
   'recovery.no': '否',
+
+  // --- Orientation (U1): what this tab is, how to use it, and what the text came from ---
+  'intro.title': '这条流水线做什么',
+  'intro.what': '一条主张走完 16 步（阶段 A–E）才成为一篇可投稿的手稿。每一步只有通过三一评判才会前进：A 是红队投票，B 是外部锚，C 是可证伪预测加实验裁决；裁不出来的一步以「弃审」结束，永远不会变成通过。',
+  'intro.how': '怎么用',
+  'intro.step1': '按「运行流水线」启动一次运行 —— 它真的跑完 16 步，并把产物写到磁盘。',
+  'intro.step2': '运行会停在 E2-submit 的人工门等你裁决：打开「人工审批」标签页批准或驳回。',
+  'intro.step3': '产物和落盘位置在「概览 → 落盘产物」；每一步的状态在同页的步骤列表里，图形与表格在各自的标签页。',
+  'intro.noRun': '当前显示的是内置演示快照：本次会话还没有启动过运行。按「运行流水线」产生这次运行自己的记录与产物。',
+  'intro.next': '下一步：{action}',
+  'next.notStarted': '按「运行流水线」开始一次运行。',
+  'next.running': '运行进行中，等它跑完或停在人工门。',
+  'next.awaitingHuman': '有 {count} 个步骤在等人工裁决 —— 打开「人工审批」标签页。',
+  'next.failed': '运行失败了：失败原因写在该步骤那一行（「概览」标签页）。',
+  'next.complete': '运行已结束，且没有待人工裁决的步骤；产物位置见「概览 → 落盘产物」。',
+  'channel.model': '本次运行的正文由部署配置的模型路由生成。',
+  'channel.deterministic': '注意：本次运行的正文由部署的确定性离线通道生成 —— 那是演示文本，不是模型写的。',
+  'channel.fixture': '注意：本次运行的正文是内置的确定性句子，没有任何散文通道运行过。',
+  'channel.unknown': '本次运行没有记录手稿正文由哪个通道产出。',
 } as const
 
 /** The research dictionary key union. */
@@ -272,4 +291,23 @@ export const en: Record<ResearchKey, string> = {
   'recovery.restored': 'Demo snapshot reloaded (demo)',
   'recovery.yes': 'yes',
   'recovery.no': 'no',
+
+  // --- Orientation (U1): what this tab is, how to use it, and what the text came from ---
+  'intro.title': 'What this pipeline does',
+  'intro.what': 'One claim becomes a submittable manuscript only by surviving all 16 steps (phases A–E). A step advances only through the judgment trinity: A is the red-team vote, B the external anchor, C a falsifiable prediction adjudicated by an experiment. A step that cannot be judged ends `abstained` and never becomes a pass.',
+  'intro.how': 'How to use it',
+  'intro.step1': 'Press “Run pipeline” to start one run — it really drives all 16 steps and writes the products to disk.',
+  'intro.step2': 'The run stops at the E2-submit human gate and waits for your decision: open the Approval tab to approve or reject it.',
+  'intro.step3': 'The products and where they were written are under Summary → Written to disk; each step’s state is in the step list on that same panel, and the figures and tables have their own tabs.',
+  'intro.noRun': 'This page is showing the built-in demo snapshot: no run has been started in this session. Press “Run pipeline” to produce this run’s own record and products.',
+  'intro.next': 'Next: {action}',
+  'next.notStarted': 'press “Run pipeline” to start a run.',
+  'next.running': 'the run is in flight; wait for it to finish or stop at the human gate.',
+  'next.awaitingHuman': '{count} step(s) are waiting for a human decision — open the Approval tab.',
+  'next.failed': 'the run failed; the cause is on the step row that failed (Summary tab).',
+  'next.complete': 'the run has ended with no step awaiting a human decision; the products are under Summary → Written to disk.',
+  'channel.model': 'This run’s prose came from the model route the deployment configured.',
+  'channel.deterministic': 'Note: this run’s prose came from the deployment’s deterministic offline route — that is demo text, not written by a model.',
+  'channel.fixture': 'Note: this run’s prose is the built-in deterministic sentences; no prose channel ran.',
+  'channel.unknown': 'This run recorded no channel for the manuscript prose.',
 }

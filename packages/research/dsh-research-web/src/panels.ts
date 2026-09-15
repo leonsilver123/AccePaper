@@ -169,6 +169,42 @@ export function selectArtifacts(
     .sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
+/** What a reader of the run on screen should do next. */
+export type NextActionKind = 'not-started' | 'running' | 'awaiting-human' | 'failed' | 'complete'
+
+/** The next action, and the counts its sentence needs. */
+export interface NextAction {
+  readonly kind: NextActionKind
+  /** Steps waiting for a human decision; 0 unless `kind` is `awaiting-human`. */
+  readonly pendingCount: number
+}
+
+/**
+ * What to do next with the run on screen.
+ *
+ * Ordered by what actually BLOCKS the reader. Demo data outranks everything: while the page shows the
+ * bundled snapshot there is no run to act on, whatever states the demo happens to contain. A failed
+ * step then outranks a human wait — a run that stopped on an error is not one a person can approve —
+ * and a human wait outranks work still in flight, because the run cannot leave the gate without a
+ * decision.
+ *
+ * @param summary - the flattened run summary.
+ * @returns the state, plus the count the copy needs.
+ */
+export function selectNextAction(summary: RunSummary): NextAction {
+  if (summary.isMock) return { kind: 'not-started', pendingCount: 0 }
+  if (summary.steps.some(step => step.status === 'failed' || step.executeError !== undefined)) {
+    return { kind: 'failed', pendingCount: 0 }
+  }
+  if (summary.humanPending.length > 0) {
+    return { kind: 'awaiting-human', pendingCount: summary.humanPending.length }
+  }
+  if (summary.byStatus.pending > 0 || summary.byStatus.in_progress > 0) {
+    return { kind: 'running', pendingCount: 0 }
+  }
+  return { kind: 'complete', pendingCount: 0 }
+}
+
 /** The recovery snapshot slice consumed by the Recovery panel. */
 export interface RecoverySlice {
   readonly runId: string

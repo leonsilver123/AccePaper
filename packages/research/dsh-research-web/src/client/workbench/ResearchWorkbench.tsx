@@ -12,6 +12,7 @@ import type {
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ResearchKey } from '../locales.ts'
 import type { ApprovalSubmitter } from '../approval-source.ts'
+import { selectNextAction, type NextActionKind } from '../../panels.ts'
 import { loadFixtureSummary } from '../../loader.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
 import { PipelinePanel } from './PipelinePanel.tsx'
@@ -62,6 +63,20 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
 ]
 
 /**
+ * The copy for each next action.
+ *
+ * A record rather than a switch: the union is closed, so a new kind fails to compile here instead of
+ * rendering an empty sentence.
+ */
+const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
+  'not-started': 'next.notStarted',
+  running: 'next.running',
+  'awaiting-human': 'next.awaitingHuman',
+  failed: 'next.failed',
+  complete: 'next.complete',
+}
+
+/**
  * Render the research workbench. Renders the injected run summary when the host
  * supplies one and the bundled MOCK fixture otherwise, then switches the active
  * sub-panel on tab click. The view never polls a live run.
@@ -76,6 +91,7 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: Re
   const [error, setError] = useState<string | undefined>(undefined)
   const summary = useMemo(() => live ?? injected ?? loadFixtureSummary(), [live, injected])
   const [active, setActive] = useState<WorkbenchTab>('summary')
+  const nextAction = selectNextAction(summary)
 
   const start = useCallback(() => {
     if (onRun === undefined) return
@@ -94,6 +110,35 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: Re
 
   return (
     <div className={css.workbench}>
+      {/* WHAT THIS TAB IS, AND WHAT TO DO WITH IT. The tab used to be a badge, a run button and nine
+          unlabelled panels: a person who had not read the design documents could not tell what a run
+          would do, where its products went, or which channel wrote the text they were reading. The
+          next action is derived from the summary rather than written here. */}
+      {/* The data attributes are the stable hooks the browser probe reads; the copy itself is
+          locale-owned and asserted through these. */}
+      <section className={css.intro} data-research-intro="">
+        <h2 className={css.introTitle}>{t('intro.title')}</h2>
+        <p className={css.note}>{t('intro.what')}</p>
+        <h3 className={css.introSubtitle}>{t('intro.how')}</h3>
+        <ol className={css.introSteps}>
+          <li>{t('intro.step1')}</li>
+          <li>{t('intro.step2')}</li>
+          <li>{t('intro.step3')}</li>
+        </ol>
+        {/* Where the numbers on this page came from, before anything is started. */}
+        {summary.isMock && (
+          <p className={css.mockNote} data-research-source-note="">{t('intro.noRun')}</p>
+        )}
+        {!summary.isMock && (
+          <p className={css.mockNote} data-research-source-note="">
+            {t(`channel.${summary.proseChannel}`)}
+          </p>
+        )}
+        <p className={css.nextAction} data-research-next-action="">
+          {t('intro.next', { action: t(NEXT_ACTION_KEY[nextAction.kind], { count: nextAction.pendingCount }) })}
+        </p>
+      </section>
+
       {/* The badge states where the numbers came from. It used to be unconditional,
           so an injected real run was still labelled as demo data. */}
       <span className={css.mockBadge}>{summary.isMock ? t('mock.badge') : t('source.live')}</span>
