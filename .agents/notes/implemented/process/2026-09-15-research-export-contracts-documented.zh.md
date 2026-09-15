@@ -36,4 +36,8 @@ Status: implemented
 
 **生成的 config 目录多了两个包。** `docs/config-catalog.md` 现在带 `@deepseek-ai/dsh-research-cordis` 与 `@deepseek-ai/dsh-research-team` 两节,以及末尾两个清单里的四条,因为一个包只有在它的 config 有文档之后才会出现在那里。中文对侧是**手工**维护的 —— 文件自己的头部就是这么写的 —— 所以那四条清单项与两个新小节被镜像进 `docs/config-catalog.zh.md`,并用 `verify-translation-pairing --write` 重记了配对。
 
+**这道门禁查的是包的**入口**够得着什么,不是包里的每个文件。** `dsh-research-core` 没有导出 `./src/*` 子路径,所以 `verify-export-jsdoc` 通过构建产物 `lib/types/index.d.ts` 与 `lib/types/host-prod.d.ts` 解析它的导出面。`GATE_ERROR_PREFIX`、`appendAuditEvent`、`_applyHumanApproval` 这三者从两个入口都够不到,门禁**从来没有报过**它们,它们也不在那 280 条里。它们仍被补齐了,为的是与旁边的同类保持一致。所以"门禁绿"的含义是"消费者能 import 的每一个名字都陈述了契约" —— 这正是门禁的主张;它**不等于**"每个文件里的每个导出名"。
+
+**一处既有注释被证明是假的,而它所在字段的文档把这件事实说了出来。** `RoadmapNode.kind` 被描述为"可选的自由布局提示",但没有任何渲染器或校验器读它 —— 分层布局只按边放置节点。这个标签由调用方写入,原样进入产物。如果只在接口层如实描述、却把那个描述着"无人实现的效果"的字段注释留在原地,更正的正下方一行仍然躺着那句假话,所以字段注释被改写为陈述事实。
+
 **文档不等于完成。** 通过 `verify-export-jsdoc` 与 `gen-config-catalog --check`,说明每个导出如今都陈述了契约;它不说明那个契约是**对的**。这一批的证据就是这两道门禁加上没有回归的测试套件,本文里的任何内容都不把某个包在完成度阶梯上往上移一级。

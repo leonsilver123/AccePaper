@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-15-research-export-contracts-documented.md
-2026-09-15-research-export-contracts-documented.md: 29d4b2f87978935588081e520ec3c1e8186a6c48
-2026-09-15-research-export-contracts-documented.zh.md: 7cefce847d1a530a543fe90e09bf8910f31a1061
+2026-09-15-research-export-contracts-documented.md: b265735529e1ff3c4cf7d7bd0f5144916828f0bf
+2026-09-15-research-export-contracts-documented.zh.md: fbf7f825f02333a5ff0f26b9bff592572e39ec7b

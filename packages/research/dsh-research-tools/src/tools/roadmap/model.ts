@@ -21,7 +21,14 @@ export const ROADMAP_ERROR_PREFIX = 'DSH_ROADMAP_'
 export interface RoadmapNode {
   readonly id: string
   readonly label: string
-  /** Optional free-placement hint; ignored by layered layout. */
+  /**
+   * The node's role, as the caller authored it.
+   *
+   * IGNORED BY EVERY READER. It was documented as a placement hint, but the layered layout places
+   * nodes by their edges alone and neither renderer nor the validator consults this field, so
+   * changing it changes no output. It survives into the artifact unchanged, which is what lets a
+   * reader compare the rendered roadmap with the caller's intent.
+   */
   readonly kind?: 'input' | 'process' | 'output' | 'gate'
 }
 
