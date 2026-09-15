@@ -12,9 +12,7 @@ Status: implemented
 
 1. **服务读取未解析。** writer 用属性代理读 `ctx.agentLoop`。该代理只为**声明了 `agentLoop` 注入**的上下文解析;writer 由研究引擎构造,引擎没有声明。读取在请求存在之前就抛错了。
 
-2. **没有工作目录。** `agentLoop.create(id, options, meta)` 的**第三个**参数才是会话创建元数据,而 `meta.cwd` 是 `{{cwd}}` 系统提示变量的唯一来源(`ctx.systemPrompt.variable('cwd', c => c.agent?.session.header.cwd)`)。writer 与它旁边的工具 invoker 都只传了两个参数。`{{cwd}}` 是**严格**变量,且每个出货 bundle 的 persona 都引用它,于是提示装配抛出
-   `prompt variable "{{cwd}}" has no value for this assembly (section "deployment:persona")`,
-   **请求根本没有到达 provider** —— 一个 `assistant/*` 事件都没产生。
+2. **没有工作目录。** `agentLoop.create(id, options, meta)` 的**第三个**参数才是会话创建元数据,而 `meta.cwd` 是 `{{cwd}}` 系统提示变量的唯一来源(`ctx.systemPrompt.variable('cwd', c => c.agent?.session.header.cwd)`)。writer 与它旁边的工具 invoker 都只传了两个参数。`{{cwd}}` 是**严格**变量,且每个出货 bundle 的 persona 都引用它,于是提示装配抛出 `prompt variable "{{cwd}}" has no value for this assembly (section "deployment:persona")`,**请求根本没有到达 provider** —— 一个 `assistant/*` 事件都没产生。
 
 3. **会话 id 撞车。** 会话 id 是 `research-prose-${counter}`,一个每次启动都从零开始的进程内计数器。会话是**持久化**的,所以第二次运行时存储拒绝该 id:`session "research-prose-0" is already persisted at a different cwd`。在工作目录恰好相同的情况下,后果比报错更糟 —— 这次写入会**恢复上一轮的会话**,把它的 assistant 文本拽进本次步骤的产物。
 

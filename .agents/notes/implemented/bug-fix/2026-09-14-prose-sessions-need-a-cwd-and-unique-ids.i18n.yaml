@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-14-prose-sessions-need-a-cwd-and-unique-ids.md
-2026-09-14-prose-sessions-need-a-cwd-and-unique-ids.md: 2cc2ecfc980634d1774feeb4cf72d2da179374c5
-2026-09-14-prose-sessions-need-a-cwd-and-unique-ids.zh.md: 200816e6e4b19f2d9ee2c9d5f00aae008a9a0ca2
+2026-09-14-prose-sessions-need-a-cwd-and-unique-ids.md: f22d06722c00523e468e4d2555597d1ff8cc0bd7
+2026-09-14-prose-sessions-need-a-cwd-and-unique-ids.zh.md: dd6d053d071806406c9a9415819a05f1328e6c00

@@ -586,6 +586,52 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 来源：[`packages/core/session/src/types.ts:329`](../packages/core/session/src/types.ts)
 
+### `research/*`
+
+<a id="researchmember--log-only"></a>
+
+#### `research/member` — log-only
+
+```ts persistence-catalog
+/** Whole member lifecycle value, stored only in the research Lead Session log. */
+'research/member': Omit<ResearchMemberEvent, 'type'>
+```
+
+Source: [`packages/research/dsh-research-team/src/session-events.ts:47`](../packages/research/dsh-research-team/src/session-events.ts)
+
+<a id="researchrebuttal--log-only"></a>
+
+#### `research/rebuttal` — log-only
+
+```ts persistence-catalog
+/** One accepted fleet rebuttal vote, recorded only by the research Lead. */
+'research/rebuttal': Omit<ResearchRebuttalEvent, 'type'>
+```
+
+Source: [`packages/research/dsh-research-team/src/session-events.ts:53`](../packages/research/dsh-research-team/src/session-events.ts)
+
+<a id="researchrev--log-only"></a>
+
+#### `research/rev` — log-only
+
+```ts persistence-catalog
+/** Compare-and-set revision record for one shared artifact head. */
+'research/rev': Omit<ResearchRevEvent, 'type'>
+```
+
+Source: [`packages/research/dsh-research-team/src/session-events.ts:51`](../packages/research/dsh-research-team/src/session-events.ts)
+
+<a id="researchtask--log-only"></a>
+
+#### `research/task` — log-only
+
+```ts persistence-catalog
+/** Whole task snapshot (revision embedded), stored only in the Lead log. */
+'research/task': Omit<ResearchTaskEvent, 'type'>
+```
+
+Source: [`packages/research/dsh-research-team/src/session-events.ts:49`](../packages/research/dsh-research-team/src/session-events.ts)
+
 ### `sandbox/*`
 
 <a id="sandboxmode--log-only"></a>

@@ -12,9 +12,7 @@ It had never been executed. Driving it on a real boot produced, in order, four d
 
 1. **Unresolved service read.** The writer read `ctx.agentLoop` through the property proxy. That proxy resolves only for a context that declares `agentLoop` in its `inject`; the writer is constructed by the research engine, which does not. The read threw before any request existed.
 
-2. **No working directory.** `agentLoop.create(id, options, meta)` takes the session's creation metadata as its **third** argument, and `meta.cwd` is the only source of the `{{cwd}}` system-prompt variable (`ctx.systemPrompt.variable('cwd', c => c.agent?.session.header.cwd)`). The writer, and the agent-loop tool invoker beside it, passed two arguments. `{{cwd}}` is a **strict** variable and every shipped bundle's persona references it, so prompt assembly threw
-   `prompt variable "{{cwd}}" has no value for this assembly (section "deployment:persona")`
-   and **the request never reached the provider** — no `assistant/*` event was ever emitted.
+2. **No working directory.** `agentLoop.create(id, options, meta)` takes the session's creation metadata as its **third** argument, and `meta.cwd` is the only source of the `{{cwd}}` system-prompt variable (`ctx.systemPrompt.variable('cwd', c => c.agent?.session.header.cwd)`). The writer, and the agent-loop tool invoker beside it, passed two arguments. `{{cwd}}` is a **strict** variable and every shipped bundle's persona references it, so prompt assembly threw `prompt variable "{{cwd}}" has no value for this assembly (section "deployment:persona")` and **the request never reached the provider** — no `assistant/*` event was ever emitted.
 
 3. **Session id collisions.** The session id was `research-prose-${counter}`, a per-process counter that restarts at zero on every boot. Sessions are persisted, so on the second run the store rejected the id: `session "research-prose-0" is already persisted at a different cwd`. Where the working directory happened to match, the outcome would have been worse than an error — the write would have resumed a previous run's session and pulled its assistant text into this step's product.
 
