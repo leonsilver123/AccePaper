@@ -12,10 +12,12 @@ import { describe, expect, it } from 'vitest'
 import type {
   MeasuredMetric,
   PredictionAdjudication,
+  PredictionClaimInput,
   PredictionCommitment,
   PredictionMeasurement,
 } from '../src/runner/prediction-gate.ts'
 import {
+  claimRejectionOf,
   claimTextNamesQuantity,
   evaluatePrediction,
   measuringClause,
@@ -730,5 +732,120 @@ describe('the discipline belongs to the gate, not to the study', () => {
     })
     expect(verdict.kind).toBe('unbindable')
     expect(ran).toBe(false)
+  })
+})
+
+describe('the claim-level check, without a measurement', () => {
+  // What a direction proposal needs. It has no study to run, and it must refuse an ungradeable
+  // claim BEFORE a person commits to it rather than after a run stalls on it — so the checks that
+  // decide gradeability are reachable from the same implementation the gate uses, and the two
+  // cannot disagree about what is gradeable.
+  const canonical =
+    'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
+  const commitment: PredictionCommitment = { direction: 'increase', bound: 'at-least', thresholdPct: 20 }
+  const cases: ReadonlyArray<{
+    readonly why: string
+    readonly claim: PredictionClaimInput
+    readonly reason: string
+  }> = [
+    {
+      why: 'the claim declares no metric',
+      claim: { predictionText: canonical, metric: MEASURED_METRIC },
+      reason: 'declares no metric',
+    },
+    {
+      why: 'the claim is about a quantity this study does not measure',
+      claim: { predictionText: canonical, metric: MEASURED_METRIC, declaredMetricKey: 'p99-latency-ms' },
+      reason: 'this study measures',
+    },
+    {
+      why: 'the prediction never names the quantity it declares',
+      claim: {
+        predictionText: 'the platoon string-stability index shall rise by at least 20%',
+        metric: MEASURED_METRIC,
+        declaredMetricKey: MEASURED_METRIC.key,
+        commitment,
+      },
+      reason: 'does not name that quantity',
+    },
+    {
+      why: 'the claim declares no commitment',
+      claim: { predictionText: canonical, metric: MEASURED_METRIC, declaredMetricKey: MEASURED_METRIC.key },
+      reason: 'declares no commitment',
+    },
+    {
+      why: 'the sentence does not state the declared threshold',
+      claim: {
+        predictionText: 'the HV-AV-HV platoon minimum time-to-collision shall rise',
+        metric: MEASURED_METRIC,
+        declaredMetricKey: MEASURED_METRIC.key,
+        commitment,
+      },
+      reason: 'states none',
+    },
+    {
+      why: 'the prediction is a prohibition',
+      claim: {
+        predictionText:
+          'the HV-AV-HV platoon minimum time-to-collision shall not rise by at least 20%',
+        metric: MEASURED_METRIC,
+        declaredMetricKey: MEASURED_METRIC.key,
+        commitment,
+      },
+      reason: 'contains a negation',
+    },
+    {
+      why: 'the declaration contradicts the sentence\'s own direction word',
+      claim: {
+        predictionText: canonical,
+        metric: MEASURED_METRIC,
+        declaredMetricKey: MEASURED_METRIC.key,
+        commitment: { direction: 'decrease', bound: 'at-least', thresholdPct: 20 },
+      },
+      reason: 'contradict each other',
+    },
+  ]
+
+  it('refuses an ungradeable claim, and never runs the study to find out', () => {
+    for (const { why, claim, reason } of cases) {
+      expect(claimRejectionOf(claim), why).toContain(reason)
+      let ran = false
+      const verdict = evaluatePrediction({
+        ...claim,
+        measure: () => {
+          ran = true
+          return { isComparable: false, reason: 'the study was asked to measure an ungradeable claim' }
+        },
+      })
+      expect(verdict.kind, why).toBe('unbindable')
+      expect(ran, why).toBe(false)
+    }
+  })
+
+  it('reports exactly the reason the gate reports', () => {
+    // One implementation. A proposal that says a claim is fine and a run that holds on it would be
+    // the two halves disagreeing about gradeability, which is what this pins shut.
+    for (const { why, claim } of cases) {
+      const verdict = evaluatePrediction({
+        ...claim,
+        measure: () => {
+          throw new Error('the gate reached the measurement for an ungradeable claim')
+        },
+      })
+      expect(verdict.kind === 'unbindable' ? verdict.reason : undefined, why).toBe(
+        claimRejectionOf(claim),
+      )
+    }
+  })
+
+  it('passes a gradeable claim through', () => {
+    expect(
+      claimRejectionOf({
+        predictionText: canonical,
+        metric: MEASURED_METRIC,
+        declaredMetricKey: MEASURED_METRIC.key,
+        commitment,
+      }),
+    ).toBeUndefined()
   })
 })

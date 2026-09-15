@@ -41,6 +41,7 @@ import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.t
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import type { RunResult } from '../src/runner/types.ts'
 import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { CASE_PACK_INPUT_SLUGS } from '../src/runner/case-pack.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import type { StudyPlan } from '../src/runner/study-plan.ts'
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
@@ -58,6 +59,7 @@ function freshRunCtx(): RunContext {
     claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
     study: experimentStudy(),
     studyPlan: DEFAULT_PLAN,
+    planSource: 'default',
     timestamp: FIXED_TS,
   }
 }
@@ -566,6 +568,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
       study: experimentStudy(),
       studyPlan: DEFAULT_PLAN,
+      planSource: 'default',
       timestamp: FIXED_TS,
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture
@@ -747,6 +750,67 @@ describe('the run states its own research, and the artifacts carry it', () => {
     // was started with survive the claim being written into it.
     expect(runCtx.studyPlan.title).toBe(PLAN.title)
     expect(runCtx.studyPlan.direction).toBe(PLAN.direction)
+  })
+
+  it('keeps the claim the caller confirmed, and does not let a Case Pack overwrite it', async () => {
+    // A claim a person confirmed is not a fixture file's to replace. The pack still supplies the
+    // scenario this run MEASURES and the material's scope and sources — so the run measures and
+    // reviews what the pack declares — but the run's claim stays the one that was confirmed. The
+    // alternative is a manuscript stating a claim its own dialog never showed.
+    const runCtx: RunContext = { ...plannedCtx(), planSource: 'caller' }
+    const entry = STEP_EXECUTOR_REGISTRY.get('A2-claim')
+    const out = (await entry?.executor({
+      ...execCtxWith('A2-claim', {
+        [CASE_PACK_INPUT_SLUGS.claim]: {
+          assertion: 'A claim the pack declares instead.',
+          essentialDifference: "the pack's difference",
+          experimentToFalsify: "the pack's experiment",
+          prediction: 'the all-HV platoon shall fall in minimum time-to-collision by at least 20%',
+          metricKey: MEASURED_METRIC.key,
+          commitment: { direction: 'decrease', bound: 'at-least', thresholdPct: 20 },
+          scope: "the pack's scope",
+          dataSource: "the pack's source",
+          declaredSources: ['pack-source'],
+          casePackId: 'case-pack-spec',
+          truthfulness: 'fixture',
+        },
+      }),
+      runCtx,
+    })) as Record<string, Record<string, unknown>>
+
+    expect(runCtx.predictionText).toBe(PLAN.claim.prediction)
+    expect(runCtx.claimId).toBe(PLAN.claim.id)
+    expect(runCtx.commitment).toEqual(PLAN.commitment)
+    // ...and the pack's own declarations still reach the material and the artifact route, so the
+    // review reads what the pack states about scope and sources rather than a gap.
+    expect(runCtx.claimMaterial.scope).toBe("the pack's scope")
+    expect(runCtx.claimMaterial.declaredSources).toEqual(['pack-source'])
+    expect((out['falsifiable-prediction']?.claimRoute as { source?: unknown }).source).toBe('caller-plan')
+  })
+
+  it('lets the Case Pack state the claim when the run carries the default plan', async () => {
+    // The control for the case above: with the deployment's own plan the pack is the authority it
+    // has always been, so the assertion above is about OWNERSHIP rather than about the pack being
+    // ignored outright.
+    const runCtx = freshRunCtx()
+    const entry = STEP_EXECUTOR_REGISTRY.get('A2-claim')
+    await entry?.executor({
+      ...execCtxWith('A2-claim', {
+        [CASE_PACK_INPUT_SLUGS.claim]: {
+          assertion: 'A claim the pack declares.',
+          essentialDifference: "the pack's difference",
+          experimentToFalsify: "the pack's experiment",
+          prediction: 'the all-HV platoon shall fall in minimum time-to-collision by at least 20%',
+          metricKey: MEASURED_METRIC.key,
+          commitment: { direction: 'decrease', bound: 'at-least', thresholdPct: 20 },
+          casePackId: 'case-pack-spec',
+          truthfulness: 'fixture',
+        },
+      }),
+      runCtx,
+    })
+    expect(runCtx.predictionText)
+      .toBe('the all-HV platoon shall fall in minimum time-to-collision by at least 20%')
   })
 
   it('D2 states the plan\'s title and the plan\'s section names', async () => {

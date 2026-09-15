@@ -19,6 +19,7 @@ import { summaryInputFrom, type WireRunSnapshot } from '../run-source.ts'
 import { buildApprovalSubmitter } from './approval-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
+import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -35,8 +36,20 @@ interface ResearchRemoteNamespace {
    * the snapshot is what made the tab report `Cannot read properties of undefined (reading
    * 'steps')` after the namespace was finally mounted.
    */
-  run(request: { readonly domainDirection?: string }): Promise<
+  run(request: { readonly domainDirection?: string; readonly plan?: WirePlan }): Promise<
     { readonly ok: true; readonly value: WireRunSnapshot }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * The second method on the same namespace: what the run dialog asks before a run exists.
+   *
+   * Declared beside `run` rather than in a twin file of its own, because the two are one surface —
+   * a plan is proposed here and confirmed into the call above, and a drift between their field
+   * names would leave the dialog confirming a plan the host cannot read.
+   */
+  proposeDirections(request: { readonly field?: string }): Promise<
+    { readonly ok: true; readonly value: WireProposalAnswer }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
 }
@@ -62,7 +75,7 @@ export function apply(ctx: Context): void {
   // inject` on the first real click. `ctx.get` reads the global service store, which is the
   // documented read for a service this plugin does not declare — the same distinction the prose
   // writer needed for `ctx.agentLoop` (docs/postmortem/0001-acp-default-export-drops-inject.md).
-  const run = async (): Promise<ReturnType<typeof buildSummary>> => {
+  const run = async (plan?: WirePlan): Promise<ReturnType<typeof buildSummary>> => {
     const remote = ctx.get('remote.research') as unknown as ResearchRemoteNamespace | undefined
     if (remote === undefined) {
       throw new Error(
@@ -70,12 +83,32 @@ export function apply(ctx: Context): void {
         + 'namespaces did not mount the research one',
       )
     }
-    const result = await remote.run({})
+    const result = await remote.run(plan === undefined ? {} : { plan })
     // A refused call carries the host's own failure; surfacing it here is what keeps the tab
     // from showing a stale fixture as though the run had produced it.
     if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
     return buildSummary(summaryInputFrom(result.value))
   }
+  /**
+   * Ask the host for research directions. The failure is surfaced rather than turned into an empty
+   * answer: "the host could not propose" and "the host proposed nothing" are different facts, and
+   * the dialog says which.
+   * @param field - the domain the person stated, or an empty string for none.
+   * @returns what the host could propose, and what it refused.
+   */
+  const propose = async (field: string): Promise<WireProposalAnswer> => {
+    const remote = ctx.get('remote.research') as unknown as ResearchRemoteNamespace | undefined
+    if (remote === undefined) {
+      throw new Error(
+        'the client has no `remote.research` namespace: the assembly that mounts Remote '
+        + 'namespaces did not mount the research one',
+      )
+    }
+    const result = await remote.proposeDirections({ field })
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+    return result.value
+  }
+
   // `ctx.connection.rpc.call` reaches the approval channel `dsh-research-team` registers on the
   // HOST's Connection service, so the browser attaches its authenticated session cookie and the
   // decision is attributable to the host's operator rather than to anything in the payload.
@@ -92,5 +125,5 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run, approve)))
+  }, researchViewWith(run, approve, propose)))
 }

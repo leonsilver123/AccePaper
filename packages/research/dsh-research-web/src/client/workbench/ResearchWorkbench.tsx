@@ -18,6 +18,8 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ResearchKey } from '../locales.ts'
 import type { ApprovalSubmitter } from '../approval-source.ts'
 import type { RunSummary } from '../../summary.ts'
+import type { WirePlan, WireProposalAnswer } from '../direction-source.ts'
+import { DirectionDialog } from './DirectionDialog.tsx'
 import { selectNextAction, type NextActionKind } from '../../panels.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
 import { PipelinePanel } from './PipelinePanel.tsx'
@@ -38,10 +40,19 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
   /** The run to render. Omitted means this session has not run anything. */
   readonly summary?: RunSummary
   /**
-   * Start a real run and resolve with its summary. Omitted by a host that has no run
-   * to start, in which case the view shows no run control.
+   * Start a real run and resolve with its summary, under the plan the person confirmed.
+   *
+   * Omitted by a host that has no run to start, in which case the view shows no run control. The
+   * plan is omitted by a caller that has none to state — the run then carries the deployment's
+   * default, which is what a host with no proposal seam can offer.
    */
-  readonly onRun?: () => Promise<RunSummary>
+  readonly onRun?: (plan?: WirePlan) => Promise<RunSummary>
+  /**
+   * Ask the host for research directions within a field. Omitted by a host that cannot reach a
+   * model, in which case the run control starts the default plan directly rather than opening a
+   * dialog that could only ever fail.
+   */
+  readonly onPropose?: (field: string) => Promise<WireProposalAnswer>
   /**
    * Submit one human-gate decision to the backend. Omitted by a host whose deployment serves no
    * authenticated approval endpoint, in which case the approval panel's buttons stay disabled.
@@ -88,8 +99,9 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  * @param props - slot runtime props, the `research` namespace translate `t`, an optional
  *   `summary` to render, and the optional run and approval seams.
  */
-export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: ResearchViewProps) {
+export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const summary = useMemo(() => live ?? injected, [live, injected])
@@ -97,11 +109,12 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: Re
   // No run means the next action is the one that starts a run, so there is nothing to derive.
   const nextAction = summary === undefined ? undefined : selectNextAction(summary)
 
-  const start = useCallback(() => {
+  const start = useCallback((plan?: WirePlan) => {
     if (onRun === undefined) return
+    setDialogOpen(false)
     setRunning(true)
     setError(undefined)
-    void onRun().then(
+    void onRun(plan).then(
       (result) => { setLive(result); setRunning(false) },
       (cause: unknown) => {
         // A run that failed is reported as a failure. Showing anything else would leave a
@@ -149,9 +162,25 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onApprove }: Re
         <span className={css.mockBadge}>{summary.isMock ? t('mock.badge') : t('source.live')}</span>
       )}
       {onRun !== undefined && (
-        <button type="button" className={css.tab} onClick={start} disabled={running}>
+        <button
+          type="button"
+          className={css.tab}
+          // The plan is what a run is ABOUT, so the control that starts one asks for it first. A
+          // host with no proposal seam has nothing to ask with, and starts the default directly
+          // rather than opening a dialog that could only fail.
+          onClick={() => { if (onPropose === undefined) start(); else setDialogOpen(true) }}
+          disabled={running}
+        >
           {running ? t('run.running') : t('run.action')}
         </button>
+      )}
+      {dialogOpen && onPropose !== undefined && (
+        <DirectionDialog
+          t={t}
+          onPropose={onPropose}
+          onConfirm={start}
+          onCancel={() => { setDialogOpen(false) }}
+        />
       )}
       {error !== undefined && (
         <span className={css.mockBadge}>{t('run.error').replace('{message}', error)}</span>

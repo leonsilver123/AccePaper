@@ -486,8 +486,34 @@ export function measuringClause(
     })
 }
 
-/** Everything the gate needs to adjudicate one claim. */
-export interface PredictionGateInput {
+/**
+ * Read a declared commitment out of an artifact, validating its shape.
+ *
+ * Anything else is the claim declining to say which way its quantity should move, or by how much —
+ * which the C channel holds on — rather than a partially-read commitment this function would have
+ * to guess at. A commitment without a threshold is not read as the old two-field commitment: the
+ * threshold is what the verdict grades, and defaulting it would put a number back into the gate
+ * that the claim never declared.
+ *
+ * @param value - the value found on the claim artifact.
+ * @returns the commitment, or undefined when the value is not one.
+ */
+export function commitmentFrom(value: unknown): PredictionCommitment | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const direction = record['direction']
+  const bound = record['bound']
+  const thresholdPct = record['thresholdPct']
+  if (direction !== 'increase' && direction !== 'decrease') return undefined
+  if (bound !== 'at-least' && bound !== 'at-most' && bound !== 'within') return undefined
+  if (typeof thresholdPct !== 'number' || !Number.isFinite(thresholdPct) || thresholdPct <= 0) {
+    return undefined
+  }
+  return { direction, bound, thresholdPct }
+}
+
+/** Everything the gate needs to judge a claim, with no measurement required. */
+export interface PredictionClaimInput {
   /** The claim's falsifiable prediction, whole. */
   readonly predictionText: string
   /** The quantity the study measures. */
@@ -511,6 +537,10 @@ export interface PredictionGateInput {
    * here — and the first for which `no usable threshold` is user-facing.
    */
   readonly commitment?: PredictionCommitment | undefined
+}
+
+/** Everything the gate needs to adjudicate one claim. */
+export interface PredictionGateInput extends PredictionClaimInput {
   /**
    * Run the study and report what it measured.
    *
@@ -525,18 +555,24 @@ export interface PredictionGateInput {
 }
 
 /**
- * Adjudicate one prediction against what the study measured.
+ * Why this claim cannot be graded at all, or undefined when it can.
  *
- * This is the single source the C1 executor and the C gate both consume, so the artifact and the
- * verdict can never disagree: they are the same measurement.
+ * THE CLAIM-LEVEL HALF OF {@link evaluatePrediction}, exported because a caller can need it
+ * without a measurement. The direction proposal a person is about to confirm is exactly that
+ * caller: it has no study to run, and it must refuse an ungradeable claim BEFORE a person commits
+ * to it rather than after a run stalls on it. Supplying a fake measurement to reach these checks
+ * would make that caller depend on the measurement half it is trying not to run.
  *
- * @param input - the claim, the quantity it is graded against, and how to run the study.
- * @returns the verdict, or why the prediction could not be adjudicated.
+ * Every check here reads the claim and nothing else: the binding, the metric's words, the clause
+ * that carries them, the declared commitment, the stated threshold, the polarity, the anchor and
+ * the direction. A returned reason is a HOLD — the same fail-closed answer the C channel gives,
+ * never a verdict.
+ *
+ * @param input - the claim, the quantity it is graded against, and what it declares.
+ * @returns the reason it cannot be graded, or undefined when it can.
  */
-export function evaluatePrediction(
-  input: PredictionGateInput,
-): PredictionAdjudication {
-  const { predictionText, metric, declaredMetricKey, commitment, measure } = input
+export function claimRejectionOf(input: PredictionClaimInput): string | undefined {
+  const { predictionText, metric, declaredMetricKey, commitment } = input
   // The binding is checked FIRST. A prediction about a quantity this study does not measure
   // cannot be adjudicated however many percentages it states, and grading it would report an
   // untested claim as supported or refuted.
@@ -545,23 +581,14 @@ export function evaluatePrediction(
     declaredMetricKey === '' ||
     declaredMetricKey !== metric.key
   ) {
-    return {
-      kind: 'unbindable',
-      reason:
-        declaredMetricKey === undefined || declaredMetricKey === ''
-          ? `the claim declares no metric, so nothing binds it to the quantity this study measures (${metric.label})`
-          : `the claim is about "${declaredMetricKey}" while this study measures "${metric.key}" (${metric.label}), so the measurement cannot adjudicate it`,
-    }
+    return declaredMetricKey === undefined || declaredMetricKey === ''
+      ? `the claim declares no metric, so nothing binds it to the quantity this study measures (${metric.label})`
+      : `the claim is about "${declaredMetricKey}" while this study measures "${metric.key}" (${metric.label}), so the measurement cannot adjudicate it`
   }
-  const matched = claimTextNamesQuantity(predictionText, metric.phrases)
-  if (matched === undefined) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the claim declares the metric "${declaredMetricKey}" but the prediction it commits to does not name ` +
-        `that quantity (no phrasing of ${metric.label} appears in it), so the declaration ` +
-        'is unverified and the measurement cannot adjudicate it',
-    }
+  if (claimTextNamesQuantity(predictionText, metric.phrases) === undefined) {
+    return `the claim declares the metric "${declaredMetricKey}" but the prediction it commits to does not name `
+      + `that quantity (no phrasing of ${metric.label} appears in it), so the declaration `
+      + 'is unverified and the measurement cannot adjudicate it'
   }
   // The literals are read from the clause naming the measured quantity, not from the whole
   // sentence: a second clause may legitimately carry its own number or anchor, and an audit measured
@@ -577,23 +604,15 @@ export function evaluatePrediction(
     // because the phrase list and the boundary table are edited independently: a phrase that ever
     // gains a boundary word makes this call return undefined, and without the branch the caller
     // would throw on `percentagesIn(undefined)` instead of HOLDING. The spec pins the list.
-    return {
-      kind: 'unbindable',
-      reason:
-        `the measurement cannot adjudicate the prediction: no clause of it names ${metric.label}`,
-    }
+    return `the measurement cannot adjudicate the prediction: no clause of it names ${metric.label}`
   }
 
   // The commitment is DECLARED, not inferred. See `PredictionCommitment` for why the inference was
   // removed rather than narrowed again.
   if (commitment === undefined) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the claim is about ${metric.label} and states a threshold, but declares no ` +
-        'commitment, so nothing says which way the quantity is supposed to move — a study has to ' +
-        'state what it is testing, exactly as it has to declare the quantity itself',
-    }
+    return `the claim is about ${metric.label} and states a threshold, but declares no `
+      + 'commitment, so nothing says which way the quantity is supposed to move — a study has to '
+      + 'state what it is testing, exactly as it has to declare the quantity itself'
   }
   const { direction, bound, thresholdPct } = commitment
   // The prose must STATE the declared threshold, exactly once. This is an equality between two
@@ -620,13 +639,9 @@ export function evaluatePrediction(
       ? `${String(thresholdPct)}%`
       : 'no usable threshold'
   if (statedPercentages.length !== 1 || statedPercentages[0] !== thresholdPct) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the claim declares ${declaredThreshold}, while its own prediction states `
-        + `${statedPercentages.length === 0 ? 'none' : `${statedPercentages.map(String).join(', ')}%`} `
-        + '— the declaration and the sentence contradict each other, so the claim is not gradeable as stated',
-    }
+    return `the claim declares ${declaredThreshold}, while its own prediction states `
+      + `${statedPercentages.length === 0 ? 'none' : `${statedPercentages.map(String).join(', ')}%`} `
+      + '— the declaration and the sentence contradict each other, so the claim is not gradeable as stated'
   }
   // POLARITY FIRST. A negation makes the sentence ungradeable whatever its words say, because the
   // model cannot tell a prohibition from a requirement — see `POLARITY_WORDS` for the counterexample
@@ -640,13 +655,9 @@ export function evaluatePrediction(
   // honest sentences too, and that is the correct direction: a false refusal is a HOLD the author
   // fixes by writing positively, while a false pass publishes a refuted claim as supported.
   if (carriesNegation(predictionText)) {
-    return {
-      kind: 'unbindable',
-      reason:
-        'the prediction contains a negation, so whether it states a requirement or a PROHIBITION '
-        + 'cannot be read from it — this model can only grade a positive statement of the direction '
-        + 'the quantity should move',
-    }
+    return 'the prediction contains a negation, so whether it states a requirement or a PROHIBITION '
+      + 'cannot be read from it — this model can only grade a positive statement of the direction '
+      + 'the quantity should move'
   }
 
   // The declaration must agree with the claim's OWN anchor literal, compared as strings. This is
@@ -655,45 +666,52 @@ export function evaluatePrediction(
   // metric that disagrees with the measured one — so the claim is not gradeable as stated.
   const anchorBound = anchorBoundIn(clause)
   if (anchorBound === undefined) {
-    return {
-      kind: 'unbindable',
-      reason:
-        'the prediction carries no anchor, or carries more than one '
-        + `(accepted: ${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's `
-        + 'own words says how the number relates to the change',
-    }
+    return 'the prediction carries no anchor, or carries more than one '
+      + `(accepted: ${ANCHOR_TOKENS.map(token => token.text).join(', ')}), so nothing in the claim's `
+      + 'own words says how the number relates to the change'
   }
   if (anchorBound !== bound) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the claim declares bound "${bound}" while its own prediction anchors the threshold with ` +
-        `"${anchorBound}" — the declaration and the sentence contradict each other, so the claim is ` +
-        'not gradeable as stated',
-    }
+    return `the claim declares bound "${bound}" while its own prediction anchors the threshold with `
+      + `"${anchorBound}" — the declaration and the sentence contradict each other, so the claim is `
+      + 'not gradeable as stated'
   }
   // ...and the DIRECTION must agree with the sentence too. Absent or ambiguous is a gap; a
   // disagreement is the contradiction. Neither can produce a verdict, which is the property that
   // separates this from the reader this batch deleted.
   const namedDirection = requirementDirectionIn(clause)
   if (namedDirection === undefined) {
-    return {
-      kind: 'unbindable',
-      reason:
-        'the prediction does not state its direction in the required form ("shall rise", "shall '
-        + 'fall" and the other direction words), so whether it requires a change or PROHIBITS one '
-        + 'cannot be read from it — a claim has to be a positive statement',
-    }
+    return 'the prediction does not state its direction in the required form ("shall rise", "shall '
+      + 'fall" and the other direction words), so whether it requires a change or PROHIBITS one '
+      + 'cannot be read from it — a claim has to be a positive statement'
   }
   if (namedDirection !== direction) {
-    return {
-      kind: 'unbindable',
-      reason:
-        `the claim declares direction "${direction}" while its own prediction says the quantity ` +
-        `should ${namedDirection} — the declaration and the sentence contradict each other, so the ` +
-        'claim is not gradeable as stated',
-    }
+    return `the claim declares direction "${direction}" while its own prediction says the quantity `
+      + `should ${namedDirection} — the declaration and the sentence contradict each other, so the `
+      + 'claim is not gradeable as stated'
   }
+  return undefined
+}
+
+/**
+ * Adjudicate one prediction against what the study measured.
+ *
+ * This is the single source the C1 executor and the C gate both consume, so the artifact and the
+ * verdict can never disagree: they are the same measurement.
+ *
+ * @param input - the claim, the quantity it is graded against, and how to run the study.
+ * @returns the verdict, or why the prediction could not be adjudicated.
+ */
+export function evaluatePrediction(
+  input: PredictionGateInput,
+): PredictionAdjudication {
+  const { predictionText, metric, commitment, measure } = input
+  const rejection = claimRejectionOf(input)
+  if (rejection !== undefined) return { kind: 'unbindable', reason: rejection }
+  // Past the claim-level checks, so the metric's words are present and the declaration agrees with
+  // the sentence. `claimRejectionOf` returned undefined, which means the phrase is there; this
+  // recomputes it rather than widening that function's return to carry the verdict's own fields.
+  const matched = claimTextNamesQuantity(predictionText, metric.phrases) as string
+  const { direction, bound, thresholdPct } = commitment as PredictionCommitment
 
   // THE MEASUREMENT IS COMPARED LAST, AFTER EVERY CLAIM-LEVEL CHECK. Two reasons, and the second
   // is the one that matters: it is the expensive step in every study, and it is the only check here

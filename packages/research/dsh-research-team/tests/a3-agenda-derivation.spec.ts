@@ -70,6 +70,7 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
       claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
       study: experimentStudy(),
       studyPlan: DEFAULT_PLAN,
+      planSource: 'default',
       timestamp: 1_700_000_000_000,
     },
     ...(writer !== undefined ? { proseWriter: writer } : {}),

@@ -287,3 +287,77 @@
   color: #b25e00;
   font-size: 11px;
 }
+
+/* The run dialog: the field, the proposals, and the criterion a person confirms. */
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(24 28 33 / 45%);
+  z-index: 40;
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(24 28 33 / 24%);
+  box-sizing: border-box;
+}
+
+.dialogField {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5b6470;
+}
+
+.dialogInput {
+  padding: 6px 8px;
+  border: 1px solid #d8dbe0;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.proposalList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e6e8ec;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.proposalChoice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.proposalTitle {
+  font-weight: 600;
+}

@@ -347,7 +347,62 @@ export interface TeamState {
 export interface ResearchRunRequest {
   /** Seed for the run's single seedable input (`domain-direction`). */
   readonly domainDirection?: string
+  /**
+   * The research this run carries, when the caller states one.
+   *
+   * Untrusted at this boundary and validated by the host before the run starts: everything
+   * downstream trusts the plan completely, so a malformed one would not fail where it entered — it
+   * would produce a run whose title, retrieval topic and graded claim disagree with each other.
+   */
+  readonly plan?: StudyPlan
 }
+
+/**
+ * Wire request for `ResearchTeamService.proposeDirections`, the run dialog's first call.
+ *
+ * @see ResearchRunRequest.plan — what a confirmed proposal becomes.
+ */
+export interface ResearchProposalRequest {
+  /**
+   * The domain the person stated. Absent or empty asks for the field the study itself belongs to,
+   * which the host substitutes rather than sending an empty field to the model.
+   */
+  readonly field?: string
+}
+
+/** One proposal, with the plan that confirming it would run. */
+export interface ResearchProposalEntry {
+  /** What the host validated. The dialog sends this back unchanged as `ResearchRunRequest.plan`. */
+  readonly plan: StudyPlan
+  /** The model's own words, which the dialog shows as content rather than as copy. */
+  readonly title: string
+  readonly direction: string
+  readonly claim: string
+}
+
+/** One block of the model's answer that became no proposal, and the reason it did not. */
+export interface ResearchProposalRefusal {
+  readonly reason: string
+  readonly block: string
+}
+
+/**
+ * What `proposeDirections` answers with.
+ *
+ * Refusals travel beside the proposals rather than being dropped: an answer whose every block was
+ * refused and an answer that proposed nothing are different facts, and a client that only counted
+ * proposals could not tell a person which happened.
+ */
+export interface ResearchProposalAnswer {
+  readonly proposals: ReadonlyArray<ResearchProposalEntry>
+  readonly refusals: ReadonlyArray<ResearchProposalRefusal>
+  /** Which channel produced the proposals, so a person knows whether a model was reached. */
+  readonly channel: string
+}
+
+import type { StudyPlan } from './runner/study-plan.ts'
+
+export type { PlanClaim, PlanSection, StudyPlan } from './runner/study-plan.ts'
 
 /**
  * The runner's per-step outcome shape, re-exported so the Remote boundary can name it.

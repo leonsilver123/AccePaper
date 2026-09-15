@@ -75,7 +75,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
-import { commitmentFrom } from './resume.ts'
+import { commitmentFrom } from './prediction-gate.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import type { PlatoonStudy } from './platoon-sim.ts'
@@ -287,6 +287,15 @@ export interface RunContext {
    * manuscript, the retrieval topic and the measured quantity are the run's own.
    */
   studyPlan: StudyPlan
+  /**
+   * Where the plan came from.
+   *
+   * A caller's plan owns the claim. A Case Pack is a curated fixture input set and stays the
+   * authority for the scenario this run MEASURES — and for the material's scope and sources — but a
+   * claim a person confirmed is not something a fixture file may overwrite: the run would then
+   * produce a manuscript stating a claim its own dialog never showed.
+   */
+  planSource: 'caller' | 'default'
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -1114,7 +1123,18 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // disagree with its own input set. Both paths record which one supplied the claim.
   const packScenario = ctx.getInput(CASE_PACK_INPUT_SLUGS.scenario)
   const packClaim = readInput(ctx, CASE_PACK_INPUT_SLUGS.claim)
-  if (packClaim !== undefined) {
+  const callerPlan = ctx.runCtx.planSource === 'caller'
+  if (packClaim !== undefined && callerPlan) {
+    // THE PLAN OWNS THE CLAIM; the pack is skipped. It still supplies the scenario read just above
+    // and the scope and sources read below, so the run measures and reviews exactly what the pack
+    // declares — what it does not do is replace the claim a person confirmed with its own.
+    claimSource = writer === undefined ? 'fixture' : proseLabelling(writer).source
+    claimRoute = {
+      source: 'caller-plan',
+      casePackId: packClaim.casePackId,
+      packClaimSkipped: true,
+    }
+  } else if (packClaim !== undefined) {
     assertion = requiredClaimField(packClaim, 'assertion')
     essentialDifference = requiredClaimField(packClaim, 'essentialDifference')
     experimentToFalsify = requiredClaimField(packClaim, 'experimentToFalsify')

@@ -8,6 +8,7 @@ import { getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-co
 import type { RestoredRun, StepStatus } from '@deepseek-ai/dsh-research-core'
 
 import type { ClaimMaterial } from './redteam-review.ts'
+import { commitmentFrom } from './prediction-gate.ts'
 import type { PredictionCommitment } from './prediction-gate.ts'
 
 /**
@@ -84,6 +85,13 @@ export function needsReleaseBeforeResume(status: StepStatus): boolean {
   return status !== 'pending'
 }
 
+/** Read a plain record, or undefined for anything else. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
 /**
  * Rebuild the claim material a resumed run reviews, from the run's OWN records.
  *
@@ -153,37 +161,4 @@ export function materialWithCommitment(
     material: commitment === undefined ? material : { ...material, commitment },
     commitment,
   }
-}
-
-/** Read a plain record, or undefined for anything else. */
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined
-}
-
-/**
- * Read a declared commitment out of an artifact, validating its shape.
- *
- * Anything else is the claim declining to say which way its quantity should move, or by how much —
- * which the C channel holds on — rather than a partially-read commitment this function would have
- * to guess at. A commitment without a threshold is not read as the old two-field commitment: the
- * threshold is what the verdict grades, and defaulting it would put a number back into the gate
- * that the claim never declared.
- *
- * @param value - the value found on the claim artifact.
- * @returns the commitment, or undefined when the value is not one.
- */
-export function commitmentFrom(value: unknown): PredictionCommitment | undefined {
-  const record = asRecord(value)
-  if (record === undefined) return undefined
-  const direction = record['direction']
-  const bound = record['bound']
-  const thresholdPct = record['thresholdPct']
-  if (direction !== 'increase' && direction !== 'decrease') return undefined
-  if (bound !== 'at-least' && bound !== 'at-most' && bound !== 'within') return undefined
-  if (typeof thresholdPct !== 'number' || !Number.isFinite(thresholdPct) || thresholdPct <= 0) {
-    return undefined
-  }
-  return { direction, bound, thresholdPct }
 }

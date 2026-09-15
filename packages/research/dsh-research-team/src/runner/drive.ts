@@ -306,7 +306,11 @@ export async function runT19B(
   const plan = opts.studyPlan ?? (opts.domainDirection === undefined
     ? DEFAULT_PLAN
     : planForDirection(opts.domainDirection))
-  const runCtx: RunContext = createRunContext(timestamp, plan)
+  const runCtx: RunContext = createRunContext(
+    timestamp,
+    plan,
+    opts.studyPlan === undefined ? 'default' : 'caller',
+  )
   const runId = createRun(store)
   // A selected Case Pack supplies this run's entry inputs. They are seeded BEFORE the
   // first step because `setRunInput` refuses a run that is already under way
@@ -347,11 +351,13 @@ export async function runT19B(
  *
  * @param timestamp - the fixed timestamp the run records on its artifacts.
  * @param plan - the research the run carries; the default plan when none is supplied.
+ * @param planSource - whether that plan is a caller's or the deployment's default.
  * @returns a context with nothing yet declared about the claim.
  */
 export function createRunContext(
   timestamp: number = FIXED_TS,
   plan: StudyPlan = DEFAULT_PLAN,
+  planSource: 'caller' | 'default' = 'default',
 ): RunContext {
   // `metricKey` starts empty: nothing has declared what the claim is about yet, and the C channel
   // treats an empty key as unbindable rather than assuming a quantity. `claimMaterial` starts
@@ -365,6 +371,7 @@ export function createRunContext(
     claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
     study: experimentStudy(),
     studyPlan: plan,
+    planSource,
     timestamp,
   }
 }

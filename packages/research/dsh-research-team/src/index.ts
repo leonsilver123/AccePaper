@@ -43,6 +43,8 @@ import { Context } from '@deepseek-ai/cordis'
 import type {
   ResearchArtifactMetaView,
   ResearchGateVerdictView,
+  ResearchProposalAnswer,
+  ResearchProposalRequest,
   ResearchRunRequest,
   ResearchRunSnapshot,
   ResearchPackageExport,
@@ -51,7 +53,23 @@ import type {
   ResearchStepStateView,
 } from './types.ts'
 
-export type { ResearchRunRequest, ResearchRunSnapshot, ResearchStepCatalogEntry } from './types.ts'
+export type {
+  ResearchProposalAnswer,
+  ResearchProposalEntry,
+  ResearchProposalRefusal,
+  ResearchProposalRequest,
+  ResearchRunRequest,
+  ResearchRunSnapshot,
+  ResearchStepCatalogEntry,
+} from './types.ts'
+import {
+  parseDirectionProposals,
+  planFromProposal,
+  proposalInstruction,
+} from './runner/direction-proposals.ts'
+import { MEASURED_METRIC } from './runner/platoon-sim.ts'
+import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
+import type { StudyPlan } from './runner/study-plan.ts'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -258,6 +276,15 @@ function snapshotOf(
 export interface ResearchPipelineOptions {
   /** Seed for the run's single seedable input (`domain-direction`). */
   readonly domainDirection?: string
+  /**
+   * The research this run carries. Absent means the deployment's default, with
+   * {@link ResearchPipelineOptions.domainDirection} replacing that default's direction.
+   *
+   * IN-PROCESS CALLERS PASS THIS DIRECTLY and are trusted, the way every typed same-process
+   * boundary is. A value off the wire is validated first — see
+   * {@link ResearchTeamService.run}.
+   */
+  readonly studyPlan?: StudyPlan
   readonly signal?: AbortSignal
 }
 
@@ -478,6 +505,7 @@ export class ResearchTeamService extends TypertRemoteService {
     const stepTimeoutMs = this.hostStepTimeoutMs()
     const run = await runT19B(store, {
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
+      ...(options.studyPlan !== undefined ? { studyPlan: options.studyPlan } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
@@ -871,10 +899,88 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   @Remote('run')
   run(request: ResearchRunRequest, signal?: AbortSignal): Promise<ResearchRunSnapshot> {
+    // THE WIRE BOUNDARY FOR A PLAN. Everything downstream trusts it completely — the manuscript's
+    // title, A1's retrieval topic, the claim the C channel grades — so a malformed one would not
+    // fail where it entered; it would produce a run whose artifacts disagree with each other. A plan
+    // that cannot be used is REFUSED HERE, with the reason, rather than replaced by the default:
+    // silently running something else would make the run's products describe a study the caller did
+    // not ask for.
+    if (request.plan !== undefined) {
+      const validated = requirePlan(request.plan, MEASURED_METRIC)
+      if (!validated.ok) {
+        return Promise.reject(new Error(`[research] the run's plan cannot be used: ${validated.reason}`))
+      }
+      return this.runPipeline({
+        studyPlan: validated.plan,
+        ...(signal !== undefined ? { signal } : {}),
+      })
+    }
     return this.runPipeline({
       ...(request.domainDirection !== undefined ? { domainDirection: request.domainDirection } : {}),
       ...(signal !== undefined ? { signal } : {}),
     })
+  }
+
+  /**
+   * {@link ResearchTeamService.run}'s first step: what the run could be about.
+   *
+   * The run dialog calls this before any run exists, so a person confirms a direction and a
+   * criterion rather than discovering them in a finished manuscript. Every proposal has already
+   * been through the gate's own claim-level check (`direction-proposals.ts`), so what reaches a
+   * person is a claim the C channel can grade — a proposal that would stall the run is refused here
+   * with its reason instead of being offered and then abandoned.
+   *
+   * The measured quantity is not the model's to choose: this run can only measure what its study
+   * measures, so it travels into the request and the instruction requires the prediction to name it.
+   *
+   * @param request - the field to propose within; absent or empty asks for the study's own.
+   * @param signal - cancellation supplied by the caller.
+   * @returns the proposals, the refusals, and which channel produced them.
+   */
+  @Remote('proposeDirections')
+  async proposeDirections(
+    request: ResearchProposalRequest,
+    signal?: AbortSignal,
+  ): Promise<ResearchProposalAnswer> {
+    const writer = this.hostProseWriter()
+    if (writer === undefined) {
+      throw new Error(
+        '[research] this deployment configures no prose channel, so no research direction can be '
+        + 'proposed — a proposal is written, and there is nothing here to write it',
+      )
+    }
+    const stated = (request.field ?? '').trim()
+    const proposalRequest = {
+      field: stated,
+      metric: MEASURED_METRIC,
+      skeleton: DEFAULT_PLAN.outline,
+    }
+    const written = await writer.write({
+      stepId: 'propose-directions',
+      instruction: proposalInstruction(proposalRequest),
+      // The model-visible context is the request's own facts, not a UI payload: the field it is
+      // proposing within and the one quantity this run can measure.
+      context: {
+        field: stated.length === 0 ? DEFAULT_PLAN.field : stated,
+        measurableQuantity: MEASURED_METRIC.label,
+        quantityKey: MEASURED_METRIC.key,
+      },
+      ...(signal !== undefined ? { signal } : {}),
+    })
+    const outcome = parseDirectionProposals(written.text, proposalRequest)
+    // The person stated no field, so the plan's field is the study's own rather than an empty
+    // string — a plan that reached the runner with an empty field would be refused there.
+    const planField = stated.length === 0 ? DEFAULT_PLAN.field : stated
+    return {
+      proposals: outcome.proposals.map(proposal => ({
+        plan: planFromProposal(proposal, planField, MEASURED_METRIC),
+        title: proposal.title,
+        direction: proposal.direction,
+        claim: proposal.claim.ref,
+      })),
+      refusals: outcome.rejected,
+      channel: writer.channel,
+    }
   }
 
   /**
