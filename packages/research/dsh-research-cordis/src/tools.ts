@@ -120,6 +120,11 @@ export const RESEARCH_TOOL_REGISTRATION: Readonly<Record<string, ResearchToolReg
  * still granted ONLY by that agent's allow-list (see
  * {@link modelReadyResearchToolIds}) applied through ctx.tools.restrict at the
  * agent scope — never by default schema presence.
+ *
+ * @param toolId - the tool this guard is installed for; the guard affects only executions
+ *   carrying this name.
+ * @param exposure - the tool's declared model exposure.
+ * @returns a predicate over one execution that returns a refusal message, or undefined to allow it.
  */
 export function researchToolExposureGuard(
   toolId: string,
@@ -136,7 +141,11 @@ export function researchToolExposureGuard(
   }
 }
 
-/** Tool ids the agent loop may be ALLOWED to call (model-ready renders). */
+/**
+ * Tool ids the agent loop may be ALLOWED to call (model-ready renders).
+ *
+ * @returns the ids whose declared exposure is `model_ready`, in catalogue order.
+ */
 export function modelReadyResearchToolIds(): ReadonlyArray<string> {
   return RESEARCH_TOOL_DIRECTORY
     .filter(entry => entry.modelExposure === 'model_ready')
@@ -150,13 +159,30 @@ const FIXTURE_DEPS: ResearchToolDeps = {
 
 /** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */
 export type LiteratureChannel =
-  | { readonly kind: 'fixture' }
-  | { readonly kind: 'openalex'; readonly mailto?: string }
+  | {
+    /** Search the synthetic corpus this package ships; no network is reached. */
+    readonly kind: 'fixture'
+  }
+  | {
+    /** Search the real OpenAlex catalogue. */
+    readonly kind: 'openalex'
+    /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
+    readonly mailto?: string
+  }
 
 /** Bibliographic-resolver selection, configured the same way as the channel above. */
 export type CitationChannel =
-  | { readonly kind: 'fixture' }
-  | { readonly kind: 'openalex'; readonly mailto?: string }
+  | {
+    /** Resolve against the synthetic records this package ships; no network is reached. */
+    readonly kind: 'fixture'
+  }
+  | {
+    /** Resolve against the real OpenAlex catalogue, where a fabricated identifier returns
+     *  `not_found` rather than a fixture verdict. */
+    readonly kind: 'openalex'
+    /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
+    readonly mailto?: string
+  }
 
 /**
  * Assemble the tool dependency graph for one deployment's retrieval channel.
@@ -165,6 +191,7 @@ export type CitationChannel =
  * catalogue records instead of synthetic ones.
  *
  * @param channel - the configured retrieval channel, or undefined for the fixture.
+ * @param citation - the configured citation-resolver channel, or undefined for the fixture.
  * @returns the dependency graph handed to every tool invocation.
  */
 export function buildToolDeps(
@@ -250,12 +277,14 @@ export const RESEARCH_TOOL_HOST_ERROR_CODES = {
   HOST_VERSION_UNSUPPORTED: 'RESEARCH_TOOL_HOST_VERSION_UNSUPPORTED',
 } as const
 
+/** One of the stable codes above, as the error classes and callers carry it. */
 export type ResearchToolHostErrorCode =
   (typeof RESEARCH_TOOL_HOST_ERROR_CODES)[keyof typeof RESEARCH_TOOL_HOST_ERROR_CODES]
 
 /** Error with a stable machine code. Messages NEVER disclose local paths,
  *  environment variables or configuration content (the cause is dropped). */
 export class ResearchToolHostError extends Error {
+  /** Which of the stable codes this failure is; a caller branches on this, never on the message. */
   readonly code: ResearchToolHostErrorCode
 
   constructor(code: ResearchToolHostErrorCode, safeMessage: string) {
@@ -273,6 +302,9 @@ const HOST_TOOLS_EXPECTED_VERSION_PREFIX = '0.1.2-alpha'
  * structurally); returns the defineTool factory or throws fail-closed with a
  * stable code and a message free of environment details.
  * @param mod - the raw dynamic-import result of the fixed host module id.
+ * @returns the host module's `defineTool` factory.
+ * @throws {ResearchToolHostError} with a code from {@link RESEARCH_TOOL_HOST_ERROR_CODES} when the
+ *   value is not an object or carries no `defineTool` function.
  */
 export function validateHostToolsModule(mod: unknown): DefineToolLoader {
   if (mod === null || typeof mod !== 'object') {
@@ -296,6 +328,12 @@ export function validateHostToolsModule(mod: unknown): DefineToolLoader {
  * the fixed module id; version probe = the package manifest when its export
  * mapping exposes it). Test seams and the packed-package consumer smoke inject
  * failing loaders here to exercise every error code deterministically.
+ *
+ * @param options - the loaders to use: `load` returns the host module, `loadVersion` optionally
+ *   returns its manifest for the capability check.
+ * @returns the validated `defineTool` factory.
+ * @throws {ResearchToolHostError} with `HOST_LOAD_FAILED` when `load` rejects, and the codes
+ *   {@link validateHostToolsModule} raises for a module it will not register against.
  */
 export async function loadHostToolsModuleWith(options: {
   load: () => Promise<unknown>
@@ -453,7 +491,13 @@ const INTERNAL_CAPABILITIES = new WeakSet<object>()
 const INTERNAL_CAPABILITY: object = {}
 INTERNAL_CAPABILITIES.add(INTERNAL_CAPABILITY)
 
-/** @internal trusted seam — returns the module-private capability object. */
+/**
+ * The trusted seam to the module-private capability object.
+ *
+ * @internal Not part of the package's public exports; trusted pipeline code passes the result to a
+ *   pipeline-only definition's `execute` to satisfy the handle-level exposure check.
+ * @returns the module-private capability object, whose identity is what the check reads.
+ */
 export function researchToolInternalExecutionCapability(): unknown {
   return INTERNAL_CAPABILITY
 }
@@ -501,6 +545,8 @@ function revocable(def: RegisteredTool, isAlive: () => boolean, meta: Registrati
  * leaves no residue. The returned disposer is idempotent (double-unload safe)
  * and revokes every returned ToolDefinition.
  * @param ctx - a context whose `tools` service is present.
+ * @param deps - the dependency graph every tool invocation is served from; defaults to the fixture
+ *   graph, so an unconfigured deployment reaches no network.
  * @returns the combined disposer that unregisters every tool and guard.
  */
 export async function registerResearchTools(

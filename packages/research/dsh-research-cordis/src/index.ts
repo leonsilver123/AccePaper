@@ -100,22 +100,6 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Adapter config.
- *
- *  `requireResearchTools` decides what happens when registering the seven catalog
- *  tools FAILS (corrected 2026-09-14 against a real 1120 boot). The engine waits
- *  for the `tools` service with `ctx.inject`; if the service never appears the
- *  callback never runs, and that absence is tolerated either way — the engine stays
- *  a standalone `ctx.research` state machine. What this flag decides is the OTHER
- *  failure: the service IS present and registration did not produce Ours. With the
- *  flag set that throw propagates instead of being swallowed; unset, a registration
- *  failure is tolerated.
- *
- *  The shipped `research-app` bundle sets it. Setting it is not what makes the
- *  tools register — `ctx.inject` is — and the earlier claim that this flag made
- *  tool registration a startup requirement was wrong: the flag was unset AND the
- *  mount ran before `tools` existed, so the bundle registered no research tool at
- *  all. See `toolsReady`. */
 /**
  * The `prose` row as a deployment writes it in `cordis.yml`. The session working
  * directory is deliberately absent — {@link ResearchEngine} resolves it once from
@@ -133,8 +117,12 @@ export type ProseChannelConfig = Omit<LlmProseWriterConfig, 'cwd'>
  * {@link DeterministicProseConfig} for what the deterministic route's text is and is not.
  */
 export type ProseChannel =
-  | ({ readonly kind: 'llm' } & ProseChannelConfig)
   | {
+    /** Send on a real provider route, configured by the fields this variant carries. */
+    readonly kind: 'llm'
+  } & ProseChannelConfig
+  | {
+    /** Answer in-process through the deterministic route, which calls no model at all. */
     readonly kind: 'deterministic'
     /** Model id requests are addressed to; defaults to the route's own id. */
     readonly model?: string
@@ -152,7 +140,31 @@ export const DETERMINISTIC_PROSE_PROVIDER = 'research-deterministic'
 /** Model id the deterministic prose route offers when a deployment names none. */
 export const DETERMINISTIC_PROSE_MODEL = 'deterministic-prose-v1'
 
+/**
+ * Deployment configuration for the research engine: which retrieval and prose channels this
+ * deployment reaches, and where a run's products are written.
+ *
+ * Every field is a DEPLOYMENT decision recorded in `cordis.yml`, never a request parameter. The
+ * channels decide what counts as evidence (fixture records versus catalogue records), and the
+ * directories decide where `runPipeline` writes — a Remote client can invoke that method, so it
+ * must not be able to choose either.
+ */
 export interface Config {
+  /**
+   * What happens when registering the seven catalogue tools FAILS (corrected 2026-09-14 against a
+   * real 1120 boot).
+   *
+   * The engine waits for the `tools` service with `ctx.inject`; if the service never appears the
+   * callback never runs, and that absence is tolerated either way — the engine stays a standalone
+   * `ctx.research` state machine. What this flag decides is the OTHER failure: the service IS
+   * present and registration did not produce Ours. With the flag set that throw propagates instead
+   * of being swallowed; unset, a registration failure is tolerated.
+   *
+   * The shipped `research-app` bundle sets it. Setting it is not what makes the tools register —
+   * `ctx.inject` is — and the earlier claim that this flag made tool registration a startup
+   * requirement was wrong: the flag was unset AND the mount ran before `tools` existed, so the
+   * bundle registered no research tool at all. See `toolsReady`.
+   */
   readonly requireResearchTools?: boolean
   /**
    * Literature-retrieval channel for the seven research tools. `'fixture'`
@@ -275,6 +287,14 @@ function resolveWorkspace(configured: string | undefined): string {
   return cwd
 }
 
+/**
+ * The research engine service (`ctx.research`): the run store the 16-step pipeline drives, the
+ * seven-tool surface registered on `ctx.tools`, and the deployment's retrieval and prose channels.
+ *
+ * The store methods below are what the driver advances a run with. The thin result surface
+ * (T07/T08/T09) delegates to `dsh-research-core` without touching the store or performing any
+ * state transition, so those calls are pure reads of core's own functions.
+ */
 export class ResearchEngine extends Service {
   static Config: z<Config> = z.object({})
 
@@ -458,54 +478,152 @@ export class ResearchEngine extends Service {
     }
   }
 
+  /**
+   * Create a run in this engine's store.
+   *
+   * @param runId - the identity to create; omitted, the core mints one.
+   * @returns the run's id.
+   * @throws Error with a `RUN_EXISTS` code when a run of that id is already stored — the core
+   *   refuses to clobber an existing run's state and audit log.
+   */
   createRun(runId?: string): string {
     return createRun(runs, runId)
   }
 
+  /**
+   * Seed one input of a run before the step that declares it starts.
+   *
+   * @param runId - the run to seed.
+   * @param slug - the input's slug, which must be one the pipeline declares seedable.
+   * @param value - the input value, which must not be null or undefined.
+   */
   setRunInput(runId: string, slug: string, value: unknown): void {
     setRunInput(runs, runId, slug, value)
   }
 
+  /**
+   * Read one run's current state.
+   *
+   * @param runId - the run to read.
+   * @returns a frozen snapshot of every step, the artifact registry, and the audit events.
+   */
   getRunSnapshot(runId: string): RunSnapshot {
     return getRunSnapshot(runs, runId)
   }
 
+  /**
+   * Read one artifact a run produced.
+   *
+   * @param runId - the run that produced it.
+   * @param slug - the artifact's slug.
+   * @returns a clone of the artifact's value, or undefined when the run never recorded it or it was
+   *   invalidated by a rollback.
+   */
   getArtifact(runId: string, slug: string): unknown {
     return getArtifact(runs, runId, slug)
   }
 
+  /**
+   * Whether a step may start now: it is still pending and every input it declares is satisfied.
+   *
+   * @param runId - the run to read.
+   * @param stepId - the step to check.
+   * @returns true when the step can start; false for an unknown step id or an unsatisfied input.
+   */
   canStart(runId: string, stepId: string): boolean {
     return canStart(runs, runId, stepId)
   }
 
+  /**
+   * Start one attempt on a step.
+   *
+   * @param runId - the run to advance.
+   * @param stepId - the step to start.
+   * @returns the step's state after the transition.
+   * @throws Error when the step is unknown, already started, or missing an input.
+   */
   startStep(runId: string, stepId: string): StepSnapshot {
     return startStep(runs, runId, stepId)
   }
 
+  /**
+   * Start a step only when {@link ResearchEngine.canStart} allows it.
+   *
+   * @param runId - the run to advance.
+   * @param stepId - the step to start.
+   * @returns the step's state after the transition, or null when the step cannot start.
+   */
   startIfCan(runId: string, stepId: string): StepSnapshot | null {
     return startIfCan(runs, runId, stepId)
   }
 
+  /**
+   * Record one output a running step produced.
+   *
+   * @param runId - the run to record into.
+   * @param stepId - the step producing the output; it must be in progress.
+   * @param outputSlug - the output's slug, which the step must declare.
+   * @param value - the artifact value, which the core clones before storing.
+   */
   recordArtifact(runId: string, stepId: string, outputSlug: string, value: unknown): void {
     recordArtifact(runs, runId, stepId, outputSlug, value)
   }
 
+  /**
+   * Record one judgment component's verdict on a gated step, and advance the step accordingly.
+   *
+   * @param runId - the run to advance.
+   * @param stepId - the gated step the verdict is about.
+   * @param verdict - the component, its outcome, and the evidence it was reached on.
+   * @returns the step's status after the verdict; the last component to report decides it.
+   * @throws Error when the step declares an empty gate — such a step is finalized by
+   *   {@link ResearchEngine.completeStep} instead.
+   */
   submitGateVerdict(runId: string, stepId: string, verdict: GateVerdict): StepStatus {
     return submitGateVerdict(runs, runId, stepId, verdict)
   }
 
+  /**
+   * Finalize a step that declares no gate.
+   *
+   * @param runId - the run to advance.
+   * @param stepId - the step to finalize.
+   * @returns the step's status after the transition.
+   * @throws Error when the step declares a gate, which means its verdicts must be submitted
+   *   individually.
+   */
   completeStep(runId: string, stepId: string): StepStatus {
     return completeStep(runs, runId, stepId)
   }
 
+  /**
+   * Roll one step back, invalidating the artifacts it produced and everything depending on them.
+   *
+   * @param runId - the run to roll back in.
+   * @param stepId - the step to return to pending; a step already pending is left alone.
+   */
   rollback(runId: string, stepId: string): void {
     rollback(runs, runId, stepId)
   }
 
+  /**
+   * Whether a step has passed and, for a human-gated step, been approved.
+   *
+   * @param runId - the run to read.
+   * @param stepId - the step to check.
+   * @returns true when the step is complete on both counts.
+   */
   isComplete(runId: string, stepId: string): boolean {
     return isComplete(runs, runId, stepId)
   }
 
+  /**
+   * Read one step's audit trail: every transition recorded against it, oldest first.
+   *
+   * @param runId - the run to read.
+   * @param stepId - the step whose history is wanted.
+   * @returns the step's audit entries.
+   */
   getAuditHistory(runId: string, stepId: string): AuditEntry[] {
     return getAuditHistory(runs, runId, stepId)
   }
@@ -518,16 +636,31 @@ export class ResearchEngine extends Service {
   // StepState is intentionally absent — core owns that transition, including the
   // abstention case (see the header note on the abstention boundary).
 
-  /** T07 — L0 routing: delegate to the pure router. The adapter is
-   *  caller-supplied (core ships mockL0Adapter as a fixture). */
+  /**
+   * T07 — L0 routing: delegate to the pure router.
+   *
+   * @param source - the declared source to classify.
+   * @param adapter - the routing adapter; caller-supplied, because core ships `mockL0Adapter` as a
+   *   fixture only.
+   * @returns the tier the adapter routed the source to.
+   */
   classifyL0(source: L0SourceInput, adapter: L0RoutingAdapter): L0Classification {
     return classifyL0(source, adapter)
   }
 
   /** T08 — citation identity verification: full thin pass-through of the core
-   *  signature (claim / citation / ref / evidence / resolver / timestamp /
-   *  options). Resolver contact rules (#6 short-circuit, fabrication
-   *  discrimination) are enforced entirely inside core. */
+   *  signature. Resolver contact rules (#6 short-circuit, fabrication
+   *  discrimination) are enforced entirely inside core.
+   * @param claimId - the claim the citation is attached to.
+   * @param citationId - the citation's identity within that claim.
+   * @param ref - the reference as the claim states it, which is what gets resolved.
+   * @param evidence - the evidence the citation was recorded with.
+   * @param resolverAdapter - the resolver this deployment configured; the fixture adapter answers
+   *    without contacting a catalogue.
+   * @param timestamp - the run's fixed timestamp, so a verdict is reproducible.
+   * @param options - resolver options, e.g. whether a fabricated identifier short-circuits.
+   * @returns the verification result, carrying the verdict and the record it was reached on.
+   */
   verifyCitation(
     claimId: ClaimId,
     citationId: CitationId,
@@ -542,12 +675,18 @@ export class ResearchEngine extends Service {
 
   /** T09 — pure gate adjudication under the T10-R name. Returns the frozen
    *  {@link AdjudicationResult}; performs NO state transition (auto-wiring a
-   *  gate outcome to StepState is deliberately deferred). */
+   *  gate outcome to StepState is deliberately deferred).
+   * @param input - the declaration, the measurement, and the channel verdicts to adjudicate.
+   * @returns the frozen adjudication: the outcome and the evidence it rests on.
+   */
   evaluateGate(input: AdjudicationInput): AdjudicationResult {
     return adjudicate(input)
   }
 
-  /** T09 — canonical-name alias of {@link evaluateGate}. */
+  /** T09 — canonical-name alias of {@link evaluateGate}.
+   * @param input - the declaration, the measurement, and the channel verdicts to adjudicate.
+   * @returns the frozen adjudication, identical to {@link ResearchEngine.evaluateGate}'s.
+   */
   adjudicate(input: AdjudicationInput): AdjudicationResult {
     return adjudicate(input)
   }
@@ -555,7 +694,10 @@ export class ResearchEngine extends Service {
   /** Single interpretation point for a gate outcome: delegates verbatim to the
    *  frozen core helper gateToStateMachineIntent (GATE_OUTCOME_TO_INTENT in
    *  contracts.ts). This service NEVER reinterprets an outcome — abstained
-   *  maps to 'hold_abstained', never to pass. */
+   *  maps to 'hold_abstained', never to pass.
+   * @param result - the adjudication whose outcome is being interpreted.
+   * @returns the state-machine intent that outcome maps to.
+   */
   getGateIntent(result: AdjudicationResult): StateMachineGateIntent {
     return gateToStateMachineIntent(result.outcome)
   }

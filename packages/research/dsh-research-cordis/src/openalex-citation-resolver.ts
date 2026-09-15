@@ -31,6 +31,7 @@ interface OpenAlexWorkRecord {
   }> | null
 }
 
+/** How the OpenAlex citation resolver reaches the catalogue. */
 export interface OpenAlexCitationResolverOptions {
   /** Contact address OpenAlex asks for ("polite pool"). */
   readonly mailto?: string

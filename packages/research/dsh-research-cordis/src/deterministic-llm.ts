@@ -75,7 +75,14 @@ export const DEFAULT_DETERMINISTIC_TEMPLATE = [
   'can be exercised reproducibly without a model credential.',
 ].join('\n')
 
-/** SHA-256 of one string, hex, truncated for readability. */
+/**
+ * SHA-256 of one string, hex, truncated for readability.
+ *
+ * @param input - the text to digest.
+ * @param length - how many leading hex characters to keep. Truncation is for readability in the
+ *   derived response, not a security parameter.
+ * @returns the leading `length` hex characters of `input`'s SHA-256.
+ */
 export function digestOf(input: string, length = 16): string {
   return createHash('sha256').update(input, 'utf8').digest('hex').slice(0, length)
 }

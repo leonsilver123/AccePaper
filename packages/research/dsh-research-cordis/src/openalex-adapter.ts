@@ -45,6 +45,7 @@ interface OpenAlexWork {
   }> | null
 }
 
+/** How the OpenAlex literature adapter reaches the catalogue. */
 export interface OpenAlexAdapterOptions {
   /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
   readonly mailto?: string

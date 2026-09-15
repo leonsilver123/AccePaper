@@ -39,7 +39,9 @@ export interface ProseRequestLike {
   readonly signal?: AbortSignal
 }
 
+/** What one prose write resolves with, as the runner's contract declares it. */
 export interface ProseResultLike {
+  /** The text the model produced; a write with no text rejects rather than resolving empty. */
   readonly text: string
   readonly provider: string
   readonly model: string
@@ -111,6 +113,7 @@ export function turnErrorOf(event: unknown): string | undefined {
   return String(error)
 }
 
+/** The model route one {@link LlmProseWriter} sends on, and where its sessions run. */
 export interface LlmProseWriterConfig {
   /** Registered provider route, e.g. `deepseek-official`. */
   readonly provider: string

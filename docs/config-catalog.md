@@ -1685,6 +1685,219 @@ export interface Config {
 
 Source: [`packages/guard/repeat-tool-reminder/src/index.ts:28`](../packages/guard/repeat-tool-reminder/src/index.ts)
 
+<a id="deepseek-aidsh-research-cordis"></a>
+
+## `@deepseek-ai/dsh-research-cordis`
+
+```ts config-catalog
+/**
+ * Deployment configuration for the research engine: which retrieval and prose channels this
+ * deployment reaches, and where a run's products are written.
+ *
+ * Every field is a DEPLOYMENT decision recorded in `cordis.yml`, never a request parameter. The
+ * channels decide what counts as evidence (fixture records versus catalogue records), and the
+ * directories decide where `runPipeline` writes — a Remote client can invoke that method, so it
+ * must not be able to choose either.
+ */
+export interface Config {
+  /**
+   * What happens when registering the seven catalogue tools FAILS (corrected 2026-09-14 against a
+   * real 1120 boot).
+   *
+   * The engine waits for the `tools` service with `ctx.inject`; if the service never appears the
+   * callback never runs, and that absence is tolerated either way — the engine stays a standalone
+   * `ctx.research` state machine. What this flag decides is the OTHER failure: the service IS
+   * present and registration did not produce Ours. With the flag set that throw propagates instead
+   * of being swallowed; unset, a registration failure is tolerated.
+   *
+   * The shipped `research-app` bundle sets it. Setting it is not what makes the tools register —
+   * `ctx.inject` is — and the earlier claim that this flag made tool registration a startup
+   * requirement was wrong: the flag was unset AND the mount ran before `tools` existed, so the
+   * bundle registered no research tool at all. See `toolsReady`.
+   */
+  readonly requireResearchTools?: boolean
+  /**
+   * Literature-retrieval channel for the seven research tools. `'fixture'`
+   * (default) keeps the synthetic corpus, so an offline deployment behaves exactly
+   * as before; `'openalex'` assembles the real catalogue adapter, and every
+   * artifact then carries real records.
+   *
+   * Selecting a real channel is a deployment decision recorded in `cordis.yml`,
+   * never a silent default — see the truthfulness vocabulary in the runner, which
+   * separates fixture from live evidence.
+   */
+  readonly literatureSearch?: LiteratureChannel
+  /**
+   * Bibliographic-resolver channel for the citation identity chain. Omitted (or
+   * `'fixture'`), citations resolve against the fixture; `'openalex'` resolves them
+   * against the real catalogue, so a fabricated DOI becomes an authoritative
+   * `not_found` (a hard block) instead of a fixture verdict.
+   */
+  readonly citationResolver?: CitationChannel
+  /**
+   * Channel for prose steps (A1 gap analysis, D2 outline, D3 writing, D4 rebuttal).
+   *
+   * Omitted, those steps emit their fixture text and no provider is contacted — the same
+   * posture as an omitted `literatureSearch`. Otherwise `kind` selects between a real
+   * provider route and the deterministic offline route.
+   *
+   * The session's working directory is NOT set here: this engine resolves it once
+   * from {@link Config.workspace} and supplies it to the writer.
+   */
+  readonly prose?: ProseChannel
+  /**
+   * Directory of the Case Pack this deployment runs against.
+   *
+   * A DEPLOYMENT setting, deliberately not a request parameter: `runPipeline` is exposed
+   * as a Remote method, and letting a client name a filesystem path would hand it the
+   * deployment's disk. Omitted, runs use the pipeline's built-in seeds and no pack.
+   *
+   * Relative paths resolve against {@link Config.workspace}. The engine only CARRIES this
+   * value: the loader lives in `dsh-research-team`, which the runner-side service reads it
+   * with, because this adapter must not depend on the team package (dependencies run
+   * `core` ← `tools` ← {`cordis`, `team`}).
+   */
+  readonly casePackDirectory?: string
+  /**
+   * Directory the run's reproducible package is written to. Omitted, no package is written.
+   *
+   * Also a DEPLOYMENT setting for the same reason as {@link Config.casePackDirectory}: the
+   * export runs inside `runPipeline`, which Remote clients can invoke, so a request-supplied
+   * path would let a browser choose where the host writes files.
+   *
+   * Relative paths resolve against {@link Config.workspace}.
+   */
+  readonly packageDirectory?: string
+  /**
+   * Directory holding the durable run snapshot. Omitted, runs are not persisted.
+   *
+   * A DEPLOYMENT setting for the same reason as the two above. The directory must exist: the
+   * snapshot store never creates it, so a missing one surfaces at the first save rather than
+   * being papered over, and the runner-side service creates it at startup where it resolves
+   * this option.
+   *
+   * Relative paths resolve against {@link Config.workspace}.
+   */
+  readonly snapshotDirectory?: string
+  /**
+   * Absolute working directory for every agent session this engine creates (prose
+   * writes and model-ready tool invocations). Omitted, it resolves to the
+   * deployment's `process.cwd()`.
+   *
+   * This is the deployment's choice of where research sessions run, and it is not
+   * optional in effect: `{{cwd}}` is a strict system-prompt variable that every
+   * shipped bundle's persona references, so a session created without one fails at
+   * prompt ASSEMBLY and its request never reaches the provider. A relative value is
+   * rejected here rather than by the session layer.
+   */
+  readonly workspace?: string
+}
+
+/** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */
+export type LiteratureChannel =
+  | {
+    /** Search the synthetic corpus this package ships; no network is reached. */
+    readonly kind: 'fixture'
+  }
+  | {
+    /** Search the real OpenAlex catalogue. */
+    readonly kind: 'openalex'
+    /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
+    readonly mailto?: string
+  }
+
+/** Bibliographic-resolver selection, configured the same way as the channel above. */
+export type CitationChannel =
+  | {
+    /** Resolve against the synthetic records this package ships; no network is reached. */
+    readonly kind: 'fixture'
+  }
+  | {
+    /** Resolve against the real OpenAlex catalogue, where a fabricated identifier returns
+     *  `not_found` rather than a fixture verdict. */
+    readonly kind: 'openalex'
+    /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
+    readonly mailto?: string
+  }
+
+/**
+ * Which provider route the prose steps run on.
+ *
+ * The two variants are a deployment's choice between reaching a real model vendor and
+ * running fully offline. Neither is a default: `kind` is required, because the two
+ * produce artifacts that must be described differently — see
+ * {@link DeterministicProseConfig} for what the deterministic route's text is and is not.
+ */
+export type ProseChannel =
+  | {
+    /** Send on a real provider route, configured by the fields this variant carries. */
+    readonly kind: 'llm'
+  } & ProseChannelConfig
+  | {
+    /** Answer in-process through the deterministic route, which calls no model at all. */
+    readonly kind: 'deterministic'
+    /** Model id requests are addressed to; defaults to the route's own id. */
+    readonly model?: string
+    /** Provider route to register; defaults to {@link DETERMINISTIC_PROSE_PROVIDER}. */
+    readonly provider?: string
+    /** Route display name. */
+    readonly name?: string
+    /** Body template; see {@link DEFAULT_DETERMINISTIC_TEMPLATE}. */
+    readonly template?: string
+  }
+
+/**
+ * The `prose` row as a deployment writes it in `cordis.yml`. The session working
+ * directory is deliberately absent — {@link ResearchEngine} resolves it once from
+ * `Config.workspace`, so it is stated in one place per deployment instead of once
+ * per row.
+ */
+export type ProseChannelConfig = Omit<LlmProseWriterConfig, 'cwd'>
+
+/** The model route one {@link LlmProseWriter} sends on, and where its sessions run. */
+export interface LlmProseWriterConfig {
+  /** Registered provider route, e.g. `deepseek-official`. */
+  readonly provider: string
+  /** Model id offered by that provider. */
+  readonly model: string
+  /**
+   * Absolute working directory for the session this writer creates.
+   *
+   * Required, not defaulted: `{{cwd}}` is a strict system-prompt variable that every
+   * shipped bundle's persona references, and a session created without one fails at
+   * prompt ASSEMBLY — before any request reaches the provider. The engine resolves
+   * this once from its own `workspace` config, so a deployment does not restate it
+   * on the `prose` row.
+   */
+  readonly cwd: string
+  /** Milliseconds to wait for the loop to go idle before failing the write. */
+  readonly idleTimeoutMs?: number
+}
+```
+
+Source: [`packages/research/dsh-research-cordis/src/index.ts:152`](../packages/research/dsh-research-cordis/src/index.ts)
+
+<a id="deepseek-aidsh-research-team"></a>
+
+## `@deepseek-ai/dsh-research-team`
+
+Requires: `agents` · `sessions` · `sessionPersistence` · `sessionProjections` · `subagents` · `tools`
+
+```ts config-catalog
+export interface ResearchTeamServiceConfig {
+  /**
+   * Write-tool allowlist whose writes are expressible as one path argument and
+   * are therefore scope-checked by the global guard. Every other tool call by
+   * a non-Lead member is denied. Defaults to the empty set (deny-all), which
+   * is the conservative posture until the deployment configures research
+   * write tools.
+   */
+  readonly scopeCheckedTools?: ReadonlyArray<string>
+}
+```
+
+Source: [`packages/research/dsh-research-team/src/index.ts:266`](../packages/research/dsh-research-team/src/index.ts)
+
 <a id="deepseek-aidsh-sandbox-local"></a>
 
 ## `@deepseek-ai/dsh-sandbox-local`
@@ -3393,6 +3606,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-host-plugin-inventory` — requires `loader` ([`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts))
 - `@deepseek-ai/dsh-llm` ([`packages/llm/llm/src/index.ts`](../packages/llm/llm/src/index.ts))
 - `@deepseek-ai/dsh-lsp` ([`packages/lsp/lsp/src/index.ts`](../packages/lsp/lsp/src/index.ts))
+- `@deepseek-ai/dsh-research-web` ([`packages/research/dsh-research-web/src/index.ts`](../packages/research/dsh-research-web/src/index.ts))
 - `@deepseek-ai/dsh-schedule` — requires `agents` · `sessions` · `tools` · `sessionPersistence` ([`packages/schedule/schedule/src/index.ts`](../packages/schedule/schedule/src/index.ts))
 - `@deepseek-ai/dsh-session` ([`packages/core/session/src/index.ts`](../packages/core/session/src/index.ts))
 - `@deepseek-ai/dsh-session-checkpoint-policy` — requires `llm` · `sessionPersistence` · `sessions` · `tools` ([`packages/session/session-checkpoint-policy/src/index.ts`](../packages/session/session-checkpoint-policy/src/index.ts))
@@ -3461,6 +3675,9 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-loader-smoke` ([`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts))
 - `@deepseek-ai/dsh-native-command` ([`packages/util/native-command/src/index.ts`](../packages/util/native-command/src/index.ts))
 - `@deepseek-ai/dsh-output-retention` ([`packages/util/output-retention/src/index.ts`](../packages/util/output-retention/src/index.ts))
+- `@deepseek-ai/dsh-research-app` ([`packages/bundle/research-app/src/index.ts`](../packages/bundle/research-app/src/index.ts))
+- `@deepseek-ai/dsh-research-core` ([`packages/research/dsh-research-core/src/index.ts`](../packages/research/dsh-research-core/src/index.ts))
+- `@deepseek-ai/dsh-research-tools` ([`packages/research/dsh-research-tools/src/index.ts`](../packages/research/dsh-research-tools/src/index.ts))
 - `@deepseek-ai/dsh-sandbox-windows-acl` ([`packages/sandbox/sandbox-windows-acl/src/index.ts`](../packages/sandbox/sandbox-windows-acl/src/index.ts))
 - `@deepseek-ai/dsh-scope` ([`packages/core/scope/src/index.ts`](../packages/core/scope/src/index.ts))
 - `@deepseek-ai/dsh-sdk-client` ([`packages/sdk/client/src/index.ts`](../packages/sdk/client/src/index.ts))
