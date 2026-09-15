@@ -752,6 +752,28 @@ export class ResearchTeamService extends TypertRemoteService {
     // persisted none.
     const persistedScenario = getRunSnapshot(restored.store, restored.runId).inputs[CASE_PACK_INPUT_SLUGS.scenario]
     runCtx.study = studyFromPack(persistedScenario) ?? studyFromPack(this.hostCasePackScenario()) ?? experimentStudy()
+    // The plan's CLAIM half, rebuilt from the same artifacts. Without this a resumed run would
+    // write prose about the default plan's claim while its own gates had already graded the one
+    // its artifacts record — the manuscript contradicting its own verdicts.
+    //
+    // WHAT IS NOT REBUILT, stated rather than implied: the title, the field, the retrieval
+    // direction and the section skeleton. No artifact carries them, so a resumed run takes them
+    // from the plan THIS deployment supplies. For the default plan that is exact; a deployment
+    // that states its own plan and resumes a run started under another would use its own for
+    // those four. Persisting the plan belongs with the change that lets a person supply one.
+    runCtx.studyPlan = {
+      ...runCtx.studyPlan,
+      claim: {
+        ...runCtx.studyPlan.claim,
+        ...(runCtx.claimId === '' ? {} : { id: runCtx.claimId }),
+        ...(runCtx.claimRef === '' ? {} : { ref: runCtx.claimRef }),
+        ...(runCtx.predictionText === '' ? {} : { prediction: runCtx.predictionText }),
+      },
+      ...(runCtx.metricKey === ''
+        ? {}
+        : { metric: { ...runCtx.studyPlan.metric, key: runCtx.metricKey } }),
+      ...(runCtx.commitment === undefined ? {} : { commitment: runCtx.commitment }),
+    }
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,

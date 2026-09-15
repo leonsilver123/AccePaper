@@ -47,6 +47,8 @@ import {
 import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
 import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
 import { experimentStudy } from './platoon-sim.ts'
+import { DEFAULT_PLAN, planForDirection } from './study-plan.ts'
+import type { StudyPlan } from './study-plan.ts'
 import type {
   DriveOptions,
   DriveStepOptions,
@@ -298,7 +300,13 @@ export async function runT19B(
   opts: DriveOptions = {},
 ): Promise<RunResult> {
   const timestamp = opts.fixedTimestamp ?? FIXED_TS
-  const runCtx: RunContext = createRunContext(timestamp)
+  // The research this run carries. A deployment states it; the default stands in otherwise, and
+  // the run's seedable direction overrides that default's own direction rather than adding a
+  // second place the direction is written.
+  const plan = opts.studyPlan ?? (opts.domainDirection === undefined
+    ? DEFAULT_PLAN
+    : planForDirection(opts.domainDirection))
+  const runCtx: RunContext = createRunContext(timestamp, plan)
   const runId = createRun(store)
   // A selected Case Pack supplies this run's entry inputs. They are seeded BEFORE the
   // first step because `setRunInput` refuses a run that is already under way
@@ -306,12 +314,9 @@ export async function runT19B(
   for (const input of opts.casePackInputs ?? []) {
     setRunInput(store, runId, input.slug, input.value)
   }
-  setRunInput(
-    store,
-    runId,
-    'domain-direction',
-    opts.domainDirection ?? 'adaptive traffic signal control research program',
-  )
+  // The seeded direction IS the plan's, because it is also A1's retrieval topic: two values for
+  // one fact is how a run's literature came to be about something its measurement was not.
+  setRunInput(store, runId, 'domain-direction', plan.direction)
 
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
@@ -337,8 +342,17 @@ export async function runT19B(
   return { runId, steps: outcomes }
 }
 
-/** Build a fresh cross-step context (claim / prediction wiring) for a run. */
-export function createRunContext(timestamp: number = FIXED_TS): RunContext {
+/**
+ * Build a fresh cross-step context (claim / prediction wiring) for a run.
+ *
+ * @param timestamp - the fixed timestamp the run records on its artifacts.
+ * @param plan - the research the run carries; the default plan when none is supplied.
+ * @returns a context with nothing yet declared about the claim.
+ */
+export function createRunContext(
+  timestamp: number = FIXED_TS,
+  plan: StudyPlan = DEFAULT_PLAN,
+): RunContext {
   // `metricKey` starts empty: nothing has declared what the claim is about yet, and the C channel
   // treats an empty key as unbindable rather than assuming a quantity. `claimMaterial` starts
   // empty for the same reason: A2 fills it, and until then the A channel reviews an empty claim
@@ -350,6 +364,7 @@ export function createRunContext(timestamp: number = FIXED_TS): RunContext {
     metricKey: '',
     claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
     study: experimentStudy(),
+    studyPlan: plan,
     timestamp,
   }
 }

@@ -32,6 +32,8 @@ This was found by an independent auditor, not by the tests, and it corrected a c
 
 `traffic-sim.ts` publishes `MEASURED_METRIC_KEY = 'mean-delay-seconds-per-vehicle'` and its display label. `evaluatePrediction(predictionText, scenario, metricKey)` now returns a discriminated result:
 
+**Where these live now** (2026-09-15): `traffic-sim.ts` was retired on 2026-09-14 in favour of the platoon simulation, which publishes `MEASURED_METRIC` in `runner/platoon-sim.ts`, and `evaluatePrediction` moved to `runner/prediction-gate.ts`, where it takes a `PredictionGateInput` object and the measured quantity is a parameter ([why](../architecture/2026-09-15-the-prediction-gate-is-not-the-studys.md)).
+
 - `{ kind: 'adjudicated', … }` — the claim declared the measured key AND states a numeric threshold. The comparison runs as before.
 - `{ kind: 'unbindable', reason }` — the claim declared no metric, declared a different one, or stated no threshold. **Nothing is graded.**
 

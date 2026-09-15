@@ -41,6 +41,8 @@ import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.t
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import type { RunResult } from '../src/runner/types.ts'
 import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
+import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
+import type { StudyPlan } from '../src/runner/study-plan.ts'
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 
 const CORE_STEPS: ReadonlyArray<StepDefinition> = getStepDefinitions()
@@ -55,6 +57,7 @@ function freshRunCtx(): RunContext {
     metricKey: '',
     claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
     study: experimentStudy(),
+    studyPlan: DEFAULT_PLAN,
     timestamp: FIXED_TS,
   }
 }
@@ -562,6 +565,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       metricKey: MEASURED_METRIC.key,
       claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
       study: experimentStudy(),
+      studyPlan: DEFAULT_PLAN,
       timestamp: FIXED_TS,
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture
@@ -687,5 +691,82 @@ describe('F1 audit fix — invoker provenance propagates onto real-tool artifact
     expect(map.__kind).toBe('real_tool_fixture_input')
     expect(map.__provenance).toBe('direct')
     expect(map.__invokerTruthfulness).toBe('direct_call')
+  })
+})
+
+describe('the run states its own research, and the artifacts carry it', () => {
+  // The claim, the title, the retrieval topic and the section names used to be constants in the
+  // runner's own source, so a run could only ever produce one paper. They are the run's plan now.
+  // Every other case in this file drives the DEFAULT plan, which is why these state a different
+  // one: a plan that changed nothing observable would not be a plan.
+  const PLAN: StudyPlan = {
+    ...DEFAULT_PLAN,
+    title: 'Cooperative caching lowers the p99 read latency of a shared index',
+    field: 'distributed systems',
+    direction: 'cooperative caching for shared read-mostly indexes',
+    outline: [
+      { id: 'abstract', heading: 'Abstract' },
+      { id: 'introduction', heading: 'Introduction' },
+      { id: 'method', heading: 'Approach' },
+      { id: 'experiments', heading: 'Evaluation' },
+      { id: 'results', heading: 'Results' },
+      { id: 'conclusion', heading: 'Conclusion' },
+      { id: 'references', heading: 'References' },
+    ],
+    claim: {
+      id: 'claim-cooperative-cache-latency',
+      ref: 'cooperative caching lowers the p99 read latency of a shared index',
+      assertion: 'Cooperative caching lowers the p99 read latency of a shared index.',
+      essentialDifference: 'peers serve each other\'s misses instead of only the origin',
+      experimentToFalsify:
+        'Replay a shared read-mostly trace against a cooperative and an origin-only cache and compare their p99 read latency.',
+      prediction:
+        'the cooperative cache shall fall in p99 read latency by at least 20% against the origin-only cache',
+    },
+  }
+
+  /** A bare run context committed to {@link PLAN}. */
+  function plannedCtx(): RunContext {
+    return { ...freshRunCtx(), studyPlan: PLAN }
+  }
+
+  it('A1 retrieves for the plan\'s direction, not for a topic in this file', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('A1-landscape')
+    const out = (await entry?.executor(execCtx('A1-landscape', plannedCtx()))) as Record<string, Record<string, unknown>>
+    expect(out['landscape-map']?.topic).toBe(PLAN.direction)
+  })
+
+  it('A2 writes the plan\'s claim into the run context', async () => {
+    const runCtx = plannedCtx()
+    const entry = STEP_EXECUTOR_REGISTRY.get('A2-claim')
+    await entry?.executor(execCtx('A2-claim', runCtx))
+    expect(runCtx.claimId).toBe(PLAN.claim.id)
+    expect(runCtx.claimRef).toBe(PLAN.claim.ref)
+    expect(runCtx.predictionText).toBe(PLAN.claim.prediction)
+    // The plan is refined in place rather than replaced, so the title and the direction the run
+    // was started with survive the claim being written into it.
+    expect(runCtx.studyPlan.title).toBe(PLAN.title)
+    expect(runCtx.studyPlan.direction).toBe(PLAN.direction)
+  })
+
+  it('D2 states the plan\'s title and the plan\'s section names', async () => {
+    const entry = STEP_EXECUTOR_REGISTRY.get('D2-framework')
+    const out = (await entry?.executor(execCtx('D2-framework', plannedCtx()))) as Record<string, Record<string, unknown>>
+    const outline = out['paper-outline']!
+    expect(outline.title).toBe(PLAN.title)
+    const sections = outline.sections as ReadonlyArray<{ id: string; heading: string }>
+    expect(sections.map(s => s.id)).toEqual(PLAN.outline.map(s => s.id))
+    // The heading itself, not just the id: a renamed section is the difference between a plan and
+    // a relabelled constant.
+    expect(sections.map(s => s.heading)).toEqual(PLAN.outline.map(s => s.heading))
+  })
+
+  it('the default plan is still the study the rest of this file asserts', () => {
+    // The guard that makes the cases above a CHANGE rather than a parallel universe: the default
+    // plan has to keep reproducing the fixture claim every other case drives.
+    expect(DEFAULT_PLAN.claim.id).toBe(CANONICAL.claimId)
+    expect(DEFAULT_PLAN.claim.ref).toBe(CANONICAL.claimRef)
+    expect(DEFAULT_PLAN.claim.prediction).toBe(CANONICAL.prediction)
+    expect(DEFAULT_PLAN.metric.key).toBe(MEASURED_METRIC.key)
   })
 })

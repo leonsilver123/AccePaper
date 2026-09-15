@@ -14,6 +14,7 @@ import type {
 } from '@deepseek-ai/dsh-research-core'
 import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import type { CasePackRunInput } from './case-pack.ts'
+import type { StudyPlan } from './study-plan.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 
 /** Per-artifact producer evidence for one step. */
@@ -49,6 +50,11 @@ export interface RunResult {
 /** Per-step override / scenario hooks for the driver. */
 export interface DriveOptions {
   readonly domainDirection?: string
+  /**
+   * The research this run carries. When absent, the default plan is used, with
+   * {@link DriveOptions.domainDirection} replacing its direction.
+   */
+  readonly studyPlan?: StudyPlan
   /**
    * Milliseconds one step may run, overriding the per-step value the registry declares.
    *

@@ -77,8 +77,10 @@ import { readFileSync, statSync } from 'node:fs'
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
 import { commitmentFrom } from './resume.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
-import type { PredictionCommitment } from './prediction-gate.ts'
+import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import type { PlatoonStudy } from './platoon-sim.ts'
+import { DEFAULT_PLAN } from './study-plan.ts'
+import type { PlanSection, StudyPlan } from './study-plan.ts'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
@@ -158,7 +160,6 @@ import type {
 import {
   ABLATION_MODULES,
   EXPERIMENT_RULE_VERSION,
-  MEASURED_METRIC,
   SIMULATION_INPUTS,
   ablationStudy,
   boundaryTest,
@@ -277,6 +278,15 @@ export interface RunContext {
    * `commitment` parameter for why the grading trusts the value's shape.
    */
   commitment?: PredictionCommitment
+  /**
+   * The research this run carries: its title, its field and direction, its section skeleton, its
+   * claim and the quantity the claim is about (seeded by the driver, refined by A2 once a Case
+   * Pack or a model has supplied a claim).
+   *
+   * Every executor reads the study through here rather than through module constants, so the
+   * manuscript, the retrieval topic and the measured quantity are the run's own.
+   */
+  studyPlan: StudyPlan
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
 }
@@ -465,35 +475,6 @@ export interface StepCapability {
   readonly note?: string
 }
 
-/** Canonical (claim, prediction) constants — match a KEEP-path row in the team's
- *  experiment fixture table (`experiment/fixture.ts`) so the C-channel adjudicates
- *  to `passed` on the happy path. */
-const CANONICAL_CLAIM_ID = 'claim-mixed-platoon-following-risk'
-// The claim names the quantity the experiment actually measures. It said "peak-hour
-// delay" while the measurement is the DEMAND-WEIGHTED MEAN over every control
-// interval, and the C gate adjudicates the prediction's threshold against that mean.
-const CANONICAL_CLAIM_REF = 'inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision'
-/**
- * The fixture claim's falsifiable prediction.
- *
- * This threshold is DEMONSTRATION DATA, not a research finding: its job is to let the
- * offline pipeline exercise a claim that the study's experiment can adjudicate. The
- * measurement is whatever the simulation produces, and the C gate's verdict follows from it
- * — including when the simulation NEGATES the prediction, which the run records as a
- * refuted claim and carries on from. A real study's threshold comes from its own claim,
- * which is what the model path and the Case Pack both produce.
- */
-const CANONICAL_PREDICTION = 'the HV-AV-HV platoon shall exceed the all-HV platoon in minimum time-to-collision by at least 20%'
-
-/**
- * The quantity the fixture claim is about.
- *
- * It declares the study's measured key because that is what its prediction text names
- * ("demand-weighted mean delay"). A claim whose text is about something else must declare
- * something else, and then the C channel holds instead of grading it.
- */
-const CANONICAL_METRIC_KEY = MEASURED_METRIC.key
-
 /**
  * The study's identity fields: what is being compared, and under which name.
  *
@@ -503,41 +484,28 @@ const CANONICAL_METRIC_KEY = MEASURED_METRIC.key
  * so the file advertised numbers that did not match any run. Every delay figure a
  * reader sees is produced by {@link measureOutcome} from an actual experiment, and
  * the identity fields here are what that experiment is measuring between.
+ *
+ * It is NOT the run's research: the title, the claim, the measured quantity and the section
+ * skeleton are fields of `ctx.runCtx.studyPlan` (`runner/study-plan.ts`), which is what a
+ * deployment states. What is left here is the measurement apparatus's own naming — the two
+ * compositions it compares, the venue A4 falls back to, and the dataset file — which no plan
+ * chooses.
  */
 export const SCENARIO = {
   baselineIdentity: 'homogeneous-HV-HV-HV',
   variantIdentity: 'mixed-HV-AV-HV',
-  metric: MEASURED_METRIC.key,
-  metricDirection: 'higher_is_better',
   venueId: 'syn-venue-trc-001',
   venueName: 'Synthetic TRC-style Transport Venue',
   // The study's own scenario file, so the fallback reference names the study's dataset
   // rather than a synthetic placeholder.
   datasetId: 'case-pack-traffic/claim.json',
-  title: 'Inserting One Autonomous Vehicle Changes a Platoon Minimum Time-to-Collision',
 } as const
 
 /** Writer-section model shared by D2/D3/D4/E1 (paper-outline → draft →
  *  revised-draft → formatted-manuscript). Plain data; deterministic. */
-interface OutlineSection {
-  readonly id: string
-  readonly heading: string
-}
-interface ManuscriptSection extends OutlineSection {
+interface ManuscriptSection extends PlanSection {
   readonly bodyText: string
 }
-
-/** Fallback outline used when an executor runs with empty inputs (registry spec
- *  smoke tests) — same skeleton the E2E drives with real upstream artifacts. */
-const DEFAULT_OUTLINE: ReadonlyArray<OutlineSection> = [
-  { id: 'abstract', heading: 'Abstract' },
-  { id: 'introduction', heading: 'Introduction' },
-  { id: 'method', heading: 'Method' },
-  { id: 'experiments', heading: 'Experiments' },
-  { id: 'results', heading: 'Results' },
-  { id: 'conclusion', heading: 'Conclusion' },
-  { id: 'references', heading: 'References' },
-]
 
 // ── Producer brands (read from the tools' own id/version constants) ─────────────
 const A1_PRODUCER = `${LITERATURE_SEARCH_TOOL_ID}@${LITERATURE_SEARCH_TOOL_VERSION}`
@@ -750,21 +718,72 @@ function proseRouteOf(result: { readonly provider: string; readonly model: strin
   return { producer: `configured prose writer: ${result.provider}/${result.model}` }
 }
 
-/** Claim identity from the run context (falls back to the canonical constants). */
+/**
+ * The research this run carries.
+ *
+ * Every executor reads the study through the run context rather than through module constants.
+ * The title, the claim, the measured quantity and the section skeleton are the RUN's, which is
+ * what lets a deployment state what it is producing instead of producing this file's one study.
+ *
+ * @param ctx - the executor or verdict context.
+ * @returns the plan the run was started with.
+ */
+function planOf(ctx: { readonly runCtx: RunContext }): StudyPlan {
+  return ctx.runCtx.studyPlan
+}
+
+/**
+ * A metric direction in the spelling the ablation tool's schema requires.
+ *
+ * The plan states the direction once; the tools that consume it each spell it their own way, and
+ * those schemas are external contracts rather than names this module may change. Written as a
+ * conversion rather than a second plan field so the two cannot disagree about the direction.
+ *
+ * @param metric - the quantity the claim is about.
+ * @returns the direction as the ablation definition spells it.
+ */
+function ablationDirectionOf(metric: MeasuredMetric): 'higher_is_better' | 'lower_is_better' {
+  return metric.direction === 'higher-is-better' ? 'higher_is_better' : 'lower_is_better'
+}
+
+/**
+ * The plan facts every prose request carries.
+ *
+ * The steps already hand the writer the claim and the prediction; what none of them handed it was
+ * the research the run is ABOUT, so a section could be written as though the study were someone
+ * else's. Spread into each request's `context`.
+ *
+ * @param plan - the run's plan.
+ * @returns the subject fields a writer request carries.
+ */
+function planContextOf(plan: StudyPlan): Record<string, unknown> {
+  return { field: plan.field, direction: plan.direction }
+}
+
+/**
+ * The claim identity every artifact carries, falling back to the plan's own.
+ *
+ * @param ctx - the executor context.
+ * @returns the claim id, reference and prediction the run is committed to.
+ */
 function canonicalOf(ctx: ExecCtx): {
   readonly claimId: string
   readonly claimRef: string
   readonly predictionText: string
 } {
+  const plan = planOf(ctx)
   return {
-    claimId: ctx.runCtx.claimId || CANONICAL_CLAIM_ID,
-    claimRef: ctx.runCtx.claimRef || CANONICAL_CLAIM_REF,
-    predictionText: ctx.runCtx.predictionText || CANONICAL_PREDICTION,
+    claimId: ctx.runCtx.claimId || plan.claim.id,
+    claimRef: ctx.runCtx.claimRef || plan.claim.ref,
+    predictionText: ctx.runCtx.predictionText || plan.claim.prediction,
   }
 }
 
 /** Section list of a manuscript-shaped artifact, with a deterministic fallback. */
-function sectionsOf(input: Record<string, unknown> | undefined): ReadonlyArray<ManuscriptSection> {
+function sectionsOf(
+  input: Record<string, unknown> | undefined,
+  plan: StudyPlan,
+): ReadonlyArray<ManuscriptSection> {
   const raw = input?.sections
   if (Array.isArray(raw) && raw.length > 0) {
     const sections: ManuscriptSection[] = []
@@ -780,7 +799,7 @@ function sectionsOf(input: Record<string, unknown> | undefined): ReadonlyArray<M
     }
     if (sections.length > 0) return sections
   }
-  return defaultBodySections()
+  return defaultBodySections(plan)
 }
 
 /** Deterministic fallback body for every outline section id. */
@@ -833,12 +852,14 @@ function measureOutcome(): {
  * here and the numbers come from {@link measureOutcome}.
  *
  * @param id - the section id from the outline.
+ * @param plan - the run's plan, which states the claim and the prediction this text quotes.
  * @param measured - the current measurement of the study experiment.
  * @param referenceCount - entries the draft carries for the reference list.
  * @returns the section body.
  */
 function bodyTextFor(
   id: string,
+  plan: StudyPlan,
   measured: ReturnType<typeof measureOutcome>,
   referenceCount: number,
 ): string {
@@ -851,7 +872,7 @@ function bodyTextFor(
     case 'abstract':
       return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency.'
     case 'introduction':
-      return `This work targets the claim: ${CANONICAL_CLAIM_REF}. The falsifiable prediction is: ${CANONICAL_PREDICTION}.`
+      return `This work targets the claim: ${plan.claim.ref}. The falsifiable prediction is: ${plan.claim.prediction}.`
     case 'method':
       return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
     case 'experiments':
@@ -871,12 +892,15 @@ function bodyTextFor(
   }
 }
 
-function defaultBodySections(referenceCount = 0): ReadonlyArray<ManuscriptSection> {
+function defaultBodySections(
+  plan: StudyPlan,
+  referenceCount = 0,
+): ReadonlyArray<ManuscriptSection> {
   const measured = measureOutcome()
-  return DEFAULT_OUTLINE.map(s => ({
+  return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
-    bodyText: bodyTextFor(s.id, measured, referenceCount),
+    bodyText: bodyTextFor(s.id, plan, measured, referenceCount),
   }))
 }
 
@@ -892,7 +916,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     && deps.literatureAdapter !== mockLiteratureSearchAdapter
   const invocation = await invoker.invoke(
     'literature-search',
-    { topic: 'adaptive traffic signal control' },
+    { topic: planOf(ctx).direction },
     { timestamp: FIXED_TS, deps },
   )
   if (!invocation.ok) {
@@ -932,6 +956,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       stepId: 'A1-landscape',
       instruction: `Identify the research gaps that the following papers leave open with respect to "${artifact.query.topic}". Return one gap per line. No numbering, no preamble, no closing commentary.`,
       context: {
+        ...planContextOf(planOf(ctx)),
         topic: artifact.query.topic,
         papers: artifact.hits.slice(0, 30).map(hit => ({ title: hit.title, venue: hit.venue })),
       },
@@ -1070,25 +1095,18 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? (gapsArtifact.gaps as ReadonlyArray<unknown>).filter((g): g is string => typeof g === 'string')
     : []
 
-  let assertion = 'Inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision.'
-  let essentialDifference = 'control policy is adaptive (RL) rather than fixed-time'
-  let experimentToFalsify = 'Simulate the homogeneous and the mixed platoon under the same declared disturbance and compare their minimum time-to-collision.'
-  let prediction = CANONICAL_PREDICTION
+  const plan = planOf(ctx)
+  let assertion = plan.claim.assertion
+  let essentialDifference = plan.claim.essentialDifference
+  let experimentToFalsify = plan.claim.experimentToFalsify
+  let prediction = plan.claim.prediction
   let claimSource: 'model' | 'deterministic' | 'fixture' | 'case-pack' = 'fixture'
   let claimRoute: Record<string, unknown> = proseRouteOf(undefined)
   // What the claim is ABOUT. Only a claim that declares the quantity this study measures can be
-  // adjudicated by it; the fixture claim declares it because its own prediction text names it.
-  let metricKey = CANONICAL_METRIC_KEY
-  // The fixture claim's own declared commitment, matching the sentence it writes. A claim that
-  // declares none is ungradeable, and the fixture is the pipeline's default claim.
-  // `increase`, because the fixture claim's sentence says the quantity RISES ("raises the platoon
-  // minimum time-to-collision"). A declared commitment that disagreed with the fixture's own words
-  // would be worse than none at all.
-  let commitment: PredictionCommitment | undefined = {
-    direction: 'increase',
-    bound: 'at-least',
-    thresholdPct: 20,
-  }
+  // adjudicated by it; the plan's claim declares it because its own prediction text names it.
+  let metricKey = plan.metric.key
+  // The plan's declared commitment, matching the sentence it carries — see `StudyPlan.commitment`.
+  let commitment: PredictionCommitment | undefined = plan.commitment
 
   // A SELECTED Case Pack is the authority for this run's claim. It is curated fixture
   // content, and it is preferred over the model because the pack is what the run was
@@ -1125,7 +1143,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'EXPERIMENT: <the experiment that would falsify it>',
         'PREDICTION: <the measurable prediction, with a numeric threshold>',
       ].join('\n'),
-      context: { gaps },
+      context: { ...planContextOf(planOf(ctx)), gaps },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
     const parsed = {
@@ -1165,7 +1183,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'claim-construct',
     {
       assertion,
-      claimId: CANONICAL_CLAIM_ID,
+      claimId: plan.claim.id,
       now: FIXED_TS,
       falsifiability: { essentialDifference, experimentToFalsify },
     },
@@ -1176,8 +1194,17 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
   const artifact = invocation.artifact as Awaited<ReturnType<typeof constructClaim>>
   // Wire the claim + prediction into the shared context for downstream C-gates.
-  ctx.runCtx.claimId = CANONICAL_CLAIM_ID
-  ctx.runCtx.claimRef = CANONICAL_CLAIM_REF
+  // The plan this run is now committed to: the one it was seeded with, with whatever a Case Pack
+  // or the model supplied written over it. Downstream steps read the EFFECTIVE plan, so a pack's
+  // claim reaches the manuscript's prose rather than only its artifacts.
+  ctx.runCtx.studyPlan = {
+    ...plan,
+    claim: { ...plan.claim, assertion, essentialDifference, experimentToFalsify, prediction },
+    metric: metricKey === plan.metric.key ? plan.metric : { ...plan.metric, key: metricKey },
+    ...(commitment === undefined ? {} : { commitment }),
+  }
+  ctx.runCtx.claimId = plan.claim.id
+  ctx.runCtx.claimRef = plan.claim.ref
   ctx.runCtx.predictionText = prediction
   ctx.runCtx.metricKey = metricKey
   if (commitment === undefined) delete ctx.runCtx.commitment
@@ -1202,7 +1229,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     essentialDifference,
     metricKey,
     truthfulness: typeof claimRoute.truthfulness === 'string' ? claimRoute.truthfulness : '',
-    measuredMetricKey: MEASURED_METRIC.key,
+    measuredMetricKey: plan.metric.key,
     ...(commitment === undefined ? {} : { commitment }),
     declaredSources: packClaim !== undefined && Array.isArray(packClaim.declaredSources)
       ? (packClaim.declaredSources as ReadonlyArray<string>)
@@ -1227,14 +1254,14 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'falsifiable-prediction': tagArtifact(
       {
         text: prediction,
-        ref: CANONICAL_CLAIM_ID,
+        ref: plan.claim.id,
         supportStatus: artifact.claim.supportStatus,
         claimSource,
         // What the claim is about. The C channel adjudicates only when this equals the quantity
         // the experiment measures, so it is the field that decides whether the number below was
         // ever a test of this claim.
         metricKey: metricKey === '' ? null : metricKey,
-        measuredMetricKey: MEASURED_METRIC.key,
+        measuredMetricKey: plan.metric.key,
         claimRoute,
       },
       A2_PRODUCER,
@@ -1273,6 +1300,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'CONTRIBUTIONS: <one contribution> || <another contribution>',
       ].join('\n'),
       context: {
+        ...planContextOf(planOf(ctx)),
         claim: claim?.assertion ?? claimRef,
         prediction: predictionText,
       },
@@ -1428,8 +1456,8 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const writer = ctx.proseWriter
   let family = 'reinforcement-learning phase-plan policy (synthetic spec)'
   let steps: ReadonlyArray<string> = ['build both platoons', 'integrate the car-following model', 'read the minimum time-to-collision']
-  let metricName: string = SCENARIO.metric
-  let metricDirection: string = SCENARIO.metricDirection
+  let metricName: string = planOf(ctx).metric.key
+  let metricDirection: string = ablationDirectionOf(planOf(ctx).metric)
   let methodSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let methodRoute: Record<string, unknown> = proseRouteOf(undefined)
 
@@ -1444,7 +1472,11 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'METRIC: <the single primary metric name>',
         'DIRECTION: <"lower is better" or "higher is better">',
       ].join('\n'),
-      context: { claim: claimArtifact?.assertion ?? claimRef, prediction: predictionText },
+      context: {
+        ...planContextOf(planOf(ctx)),
+        claim: claimArtifact?.assertion ?? claimRef,
+        prediction: predictionText,
+      },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
     const parsedFamily = labelledField(analysis.text, 'FAMILY')
@@ -1605,9 +1637,14 @@ function checkDatasetFiles(): ReadonlyArray<FileCheck> {
  * what the study assumed on top of it. It is the same object in C1, B3 and C3, so
  * the three cannot describe different inputs.
  *
+ * @param plan - the run's plan, which states the quantity this study measures.
+ * @param study - the scenarios the measurement ran.
  * @returns the demand evidence block attached to every experiment artifact.
  */
-function studyEvidence(study: PlatoonStudy = experimentStudy()): Record<string, unknown> {
+function studyEvidence(
+  plan: StudyPlan,
+  study: PlatoonStudy = experimentStudy(),
+): Record<string, unknown> {
   return {
     source: 'declared-scenario',
     study: {
@@ -1632,7 +1669,7 @@ function studyEvidence(study: PlatoonStudy = experimentStudy()): Record<string, 
     // experiment ran" invites the reader to assume it tested the claim; naming both is what
     // lets them check, and the previous study's artifact had to say its measurement was
     // about an intersection while its claim was about a platoon.
-    measures: MEASURED_METRIC.key,
+    measures: plan.metric.key,
     alsoMeasured: ['ttc-lt-1.5s-rate-pct', 'mean-time-headway-seconds', 'mean-jerk-mps3', 'string-stability-index'],
     doesNotMeasure: 'field crash frequency, any external SOTA, or any quantity outside the declared simulation',
     note:
@@ -1742,7 +1779,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         baseline: {
           identity: SCENARIO.baselineIdentity,
           protocol: 'simulate the homogeneous platoon under the study’s declared disturbance and read its minimum time-to-collision',
-          metric: { name: MEASURED_METRIC.key, direction: 'higher is better' },
+          metric: { name: planOf(ctx).metric.key, direction: 'higher is better' },
           // The input this NUMBER came from. The baseline is measured by running the
           // simulation over the Case Pack's declared scenario, which is not the dataset B2
           // registered; naming B2's descriptor here would attribute the measurement to a
@@ -1758,7 +1795,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           baselineTtcLt1_5RatePct: comparison.baseline.ttcLt1_5RatePct,
           variantTtcLt1_5RatePct: comparison.variant.ttcLt1_5RatePct,
           source: 'platoon-sim (both platoons simulated under the declared disturbance)',
-          study: studyEvidence(study),
+          study: studyEvidence(planOf(ctx), study),
         },
         beatsBaselineWhen: `variant minimum time-to-collision moves ${thresholdLabel(ctx.runCtx.commitment)} against the baseline's, in the claim's declared direction`,
         note: 'baseline MEASURED by simulating the homogeneous platoon; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
@@ -1771,7 +1808,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         fixture: false,
         stepId: 'B3-baseline',
         slug: 'sota-comparison',
-        targetMetric: MEASURED_METRIC.key,
+        targetMetric: planOf(ctx).metric.key,
         rows: [
           { method: 'HV-HV-HV (this study baseline)', minTtcSeconds: comparison.baseline.minTtcSeconds, source: 'measured by platoon-sim' },
           { method: 'HV-AV-HV (this study variant)', minTtcSeconds: comparison.variant.minTtcSeconds, measuredImprovementPct, source: 'measured by platoon-sim' },
@@ -1802,7 +1839,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   // verdict are the same measurement rather than two tables that might disagree.
   const verdict = evaluatePrediction({
     predictionText,
-    metric: MEASURED_METRIC,
+    metric: planOf(ctx).metric,
     declaredMetricKey: ctx.runCtx.metricKey,
     commitment: ctx.runCtx.commitment,
     measure: () => measureStudy(ctx.runCtx.study),
@@ -1830,10 +1867,10 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
           // What this experiment measures and what it does NOT. An artifact that states only
           // "an experiment ran" invites the reader to assume it tested the claim; naming the
           // quantity is what lets them check.
-          measures: MEASURED_METRIC.key,
+          measures: planOf(ctx).metric.key,
           doesNotMeasure: 'field crash frequency, any external SOTA, or any road layout beyond one lane',
           ruleVersion: EXPERIMENT_RULE_VERSION,
-          study: studyEvidence(ctx.runCtx.study),
+          study: studyEvidence(planOf(ctx), ctx.runCtx.study),
         },
         outcome: {
           supportsPrediction: verdict.supportsPrediction,
@@ -1972,17 +2009,25 @@ function boundaryProbe(study: PlatoonStudy): Record<string, unknown> {
   }
 }
 
-/** The C3-boundary ablation definition: the mixed platoon vs the homogeneous one,
- *  minimum time-to-collision, 4 repetitions (real tool over a deterministic executor). */
-const ABLATION_DEFINITION: AblationDefinition = {
-  baselineIdentity: SCENARIO.baselineIdentity,
-  variantIdentity: SCENARIO.variantIdentity,
-  removedOrReplacedComponents: [
-    { component: 'platoon-composition', action: 'replaced', replacement: SCENARIO.variantIdentity },
-  ],
-  dataset: { version: 'case-pack-traffic.v2', split: 'declared-scenario', seed: 20260909 },
-  metric: { name: MEASURED_METRIC.key, direction: 'higher_is_better' },
-  repetitions: 4,
+/**
+ * The C3-boundary ablation definition: the mixed platoon vs the homogeneous one, over the
+ * quantity the run's claim is about, 4 repetitions (real tool over a deterministic executor).
+ *
+ * @param metric - the quantity the claim is about. The ablation tool validates the direction
+ *   against its own closed set, so the plan's direction is converted rather than restated.
+ * @returns the definition the ablation tool is invoked with.
+ */
+function ablationDefinition(metric: MeasuredMetric): AblationDefinition {
+  return {
+    baselineIdentity: SCENARIO.baselineIdentity,
+    variantIdentity: SCENARIO.variantIdentity,
+    removedOrReplacedComponents: [
+      { component: 'platoon-composition', action: 'replaced', replacement: SCENARIO.variantIdentity },
+    ],
+    dataset: { version: 'case-pack-traffic.v2', split: 'declared-scenario', seed: 20260909 },
+    metric: { name: metric.key, direction: ablationDirectionOf(metric) },
+    repetitions: 4,
+  }
 }
 
 /**
@@ -2021,10 +2066,11 @@ function platoonAblationExecutor(study: PlatoonStudy): AblationExecutor {
  *  Ablation lives HERE (canonical C3), not in B3-baseline (T19-S fix). */
 async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const verdict = readInput(ctx, 'converged-verdict')
+  const definition = ablationDefinition(planOf(ctx).metric)
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('c3-fixture')
   const invocation = await invoker.invoke(
     'ablation',
-    { definition: ABLATION_DEFINITION },
+    { definition },
     { timestamp: FIXED_TS, deps: { ablationExecutor: platoonAblationExecutor(ctx.runCtx.study) } },
   )
   if (!invocation.ok) {
@@ -2067,13 +2113,13 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'boundary-map': tagArtifact(
       {
         probed: {
-          baseline: ABLATION_DEFINITION.baselineIdentity,
-          variant: ABLATION_DEFINITION.variantIdentity,
-          removedOrReplacedComponents: ABLATION_DEFINITION.removedOrReplacedComponents,
+          baseline: definition.baselineIdentity,
+          variant: definition.variantIdentity,
+          removedOrReplacedComponents: definition.removedOrReplacedComponents,
         },
-        metric: ABLATION_DEFINITION.metric,
+        metric: definition.metric,
         aggregate: artifact.aggregate,
-        study: studyEvidence(ctx.runCtx.study),
+        study: studyEvidence(planOf(ctx), ctx.runCtx.study),
         boundary: boundaryProbe(ctx.runCtx.study),
         note: 'boundary-map derived from the REAL runAblation execution over simulated platoons, plus the measured stop-and-go scope test — an applicability claim for this declared scenario only, not a general one',
       },
@@ -2276,17 +2322,6 @@ const OUTLINE_SKELETON: ReadonlyArray<{ id: string; covers: ReadonlyArray<string
   { id: 'references', covers: ['landscape'] },
 ]
 
-/** Default headings when no writer is injected (the skeleton's own names). */
-const DEFAULT_HEADING: Readonly<Record<string, string>> = {
-  abstract: 'Abstract',
-  introduction: 'Introduction',
-  method: 'Method',
-  experiments: 'Experiments',
-  results: 'Results',
-  conclusion: 'Conclusion',
-  references: 'References',
-}
-
 async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const agenda = readInput(ctx, 'agenda')
@@ -2299,8 +2334,13 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // writer, both are derived from the claim and the method; the section IDS and
   // their `covers` links stay fixed, because they are the structure every
   // downstream step depends on.
-  let title: string = SCENARIO.title
-  const headings: Record<string, string> = { ...DEFAULT_HEADING }
+  let title: string = planOf(ctx).title
+  // The plan states the section names; `OUTLINE_SKELETON` states which upstream artifacts each
+  // section consumes. Two facts, two homes — a `DEFAULT_HEADING` table here would be a third, and
+  // a plan that renamed a section would silently keep the old one.
+  const headings: Record<string, string> = Object.fromEntries(
+    planOf(ctx).outline.map(section => [section.id, section.heading]),
+  )
   let outlineSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let outlineRoute: Record<string, unknown> = proseRouteOf(undefined)
 
@@ -2321,6 +2361,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         `  (one per placeholder, in this order: ${OUTLINE_SKELETON.map(s => s.id).join(', ')})`,
       ].join('\n'),
       context: {
+        ...planContextOf(planOf(ctx)),
         claim: claim?.assertion ?? claimRef,
         methodFamily: method?.family ?? null,
       },
@@ -2349,7 +2390,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     outlineRoute = proseRouteOf(analysis)
   }
 
-  const outline: ReadonlyArray<OutlineSection & { covers: ReadonlyArray<string> }> =
+  const outline: ReadonlyArray<PlanSection & { covers: ReadonlyArray<string> }> =
     OUTLINE_SKELETON.map(section => ({
       id: section.id,
       heading: headings[section.id] as string,
@@ -2391,7 +2432,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const rawOutline = outline?.sections
   const ids: ReadonlyArray<string> = Array.isArray(rawOutline) && rawOutline.length > 0
     ? rawOutline.map(s => (s as { id?: unknown }).id).filter((id): id is string => typeof id === 'string')
-    : DEFAULT_OUTLINE.map(s => s.id)
+    : planOf(ctx).outline.map(s => s.id)
   const figures = figurePlan?.totalFigures as number | undefined
   const hitCount = landscape?.hitCount as number | undefined
   // The rendered figures travel with the draft so E1 can embed them. D1 owns the
@@ -2406,7 +2447,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     const heading =
       Array.isArray(rawOutline) && typeof (rawOutline[index] as { heading?: unknown } | undefined)?.heading === 'string'
         ? ((rawOutline[index] as { heading: string }).heading)
-        : DEFAULT_OUTLINE.find(d => d.id === id)?.heading ?? id
+        : planOf(ctx).outline.find(d => d.id === id)?.heading ?? id
     return { id, heading }
   })
 
@@ -2427,7 +2468,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let producer: string = D3_PRODUCER
   if (writer === undefined) {
     const measured = measureOutcome()
-    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, measured, references.length) }))
+    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, references.length) }))
     proseSource = 'fixture'
   } else {
     const written = await Promise.all(
@@ -2438,7 +2479,13 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           // The roster travels as DATA as well as in the instruction: a label the model has to
           // recover from a sentence is one it can get wrong, and a wrong number in a paper reads as
           // a citation of something this manuscript does not contain.
-          context: { sectionId: h.id, claimRef, figureCount: figures ?? 0, citable },
+          context: {
+            ...planContextOf(planOf(ctx)),
+            sectionId: h.id,
+            claimRef,
+            figureCount: figures ?? 0,
+            citable,
+          },
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
         }),
       ),
@@ -2459,7 +2506,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         fixture: proseSource === 'fixture',
         stepId: 'D3-writing',
         slug: 'draft',
-        title: SCENARIO.title,
+        title: planOf(ctx).title,
         claimRef,
         sections,
         proseSource,
@@ -2512,7 +2559,7 @@ function parseExchanges(text: string): ReadonlyArray<RebuttalPoint> {
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const draft = readInput(ctx, 'draft')
-  const sections = sectionsOf(draft)
+  const sections = sectionsOf(draft, planOf(ctx))
   // A revision keeps the reference list it is revising. Dropping it here is what
   // made the assembled manuscript report zero references while its own references
   // section described the landscape scan it was built from.
@@ -2551,7 +2598,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         'CONCERN: <reviewer concern>',
         'RESPONSE: <the author response, using only the measurements given in the context>',
       ].join('\n'),
-      context: { claimRef, measured },
+      context: { ...planContextOf(planOf(ctx)), claimRef, measured },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
     const parsed = parseExchanges(analysis.text)
@@ -2600,7 +2647,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         fixture: true,
         stepId: 'D4-rebuttal',
         slug: 'revised-draft',
-        title: SCENARIO.title,
+        title: planOf(ctx).title,
         claimRef,
         sections: revised,
         references,
@@ -2623,14 +2670,14 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const outline = readInput(ctx, 'paper-outline')
   // The manuscript carries the outline's title, so the assembled document is this
   // paper rather than a generic skeleton.
-  const title = typeof outline?.title === 'string' ? outline.title : SCENARIO.title
+  const title = typeof outline?.title === 'string' ? outline.title : planOf(ctx).title
   const venueName = typeof venue?.name === 'string' ? venue.name : SCENARIO.venueName
   const venueId = typeof venue?.venueId === 'string' ? venue.venueId : SCENARIO.venueId
   const rawMatches = venueScope?.matches
   const scopeMatches = Array.isArray(rawMatches)
     ? rawMatches.filter((m): m is string => typeof m === 'string')
     : []
-  const sections = sectionsOf(revised)
+  const sections = sectionsOf(revised, planOf(ctx))
 
   // Real three-line-table sub-capability: the manuscript results table, built from
   // the SAME measurements the experiment produced.
@@ -3222,10 +3269,16 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
 }
 
 /** Convenience: the canonical claim/prediction constants used by executors + verdicts. */
+/**
+ * The default plan's claim identity.
+ *
+ * A caller that wants the values a run with no plan supplied will carry — the fixtures the specs
+ * assert against — reads them here rather than restating them.
+ */
 export const CANONICAL = {
-  claimId: CANONICAL_CLAIM_ID,
-  claimRef: CANONICAL_CLAIM_REF,
-  prediction: CANONICAL_PREDICTION,
+  claimId: DEFAULT_PLAN.claim.id,
+  claimRef: DEFAULT_PLAN.claim.ref,
+  prediction: DEFAULT_PLAN.claim.prediction,
 } as const
 
 export type { StepDefinition }

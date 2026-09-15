@@ -32,6 +32,8 @@ rationale: experiment (live) refutes the falsifiable prediction
 
 `traffic-sim.ts` 公布 `MEASURED_METRIC_KEY = 'mean-delay-seconds-per-vehicle'` 及其显示标签。`evaluatePrediction(predictionText, scenario, metricKey)` 现在返回一个判别式结果:
 
+**这些现在住在哪**(2026-09-15):`traffic-sim.ts` 已在 2026-09-14 被车队仿真取代,后者在 `runner/platoon-sim.ts` 里公布 `MEASURED_METRIC`;`evaluatePrediction` 搬到了 `runner/prediction-gate.ts`,在那里收一个 `PredictionGateInput` 对象,被测量的量是参数([为什么](../architecture/2026-09-15-the-prediction-gate-is-not-the-studys.zh.md))。
+
 - `{ kind: 'adjudicated', … }` —— claim 声明了被测量的 key **且**给出数值阈值。比较照旧执行。
 - `{ kind: 'unbindable', reason }` —— claim 没声明 metric、声明了另一个、或没给阈值。**什么都不裁定。**
 

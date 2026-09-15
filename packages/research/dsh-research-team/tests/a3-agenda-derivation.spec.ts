@@ -15,6 +15,7 @@ import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 import type { ExecCtx, ResearchProseRequest, ResearchProseWriter } from '../src/runner/registry.ts'
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 import { experimentStudy } from '../src/runner/platoon-sim.ts'
+import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 
 interface AgendaShape {
   readonly phases: ReadonlyArray<string>
@@ -68,6 +69,7 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
       metricKey: '',
       claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
       study: experimentStudy(),
+      studyPlan: DEFAULT_PLAN,
       timestamp: 1_700_000_000_000,
     },
     ...(writer !== undefined ? { proseWriter: writer } : {}),
