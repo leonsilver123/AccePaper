@@ -109,6 +109,14 @@ export interface WireRunSnapshot {
     readonly runId: string
     readonly steps: ReadonlyArray<WireStepOutcome>
   }
+  /**
+   * The project revision this snapshot was read at, when the host names one.
+   *
+   * OPTIONAL for the same reason `packageExport` is: a host that predates the field still satisfies
+   * this declaration. Read explicitly — a missing revision is reported as absent, never as zero,
+   * because zero is a revision a run can genuinely be at.
+   */
+  readonly projectRevision?: number
   readonly catalog: ReadonlyArray<WireStepCatalogEntry>
   readonly gates: ReadonlyArray<WireGateVerdict>
   readonly artifacts: ReadonlyArray<WireArtifactMeta>
@@ -354,6 +362,9 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     abstentions,
     degradations,
     deliverables: deliverablesOf(snapshot),
+    // Absent stays absent: a host that names no revision is reported as naming none, rather than as
+    // revision 0, which is a revision a run genuinely starts at.
+    ...(snapshot.projectRevision === undefined ? {} : { projectRevision: snapshot.projectRevision }),
   }
 }
 

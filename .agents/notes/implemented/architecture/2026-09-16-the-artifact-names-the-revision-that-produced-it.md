@@ -65,5 +65,7 @@ no consumer is not a deliverable. The manifest reads it in this change.
 - Snapshots written before this are refused on load. That is the format's normal discipline (the
   loader validates against the live model and returns no partial run), and no snapshot in the tree
   predates the change.
-- **What is still missing, and named in the README**: the browser wire and the workbench do not read
-  it yet. The manifest is a real consumer; the UI is the next one.
+- The Remote projection carries it to the browser and the workbench names it beside the run, so a
+  reader can tell whether the page and the exported package describe one state of the study or two.
+- **What is still missing, and named in the README**: nothing reads it PER ARTIFACT yet. The
+  revision reaches the wire for the run; the artifact metadata reaches it without one.

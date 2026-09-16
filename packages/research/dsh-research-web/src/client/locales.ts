@@ -10,6 +10,7 @@ export const zh = {
   'source.live': '真实运行',
   'run.action': '运行流水线',
   'run.running': '运行中…',
+  'run.revision': '项目版本 {revision}',
   'run.error': '运行失败:{message}',
   // The run dialog: the field, the proposals, and the criterion a person confirms.
   'propose.title': '这次运行研究什么',
@@ -196,6 +197,7 @@ export const en: Record<ResearchKey, string> = {
   'source.live': 'Live run',
   'run.action': 'Run pipeline',
   'run.running': 'Running…',
+  'run.revision': 'Project revision {revision}',
   'run.error': 'Run failed: {message}',
   'propose.title': 'What this run studies',
   'propose.note': 'Give a field and the model proposes research directions. Each carries the falsifiable prediction it commits to and the criterion it will be graded against — the pipeline starts only after you confirm, and runs only the one you confirmed.',

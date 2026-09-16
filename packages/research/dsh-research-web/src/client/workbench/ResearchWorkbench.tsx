@@ -161,6 +161,15 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
       {summary !== undefined && (
         <span className={css.mockBadge}>{summary.isMock ? t('mock.badge') : t('source.live')}</span>
       )}
+      {/* WHICH STATE OF THE STUDY THIS PAGE IS SHOWING. The exported package names the same
+          revision, so a reader can tell whether the page and the download describe one state or
+          two — a question a timestamp cannot answer. Absent when the host names none: showing a
+          zero would name a revision nobody read. */}
+      {summary !== undefined && summary.projectRevision !== null && (
+        <span className={css.mockBadge} data-research-revision="">
+          {t('run.revision', { revision: String(summary.projectRevision) })}
+        </span>
+      )}
       {onRun !== undefined && (
         <button
           type="button"

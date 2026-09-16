@@ -106,6 +106,7 @@ function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, run.runId)
   return {
     run,
+    projectRevision: snapshot.revision,
     catalog: [],
     gates: [],
     artifacts: [],

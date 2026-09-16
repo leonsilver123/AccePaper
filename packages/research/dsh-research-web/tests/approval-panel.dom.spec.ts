@@ -101,6 +101,19 @@ describe('the approval panel decides nothing by itself', () => {
     }
   })
 
+  it('names the project revision the page is showing, and says nothing when the host named none', () => {
+    // The exported package's manifest carries the same number, so this is what lets a reader tell
+    // whether the page and the download describe one state of the study or two.
+    openApprovalTab({ summary: toRunSummary({ ...gatedInput(), projectRevision: 7 }) })
+    expect(screen.getByText(en['run.revision'].replace('{revision}', '7'))).toBeTruthy()
+    cleanup()
+
+    // Named none, shown none: revision 0 is a state a run genuinely starts at, so rendering it here
+    // would name a revision nobody read.
+    openApprovalTab({ summary: toRunSummary(gatedInput()) })
+    expect(screen.queryByText(en['run.revision'].replace('{revision}', '0'))).toBeNull()
+  })
+
   it('asks the submitter for exactly this run, step and attempt', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,

@@ -283,6 +283,7 @@ function snapshotOf(
 
   return {
     run,
+    projectRevision: snapshot.revision,
     catalog,
     gates,
     artifacts,

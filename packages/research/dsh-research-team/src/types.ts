@@ -483,6 +483,14 @@ export interface ResearchStepStateView {
 export interface ResearchRunSnapshot {
   /** The runner's own result, unchanged. */
   readonly run: RunResult
+  /**
+   * The project revision this snapshot was read at.
+   *
+   * The artifacts below belong to this state of the run. A reader comparing what the page shows with
+   * an exported package — which names the same revision — can tell whether the two describe the same
+   * study state, which `producedAt` timestamps cannot answer.
+   */
+  readonly projectRevision: number
   /** The catalogue for the steps in `run.steps`, in canonical order. */
   readonly catalog: ReadonlyArray<ResearchStepCatalogEntry>
   /** Every gate verdict recorded during the run, with the evidence each carried. */

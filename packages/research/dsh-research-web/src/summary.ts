@@ -183,6 +183,13 @@ export interface DegradationNote {
 export interface RunSummaryInput {
   readonly runId: string
   /**
+   * The project revision the host read this run at, when it names one.
+   *
+   * The same value the exported package's manifest carries, so a reader can tell whether the page
+   * and the download describe the same state of the study.
+   */
+  readonly projectRevision?: number
+  /**
    * Where this summary came from.
    *
    * The view used to render a MOCK badge unconditionally, and the model declared
@@ -224,6 +231,8 @@ export interface DeliverableView {
 /** Derived + raw presentation model handed to the view. */
 export interface RunSummary {
   readonly runId: string
+  /** The project revision this summary describes; null when the host named none. */
+  readonly projectRevision: number | null
   readonly status: RunStatus
   readonly steps: ReadonlyArray<StepView>
   readonly artifacts: ReadonlyArray<ArtifactView>
@@ -292,6 +301,8 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
 
   return {
     runId: input.runId,
+    // Absent stays null: a host that named no revision is reported as having named none.
+    projectRevision: input.projectRevision ?? null,
     status: input.status,
     steps: input.steps,
     artifacts: input.artifacts,
