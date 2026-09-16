@@ -181,6 +181,8 @@ import {
 } from './result-version.ts'
 import type { MeasuredOutcome, ResultSource } from './result-version.ts'
 import { sectionEvidenceFor } from './section-evidence.ts'
+import { applyRevision, bodyHashOf } from './issue-patch.ts'
+import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
@@ -2668,33 +2670,78 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
 /** D4-rebuttal: fixture that reads the D3 draft, produces an adversarial rebuttal
  *  record and a revised draft (same sections, revision markers). */
+
 /**
- * Pair up CONCERN/RESPONSE lines from a model's rebuttal response.
+ * One issue per CONCERN/SECTION/RESPONSE triple, with an optional PATCH.
  *
- * A CONCERN opens an exchange and the next RESPONSE closes it; a response with no
- * open concern is dropped rather than attached to the previous one, so a malformed
- * reply yields fewer exchanges instead of a mispaired one.
+ * WHAT CHANGED, AND WHY. This used to read only CONCERN and RESPONSE and set
+ * `requiresRevision: true` on every pair, which is where `D4`'s defect started: every exchange
+ * demanded a revision, and the executor marked every section revised for a set of exchanges that
+ * proposed no change to any of them. The reply now names the SECTION an exchange is about and may
+ * carry a PATCH — the replacement body — so whether a text change is required follows from whether
+ * one was offered rather than from a constant.
  *
- * @param text - the model's response.
- * @returns one point per complete pair, in the order they appeared.
+ * An exchange missing its SECTION line is not parsable into an issue, and the caller fails the step
+ * rather than guessing which section the author meant.
+ *
+ * @param text - the model's reply.
+ * @returns one issue per complete exchange, without the basis hash the executor supplies.
  */
-function parseExchanges(text: string): ReadonlyArray<RebuttalPoint> {
-  const points: RebuttalPoint[] = []
+function parseIssues(text: string): ReadonlyArray<Omit<RevisionIssue, 'basisHash'>> {
+  const issues: Array<Omit<RevisionIssue, 'basisHash'>> = []
   let concern: string | undefined
+  let sectionId: string | undefined
+  let response: string | undefined
+  let patch: string | undefined
+  const flush = (): void => {
+    if (concern === undefined || sectionId === undefined || response === undefined) return
+    issues.push({
+      issueId: `d4-issue-${String(issues.length + 1)}`,
+      sectionId,
+      concern,
+      response,
+      requiresTextChange: patch !== undefined,
+      ...(patch === undefined ? {} : { patch }),
+    })
+  }
   for (const rawLine of text.split('\n')) {
     const line = rawLine.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
-    const concernMatch = /^CONCERN\s*[:=]\s*(.+)$/i.exec(line)
-    if (concernMatch !== null) {
-      concern = concernMatch[1]?.trim()
+    const labeled = (label: string): string | undefined => {
+      const match = new RegExp(`^${label}\\s*[:=]\\s*(.+)$`, 'i').exec(line)
+      return match === null ? undefined : (match[1]?.trim() ?? '')
+    }
+    const nextConcern = labeled('CONCERN')
+    if (nextConcern !== undefined) {
+      // A new CONCERN closes whatever was open, so a reply that omits a RESPONSE yields fewer
+      // issues rather than a mispaired one.
+      flush()
+      concern = nextConcern
+      sectionId = undefined
+      response = undefined
+      patch = undefined
       continue
     }
-    const responseMatch = /^RESPONSE\s*[:=]\s*(.+)$/i.exec(line)
-    if (responseMatch !== null && concern !== undefined && concern.length > 0) {
-      points.push({ concern, response: responseMatch[1]?.trim() ?? '', requiresRevision: true })
-      concern = undefined
+    const nextSection = labeled('SECTION')
+    if (nextSection !== undefined && concern !== undefined) {
+      sectionId = nextSection
+      continue
+    }
+    const nextResponse = labeled('RESPONSE')
+    if (nextResponse !== undefined && concern !== undefined) {
+      response = nextResponse
+      continue
+    }
+    const nextPatch = labeled('PATCH')
+    if (nextPatch !== undefined && concern !== undefined) {
+      // `NONE` is how a reply states that the answer changes no text: the author accepts the
+      // concern as an explanation. Written as a word rather than as an absent line so the two are
+      // distinguishable — a reply that forgot its patch is a malformed reply, not an acceptance.
+      patch = /^none$/iu.test(nextPatch) ? undefined : nextPatch
+      continue
     }
   }
-  return points
+  flush()
+  return issues
 }
 
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
@@ -2715,10 +2762,16 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // concerns come from the model; without one they are the questions this study's own
   // design raises, stated with the MEASURED numbers rather than a remembered constant.
   const writer = ctx.proseWriter
+  // The bodies the author is shown, keyed by section. A patch is written against one of THESE, and
+  // the basis hash travels with the issue so the applier can refuse a patch aimed at a version that
+  // no longer exists.
+  const bodiesShown = new Map(sections.map(section => [section.id, section.bodyText]))
+  let issues: ReadonlyArray<Omit<RevisionIssue, 'basisHash'>> = []
   let points: ReadonlyArray<RebuttalPoint>
   let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
+    const resultsBody = bodiesShown.get('results') ?? ''
     points = [
       {
         concern: `Is the ${measured.improvementPct.toFixed(2)}% minimum-TTC change robust at the boundary?`,
@@ -2731,39 +2784,77 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         requiresRevision: true,
       },
     ]
+    issues = [
+      {
+        issueId: 'd4-issue-1',
+        // The boundary question is answered without touching the text, which is what an
+        // `accepted_explanation` is and why it is recorded apart from a patch.
+        sectionId: 'results',
+        concern: points[0]?.concern ?? '',
+        response: points[0]?.response ?? '',
+        requiresTextChange: false,
+      },
+      {
+        issueId: 'd4-issue-2',
+        sectionId: 'results',
+        concern: points[1]?.concern ?? '',
+        response: points[1]?.response ?? '',
+        requiresTextChange: true,
+        // A REAL patch: the results section gains the sentence the concern asks for. It introduces
+        // no number, which is what keeps it past the A gate's number check.
+        patch: `${resultsBody} No published-SOTA row is recorded: a minimum time-to-collision figure has to be read out of a paper, so the comparison is against this study's own measured baseline and says so.`,
+      },
+    ]
   } else {
     const analysis = await writer.write({
       stepId: 'D4-rebuttal',
       instruction: [
         'Write the review exchanges this paper must answer.',
-        'Reply with one exchange per pair of lines, at least two exchanges:',
+        'Reply with one exchange per group of FOUR lines, at least two exchanges:',
         'CONCERN: <reviewer concern>',
+        'SECTION: <the id of the section the concern is about>',
         'RESPONSE: <the author response, using only the measurements given in the context>',
+        'PATCH: <the complete replacement body for that section, or exactly NONE when the answer '
+        + 'changes no text>',
+        'A PATCH replaces the whole section, so it must keep every sentence the section still needs.',
       ].join('\n'),
-      context: { ...planContextOf(planOf(ctx)), claimRef, measured },
+      // The bodies travel so a patch can be written against them, and the section ids travel so a
+      // reply can name one without inventing the outline.
+      context: {
+        ...planContextOf(planOf(ctx)),
+        claimRef,
+        measured,
+        sections: sections.map(section => ({ id: section.id, heading: section.heading, bodyText: section.bodyText })),
+      },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
-    const parsed = parseExchanges(analysis.text)
+    const parsed = parseIssues(analysis.text)
     if (parsed.length === 0) {
       throw new Error(
-        '[D4-rebuttal] the model response carried no CONCERN/RESPONSE pair '
+        '[D4-rebuttal] the model response carried no CONCERN/SECTION/RESPONSE exchange '
         + '(a rebuttal with no exchange answers nothing — NO DEFAULT PASS)',
       )
     }
-    points = parsed
+    issues = parsed
+    points = parsed.map(issue => ({
+      concern: issue.concern,
+      response: issue.response,
+      requiresRevision: issue.requiresTextChange,
+    }))
     rebuttalSource = proseLabelling(writer).source
     rebuttalRoute = proseRouteOf(analysis)
   }
 
+  // WHAT THE ROUND ACTUALLY CHANGED. Each issue is bound to the version it was written against,
+  // and the applier decides: a patch applies, a conflict or an empty diff stays open, an answer
+  // without a change is an accepted explanation. `revised` follows from the bodies, never from a
+  // flag a caller set.
+  const applied = applyRevision(
+    sections,
+    issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
+  )
   const record = buildRevisionRecord(points)
-  // The revision is recorded as a FLAG per section, not as a marker pasted into the
-  // prose. The marker used to travel with the body all the way into the formatted
-  // manuscript, so the submitted paper carried `[revised: rebuttal addressed]` after
-  // every paragraph — process metadata printed as content.
-  const revised: ReadonlyArray<ManuscriptSection & { readonly revised: boolean }> = sections.map(s => ({
-    ...s,
-    revised: record.hasRevisions,
-  }))
+  const revised: ReadonlyArray<ManuscriptSection & { readonly revised: boolean }> = applied.sections
   return {
     rebuttal: tagArtifact(
       {
@@ -2777,6 +2868,13 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         exchanges: record.points,
         revisionCount: record.revisionCount,
         hasRevisions: record.hasRevisions,
+        // PER ISSUE, not per round: what became of each concern, and the before/after hashes of
+        // every section a patch changed. A round that closes nothing says so with an empty
+        // `patchedSections` rather than with a flag nothing supports.
+        issues: applied.outcomes,
+        changes: applied.changes,
+        patchedSections: applied.patchedSections,
+        openIssues: applied.openIssues,
         note: rebuttalSource === 'fixture'
           ? 'exchanges written from this study\'s own design questions, with measured numbers'
           : 'exchanges written by the model from the measured outcome',
@@ -2792,11 +2890,15 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         title: planOf(ctx).title,
         claimRef,
         sections: revised,
+        // The same per-section fact on the draft, so a reader of the manuscript alone can tell a
+        // section a patch changed from one it did not.
+        patchedSections: applied.patchedSections,
+        openIssues: applied.openIssues,
         references,
         renderedFigures,
         resultSource: d4Outcome.source,
         resultRef: d4Outcome.contentHash,
-        note: 'synthetic revised draft — same section ids as the D3 draft with revision markers',
+        note: 'revised draft — same section ids as the D3 draft, with `revised` set only on the sections a patch actually changed',
       },
       D4_PRODUCER,
       'fixture_executor',
