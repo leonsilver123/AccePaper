@@ -173,6 +173,13 @@ import {
   studyFromPack,
 } from './platoon-sim.ts'
 import { resolveImplementation } from './implementations.ts'
+import {
+  RESULT_VERSION_SLUG,
+  measuredFromComparison,
+  readResultVersion,
+  resultVersionOf,
+} from './result-version.ts'
+import type { MeasuredOutcome, ResultSource } from './result-version.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -568,6 +575,8 @@ const ARTIFACT_TYPE_BY_SLUG: Readonly<Record<string, string>> = {
   'baseline-results': 'baseline-measurement-set',
   'sota-comparison': 'sota-comparison-note',
   'mvp-results': 'experiment-result-set',
+  // The run's measured result, written by C1 and read by every step that reports a number.
+  'result-version': 'result-version',
   'converged-verdict': 'convergence-verdict',
   'ablation-results': 'ablation-measurement-set',
   'boundary-map': 'boundary-map',
@@ -795,6 +804,7 @@ function canonicalOf(ctx: ExecCtx): {
 function sectionsOf(
   input: Record<string, unknown> | undefined,
   plan: StudyPlan,
+  ctx: ExecCtx,
 ): ReadonlyArray<ManuscriptSection> {
   const raw = input?.sections
   if (Array.isArray(raw) && raw.length > 0) {
@@ -811,48 +821,43 @@ function sectionsOf(
     }
     if (sections.length > 0) return sections
   }
-  return defaultBodySections(plan)
+  return defaultBodySections(plan, ctx)
 }
 
-/** Deterministic fallback body for every outline section id. */
+/**
+ * The numbers this step reports, preferring the run's own `result-version` record.
+ *
+ * The optional `ctx` is what makes the difference: with a run context the record is read from the
+ * run, and without one (a step driven alone, a pure helper) the study is measured here. The
+ * returned `source` says which happened, so a consumer can state it and a test can assert it.
+ */
+function measureOutcomeWithSource(ctx?: ExecCtx): {
+  readonly measured: MeasuredOutcome
+  readonly source: ResultSource
+  readonly contentHash: string
+} {
+  const recorded = ctx === undefined ? undefined : ctx.getInput(RESULT_VERSION_SLUG)
+  const record = readResultVersion(recorded)
+  if (record !== undefined) {
+    return { measured: record.measured, source: 'result-version', contentHash: record.contentHash }
+  }
+  // No record: this step was driven without its producer, so it measures the study itself and the
+  // artifact it writes says so. In a driven run this branch is a defect, and `resultSource` on the
+  // artifacts is what makes it visible rather than an assumption that the numbers agree.
+  const comparison = comparePlatoons(ctx?.runCtx.study ?? experimentStudy())
+  return { measured: measuredFromComparison(comparison), source: 'recomputed', contentHash: '' }
+}
+
 /**
  * The run's measured outcome, rounded to the precision the manuscript reports.
  *
- * Body text and the figures/tables are generated from THIS one computation, so a
- * paper can never state a number its own exhibit contradicts. It is the same
- * measurement the C gate adjudicates.
- *
+ * @param ctx - the run, when the caller has one; the record is read from it.
  * @returns both platoons' minimum time-to-collision plus the change between them.
  */
-function measureOutcome(): {
-  readonly baselineMinTtcSeconds: number
-  readonly variantMinTtcSeconds: number
-  /** Change in the variant relative to the baseline, %. Positive means the AV helped. */
-  readonly improvementPct: number
-  readonly baselineTtcRatePct: number
-  readonly variantTtcRatePct: number
-  readonly stringStabilityIndex: number
-} {
-  const round2 = (value: number): number => Math.round(value * 100) / 100
-  const comparison = comparePlatoons(experimentStudy())
-  return {
-    baselineMinTtcSeconds: round2(comparison.baseline.minTtcSeconds),
-    variantMinTtcSeconds: round2(comparison.variant.minTtcSeconds),
-    improvementPct: round2(comparison.relativeImprovementPct),
-    baselineTtcRatePct: round2(comparison.baseline.ttcLt1_5RatePct),
-    variantTtcRatePct: round2(comparison.variant.ttcLt1_5RatePct),
-    stringStabilityIndex: round2(comparison.variant.stringStabilityIndex),
-  }
+function measureOutcome(ctx?: ExecCtx): MeasuredOutcome {
+  return measureOutcomeWithSource(ctx).measured
 }
 
-/**
- * Draft a section body.
- *
- * @param id - section id from the outline skeleton.
- * @param measured - the run's measured outcome, so no section quotes a number the
- *   exhibits do not show.
- * @returns the section's prose.
- */
 /**
  * The fallback section prose, generated FROM the experiment's own parameters.
  *
@@ -865,7 +870,8 @@ function measureOutcome(): {
  *
  * @param id - the section id from the outline.
  * @param plan - the run's plan, which states the claim and the prediction this text quotes.
- * @param measured - the current measurement of the study experiment.
+ * @param measured - the run's measured outcome, so no section quotes a number the
+ *   exhibits do not show.
  * @param referenceCount - entries the draft carries for the reference list.
  * @returns the section body.
  */
@@ -904,11 +910,13 @@ function bodyTextFor(
   }
 }
 
+/** Deterministic fallback body for every outline section id. */
 function defaultBodySections(
   plan: StudyPlan,
+  ctx: ExecCtx,
   referenceCount = 0,
 ): ReadonlyArray<ManuscriptSection> {
-  const measured = measureOutcome()
+  const measured = measureOutcome(ctx)
   return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
@@ -1911,6 +1919,12 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
     )
   }
   const comparison = comparePlatoons(ctx.runCtx.study)
+  // The record every later step measures against. Written by the step that MEASURED, read by the
+  // steps that report — see `result-version.ts` for what recomputing beside it cost.
+  const resultVersion = resultVersionOf(
+    comparison,
+    ctx.runCtx.metricKey === '' ? planOf(ctx).metric.key : ctx.runCtx.metricKey,
+  )
   return {
     'mvp-results': tagArtifact(
       {
@@ -1951,6 +1965,20 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
           stringStabilityIndex: comparison.variant.stringStabilityIndex,
         },
         note: 'mvp-results measured by simulating both platoons under the same declared disturbance; a refuted prediction is recorded as refuted and does not stop the run',
+      },
+      C1_PRODUCER,
+      'local_computation',
+    ),
+    [RESULT_VERSION_SLUG]: tagArtifact(
+      {
+        fixture: true,
+        stepId: 'C1-mvp',
+        slug: RESULT_VERSION_SLUG,
+        ...resultVersion,
+        // This step MEASURED, so it is the one place `recomputed` is the honest source. Every
+        // later reader reports `result-version`, and a test asserts exactly that.
+        resultSource: 'recomputed',
+        note: 'the run’s measured result, written by the step that measured it; every later step reports these numbers rather than measuring again',
       },
       C1_PRODUCER,
       'local_computation',
@@ -2260,13 +2288,11 @@ function citableFloats(
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
   // The figures plot the SAME measurements the experiment produced, so a chart can
-  // never disagree with the verdict it illustrates.
-  const comparison = comparePlatoons(ctx.runCtx.study)
-  // Rounded to the precision the table column declares: the tool refuses a value
-  // carrying more decimals than its column, and that guard is right to.
-  const round2 = (value: number): number => Math.round(value * 100) / 100
-  const measuredBaseline = round2(comparison.baseline.minTtcSeconds)
-  const measuredVariant = round2(comparison.variant.minTtcSeconds)
+  // never disagree with the verdict it illustrates. "The same" is now a record the run
+  // holds, not a re-measurement: see `result-version.ts`.
+  const outcome = measureOutcomeWithSource(ctx)
+  const measuredBaseline = outcome.measured.baselineMinTtcSeconds
+  const measuredVariant = outcome.measured.variantMinTtcSeconds
   const figureSpec = {
     kind: 'bar',
     title: 'Platoon Minimum Time-to-Collision by Composition',
@@ -2524,8 +2550,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let proseSource: 'fixture' | 'model' | 'deterministic'
   let proseRoute: Record<string, unknown> = proseRouteOf(undefined)
   let producer: string = D3_PRODUCER
+  // Read once, for both prose paths: a draft written by a model quotes the same numbers as one
+  // written by the fixture, and both have to say where those numbers came from.
+  const d3Outcome = measureOutcomeWithSource(ctx)
   if (writer === undefined) {
-    const measured = measureOutcome()
+    const measured = d3Outcome.measured
     sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, references.length) }))
     proseSource = 'fixture'
   } else {
@@ -2569,6 +2598,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sections,
         proseSource,
         proseRoute,
+        // WHICH numbers this draft quotes and where they came from. `result-version` means the
+        // step read the run's own record; `recomputed` means it measured the study itself, which
+        // in a driven run is the defect `result-version.ts` exists to make visible.
+        resultSource: d3Outcome.source,
+        resultRef: d3Outcome.contentHash,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
         references,
@@ -2617,14 +2651,15 @@ function parseExchanges(text: string): ReadonlyArray<RebuttalPoint> {
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const draft = readInput(ctx, 'draft')
-  const sections = sectionsOf(draft, planOf(ctx))
+  const sections = sectionsOf(draft, planOf(ctx), ctx)
   // A revision keeps the reference list it is revising. Dropping it here is what
   // made the assembled manuscript report zero references while its own references
   // section described the landscape scan it was built from.
   const references = Array.isArray(draft?.references) ? draft.references : []
   // Same reasoning as the references: a revision keeps the figures it is revising.
   const renderedFigures = Array.isArray(draft?.renderedFigures) ? draft.renderedFigures : []
-  const measured = measureOutcome()
+  const d4Outcome = measureOutcomeWithSource(ctx)
+  const measured = d4Outcome.measured
 
   // The exchanges are organised by the real module, which computes the revision
   // tally from the points and refuses an empty or shell response. With a writer the
@@ -2710,6 +2745,8 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sections: revised,
         references,
         renderedFigures,
+        resultSource: d4Outcome.source,
+        resultRef: d4Outcome.contentHash,
         note: 'synthetic revised draft — same section ids as the D3 draft with revision markers',
       },
       D4_PRODUCER,
@@ -2735,14 +2772,14 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const scopeMatches = Array.isArray(rawMatches)
     ? rawMatches.filter((m): m is string => typeof m === 'string')
     : []
-  const sections = sectionsOf(revised, planOf(ctx))
+  const sections = sectionsOf(revised, planOf(ctx), ctx)
 
   // Real three-line-table sub-capability: the manuscript results table, built from
-  // the SAME measurements the experiment produced.
-  const round2 = (value: number): number => Math.round(value * 100) / 100
-  const e1Comparison = comparePlatoons(ctx.runCtx.study)
-  const measuredBaseline = round2(e1Comparison.baseline.minTtcSeconds)
-  const measuredVariant = round2(e1Comparison.variant.minTtcSeconds)
+  // the SAME measurements the experiment produced — read off the run's record, so the
+  // table and the prose cannot come from two different computations.
+  const e1Outcome = measureOutcomeWithSource(ctx)
+  const measuredBaseline = e1Outcome.measured.baselineMinTtcSeconds
+  const measuredVariant = e1Outcome.measured.variantMinTtcSeconds
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
   const invocation = await invoker.invoke(
     'three-line-table',

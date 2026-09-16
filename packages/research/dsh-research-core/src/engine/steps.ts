@@ -89,7 +89,12 @@ export const STEPS: readonly StepDefinition[] = [
     id: 'C1-mvp', index: 8, phase: 'C', name: 'MVP',
     purpose: '最小可行实验,对核心预测给出裁决',
     inputs: ['method-spec', 'dataset'],
-    outputs: ['mvp-results'],
+    // `result-version` is what every later step measures against. The study's numbers used to be
+    // recomputed by each consumer — the C gate, D1, D3, D4 and E1 each ran the simulation again —
+    // so a change to the study could leave the table, the figure and the verdict describing three
+    // different runs. The arithmetic was identical because the simulation is deterministic, which
+    // is exactly why nothing caught it: the defect is that they were separate computations.
+    outputs: ['mvp-results', 'result-version'],
     gate: ['C'],
     falsifiable: 'MVP 实验结果必须能判定核心预测 真/假',
     humanGate: false,
@@ -97,7 +102,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'C2-trinity-loop', index: 9, phase: 'C', name: '三合一循环',
     purpose: '判断三件套迭代收敛',
-    inputs: ['mvp-results', 'baseline-results'],
+    inputs: ['mvp-results', 'baseline-results', 'result-version'],
     outputs: ['converged-verdict'],
     gate: ['A', 'B', 'C'],
     falsifiable: '收敛判决须同时通过对抗/外部/可证伪三方',
@@ -106,7 +111,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'C3-boundary', index: 10, phase: 'C', name: '边界',
     purpose: '探边界/消融,测试方法适用域',
-    inputs: ['converged-verdict'],
+    inputs: ['converged-verdict', 'result-version'],
     outputs: ['ablation-results', 'boundary-map'],
     gate: ['C'],
     falsifiable: '边界预测须被实验逐一裁决',
@@ -116,7 +121,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D1-figure-map', index: 11, phase: 'D', name: '图表映射',
     purpose: '结果→图表映射(数据图/三线表/路线图)',
-    inputs: ['converged-verdict', 'ablation-results'],
+    inputs: ['converged-verdict', 'ablation-results', 'result-version'],
     outputs: ['figure-plan'],
     gate: ['B'],
     falsifiable: null,
@@ -138,7 +143,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D3-writing', index: 13, phase: 'D', name: '写作',
     purpose: '起草各章节 + 添加参考文献(经 L0 过滤)',
-    inputs: ['paper-outline', 'figure-plan', 'landscape-map'],
+    inputs: ['paper-outline', 'figure-plan', 'landscape-map', 'result-version'],
     outputs: ['draft'],
     gate: ['A', 'B'],
     falsifiable: null,
@@ -147,7 +152,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D4-rebuttal', index: 14, phase: 'D', name: 'rebuttal',
     purpose: '对抗式 rebuttal,产出修订稿',
-    inputs: ['draft'],
+    inputs: ['draft', 'result-version'],
     outputs: ['rebuttal', 'revised-draft'],
     gate: ['A'],
     falsifiable: null,
@@ -159,7 +164,7 @@ export const STEPS: readonly StepDefinition[] = [
     purpose: '按目标期刊格式化(版式/引用样式)',
     // `paper-outline` is read by this step's executor and was not declared — see D2-framework for
     // what an undeclared read costs.
-    inputs: ['revised-draft', 'venue', 'venue-scope', 'paper-outline'],
+    inputs: ['revised-draft', 'venue', 'venue-scope', 'paper-outline', 'result-version'],
     outputs: ['formatted-manuscript'],
     gate: ['B'],
     falsifiable: null,
