@@ -341,7 +341,9 @@ describe('following a run', () => {
       const other = await host.service.startRun({ commandId: 'follow-3' })
 
       const frames = await drain(host.service.followRun(
-        { runId: started.runId, cursor: runCursorOf(other.runId, 1) },
+        // A WELL-FORMED cursor that belongs to another run: the refusal must be about the RUN, not
+        // about the text failing to parse.
+        { runId: started.runId, cursor: runCursorOf(other.runId, 1, EMPTY_LOG.digest) },
         new AbortController().signal,
       ))
       expect(frames).toHaveLength(1)
