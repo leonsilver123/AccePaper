@@ -137,6 +137,15 @@ export interface ArtifactRecord {
    * what lets a report say which version it judged rather than which name it saw.
    */
   readonly ref: ArtifactRef
+  /**
+   * The project revision this artifact was produced under.
+   *
+   * `ref.version` counts revisions of ONE artifact; this names the state of the whole run when the
+   * commit that wrote it landed. They answer different questions — "is this the third draft of the
+   * results section" and "which study produced it" — and a reader who needs the second cannot
+   * derive it from the first.
+   */
+  readonly projectRevision: ProjectRevision
 }
 
 /** The kinds of record the run's append-only audit log holds. Every state-machine
@@ -322,6 +331,8 @@ export interface ArtifactRecordMeta {
   readonly invalidated: boolean
   /** The revision this entry is: which artifact, which version, and the hash of its bytes. */
   readonly ref: ArtifactRef
+  /** The project revision the artifact was produced under; see {@link ArtifactRecord}. */
+  readonly projectRevision: ProjectRevision
 }
 
 /** Read-only run snapshot (deep-cloned on return; artifact values excluded — fetch via getArtifact). */

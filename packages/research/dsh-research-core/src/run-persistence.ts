@@ -723,6 +723,13 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
       producedAt: asNumber(rec.producedAt, `${what}.producedAt`),
       invalidated: rec.invalidated,
       ref: parseArtifactRef(rec.ref, `${what}.ref`, slug),
+      // REQUIRED, and a snapshot without it is refused rather than defaulted. A default would name
+      // a project revision the artifact may never have belonged to, and every reader of this field
+      // exists to tell which state produced an artifact — the one fact a guess destroys.
+      projectRevision: asCount(
+        rec.projectRevision,
+        `${what}.projectRevision`,
+      ) as ArtifactRecord['projectRevision'],
     }
   }
   return registry

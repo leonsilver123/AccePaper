@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getArtifact, getAuditHistory } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getAuditHistory, getRunSnapshot } from '@deepseek-ai/dsh-research-core'
 import { readinessOfRun } from './submission-readiness.ts'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
@@ -41,6 +41,14 @@ export interface PackagedFile {
 /** The manifest written as `run-manifest.json`. */
 export interface RunPackageManifest {
   readonly runId: string
+  /**
+   * The project revision this package was exported FROM.
+   *
+   * A package is a reading of one state of the run. `generatedAt` says when someone read it, which
+   * is not the same fact — two exports a minute apart can carry different manuscripts — and the
+   * artifacts the export names are the ones this revision holds.
+   */
+  readonly projectRevision: number
   readonly generatedAt: string
   readonly files: ReadonlyArray<PackagedFile>
   /** Per-step outcome, so the package states how each product was produced. */
@@ -258,6 +266,10 @@ export function planRunPackage(
   const written = new Set(files.map(file => file.path))
   const manifest: RunPackageManifest = {
     runId,
+    // Read from the RUN, not derived from the files: the revision is what the artifacts in this
+    // package belong to, and a reader comparing two packages needs it to tell whether they read
+    // the same study or two states of it.
+    projectRevision: getRunSnapshot(store, runId).revision,
     generatedAt: new Date(0).toISOString(),
     files: [],
     steps: run.steps.map(stepRecord),

@@ -249,6 +249,8 @@ function invalidateArtifactsFor(run: RunState, producerStepId: string, producerA
         producedAt: rec.producedAt,
         invalidated: true,
         ref: rec.ref,
+        // Invalidation changes whether the artifact still counts, not which revision produced it.
+        projectRevision: rec.projectRevision,
       }
     }
   }
@@ -467,6 +469,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
       producedAt: r.producedAt,
       invalidated: r.invalidated,
       ref: cloneValue(r.ref) as ArtifactRecordMeta['ref'],
+      projectRevision: r.projectRevision,
     }
   }
   const snapshot: RunSnapshot = {
@@ -654,6 +657,10 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
       version: nextArtifactVersion(run, outputSlug) as ArtifactRef['version'],
       contentHash: hashed.value,
     },
+    // This seam writes ONE artifact and does not move the run's revision, so the artifact belongs
+    // to whatever revision the run is at. Reporting the revision it will be part of would claim a
+    // change this call did not make.
+    projectRevision: run.revision,
   }
   pushEvent(run, 'artifact-recorded', stepId, state.attempt_id, { slug: outputSlug })
 }

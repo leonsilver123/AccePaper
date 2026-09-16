@@ -132,6 +132,39 @@ describe('J01 — a gate cannot certify a step that produced nothing', () => {
   })
 })
 
+describe('every artifact names the project revision it was produced under', () => {
+  it('stamps the revision the commit published, not the one it was prepared against', () => {
+    // The two differ by exactly the commit itself, and naming the PREPARED revision would tell a
+    // reader the artifact belongs to the state before it existed. `ref.version` cannot stand in for
+    // this: it counts revisions of one artifact, and two artifacts from the same commit share a
+    // project revision while having unrelated version numbers.
+    const [store, id] = started()
+    const before = revisionOf(store, id)
+    const outcome = commitStepOutputs(store, id, STEP, request(store, id))
+    if (!outcome.ok) throw new Error('spec: the commit was refused')
+
+    const snapshot = getRunSnapshot(store, id)
+    expect(snapshot.revision).not.toBe(before)
+    expect(snapshot.registry['landscape-map']?.projectRevision).toBe(snapshot.revision)
+    expect(snapshot.registry['gap-list']?.projectRevision).toBe(snapshot.revision)
+    // Both artifacts of one commit belong to ONE state of the run.
+    expect(snapshot.registry['landscape-map']?.projectRevision)
+      .toBe(snapshot.registry['gap-list']?.projectRevision)
+  })
+
+  it('stamps the CURRENT revision when the one-artifact seam writes, and does not move it', () => {
+    // `recordArtifact` writes one artifact and does not commit, so the run is still at the revision
+    // it was. Claiming the NEXT one would report a change this call never made.
+    const [store, id] = started()
+    const before = revisionOf(store, id)
+    recordArtifact(store, id, STEP, 'landscape-map', { v: 1 })
+
+    const snapshot = getRunSnapshot(store, id)
+    expect(snapshot.revision).toBe(before)
+    expect(snapshot.registry['landscape-map']?.projectRevision).toBe(before)
+  })
+})
+
 describe('F02 — the per-slug seam cannot write beside a commit', () => {
   it('refuses recordArtifact once the attempt has committed, and changes nothing', () => {
     const [store, id] = started()

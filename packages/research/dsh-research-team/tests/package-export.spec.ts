@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
@@ -44,6 +44,18 @@ async function realRun(): Promise<{ store: ResearchRunStore; run: RunResult }> {
 }
 
 describe('planRunPackage', () => {
+  it('names the project revision the package was read from', async () => {
+    // A package is a reading of ONE state of the run. `generatedAt` says when someone read it, and
+    // two exports a minute apart can carry different manuscripts — so a reader comparing two
+    // packages, or matching a package against a screen, needs the revision and not the clock.
+    const { store, run } = await realRun()
+    const plan = planRunPackage(store, run, 'evaluation')
+
+    expect(plan.manifest.projectRevision).toBe(getRunSnapshot(store, run.runId).revision)
+    // And it is a revision this run actually reached, not the zero a missing read would produce.
+    expect(plan.manifest.projectRevision).toBeGreaterThan(0)
+  })
+
   it('builds every run-level file plus the ones E1 produced, as content', async () => {
     const { store, run } = await realRun()
     const plan = planRunPackage(store, run, 'evaluation')

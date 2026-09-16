@@ -253,6 +253,9 @@ export function commitStepOutputs(
       producedAt: committedAt,
       invalidated: false,
       ref,
+      // The revision this commit PUBLISHED, not the one it was prepared against: the artifacts
+      // become part of the state `revision` names.
+      projectRevision: revision,
     }
     artifacts.push({ slug: item.slug, ref })
   }
