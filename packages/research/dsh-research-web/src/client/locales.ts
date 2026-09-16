@@ -69,6 +69,7 @@ export const zh = {
   'abstention.reason': '原因 {code}',
   'status.running': '运行中',
   'status.completed': '已完成',
+  'status.awaiting-approval': '等待你确认',
   'status.abstained': '已弃审',
   'status.failed': '失败',
   'status.degraded': '已降级',
@@ -159,7 +160,7 @@ export const zh = {
 
   // --- Orientation (U1): what this tab is, how to use it, and what the text came from ---
   'intro.title': '这条流水线做什么',
-  'intro.what': '一条主张走完 16 步（阶段 A–E）才成为一篇可投稿的手稿。每一步只有通过三一评判才会前进：A 是红队投票，B 是外部锚，C 是可证伪预测加实验裁决；裁不出来的一步以「弃审」结束，永远不会变成通过。',
+  'intro.what': '一条主张走完 16 步（阶段 A–E）才成为一份材料齐备的手稿。每一步只有通过三一评判才会前进：A 是红队投票，B 是外部锚，C 是可证伪预测加实验裁决；裁不出来的一步以「弃审」结束，永远不会变成通过。材料齐备不等于可投稿：那还要生产证据模式、全部门禁关闭、没有未关闭的评审意见，以及一次人工批准。',
   'intro.how': '怎么用',
   'intro.step1': '按「运行流水线」启动一次运行 —— 它真的跑完 16 步，并把产物写到磁盘。',
   'intro.step2': '运行会停在 E2-submit 的人工门等你裁决：打开「人工审批」标签页批准或驳回。',
@@ -255,6 +256,7 @@ export const en: Record<ResearchKey, string> = {
   'abstention.reason': 'reason {code}',
   'status.running': 'running',
   'status.completed': 'completed',
+  'status.awaiting-approval': 'waiting for your approval',
   'status.abstained': 'abstained',
   'status.failed': 'failed',
   'status.degraded': 'degraded',
@@ -337,7 +339,7 @@ export const en: Record<ResearchKey, string> = {
 
   // --- Orientation (U1): what this tab is, how to use it, and what the text came from ---
   'intro.title': 'What this pipeline does',
-  'intro.what': 'One claim becomes a submittable manuscript only by surviving all 16 steps (phases A–E). A step advances only through the judgment trinity: A is the red-team vote, B the external anchor, C a falsifiable prediction adjudicated by an experiment. A step that cannot be judged ends `abstained` and never becomes a pass.',
+  'intro.what': 'One claim becomes a manuscript with all its material only by surviving all 16 steps (phases A–E). A step advances only through the judgment trinity: A is the red-team vote, B the external anchor, C a falsifiable prediction adjudicated by an experiment. A step that cannot be judged ends `abstained` and never becomes a pass. Material is not submittability: that also takes the production evidence profile, every gate closed, no unclosed reviewer concern, and a person’s approval.',
   'intro.how': 'How to use it',
   'intro.step1': 'Press “Run pipeline” to start one run — it really drives all 16 steps and writes the products to disk.',
   'intro.step2': 'The run stops at the E2-submit human gate and waits for your decision: open the Approval tab to approve or reject it.',

@@ -212,6 +212,17 @@ describe('runStatusOf', () => {
     expect(summary.status).toBe('abstained')
   })
 
+  it('reads a run stopped at the human gate as waiting, not as finished', () => {
+    // The whole chain, on the fixture the other tests use: A1 passed, E2 gated. The header used to
+    // say `completed` here, which is the sentence "the work is over" shown at the moment the
+    // pipeline is waiting for a person to look at it.
+    const summary = buildSummary(summaryInputFrom(snapshot()))
+
+    expect(summary.status).toBe('awaiting-approval')
+    // And the gate is still listed as pending a decision, which is what the reader has to act on.
+    expect(summary.humanPending.map(step => step.stepId)).toEqual(['E2-submit'])
+  })
+
   it('ranks a failure above an abstention and an abstention above an unfinished step', () => {
     const gate = {
       stepId: 'A1-landscape',
@@ -237,6 +248,11 @@ describe('runStatusOf', () => {
     expect(runStatusOf([step('failed')], [gate])).toBe('failed')
     expect(runStatusOf([step('passed')], [gate])).toBe('abstained')
     expect(runStatusOf([step('in_progress')], [])).toBe('running')
-    expect(runStatusOf([step('passed'), step('gated')], [])).toBe('completed')
+    // A step waiting for a PERSON outranks "done". This assertion used to read `completed`, which
+    // told the reader the work was over at the moment the pipeline needed them — the promise the
+    // `awaiting-approval` status exists to stop making.
+    expect(runStatusOf([step('passed'), step('gated')], [])).toBe('awaiting-approval')
+    // Everything closed and nobody to wait for is what completion actually is.
+    expect(runStatusOf([step('passed'), step('passed')], [])).toBe('completed')
   })
 })

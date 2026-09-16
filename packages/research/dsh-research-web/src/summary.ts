@@ -45,6 +45,15 @@ export type GateOutcome = 'passed' | 'blocked' | 'failed' | 'abstained'
 /** Top-level run status surfaced in the view header. */
 export type RunStatus =
   | 'running'
+  /**
+   * Every automatable step closed and a human gate is open.
+   *
+   * Its own status because it is its own thing to do: the run has NOT finished, and the reader has
+   * a decision to make. Reporting it as `completed` told them the work was over while the pipeline
+   * was waiting for them — and a header that says "completed" over a pending gate is the promise
+   * this type exists to stop making.
+   */
+  | 'awaiting-approval'
   | 'completed'
   | 'abstained'
   | 'failed'

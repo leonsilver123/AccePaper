@@ -234,8 +234,8 @@ export function resolveStepStatus(
  * The run-level status the header shows.
  *
  * Derived, not taken from the wire: a failure outranks an abstention, an abstention
- * outranks an unfinished step, and a run that finished its automatable work — leaving
- * only the human gate — is `completed`, because waiting for a person is the design.
+ * outranks an unfinished step, and a step waiting for a PERSON outranks "done" — the run has
+ * automatable work left only in the sense that someone has to look at it.
  *
  * @param steps - the step outcomes the run produced.
  * @param gates - every gate verdict the run recorded.
@@ -248,6 +248,10 @@ export function runStatusOf(
   if (steps.some(step => step.status === 'failed')) return 'failed'
   if (gates.some(gate => gate.outcome === 'abstained')) return 'abstained'
   if (steps.some(step => step.status === 'pending' || step.status === 'in_progress')) return 'running'
+  // A gated step is not an unfinished one: the pipeline has stopped exactly where it is supposed
+  // to and is waiting for a decision. Reporting that as `completed` told the reader the work was
+  // over at the moment it needed them.
+  if (steps.some(step => step.status === 'gated')) return 'awaiting-approval'
   return 'completed'
 }
 
