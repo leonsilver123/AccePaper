@@ -22,6 +22,7 @@
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { createHostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 
 import { runT19B } from '../src/runner/drive.ts'
 import { assertWellFormed, parseReply } from '../src/runner/issue-parse.ts'
@@ -29,6 +30,7 @@ import { comparePlatoons, experimentStudy } from '../src/runner/platoon-sim.ts'
 import type { ResearchProseRequest, ResearchProseWriter } from '../src/runner/registry.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
+import { openIssuesOf, readinessOfRun } from '../src/runner/submission-readiness.ts'
 
 /** The tracked traffic pack, reused rather than duplicated (one data system, not two). */
 const CASE_PACK_DIR = join(process.cwd(), 'plan/overnight/2026-09-09/case-pack-traffic')
@@ -247,6 +249,51 @@ describe('the reply parser tells three intentions apart', () => {
     expect(() => assertWellFormed(parseReply(MALFORMED), 'D4-rebuttal')).toThrow(
       /did not state 1 of its 2 exchanges completely[\s\S]*#2 \(missing SECTION\)/u,
     )
+  })
+})
+
+describe('a revision round that leaves a concern open', () => {
+  it('leaves the run NOT ready when the round did not close a concern', async () => {
+    // A CONCERN THE MANUSCRIPT STILL CARRIES. This patch replaces the Method body with the text D3
+    // already wrote, so the applier refuses it as no-diff and leaves that issue OPEN. The step still
+    // passes — the revised draft is a real draft and the A gate reads it — and the run is not ready,
+    // because a reviewer raised something the paper has not answered.
+    const sameBody = d3Section({ stepId: 'D3-writing', instruction: '', context: { sectionId: 'method' } })
+    const reply = [
+      'CONCERN: The method section is terse.',
+      'SECTION: method',
+      'RESPONSE: It is restated.',
+      `PATCH: ${sameBody}`,
+      'CONCERN: The results section does not report the baseline value.',
+      'SECTION: results',
+      'RESPONSE: The baseline value is added.',
+      `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision, a change of ${CHANGE}%.`,
+    ].join('\n')
+
+    const { store, runId, rebuttal } = await revisedRun(reply)
+    expect(rebuttal?.['openIssues']).toEqual(['d4-issue-1'])
+
+    // Every gate is closed and a person approved the package, so readiness has nothing else to
+    // report — the open concern is the only thing standing between this run and ready.
+    const channel = createHostApprovalChannel('spec-secret')
+    channel.registerPrincipal('human-1')
+    channel.submit(store, runId, 'E2-submit', 'approved',
+      channel.mintPrincipal(runId, 'E2-submit', 'human-1', 'evt-open-issue'))
+
+    const readiness = readinessOfRun(store, runId, 'production')
+    expect(readiness.ready).toBe(false)
+    expect(readiness.reason).toContain('left 1 concern(s) open')
+    expect(readiness.reason).toContain("d4-issue-1 on 'method'")
+  })
+
+  it('does not read a reason the applier did not give as if it had', () => {
+    // The reader states what it found and nothing more: an outcome with no reason is reported as
+    // one rather than invented into a plausible sentence.
+    expect(openIssuesOf({ issues: [{ issueId: 'i1', sectionId: 'method', disposition: 'open' }] }))
+      .toEqual([{ issueId: 'i1', sectionId: 'method', reason: 'no reason recorded' }])
+    // And an outcome that was closed is not an open issue.
+    expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'patched' }] })).toEqual([])
+    expect(openIssuesOf(undefined)).toEqual([])
   })
 })
 

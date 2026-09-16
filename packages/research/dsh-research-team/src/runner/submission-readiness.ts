@@ -51,6 +51,7 @@ export interface SubmissionReadiness {
  * @param staleApproval - the revision a step's approval no longer covers, when one moved after the
  *   decision was made. A person approved the manuscript in front of them; if it is not the same
  *   manuscript, the approval is not about this one.
+ * @param openIssues - concerns a revision round did not close.
  * @returns the decision and the reason.
  */
 export function submissionReadinessOf(
@@ -59,6 +60,7 @@ export function submissionReadinessOf(
   manuscriptProduced: boolean,
   refusedSections: ReadonlyArray<string> = [],
   staleApproval?: string,
+  openIssues: ReadonlyArray<OpenIssue> = [],
 ): SubmissionReadiness {
   const eligibility = evidenceEligibilityOf(profile)
   if (!eligibility.eligible) {
@@ -103,6 +105,24 @@ export function submissionReadinessOf(
       manuscriptProduced: true,
     }
   }
+  if (openIssues.length > 0) {
+    // A REVISION THAT DID NOT CLOSE A CONCERN IS NOT A FINISHED REVISION. The round recorded what
+    // became of every issue; the ones still open were refused because the patch was written against
+    // another version, changed nothing, or conflicted with another patch to the same section. Each
+    // is a concern a reviewer raised and the manuscript still carries, so the paper is not ready
+    // however closed its gates are.
+    const named = openIssues
+      .map(issue => `${issue.issueId} on '${issue.sectionId}' (${issue.reason})`)
+      .join('; ')
+    return {
+      ready: false,
+      reason:
+        `the revision left ${String(openIssues.length)} concern(s) open: ${named} — an unclosed`
+        + ' concern is one a reviewer raised and the manuscript still carries',
+      profileEligible: true,
+      manuscriptProduced: true,
+    }
+  }
   if (staleApproval !== undefined) {
     return {
       ready: false,
@@ -129,6 +149,40 @@ function refusedSectionsOf(draft: unknown): ReadonlyArray<string> {
   if (draft === null || typeof draft !== 'object') return []
   const recorded = (draft as { refusedSections?: unknown }).refusedSections
   return Array.isArray(recorded) ? recorded.filter((id): id is string => typeof id === 'string') : []
+}
+
+/** One concern a revision round did not close, with the reason the applier gave. */
+export interface OpenIssue {
+  readonly issueId: string
+  readonly sectionId: string
+  readonly reason: string
+}
+
+/**
+ * The issues a revision round left open.
+ *
+ * A round that closed every concern it raised says so with an empty list; a round that left one open
+ * says which and why, and the rebuttal artifact already carries both. Read here rather than
+ * summarised, because "3 issues" is not something a reader can act on and "the patch for `results`
+ * was written against a different version" is.
+ *
+ * @param rebuttal - the `rebuttal` artifact, when the run produced one.
+ * @returns the open issues, in the order the round recorded them.
+ */
+export function openIssuesOf(rebuttal: unknown): ReadonlyArray<OpenIssue> {
+  if (rebuttal === null || typeof rebuttal !== 'object') return []
+  const outcomes = (rebuttal as { issues?: unknown }).issues
+  if (!Array.isArray(outcomes)) return []
+  return outcomes.flatMap((outcome): OpenIssue[] => {
+    if (outcome === null || typeof outcome !== 'object') return []
+    const record = outcome as { issueId?: unknown; sectionId?: unknown; disposition?: unknown; reason?: unknown }
+    if (record.disposition !== 'open') return []
+    return [{
+      issueId: typeof record.issueId === 'string' ? record.issueId : 'unknown issue',
+      sectionId: typeof record.sectionId === 'string' ? record.sectionId : 'unknown section',
+      reason: typeof record.reason === 'string' ? record.reason : 'no reason recorded',
+    }]
+  })
 }
 
 /**
@@ -162,5 +216,6 @@ export function readinessOfRun(
     getArtifact(store, runId, MANUSCRIPT_SLUG) !== undefined,
     refusedSectionsOf(getArtifact(store, runId, 'draft')),
     staleApproval,
+    openIssuesOf(getArtifact(store, runId, 'rebuttal')),
   )
 }
