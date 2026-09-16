@@ -57,6 +57,9 @@ function gatedInput(runId = 'run_approval_001'): RunSummaryInput {
   return {
     runId,
     source: 'live',
+    // A decision is about a revision, so the panel needs one to offer the buttons at all. The tests
+    // that are ABOUT a missing revision override this to `undefined`.
+    projectRevision: 1,
     status: 'completed',
     steps: [
       {
@@ -110,7 +113,7 @@ describe('the approval panel decides nothing by itself', () => {
 
     // Named none, shown none: revision 0 is a state a run genuinely starts at, so rendering it here
     // would name a revision nobody read.
-    openApprovalTab({ summary: toRunSummary(gatedInput()) })
+    openApprovalTab({ summary: toRunSummary({ ...gatedInput(), projectRevision: undefined }) })
     expect(screen.queryByText(en['run.revision'].replace('{revision}', '0'))).toBeNull()
   })
 
@@ -283,6 +286,21 @@ describe('the approval panel decides nothing by itself', () => {
     expect(screen.queryByText(en['approval.notPersisted'].replace('{detail}', ''))).toBeNull()
   })
 
+  it('offers no buttons at all when the page cannot name a revision', async () => {
+    // A decision is about a REVISION. A page that cannot say which one it is showing cannot promise
+    // the reader decided about what they read, so it does not offer the button and says why.
+    const onSubmit = vi.fn<ApprovalSubmitter>()
+    openApprovalTab({ summary: toRunSummary({ ...gatedInput(), projectRevision: undefined }), onApprove: onSubmit })
+
+    expect(screen.getByText(en['approval.noRevision'])).toBeTruthy()
+    for (const label of [en['approval.approve'], en['approval.reject']]) {
+      expect(screen.getByRole('button', { name: label }).hasAttribute('disabled')).toBe(true)
+    }
+    // And pressing one anyway decides nothing.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('retries under the SAME command id, and a changed mind under a new one', async () => {
     // The reader presses Approve, the call times out, and the button is offered again. Pressing it
     // has to be the same command — otherwise the backend sees a second decision, refuses it as
@@ -364,7 +382,7 @@ describe('the approval request carries exactly the decidable fields', () => {
     // The payload is the four fields verbatim: no `actor`, no `status`, no `principalId`.
     expect(connection.calls[0]?.payload).toEqual(request)
     expect(Object.keys(connection.calls[0]?.payload as object).sort())
-      .toEqual(['attempt', 'commandId', 'decision', 'runId', 'stepId'])
+      .toEqual(['attempt', 'commandId', 'decision', 'expectedProjectRevision', 'runId', 'stepId'])
     expect(outcome.ok).toBe(true)
     // `summary` is on ONE of the two applied-and-ok outcomes: the other carries `summaryUnavailable`
     // instead, because a decision whose refresh failed is still a decision.

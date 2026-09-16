@@ -37,6 +37,11 @@ act on.
 be called stale. That is the behaviour it was made under; inventing targets for it at parse time
 would credit a decision with a binding it never had.
 
+The decision also names the revision the READER saw. `ApprovalSubmission.expectedProjectRevision` is
+required and compared against the run before anything is decided: a page that moved under the reader
+— a second tab, a step that landed, a recovery — cannot get a decision recorded against a document
+nobody read. The two checks cover the same mismatch from either side of the moment.
+
 ## Alternatives considered
 
 **Compare a package hash at export time instead.** Rejected as the primary mechanism: the package is

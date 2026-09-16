@@ -67,15 +67,22 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
     setOutcome(stated)
   }, [])
 
+  // A DECISION NEEDS A REVISION TO BE ABOUT. A page that cannot say which one it is showing cannot
+  // promise the reader decided about what they read, so the buttons are not offered.
+  const revision = summary.projectRevision
   const decide = useCallback((runId: string, stepId: string, attempt: number, decision: 'approved' | 'rejected') => {
-    if (onSubmit === undefined) return
+    if (onSubmit === undefined || revision === null) return
     // Same intent, same command: a retry after a failure must not become a second decision.
     const previous = rows[stepId]
     const commandId = previous !== undefined && previous.kind === 'refused' && previous.decision === decision
       ? previous.commandId
       : newApprovalCommandId()
     setRows(current => ({ ...current, [stepId]: { kind: 'deciding', decision, commandId } }))
-    void onSubmit({ runId, stepId, attempt, decision, commandId }).then(
+    void onSubmit({
+      runId, stepId, attempt, decision, commandId,
+      // The revision on screen. The backend refuses a decision about any other.
+      expectedProjectRevision: revision,
+    }).then(
       (result) => {
         if (result.ok) {
           // THE DECISION STANDS WHATEVER ELSE FAILED. A summary that could not be built and a
@@ -109,7 +116,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
         )
       },
     )
-  }, [onSubmit, onDecided, settle, rows])
+  }, [onSubmit, onDecided, settle, rows, revision])
 
   const detailKey = (code: ApprovalFailure) =>
     code === 'unavailable' ? 'approval.unavailable' : `approval.failure.${code}` as const
@@ -117,7 +124,11 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
   return (
     <section className={css.panel}>
       <h3 className={css.panelHeader}>{t('approval.title')}</h3>
-      <p className={css.note}>{onSubmit === undefined ? t('approval.disabled') : t('approval.note')}</p>
+      <p className={css.note}>
+        {onSubmit === undefined
+          ? t('approval.disabled')
+          : revision === null ? t('approval.noRevision') : t('approval.note')}
+      </p>
 
       {/* The receipt is stated once, above the queue: a decision drains its own row when the
           backend's refreshed summary arrives, so this is where "who decided what" survives.
@@ -174,7 +185,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                           <button
                             type="button"
                             className={css.approveBtn}
-                            disabled={onSubmit === undefined || row?.kind === 'deciding'}
+                            disabled={onSubmit === undefined || revision === null || row?.kind === 'deciding'}
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'approved') }}
                           >
                             {row?.kind === 'deciding' ? t('approval.submitting') : t('approval.approve')}
@@ -182,7 +193,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                           <button
                             type="button"
                             className={css.rejectBtn}
-                            disabled={onSubmit === undefined || row?.kind === 'deciding'}
+                            disabled={onSubmit === undefined || revision === null || row?.kind === 'deciding'}
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'rejected') }}
                           >
                             {t('approval.reject')}

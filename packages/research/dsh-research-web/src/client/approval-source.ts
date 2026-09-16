@@ -45,6 +45,14 @@ export interface ApprovalRequest {
    * refusal the caller cannot tell apart from "my decision never landed".
    */
   readonly commandId: string
+  /**
+   * The project revision the reader was looking at.
+   *
+   * The backend refuses a decision that names any other revision, so a page that moved under the
+   * reader — a second tab, a step that landed, a recovery — cannot get a decision recorded against
+   * a document nobody read. The panel does not offer the buttons at all when this is unknown.
+   */
+  readonly expectedProjectRevision: number
 }
 
 /**
@@ -230,6 +238,7 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
         attempt: request.attempt,
         decision: request.decision,
         commandId: request.commandId,
+        expectedProjectRevision: request.expectedProjectRevision,
       })
     } catch (cause) {
       return { ok: false, code: 'transport', detail: cause instanceof Error ? cause.message : String(cause) }

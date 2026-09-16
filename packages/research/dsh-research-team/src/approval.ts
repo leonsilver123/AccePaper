@@ -77,6 +77,7 @@ export const APPROVAL_ERROR_CODES = {
   notStarted: 'research/approval-step-not-started',
   notPending: 'research/approval-not-pending',
   staleAttempt: 'research/approval-stale-attempt',
+  staleRevision: 'research/approval-stale-revision',
   refused: 'research/approval-refused',
 } as const
 
@@ -104,6 +105,16 @@ export interface ApprovalSubmission {
    * who changes their mind and rejects after approving must send a different one.
    */
   readonly commandId: string
+  /**
+   * The project revision the reader was LOOKING AT when they decided.
+   *
+   * A decision is about a revision, not about a step. The host records the refs it freezes at the
+   * moment of the decision; this says whether the thing in front of the reader was that revision.
+   * When it is not — the run moved between the render and the click, which a second tab, a running
+   * step or a recovery can all do — the decision is refused rather than recorded, because approving
+   * a document nobody read is the failure this field exists to catch.
+   */
+  readonly expectedProjectRevision: number
 }
 
 /** The graded outcome of one accepted approval. */
@@ -316,7 +327,14 @@ export function readSubmission(payload: unknown): ApprovalSubmission | undefined
   // REQUIRED. A command with no identity cannot be retried safely, and defaulting one here would
   // make every retry a fresh decision — the failure this field exists to prevent.
   if (typeof commandId !== 'string' || commandId === '') return undefined
-  return { runId, stepId, attempt, decision, commandId }
+  // REQUIRED, and for a stronger reason: a caller that cannot say which revision it read cannot
+  // promise it read one, and defaulting this would make every approval a decision about whatever
+  // the run happens to hold.
+  const expectedProjectRevision = record['expectedProjectRevision']
+  if (typeof expectedProjectRevision !== 'number' || !Number.isSafeInteger(expectedProjectRevision) || expectedProjectRevision < 0) {
+    return undefined
+  }
+  return { runId, stepId, attempt, decision, commandId, expectedProjectRevision }
 }
 
 /**
@@ -364,6 +382,17 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
     return refuse(
       APPROVAL_ERROR_CODES.staleAttempt,
       `step '${stepId}' is at attempt ${String(state.attemptId)}, not ${String(attempt)} — a decision for a superseded attempt does not decide the current one`,
+    )
+  }
+  // A DECISION IS ABOUT A REVISION. The reader read a document at some revision of the run; this
+  // refuses when the run has moved since, rather than approving whatever is there now. The refusal
+  // names both revisions so the reader can re-read the difference, and it says what to do about it.
+  const currentRevision = getRunSnapshot(run.store, runId).revision
+  if (currentRevision !== submission.expectedProjectRevision) {
+    return refuse(
+      APPROVAL_ERROR_CODES.staleRevision,
+      `this decision was made about project revision ${String(submission.expectedProjectRevision)}, `
+      + `and run '${runId}' is at ${String(currentRevision)} — re-read the current manuscript before deciding`,
     )
   }
 
