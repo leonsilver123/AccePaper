@@ -37,6 +37,7 @@ import type {
   RunSummaryInput,
   StepStatus,
   DeliverableView,
+  RunExecution,
   StepView,
   TrinityComponent,
 } from './summary.ts'
@@ -211,6 +212,65 @@ export interface WirePackageExport {
 }
 
 /**
+ * One study the deployment holds, as the list query carries it.
+ *
+ * Structural twin of the Host's `ResearchRunSummaryEntry`. The page needs no more than this to offer
+ * a choice: what the study is, how far it got, and whether it can be submitted.
+ */
+export interface WireRunSummaryEntry {
+  readonly runId: string
+  readonly execution?: string
+  readonly projectRevision: number
+  readonly stepsPassed: number
+  readonly stepsTotal: number
+  readonly submissionReady: boolean
+  readonly saveFailure?: string
+  readonly executionError?: string
+  readonly interrupted: ReadonlyArray<string>
+}
+
+/**
+ * One entry as the workbench renders it.
+ *
+ * A VIEW MODEL, not the wire shape: an execution state this build does not recognise becomes `null`
+ * rather than being folded into `stopped`, for the same reason {@link RunSummary.execution} is
+ * nullable — a host that says something this build cannot name has not said the study stopped.
+ */
+export interface RunListEntryView {
+  readonly runId: string
+  /** One of the states this build knows, or null when the host named one it does not. */
+  readonly execution: RunExecution | null
+  readonly projectRevision: number
+  readonly stepsPassed: number
+  readonly stepsTotal: number
+  readonly submissionReady: boolean
+  readonly saveFailure: string | null
+  readonly executionError: string | null
+  readonly interrupted: ReadonlyArray<string>
+}
+
+/**
+ * Map the list query's answer into what the workbench renders.
+ *
+ * @param entries - the entries the host returned.
+ * @returns one view per entry, in the host's order.
+ */
+export function runListFrom(entries: ReadonlyArray<WireRunSummaryEntry>): ReadonlyArray<RunListEntryView> {
+  return entries.map(entry => ({
+    runId: entry.runId,
+    // REPORT, do not default: a state this build cannot name is null, never folded into `stopped`.
+    execution: RUN_EXECUTIONS.find(execution => execution === entry.execution) ?? null,
+    projectRevision: entry.projectRevision,
+    stepsPassed: entry.stepsPassed,
+    stepsTotal: entry.stepsTotal,
+    submissionReady: entry.submissionReady,
+    saveFailure: entry.saveFailure ?? null,
+    executionError: entry.executionError ?? null,
+    interrupted: entry.interrupted,
+  }))
+}
+
+/**
  * What one save retry answers with, structurally.
  *
  * The same fields {@link WireRunStart} carries for a start, because they are the same facts: whether
@@ -236,6 +296,8 @@ export interface WireRunPersistence {
 const STEP_STATUSES: ReadonlyArray<StepStatus> = ['pending', 'in_progress', 'gated', 'passed', 'blocked', 'failed']
 const PHASES: ReadonlyArray<Phase> = ['A', 'B', 'C', 'D', 'E']
 const COMPONENTS: ReadonlyArray<TrinityComponent> = ['A', 'B', 'C']
+
+const RUN_EXECUTIONS: ReadonlyArray<RunExecution> = ['running', 'stopped', 'failed']
 
 function asStepStatus(value: string): StepStatus {
   // REPORT, do not default. Defaulting to `pending` showed a step the Host had advanced as 未开始

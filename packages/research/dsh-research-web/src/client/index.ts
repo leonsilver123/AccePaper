@@ -22,7 +22,8 @@ import { followToRest } from './follow-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
-import type { WireRunFrame, WireRunSaveRetry, WireRunStart } from '../run-source.ts'
+import { runListFrom } from '../run-source.ts'
+import type { RunListEntryView, WireRunFrame, WireRunSaveRetry, WireRunStart, WireRunSummaryEntry } from '../run-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -91,6 +92,17 @@ interface ResearchRemoteNamespace {
    */
   runSnapshot(request: { readonly runId: string }): Promise<
     { readonly ok: true; readonly value: WireRunSnapshot | null }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * The studies this deployment holds, newest first.
+   *
+   * The read that makes a study findable after the page that started it is gone: a run id lived in
+   * one tab's storage, while the studies themselves stayed on disk.
+   */
+  listRuns(): Promise<
+    { readonly ok: true; readonly value: ReadonlyArray<WireRunSummaryEntry> }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
 
@@ -236,6 +248,39 @@ export function apply(ctx: Context): void {
     await followToRest(remote, runId, null, onUpdate)
   }
   /**
+   * List the studies this deployment holds.
+   *
+   * A refusal rejects with the host's own reason rather than resolving to an empty list: "this
+   * deployment holds no study" and "I could not ask" are different facts, and a person looking for
+   * their work has to be told which one they have.
+   *
+   * @returns one entry per study, in the host's order.
+   */
+  const listRuns = async (): Promise<ReadonlyArray<RunListEntryView>> => {
+    const answered = await namespace().listRuns()
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    return runListFrom(answered.value)
+  }
+
+  /**
+   * Open one study this deployment holds, by the id the person picked.
+   *
+   * The same follow the run control uses, so a study opened from the list is read exactly like one
+   * this tab started — and the id is remembered here, so a reload lands on the same study.
+   *
+   * @param runId - the study to open.
+   * @param onUpdate - called with each snapshot the host reports.
+   * @returns when the run stops leaving more to read.
+   */
+  const openRun = async (
+    runId: string,
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+  ): Promise<void> => {
+    rememberRunId(runId)
+    await followToRest(namespace(), runId, null, onUpdate)
+  }
+
+  /**
    * Ask the host to write the run's current state to its snapshot again, after a write that failed.
    *
    * THE PAGE'S ONLY REMEDY FOR A RUN THAT IS NOT ON DISK, and the reason it is not "run it again":
@@ -310,5 +355,5 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run, approve, propose, resume, retrySave)))
+  }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun)))
 }

@@ -24,6 +24,7 @@
 
 不发布不变式伴生入口,因为本包不发布任何运行时不变式条目:它的宿主半边刻意惰性,没有可发布的伴生对象。
 
+- **部署持有的研究以列表提供,所以一个什么都没记住的页面也能打开其中一项** (2026-09-17):工作台渲染 `[data-research-projects]` 行 —— 每项研究一行,带着管线编目的步数里过了几步、执行状态、后端自己报出的 `saveFailure` 与中断事实、用来打开它的 run id,以及一个「打开这项研究」按钮。列表在挂载时从部署读出,而选择器**只在**宿主同时提供 `onListRuns` 与 `onOpenRun` 时出现;不能列举研究的宿主显示的是没有选择器,而不是一个空的选择器。**读不到的列表报成失败,不渲染成「没有研究」** —— 「这个部署没有任何研究」与「问不出来」有不同的补救办法 —— 而 `runListFrom` 把本构建叫不出名字的执行状态映射为 `null`,不折进 `stopped`。打开一项研究走的是运行控件同一条 follow,并记住 id,所以刷新会落回读者选中的那项研究。
 - **运行接线已是 Runtime-verified**(2026-09-15)。研究标签页启动真实运行 —— `ctx.remote.research.run({})` → `run-source.ts` 映射 → `ResearchWorkbench` 渲染 —— 并已被一个独立浏览器探针对着运行中的 Host(1120 端口)驱动过,断言对着后端自己的记录(`.workbuddy/tmp/verify-browser-b.mjs`,30/30)。这里此前写"没有任何浏览器驱动过",写下时是真的,现在不再是。
 - **审批面板同样只是 Integration-verified**:它的提交器由 jsdom spec 对着一个 mock 的 Connection 服务覆盖,`dsh-research-team/tests/approval.spec.ts` 覆盖后端核对与 §8.1 各条不变量;真实 socket 上验过的是**通道本身**(无 cookie → 401 且处理器不被调用,令牌换 cookie → 200 并写入后端记录,伪造 cookie → 401),不是浏览器里的这一次点击。
 - **`summary` 的载荷形状是本包声明的结构孪生**。服务在 Host 面编译、本包在 Client 面,而客户端 bundle 不取跨插件值依赖,所以 `run-source.ts` 里的 `WireRunSnapshot` 是**复述**而不是导入。两边字段名不一致会让视图静默变空。Host 侧的集成 spec 断言的正是同一组字段名。

@@ -12,6 +12,7 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RunSummary } from '../summary.ts'
 import type { ApprovalSubmitter } from './approval-source.ts'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
+import type { RunListEntryView } from '../run-source.ts'
 import { ResearchWorkbench } from './workbench/ResearchWorkbench.tsx'
 
 /**
@@ -51,6 +52,25 @@ export type ResearchSaveRetrySource = (
 ) => Promise<void>
 
 /**
+ * List the studies this deployment holds, newest first.
+ *
+ * A rejection carries the host's own reason; resolving to an empty list would tell a person their
+ * work is gone when the truth is that the question could not be asked.
+ */
+export type ResearchRunListSource = () => Promise<ReadonlyArray<RunListEntryView>>
+
+/**
+ * Open one study the deployment holds, by the id a person picked from the list.
+ *
+ * The same follow the run control performs, so a study opened this way is read exactly like one
+ * that was started in this tab.
+ */
+export type ResearchRunOpenSource = (
+  runId: string,
+  onUpdate: (summary: RunSummary) => void,
+) => Promise<void>
+
+/**
  * Build the slot component bound to one run source and one approval endpoint.
  *
  * @param run - starts a run and reports each snapshot as it is read.
@@ -63,6 +83,9 @@ export type ResearchSaveRetrySource = (
  * @param retrySave - retries a run's write after the host reported it did not land. Omitted by a
  *   host that cannot retry one, in which case the control that offers it is absent rather than
  *   inert.
+ * @param listRuns - the studies this deployment holds. Omitted by a host that cannot list them, in
+ *   which case the picker is absent and a page with nothing on screen stays that way.
+ * @param openRun - opens one of those studies. Omitted on the same terms as {@link listRuns}.
  * @returns a conversation-view component that renders the research workbench.
  */
 export function researchViewWith(
@@ -71,6 +94,8 @@ export function researchViewWith(
   propose?: ResearchProposalSource,
   resume?: ResearchResumeSource,
   retrySave?: ResearchSaveRetrySource,
+  listRuns?: ResearchRunListSource,
+  openRun?: ResearchRunOpenSource,
 ) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
@@ -88,6 +113,8 @@ export function researchViewWith(
         {...(resume === undefined ? {} : { onResume: resume })}
         {...approve === undefined ? {} : { onApprove: approve }}
         {...retrySave === undefined ? {} : { onRetrySave: retrySave }}
+        {...listRuns === undefined ? {} : { onListRuns: listRuns }}
+        {...openRun === undefined ? {} : { onOpenRun: openRun }}
       />
     )
   }

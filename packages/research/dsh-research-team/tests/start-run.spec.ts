@@ -645,6 +645,56 @@ describe('a study is started and read back', () => {
     }
   })
 
+  it('lists the studies this deployment holds, including one a page never saw', async () => {
+    // THE HANDLE A CLOSED PAGE LOSES. A run id lived in the tab that started the study, so closing
+    // the page closed the only way back to it — while the study itself stayed on disk. This read is
+    // what makes it findable by a browser that knows nothing about any run.
+    const root = snapshotRoot()
+    const held = barrier()
+    const running = await boot({ literatureAdapter: held.adapter, snapshotDirectory: root })
+    try {
+      const started = await running.service.startRun({ commandId: 'command-listed-running' })
+      await held.entered
+      // A RUN STILL BEING DRIVEN IS LISTED FROM ITS LIVE STATE, not from a file it has not written.
+      const entry = (await running.service.listRuns()).find(candidate => candidate.runId === started.runId)
+      expect(entry?.execution).toBe('running')
+      expect(entry?.stepsTotal).toBe(STEP_EXECUTOR_REGISTRY.size)
+      held.release()
+      await untilStopped(running.service, started.runId)
+    } finally {
+      held.release()
+      await running.dispose()
+    }
+
+    // A STUDY THAT WENT FURTHER, so "3 of 16" is a fact the entry carries rather than a guess.
+    let runId = ''
+    const first = await boot({ snapshotDirectory: root })
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-listed-whole' })).runId
+      await untilStopped(first.service, runId)
+      const entry = (await first.service.listRuns()).find(candidate => candidate.runId === runId)
+      expect(entry?.execution).toBe('stopped')
+      expect(entry?.stepsPassed ?? 0).toBeGreaterThan(0)
+      expect(entry?.projectRevision).toBeGreaterThan(0)
+      expect(entry?.submissionReady).toBe(false)
+    } finally {
+      await first.dispose()
+    }
+
+    // A DIFFERENT PROCESS THAT NEVER HEARD OF THE COMMAND still lists the study — the case the id's
+    // home in one tab's storage could not serve.
+    const second = await boot({ snapshotDirectory: root })
+    try {
+      const entry = (await second.service.listRuns()).find(candidate => candidate.runId === runId)
+      expect(entry).toBeDefined()
+      expect(entry?.execution).toBe('stopped')
+      expect(entry?.stepsPassed ?? 0).toBeGreaterThan(0)
+      expect(entry?.stepsTotal).toBe(STEP_EXECUTOR_REGISTRY.size)
+    } finally {
+      await second.dispose()
+    }
+  })
+
   it('refuses to retry the save of a run it does not hold', async () => {
     // A RUN READ BACK FROM DISK HAS NOTHING TO RETRY: it is already at the state its file records,
     // and re-running it is not a save. The refusal says which of the two the caller asked for.

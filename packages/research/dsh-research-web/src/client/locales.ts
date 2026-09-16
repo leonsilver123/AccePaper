@@ -18,6 +18,17 @@ export const zh = {
   'run.error': '运行失败:{message}',
   // 保存失败是"这次运行不在盘上":把后端自己的原因原样显示,并提供唯一能修好它的操作。
   'run.saveFailure': '最新成果没有落盘:{message}',
+  // 关闭页面会丢掉这个标签页记住的 run id;这张列表读的是部署自己持有的研究。
+  'projects.title': '已有的研究',
+  'projects.note': '下面这些是部署持有的研究,来自后端自己的记录 —— 关掉页面也还在。',
+  'projects.empty': '这个部署还没有任何研究。',
+  'projects.listFailed': '读不到研究列表:{message}',
+  'projects.runId': '运行',
+  'projects.state': '状态',
+  'projects.stateUnknown': '后端用了这个版本不认识的状态',
+  'projects.steps': '已完成 {passed} / {total} 步',
+  'projects.interrupted': '中断时在飞行中的步骤:{steps}',
+  'projects.open': '打开这项研究',
   'run.retrySave': '重试保存',
   'run.retryingSave': '正在重试保存…',
   // The run dialog: the field, the proposals, and the criterion a person confirms.
@@ -224,6 +235,17 @@ export const en: Record<ResearchKey, string> = {
   // A failed save is "this run is not on disk": the host's own reason, shown as it stated it, beside
   // the one operation that fixes it.
   'run.saveFailure': 'The latest work did not reach the disk: {message}',
+  // Closing the page loses the run id this tab remembered; this list is the deployment's own inventory.
+  'projects.title': 'Studies this deployment holds',
+  'projects.note': "These come from the backend's own records, not from this tab — they survive closing the page.",
+  'projects.empty': 'This deployment holds no study yet.',
+  'projects.listFailed': 'The study list could not be read: {message}',
+  'projects.runId': 'Run',
+  'projects.state': 'State',
+  'projects.stateUnknown': 'the host named a state this build does not know',
+  'projects.steps': '{passed} of {total} steps passed',
+  'projects.interrupted': 'in flight when it stopped: {steps}',
+  'projects.open': 'Open this study',
   'run.retrySave': 'Retry the save',
   'run.retryingSave': 'Retrying the save…',
   'propose.title': 'What this run studies',

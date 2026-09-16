@@ -19,6 +19,7 @@ import type { ResearchKey } from '../locales.ts'
 import type { ApprovalSubmitter } from '../approval-source.ts'
 import type { RunSummary } from '../../summary.ts'
 import type { WirePlan, WireProposalAnswer } from '../direction-source.ts'
+import type { RunListEntryView } from '../../run-source.ts'
 import { DirectionDialog } from './DirectionDialog.tsx'
 import { selectNextAction, type NextActionKind } from '../../panels.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
@@ -69,6 +70,15 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * as a remedy this deployment does not have.
    */
   readonly onRetrySave?: (runId: string, onUpdate: (summary: RunSummary) => void) => Promise<void>
+  /**
+   * The studies this deployment holds, newest first. Omitted by a host that cannot list them, in
+   * which case this page offers only what it can start itself.
+   */
+  readonly onListRuns?: () => Promise<ReadonlyArray<RunListEntryView>>
+  /**
+   * Open one of those studies. Omitted on the same terms as {@link onListRuns}.
+   */
+  readonly onOpenRun?: (runId: string, onUpdate: (summary: RunSummary) => void) => Promise<void>
 }
 
 /** Workbench sub-panel tab identifiers. */
@@ -110,7 +120,9 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  * @param props - slot runtime props, the `research` namespace translate `t`, an optional
  *   `summary` to render, and the optional run and approval seams.
  */
-export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave }: ResearchViewProps) {
+export function ResearchWorkbench({
+  t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave, onListRuns, onOpenRun,
+}: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [running, setRunning] = useState(false)
@@ -120,6 +132,24 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
   const [active, setActive] = useState<WorkbenchTab>('summary')
   // No run means the next action is the one that starts a run, so there is nothing to derive.
   const nextAction = summary === undefined ? undefined : selectNextAction(summary)
+  // THE STUDIES THIS DEPLOYMENT HOLDS. Read once on arrival, and again after a study is opened, so
+  // the list is the host's answer rather than a copy of what this tab happened to start.
+  const [offered, setOffered] = useState<ReadonlyArray<RunListEntryView>>([])
+  const [listError, setListError] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (onListRuns === undefined) return
+    let cancelled = false
+    void onListRuns().then(
+      (entries) => { if (!cancelled) setOffered(entries) },
+      (cause: unknown) => {
+        if (cancelled) return
+        // A LIST THAT COULD NOT BE READ IS REPORTED, not rendered as "no studies": the two facts
+        // have different remedies, and one of them is not "your work is gone".
+        setListError(cause instanceof Error ? cause.message : String(cause))
+      },
+    )
+    return () => { cancelled = true }
+  }, [onListRuns])
 
   // ONCE, ON ARRIVAL. A reload is not a new study: the host is still driving the run this browser
   // started, and this asks it what became of it. An injected summary means the caller already knows
@@ -293,6 +323,47 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
       )}
       {error !== undefined && (
         <span className={css.mockBadge}>{t('run.error').replace('{message}', error)}</span>
+      )}
+
+      {/* THE STUDIES THIS DEPLOYMENT HOLDS. A page whose only handle on a study was the id it kept in
+          its own storage lost that study when the page closed, while the study stayed on disk. This
+          is the list a person picks from — read from the deployment, not from this tab. */}
+      {onListRuns !== undefined && onOpenRun !== undefined && summary === undefined && (
+        <section className={css.intro} data-research-projects="">
+          <h3 className={css.introSubtitle}>{t('projects.title')}</h3>
+          <p className={css.note}>{t('projects.note')}</p>
+          {listError !== undefined && (
+            <p className={css.mockNote}>{t('projects.listFailed').replace('{message}', listError)}</p>
+          )}
+          {listError === undefined && offered.length === 0 && (
+            <p className={css.mockNote} data-research-projects-empty="">{t('projects.empty')}</p>
+          )}
+          {offered.map(entry => (
+            <div key={entry.runId} className={css.recoveryGrid} data-research-project={entry.runId}>
+              <span className={css.recoveryVal}>{t('projects.steps', { passed: String(entry.stepsPassed), total: String(entry.stepsTotal) })}</span>
+              <span className={css.recoveryKey}>{t('projects.state')}</span>
+              <span className={css.recoveryVal}>
+                {entry.execution === null ? t('projects.stateUnknown') : t(`run.execution.${entry.execution}`)}
+                {entry.saveFailure !== null ? ` — ${entry.saveFailure}` : ''}
+                {entry.interrupted.length > 0 ? ` — ${t('projects.interrupted', { steps: entry.interrupted.join(', ') })}` : ''}
+              </span>
+              <span className={css.recoveryKey}>{t('projects.runId')}</span>
+              <span className={css.recoveryVal}>{entry.runId}</span>
+              <button
+                type="button"
+                className={css.tab}
+                onClick={() => {
+                  setError(undefined)
+                  void onOpenRun(entry.runId, (update) => { setLive(update) }).catch((cause: unknown) => {
+                    setError(cause instanceof Error ? cause.message : String(cause))
+                  })
+                }}
+              >
+                {t('projects.open')}
+              </button>
+            </div>
+          ))}
+        </section>
       )}
 
       {summary !== undefined && (

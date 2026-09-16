@@ -459,6 +459,36 @@ export interface ResearchRunStart {
 }
 
 /**
+ * One study this deployment holds, as a list entry.
+ *
+ * A STUDY OUTLIVES THE PAGE THAT STARTED IT, and a browser that closed has nothing left to name it
+ * by: the run id lived in that tab's storage. This is the entry a person picks from instead — the
+ * deployment's own inventory, read from the runs it holds, not from anything the page remembered.
+ */
+export interface ResearchRunSummaryEntry {
+  readonly runId: string
+  /** Whether a driver is on it IN THIS PROCESS; `stopped` says only that nothing here is. */
+  readonly execution: ResearchRunExecution
+  /** The revision the study is at, so two entries can be told apart by what they produced. */
+  readonly projectRevision: number
+  /** How many of the pipeline's steps have passed. */
+  readonly stepsPassed: number
+  /** How many steps are catalogued, so "3 of 16" is a fact rather than an impression. */
+  readonly stepsTotal: number
+  readonly submissionReady: boolean
+  /** Why the run's last save did not land, when it did not. */
+  readonly saveFailure?: string
+  /** Why a driver stopped with a failure, when it did. */
+  readonly executionError?: string
+  /**
+   * The steps that were in flight when the snapshot was taken, for a run this process is not driving.
+   *
+   * Empty for a run this process holds, whose live state is the answer instead.
+   */
+  readonly interrupted: ReadonlyArray<string>
+}
+
+/**
  * What one retry of a run's write did, and the run as it stands after it.
  *
  * The remedy for a save that failed, and the reason it is a separate command rather than a second

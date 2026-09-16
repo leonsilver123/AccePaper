@@ -582,6 +582,61 @@ describe('research workbench run control', () => {
       .toContain('16')
   })
 
+  it('offers the studies the deployment holds, and opens the one that is picked', async () => {
+    // THE HANDLE A CLOSED PAGE LOSES. A page whose only way back to a study was the id in its own
+    // session storage showed "nothing has been run" after the page was closed — while the study was
+    // on disk the whole time. The list is the deployment's answer, not this tab's memory.
+    const healed = toRunSummary({ ...fixtureInput(), runId: 'run-held-7', source: 'live' })
+    const onListRuns = vi.fn(async () => ([
+      {
+        runId: 'run-held-7',
+        execution: 'stopped' as const,
+        projectRevision: 19,
+        stepsPassed: 12,
+        stepsTotal: 16,
+        submissionReady: false,
+        saveFailure: null,
+        executionError: null,
+        interrupted: ['D3-writing'],
+      },
+    ]))
+    const onOpenRun = vi.fn(async (_runId: string, onUpdate: (summary: typeof healed) => void) => { onUpdate(healed) })
+    renderComp(createElement(ResearchWorkbench, { t, onListRuns, onOpenRun }))
+
+    // THE LIST IS READ ON ARRIVAL, and it says what the person needs to choose: how far the study got,
+    // what state it is in, and — for one this process is not driving — what was in flight.
+    await waitFor(() => { expect(document.querySelector('[data-research-project="run-held-7"]')).toBeTruthy() })
+    const row = document.querySelector('[data-research-project="run-held-7"]')
+    expect(row?.textContent).toContain('12 of 16 steps passed')
+    expect(row?.textContent).toContain(en['run.execution.stopped'])
+    expect(row?.textContent).toContain('D3-writing')
+
+    await act(async () => {
+      fireEvent.click(within(row as HTMLElement).getByRole('button', { name: en['projects.open'] }))
+    })
+    expect(onOpenRun).toHaveBeenCalledWith('run-held-7', expect.any(Function))
+    // AND THE STUDY IT ANSWERED WITH IS WHAT THE PAGE SHOWS.
+    expect(document.querySelector('[data-research-run-id]')?.textContent).toContain('run-held-7')
+  })
+
+  it('says the list could not be read instead of saying there are no studies', async () => {
+    // "I could not ask" and "there is nothing" have different remedies, and telling a person their
+    // work is gone when the question failed is the worse of the two mistakes.
+    const onListRuns = vi.fn().mockRejectedValue(new Error('the snapshot root cannot be read'))
+    const onOpenRun = vi.fn()
+    renderComp(createElement(ResearchWorkbench, { t, onListRuns, onOpenRun }))
+
+    await waitFor(() => {
+      expect(screen.getByText(en['projects.listFailed'].replace('{message}', 'the snapshot root cannot be read'))).toBeTruthy()
+    })
+    expect(screen.queryByText(en['projects.empty'])).toBeNull()
+  })
+
+  it('offers no study list when the host cannot list one', async () => {
+    renderComp(createElement(ResearchWorkbench, { t }))
+    expect(document.querySelector('[data-research-projects]')).toBeNull()
+  })
+
   it('offers no save retry when the host reports no failed write', async () => {
     // THE CONTROL FOLLOWS THE FACT. A retry button on a run that is on disk would read as a remedy
     // this deployment does not need, and a host that cannot retry one has no control at all.

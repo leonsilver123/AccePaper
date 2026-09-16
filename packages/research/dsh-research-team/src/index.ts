@@ -51,6 +51,7 @@ import type {
   ResearchRunFrame,
   ResearchRunQuery,
   ResearchRunRequest,
+  ResearchRunSummaryEntry,
   ResearchRunSaveRetry,
   ResearchRunSnapshot,
   ResearchRunStart,
@@ -74,6 +75,7 @@ export type {
   ResearchRunQuery,
   ResearchRunRequest,
   ResearchRunSaveRetry,
+  ResearchRunSummaryEntry,
   ResearchRunSnapshot,
   ResearchRunStart,
   ResearchStartRequest,
@@ -1539,6 +1541,71 @@ export class ResearchTeamService extends TypertRemoteService {
       if ((error as { code?: unknown }).code === 'ENOENT') return null
       throw new Error(`[research] the start command '${commandId}' cannot be read: ${errorMessage(error)}`)
     }
+  }
+
+  /**
+   * The studies this deployment holds, newest first, for a person to pick from.
+   *
+   * WHY THIS EXISTS. A run id lived in the browser tab that started the study: the page remembered it
+   * in session storage, so closing the page closed the only handle the deployment had ever handed out.
+   * The studies themselves were on disk the whole time. This is the read that makes them findable —
+   * a browser that knows nothing about any run can still open the one it wants.
+   *
+   * EVERY RUN IS READ, not just the ones with a stored snapshot: a run this process is driving has no
+   * file of its own yet, and leaving it out would hide the study a person is most likely looking for.
+   * A run that is both held and stored is reported ONCE, from the live state, because that is the
+   * state its own readers see.
+   *
+   * @returns one entry per study, newest first.
+   */
+  @Remote('listRuns')
+  async listRuns(): Promise<ReadonlyArray<ResearchRunSummaryEntry>> {
+    const entries: ResearchRunSummaryEntry[] = []
+    for (const [runId, active] of this.activeRuns) {
+      entries.push({
+        runId,
+        execution: active.state,
+        projectRevision: getRunSnapshot(active.store, runId).revision,
+        stepsPassed: this.passedStepsOf(active.store, runId),
+        stepsTotal: getStepDefinitions().length,
+        submissionReady: this.projectActive(active, runId).submissionReady,
+        ...(active.checkpointError === undefined ? {} : { saveFailure: active.checkpointError }),
+        ...(active.error === undefined ? {} : { executionError: active.error }),
+        interrupted: [],
+      })
+    }
+    for (const runId of this.storedRunIds()) {
+      if (this.activeRuns.has(runId)) continue
+      const found = await this.findStoredRun(runId)
+      if (found === null) continue
+      const snapshot = snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped')
+      entries.push({
+        runId,
+        execution: 'stopped',
+        projectRevision: found.restored.revision,
+        stepsPassed: this.passedStepsOf(found.restored.store, runId),
+        stepsTotal: getStepDefinitions().length,
+        submissionReady: snapshot.submissionReady,
+        ...(found.persistence.error === undefined ? {} : { saveFailure: found.persistence.error }),
+        interrupted: found.persistence.interrupted,
+      })
+    }
+    // A STABLE ORDER: the run's own revision cannot order two studies meaningfully, and the
+    // directory listing's order is the filesystem's. Newest first, by the id when nothing else
+    // distinguishes them — ids are UUIDs, so this is stable across calls and processes.
+    return entries.sort((left, right) => right.runId.localeCompare(left.runId))
+  }
+
+  /**
+   * How many of the pipeline's steps have passed in one run.
+   *
+   * @param store - the store holding the run.
+   * @param runId - the run to count.
+   * @returns the number of steps whose recorded status is `passed`.
+   */
+  private passedStepsOf(store: ResearchRunStore, runId: string): number {
+    const steps = getRunSnapshot(store, runId).steps
+    return getStepDefinitions().filter(definition => steps[definition.id]?.status === 'passed').length
   }
 
   /**
