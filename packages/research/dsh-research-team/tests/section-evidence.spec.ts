@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getArtifact, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { LiteratureSearchAdapter, LiteratureSearchOutcome } from '@deepseek-ai/dsh-research-tools'
 
@@ -222,13 +222,16 @@ describe('a refused section makes the run not ready', () => {
     // Every other section still had its evidence, so only the one is missing.
     expect(draft?.sections?.find(section => section.id === 'results')?.bodyText).not.toBe('')
 
-    // THE HOLE STOPS THE RUN RATHER THAN REACHING A READER. `assembleManuscript` already refused an
-    // empty section body (`DSH_MANUSCRIPT_EMPTY_SECTION`), so E1 cannot format a manuscript with a
-    // section D3 declined to write — the refusal propagates instead of being formatted away. That
-    // guard is older than this change and this is the first time anything produced a section for it
-    // to catch.
-    const e1 = run.steps.find(step => step.stepId === 'E1-format')
-    expect(e1?.executeError).toContain('DSH_MANUSCRIPT_EMPTY_SECTION')
+    // THE HOLE STOPS THE RUN RATHER THAN REACHING A READER — and it is the A GATE that stops it,
+    // which is the stronger of the two guards available. `red-method` reviews the manuscript this
+    // step produced, sees that a section the outline declares has an empty body, and refutes; the
+    // step is `blocked` and the run ends there. `assembleManuscript`'s own
+    // `DSH_MANUSCRIPT_EMPTY_SECTION` guard is still behind it and never fires, because nothing with
+    // an empty section reaches E1.
+    expect(run.steps.at(-1)?.stepId).toBe('D3-writing')
+    expect(run.steps.find(step => step.stepId === 'D3-writing')?.verdicts.A).toBe('blocked')
+    const evidence = String(getRunSnapshot(store, run.runId).steps['D3-writing']?.gateResults.A?.evidence)
+    expect(evidence).toContain('red-method=refute')
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
 
     // And readiness reports the run it actually is: eligible, and not ready.

@@ -251,6 +251,9 @@ export async function driveStep(
       // default is the demo profile: an undeclared run executes and cannot be submitted.
       evidenceProfile: opts.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE,
       evidenceSourceDoi: opts.evidenceSourceDoi,
+      // The same resolution the executor used, so a verdict and the step it judges cannot disagree
+      // about what the run contains.
+      readInput: (slug: string) => resolveStepInput(store, runId, slug),
     }
     const built = await buildStepVerdicts(vctx)
     for (const v of built) {

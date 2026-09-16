@@ -130,14 +130,14 @@ export interface RoleReview {
 }
 
 /** Collapse a role's findings into its vote: any contradiction refutes, any gap abstains. */
-function positionOf(findings: ReadonlyArray<ReviewFinding>): ResearchRebuttalPosition {
+export function positionOf(findings: ReadonlyArray<ReviewFinding>): ResearchRebuttalPosition {
   if (findings.some(f => f.position === 'refute')) return 'refute'
   if (findings.some(f => f.position === 'abstain')) return 'abstain'
   return 'support'
 }
 
 /** Build a role's review from its findings, deriving the rationale from them. */
-function review(role: string, findings: ReadonlyArray<ReviewFinding>): RoleReview {
+export function review(role: string, findings: ReadonlyArray<ReviewFinding>): RoleReview {
   const position = positionOf(findings)
   return {
     role,

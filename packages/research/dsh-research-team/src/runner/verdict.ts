@@ -45,9 +45,11 @@ import { B_CHANNEL_INCONCLUSIVE_REF, buildBChannelAnchors } from './anchor-fixtu
 import type { BChannelEvidence } from './anchor-fixture.ts'
 import { buildEvidenceAnchors } from './evidence-anchors.ts'
 import { REVIEW_ROLES, reviewClaim } from './redteam-review.ts'
+import { MANUSCRIPT_REVIEW_ROLES, reviewManuscript } from './manuscript-review.ts'
+import { RESULT_VERSION_SLUG } from './result-version.ts'
 import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC, measureStudy } from './platoon-sim.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
-import { CANONICAL } from './registry.ts'
+import { CANONICAL, planOf } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
 
 export type { VerdictBuildCtx } from './types.ts'
@@ -56,20 +58,132 @@ export type { VerdictBuildCtx } from './types.ts'
 const A_CHANNEL_ROLES: ReadonlyArray<string> = REVIEW_ROLES.map(entry => entry.role)
 
 /**
+ * The manuscript this step's A gate reviews, when the run has one.
+ *
+ * `D3-writing` produces `draft` and `D4-rebuttal` produces `revised-draft`; a step that reads the
+ * draft sees it as an input. The more downstream artifact wins, because that is the document the
+ * run is currently standing behind.
+ */
+const MANUSCRIPT_SLUGS: ReadonlyArray<string> = ['revised-draft', 'draft']
+
+/**
+ * The manuscript this step's A gate is to review, with the evidence its checks need.
+ *
+ * `readInput` is absent on a hand-built verdict context, and the run may hold no manuscript yet —
+ * both mean the A channel reviews the claim material, which is the pre-manuscript path rather than
+ * a fallback from a failure.
+ *
+ * @param ctx - the verdict context, with the run's artifacts behind it.
+ * @returns the manuscript and its rosters, or undefined when there is no manuscript to review.
+ */
+function manuscriptUnderReview(ctx: VerdictBuildCtx): {
+  readonly slug: string
+  readonly sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
+  readonly implementationNames: ReadonlyArray<string>
+  readonly declaredNumbers: ReadonlyArray<number>
+  readonly referenceCount: number
+  readonly floatLabels: ReadonlyArray<string>
+} | undefined {
+  if (ctx.readInput === undefined) return undefined
+  for (const slug of MANUSCRIPT_SLUGS) {
+    const value = ctx.readInput(slug)
+    const sections = sectionsOfManuscript(value)
+    if (sections === undefined) continue
+    const draft = value as { references?: unknown; renderedFigures?: unknown }
+    const references = Array.isArray(draft.references) ? draft.references : []
+    const figures = Array.isArray(draft.renderedFigures) ? draft.renderedFigures : []
+    const floatLabels = figures
+      .map(entry => (entry !== null && typeof entry === 'object' ? (entry as { title?: unknown }).title : undefined))
+      .filter((title): title is string => typeof title === 'string')
+    const method = ctx.readInput('method-spec')
+    const implementation = method !== null && typeof method === 'object'
+      ? (method as { implementation?: { id?: unknown; algorithm?: unknown; parameters?: unknown; varied?: unknown } }).implementation
+      : undefined
+    const names = [implementation?.id, implementation?.algorithm]
+      .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    // Every number the run declares: the implementation's own parameters and the values its two
+    // arms vary in. A Method section states these, and they are the run's numbers even though the
+    // result record does not hold them.
+    const declaredNumbers: number[] = []
+    const parameters = implementation?.parameters
+    if (parameters !== null && typeof parameters === 'object') {
+      for (const value of Object.values(parameters)) {
+        if (typeof value === 'number' && Number.isFinite(value)) declaredNumbers.push(value)
+      }
+    }
+    if (Array.isArray(implementation?.varied)) {
+      for (const entry of implementation.varied) {
+        if (entry === null || typeof entry !== 'object') continue
+        for (const value of Object.values(entry as Record<string, unknown>)) {
+          if (typeof value === 'number' && Number.isFinite(value)) declaredNumbers.push(value)
+        }
+      }
+    }
+    return {
+      slug,
+      sections,
+      implementationNames: names,
+      declaredNumbers,
+      referenceCount: references.length,
+      floatLabels,
+    }
+  }
+  return undefined
+}
+
+/** The draft's sections, or undefined when the value is not a manuscript-shaped artifact. */
+function sectionsOfManuscript(value: unknown): ReadonlyArray<{ id: string; heading: string; bodyText: string }> | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const raw = (value as { sections?: unknown }).sections
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const sections: Array<{ id: string; heading: string; bodyText: string }> = []
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== 'object') return undefined
+    const row = entry as { id?: unknown; heading?: unknown; bodyText?: unknown }
+    if (typeof row.id !== 'string' || typeof row.heading !== 'string') return undefined
+    sections.push({ id: row.id, heading: row.heading, bodyText: typeof row.bodyText === 'string' ? row.bodyText : '' })
+  }
+  return sections
+}
+
+/**
  * Build the A-channel verdict via the rule-based review → team `judgeRound` →
  * core `adjudicate('A')`.
  *
- * The votes are DERIVED from the run's claim material. They used to be three `support`
- * literals with a constant rationale, which made the gate a constant: it reported the same
- * verdict whatever the run contained, so every step it gated advanced for a reason
- * unrelated to the work. See `./redteam-review.ts` for what each role checks and for the
- * limit that these are rulebooks rather than model reviewers.
+ * WHICH DOCUMENT IT REVIEWS. When the run has produced a manuscript, the A channel reviews THAT —
+ * its numbers against the run's measured record, its floats and references against the draft's own
+ * rosters, its Method section against the implementation that executed. Before this it reviewed the
+ * claim material whatever the step had written, so an offline probe could change a number in the
+ * draft, delete a Method section and skip the revision, and the A vote did not move: the gate that
+ * is supposed to be the adversarial reader was reading a different document from the one the run
+ * produced. The steps gated on A before any manuscript exists (A2, A3, B1, D2) still review the
+ * claim material, and the verdict says which of the two it read.
+ *
+ * The votes are DERIVED from the material either way. They used to be three `support` literals with
+ * a constant rationale, which made the gate a constant: it reported the same verdict whatever the
+ * run contained, so every step it gated advanced for a reason unrelated to the work. See
+ * `./redteam-review.ts` and `./manuscript-review.ts` for what each role checks and for the limit
+ * that these are rulebooks rather than model reviewers.
  */
 function verdictA(ctx: VerdictBuildCtx): GateVerdict {
   const useAbstain = ctx.abstain.has('A')
   const roundId = `t19b-round-${ctx.step.id}`
   const claimRef = ctx.runCtx.claimRef || CANONICAL.claimRef
-  const reviews = reviewClaim(ctx.runCtx.claimMaterial)
+  const manuscript = manuscriptUnderReview(ctx)
+  const reviews = manuscript === undefined
+    ? reviewClaim(ctx.runCtx.claimMaterial)
+    : reviewManuscript({
+      sections: manuscript.sections,
+      result: ctx.readInput?.(RESULT_VERSION_SLUG),
+      implementationNames: manuscript.implementationNames,
+      declaredNumbers: manuscript.declaredNumbers,
+      referenceCount: manuscript.referenceCount,
+      floatLabels: manuscript.floatLabels,
+      commitment: ctx.runCtx.commitment,
+      predictionText: ctx.runCtx.predictionText,
+      metricPhrases: planOf(ctx).metric.phrases,
+    })
+  const reviewed = manuscript === undefined ? 'claim material' : `the ${manuscript.slug} manuscript`
   const votes: ResearchRebuttal[] = reviews.map(review => ({
     roundId,
     claimRef,
@@ -86,7 +200,9 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
     roundId,
     claimRef,
     gate: ctx.step.id,
-    expectedRoles: A_CHANNEL_ROLES,
+    // Declared per path rather than taken from the reviews: a review that silently dropped a role
+    // would otherwise produce a round that satisfies its own expectation.
+    expectedRoles: manuscript === undefined ? A_CHANNEL_ROLES : MANUSCRIPT_REVIEW_ROLES,
     status: 'completed',
     votes,
   }
@@ -119,7 +235,8 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
     passed: rv.outcome === 'passed',
     evidence:
       `team:judgeRound → core adjudicate('A') outcome=${rv.outcome}; `
-      + `rule-based offline review by ${String(reviews.length)} declared checklists (${tally}); `
+      + `rule-based offline review of ${reviewed} by ${String(reviews.length)} declared checklists `
+      + `(${tally}); `
       + 'one deterministic implementation, NO model called, so these votes are not '
       + 'independent review opinions and a pass here is not three reviewers agreeing'
       + (useAbstain ? ' (injected abstention: uncalibrated config → abstain)' : ''),

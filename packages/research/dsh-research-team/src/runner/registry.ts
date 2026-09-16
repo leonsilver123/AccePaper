@@ -752,7 +752,7 @@ function proseRouteOf(result: { readonly provider: string; readonly model: strin
  * @param ctx - the executor or verdict context.
  * @returns the plan the run was started with.
  */
-function planOf(ctx: { readonly runCtx: RunContext }): StudyPlan {
+export function planOf(ctx: { readonly runCtx: RunContext }): StudyPlan {
   return ctx.runCtx.studyPlan
 }
 

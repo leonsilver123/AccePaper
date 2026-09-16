@@ -193,4 +193,13 @@ export interface VerdictBuildCtx {
    * not a bypass: the gate still adjudicates whatever the citation chain returns from it.
    */
   readonly evidenceSourceDoi?: string | undefined
+  /**
+   * Read an artifact of the run being judged, by slug, or undefined when the run holds none.
+   *
+   * A gate that grades the step's OUTPUT needs the output. The commit receipt carries refs, which
+   * name a revision but not its content, so the A channel's manuscript review reads through here —
+   * the same resolution the executor used, so a verdict and the step it judges cannot disagree
+   * about what the run contains.
+   */
+  readonly readInput?: ((slug: string) => unknown) | undefined
 }
