@@ -14,7 +14,7 @@
  * vitest's own timeout rather than on a fixed sleep of the test's choosing.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -69,6 +69,7 @@ async function boot(options: {
 }): Promise<{
   readonly ctx: Context
   readonly service: ResearchTeamService
+  directoryEntries(name: string): ReadonlyArray<string>
   dispose(): Promise<void>
 }> {
   const ctx = new Context()
@@ -96,6 +97,12 @@ async function boot(options: {
   return {
     ctx,
     service: ctx.agentTeams as unknown as ResearchTeamService,
+    // What the deployment actually wrote, read off the disk rather than from the service: a count
+    // taken from the thing under test would agree with itself.
+    directoryEntries: (name: string) => {
+      const directory = options.snapshotDirectory === undefined ? undefined : join(options.snapshotDirectory, name)
+      return directory === undefined || !existsSync(directory) ? [] : readdirSync(directory)
+    },
     dispose: async () => { await fiber.dispose() },
   }
 }
@@ -159,6 +166,109 @@ describe('a study is started and read back', () => {
       expect(finished?.run.steps.find(step => step.stepId === 'A1-landscape')?.status).not.toBe('pending')
     } finally {
       await host.dispose()
+    }
+  })
+
+  it('creates ONE run when the same command arrives twice at once', async () => {
+    // THE CONCURRENT CASE, which the map could not close while it was written after the save: two
+    // calls that arrived together both missed it and both created a run. The registration now
+    // happens synchronously, before the first await, so the second call waits for the first answer.
+    const held = barrier()
+    const host = await boot({ literatureAdapter: held.adapter, snapshotDirectory: snapshotRoot() })
+    try {
+      const [first, second] = await Promise.all([
+        host.service.startRun({ commandId: 'command-concurrent' }),
+        host.service.startRun({ commandId: 'command-concurrent' }),
+      ])
+      expect(second.runId).toBe(first.runId)
+      expect(host.directoryEntries('commands')).toHaveLength(1)
+      await held.release()
+      await untilStopped(host.service, first.runId)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('refuses the same command id carrying different research', async () => {
+    // A RETRY RE-SENDS THE SAME REQUEST. The same id carrying a different field is a second study
+    // wearing the first one's identity, and answering it with the first run would run something the
+    // caller did not ask for.
+    const held = barrier()
+    const host = await boot({ literatureAdapter: held.adapter, snapshotDirectory: snapshotRoot() })
+    try {
+      const first = await host.service.startRun({ commandId: 'command-changed', domainDirection: 'road safety' })
+      await expect(
+        host.service.startRun({ commandId: 'command-changed', domainDirection: 'protein folding' }),
+      ).rejects.toThrow(/different research/u)
+      await held.release()
+      await untilStopped(host.service, first.runId)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('refuses a command id that cannot name a record', async () => {
+    // The id becomes a file name beside the runs, so one carrying a path separator is refused at the
+    // boundary — sanitising it would produce a DIFFERENT id, and the next retry would not find it.
+    const host = await boot({ snapshotDirectory: snapshotRoot() })
+    try {
+      for (const bad of ['../escape', 'a/b', '', 'x'.repeat(129)]) {
+        await expect(host.service.startRun({ commandId: bad })).rejects.toThrow(/cannot name a start command/u)
+      }
+      expect(host.directoryEntries('commands')).toHaveLength(0)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('answers a retry from the record after a restart', async () => {
+    // THE LOST RESPONSE, ONE PROCESS LATER. The caller never read its answer and the process that
+    // produced it is gone; without the record the retry would be handed a second study.
+    const root = snapshotRoot()
+    const first = await boot({ snapshotDirectory: root })
+    let runId = ''
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-durable' })).runId
+      await untilStopped(first.service, runId)
+    } finally {
+      await first.dispose()
+    }
+
+    const second = await boot({ snapshotDirectory: root })
+    try {
+      const retried = await second.service.startRun({ commandId: 'command-durable' })
+      // THE SAME RUN, and it says it is still findable rather than promising a new study.
+      expect(retried.runId).toBe(runId)
+      expect(retried.persisted).toBe(true)
+      // And it did not start a second one: the run's own records say one thing happened.
+      expect(await second.service.runSnapshot({ runId })).not.toBeNull()
+    } finally {
+      await second.dispose()
+    }
+  })
+
+  it('says which half is missing when a recorded command names a run that is gone', async () => {
+    // A record without its run is not a success to report: the caller would be told its study is
+    // findable when nothing can be read.
+    const root = snapshotRoot()
+    const first = await boot({ snapshotDirectory: root })
+    let runId = ''
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-orphan' })).runId
+      await untilStopped(first.service, runId)
+    } finally {
+      await first.dispose()
+    }
+    rmSync(join(root, runId), { recursive: true, force: true })
+
+    const second = await boot({ snapshotDirectory: root })
+    try {
+      const retried = await second.service.startRun({ commandId: 'command-orphan' })
+      expect(retried.runId).toBe(runId)
+      expect(retried.persisted).toBe(false)
+      expect(retried.persistenceError).toContain('no longer stored')
+    } finally {
+      await second.dispose()
     }
   })
 

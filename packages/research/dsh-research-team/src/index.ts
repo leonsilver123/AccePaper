@@ -37,6 +37,7 @@
 // needed to keep the durable fold or the guard current.
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { Context } from '@deepseek-ai/cordis'
@@ -85,6 +86,7 @@ import { MEASURED_METRIC } from './runner/platoon-sim.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
 import { envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
+import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
 import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
@@ -354,6 +356,23 @@ export interface ResearchTeamServiceConfig {
    * write tools.
    */
   readonly scopeCheckedTools?: ReadonlyArray<string>
+}
+
+/**
+ * Refuse a command id that has already been used for a different study.
+ *
+ * @param commandId - the id both sends used.
+ * @param recorded - what the first send asked for.
+ * @param asked - what this send asks for.
+ * @throws {Error} when they differ.
+ */
+function requireSameCommand(commandId: string, recorded: string, asked: string): void {
+  if (recorded !== asked) {
+    throw new Error(
+      `[research] command '${commandId}' was already sent with different research; `
+      + 'a retry re-sends the same request, and a second study needs a second command id',
+    )
+  }
 }
 
 /** A run restored from this deployment's own records. */
@@ -1157,7 +1176,10 @@ export class ResearchTeamService extends TypertRemoteService {
    * that holds no such run, and the caller is told so rather than being handed a second study. The
    * durable form of this is the run record itself, which `runSnapshot` reads.
    */
-  private readonly startCommands = new Map<string, ResearchRunStart>()
+  private readonly startCommands = new Map<
+    string,
+    { readonly digest: string; readonly started: Promise<ResearchRunStart> }
+  >()
 
   /**
    * The deployment's own drive options.
@@ -1208,8 +1230,60 @@ export class ResearchTeamService extends TypertRemoteService {
     // — and sends the same command again; creating a second run for it would spend a second study.
     // The id names the COMMAND, so one id is one run however many times it is sent, and a caller
     // that wants a second study sends a second id.
-    const answered = this.startCommands.get(request.commandId)
-    if (answered !== undefined) return answered
+    const commandId = requireCommandId(request.commandId)
+    const digest = startCommandDigest(request)
+    const known = this.startCommands.get(commandId)
+    if (known !== undefined) {
+      // A SECOND STUDY WEARING THE FIRST ONE'S IDENTITY. Answering it with the first run would run
+      // something the caller did not ask for, so it is refused instead.
+      requireSameCommand(commandId, known.digest, digest)
+      return await known.started
+    }
+    // THE REGISTRATION HAPPENS BEFORE ANY `await`. `startCommandOnce` runs synchronously up to its
+    // first one, so a second call — which cannot run until this synchronous block finishes — finds
+    // this promise and waits for its answer rather than creating a run of its own.
+    const started = this.startCommandOnce(commandId, digest, request)
+    this.startCommands.set(commandId, { digest, started })
+    try {
+      return await started
+    } catch (error) {
+      // A FAILED START IS RETRYABLE. Nothing was recorded, so the id is free again.
+      this.startCommands.delete(commandId)
+      throw error
+    }
+  }
+
+  /**
+   * The one start behind one command id: the recorded answer, or a new run.
+   *
+   * @param commandId - the id, already validated.
+   * @param digest - what the command asked for.
+   * @param request - the command.
+   * @returns the receipt.
+   */
+  private async startCommandOnce(
+    commandId: string,
+    digest: string,
+    request: ResearchStartRequest,
+  ): Promise<ResearchRunStart> {
+    // ACROSS A RESTART THE RECORD IS THE ONLY WITNESS. A caller whose response was lost asks again
+    // in a process that never heard of the command; without this it would be handed a second study.
+    const recorded = await this.readStartCommand(commandId)
+    if (recorded !== null) {
+      requireSameCommand(commandId, recorded.paramsDigest, digest)
+      const found = await this.findStoredRun(recorded.runId)
+      if (found === null) {
+        // The command is known and the run it named is not: reporting success would promise a study
+        // this deployment cannot produce, so it says which of the two is missing.
+        return {
+          runId: recorded.runId,
+          persisted: false,
+          persistenceError: `the run this command started ('${recorded.runId}') is no longer stored`,
+          startedAt: recorded.startedAt,
+        }
+      }
+      return { runId: recorded.runId, persisted: true, startedAt: recorded.startedAt }
+    }
 
     const seed: DriveOptions = request.plan !== undefined
       ? (() => {
@@ -1297,8 +1371,64 @@ export class ResearchTeamService extends TypertRemoteService {
       persisted,
       startedAt: Date.now(),
     }
-    this.startCommands.set(request.commandId, started)
+    // THE COMMAND IS RECORDED BEFORE THE DRIVER STARTS, beside the run it names. A restart reads it
+    // to answer the retry; a record that cannot be written is a start that cannot be recovered, so
+    // it fails here rather than leaving a caller with an id nothing can look up.
+    await this.writeStartCommand({
+      commandId,
+      runId: prepared.runId,
+      paramsDigest: digest,
+      startedAt: started.startedAt,
+    })
     return started
+  }
+
+  /**
+   * The directory the start-command records live in, or undefined when none is configured.
+   *
+   * @returns the absolute directory, or undefined.
+   */
+  private startCommandDirectory(): string | undefined {
+    const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
+    return research?.snapshotDirectory === undefined
+      ? undefined
+      : join(research.snapshotDirectory, 'commands')
+  }
+
+  /**
+   * Read one command's durable record, or null when this deployment holds none.
+   *
+   * @param commandId - the command to look up.
+   * @returns the record, or null.
+   */
+  private async readStartCommand(commandId: string): Promise<StartCommandRecord | null> {
+    const directory = this.startCommandDirectory()
+    if (directory === undefined) return null
+    try {
+      return JSON.parse(await readFile(join(directory, `${commandId}.json`), 'utf8')) as StartCommandRecord
+    } catch (error) {
+      // ABSENT means this command was never sent here; UNREADABLE means the deployment cannot be
+      // told. Treating the second as the first is how a retry becomes a second study.
+      if ((error as { code?: unknown }).code === 'ENOENT') return null
+      throw new Error(`[research] the start command '${commandId}' cannot be read: ${errorMessage(error)}`)
+    }
+  }
+
+  /**
+   * Write one command's durable record.
+   *
+   * @param record - what the command produced.
+   */
+  private async writeStartCommand(record: StartCommandRecord): Promise<void> {
+    const directory = this.startCommandDirectory()
+    if (directory === undefined) return
+    mkdirSync(directory, { recursive: true })
+    const target = join(directory, `${record.commandId}.json`)
+    const temporary = `${target}.tmp`
+    // WRITE AND RENAME, the order the run snapshots use: a reader of the final name sees a whole
+    // record or none, never one a crash left half-written.
+    await writeFile(temporary, JSON.stringify(record), { encoding: 'utf8' })
+    await rename(temporary, target)
   }
 
   /**
