@@ -34,6 +34,12 @@ export interface WirePlan {
   readonly metric: {
     readonly key: string
     readonly label: string
+    /**
+     * The unit the quantity is measured in. Required, because the host's `MeasuredMetric` requires
+     * it and this twin must describe the same value: a field missing here is one the client cannot
+     * see, and the first symptom is the gateway refusing the request rather than a type error.
+     */
+    readonly unit: string
     readonly direction: string
     readonly phrases: ReadonlyArray<string>
   }
