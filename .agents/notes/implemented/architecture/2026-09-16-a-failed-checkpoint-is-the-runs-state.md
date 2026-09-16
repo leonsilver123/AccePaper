@@ -48,7 +48,6 @@ without killing work that is still recoverable if the directory comes back.
 
 - The failure clears itself: the next checkpoint that lands deletes it, so a transient outage does
   not leave a run permanently unready.
-- **The approval is NOT yet blocked by it.** Readiness (publication) is; an approval submitted while
-  the run's saving is broken still applies and is reported as `persisted: false`, which is the same
-  answer a failed write already produced. Blocking it belongs in the approval's own precondition
-  (`approval.ts` checks run/step/attempt/status before applying), and that is not done here.
+- **The approval is blocked by it too** — in the approval's own precondition, before anything is
+  decided ([a decision needs the run on disk](2026-09-16-a-decision-needs-the-run-on-disk.md)). This
+  note left it unblocked and named where the guard belonged; that change is where it landed.

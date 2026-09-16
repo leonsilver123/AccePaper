@@ -1937,7 +1937,7 @@ export interface ResearchTeamServiceConfig {
 }
 ```
 
-Source: [`packages/research/dsh-research-team/src/index.ts:348`](../packages/research/dsh-research-team/src/index.ts)
+Source: [`packages/research/dsh-research-team/src/index.ts:358`](../packages/research/dsh-research-team/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-local"></a>
 

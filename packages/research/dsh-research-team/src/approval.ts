@@ -78,6 +78,7 @@ export const APPROVAL_ERROR_CODES = {
   notPending: 'research/approval-not-pending',
   staleAttempt: 'research/approval-stale-attempt',
   staleRevision: 'research/approval-stale-revision',
+  saveFailed: 'research/approval-save-failed',
   refused: 'research/approval-refused',
 } as const
 
@@ -203,11 +204,23 @@ export interface RememberedRun {
   /**
    * Write this run's CURRENT state to its durable snapshot, and re-export its package.
    *
-   * Absent when the deployment configured no snapshot directory, in which case there is
-   * nothing to be durable about and `ApprovalDecision.persisted` reports false for the same
-   * reason a save would.
+   * A deployment that configured no snapshot directory has nothing to be durable about: its
+   * writer answers null, and `ApprovalDecision.persisted` then reports false for the same reason
+   * a refused save would.
    */
-  readonly persist?: () => Promise<ResearchRunPersistence | null>
+  readonly persist: () => Promise<ResearchRunPersistence | null>
+  /**
+   * What this run's LAST durable write did, as the run's own projection reports it.
+   *
+   * REQUIRED, and not a second opinion about durability: this is the one fact the page renders
+   * (`ResearchRunSnapshot.runPersistence`), the readiness note explains, and {@link submitApproval}
+   * refuses on. A caller that could not answer it would be a caller free to decide a gate whose
+   * record exists only in this process — the decision is refused while this reports a failure.
+   *
+   * `null` means this deployment keeps no durable record for the run, which is a different fact
+   * from a write that was attempted and failed, and is not a failure.
+   */
+  readonly saveState: () => ResearchRunPersistence | null
 }
 
 /**
@@ -266,14 +279,17 @@ function requireHostChannel(): HostApprovalChannel {
  * @param runId - the run's immutable identity, the key a later approval addresses it by.
  * @param store - the store the run populated.
  * @param project - re-projects the run from its current store, as its owner builds it.
+ * @param persist - writes the run's current state to its durable snapshot.
+ * @param saveState - reads back what the run's last durable write did.
  */
 export function rememberRun(
   runId: string,
   store: ResearchRunStore,
   project: () => ResearchRunSnapshot,
-  persist?: () => Promise<ResearchRunPersistence | null>,
+  persist: () => Promise<ResearchRunPersistence | null>,
+  saveState: () => ResearchRunPersistence | null,
 ): void {
-  rememberedRuns.set(runId, persist === undefined ? { store, project } : { store, project, persist })
+  rememberedRuns.set(runId, { store, project, persist, saveState })
 }
 
 /**
@@ -395,6 +411,28 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
       + `and run '${runId}' is at ${String(currentRevision)} — re-read the current manuscript before deciding`,
     )
   }
+  // THE RUN HAS TO BE ON DISK FOR A DECISION ABOUT IT TO BE. A decision that lives only in this
+  // process is one a restart forgets: the restored run shows E2 `gated` and asks the person to
+  // approve what they already approved. Reporting that as `persisted: false` AFTER the decision was
+  // the wrong place for it — the gate had already moved to `passed` in memory, so a caller was told
+  // its decision was not durable without being able to do anything about it, and the run's own
+  // record said one thing while the refusal said another. Refused here, with the other
+  // preconditions, because this is the only place the operation can decline to happen.
+  //
+  // The fact is the run's own last write, not a second measurement of it: the page renders the same
+  // value, so a reader told "the run could not be saved" is refused for exactly what they were
+  // shown. It clears on the run's next write that lands (a checkpoint while it is being driven, a
+  // resume's write when it is not), and a refusal is never remembered, so the caller retries the
+  // same command once the deployment can write again.
+  const saveState = run.saveState()
+  if (saveState?.error !== undefined) {
+    return refuse(
+      APPROVAL_ERROR_CODES.saveFailed,
+      `run '${runId}' is not on disk: its last write to the run snapshot failed (${saveState.error}). `
+      + 'A decision that cannot be recorded is refused rather than applied, because a restart would '
+      + 'ask the person to approve the same gate again',
+    )
+  }
 
   // Minting is outside the try: a broken channel is a deployment failure to report, not a
   // decision to grade.
@@ -425,20 +463,16 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
       projectionError = error instanceof Error ? error.message : String(error)
     }
 
-    let persisted = false
-    let persistenceError: string | undefined
-    if (run.persist !== undefined) {
-      const saved = await run.persist().catch((error: unknown) => ({
-        runId,
-        revision: null,
-        interrupted: [],
-        error: error instanceof Error ? error.message : String(error),
-      }) satisfies ResearchRunPersistence)
-      persisted = saved !== null && saved.revision !== null
-      if (!persisted) persistenceError = saved?.error ?? 'no snapshot directory is configured for this deployment'
-    } else {
-      persistenceError = 'no snapshot directory is configured for this deployment'
-    }
+    const saved = await run.persist().catch((error: unknown) => ({
+      runId,
+      revision: null,
+      interrupted: [],
+      error: error instanceof Error ? error.message : String(error),
+    }) satisfies ResearchRunPersistence)
+    const persisted = saved !== null && saved.revision !== null
+    const persistenceError = persisted
+      ? undefined
+      : (saved?.error ?? 'no snapshot directory is configured for this deployment')
     // Report BOTH failures when both happened. They have different remedies and neither hides the
     // other: one says the decision is not on disk, the other says the response cannot carry the run.
 

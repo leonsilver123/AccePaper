@@ -63,7 +63,7 @@ import {
 } from '../src/approval.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import type { RunResult } from '../src/runner/types.ts'
-import type { ResearchRunSnapshot } from '../src/types.ts'
+import type { ResearchRunPersistence, ResearchRunSnapshot } from '../src/types.ts'
 
 /** The human gate every approval test decides. */
 const E2 = 'E2-submit'
@@ -100,8 +100,35 @@ async function gatedRun(): Promise<GatedRun> {
   const store: ResearchRunStore = new Map()
   const run = await runT19B(store)
   gated = { store, run }
-  rememberRun(run.runId, store, () => project(run, store))
+  registerGatedRun(gated)
   return gated
+}
+
+/**
+ * Register one run with the approval endpoint the way the service does.
+ *
+ * `saveState` is the run's durable state as its owner reports it — the fact `submitApproval` reads
+ * before it decides anything. The default answers null (this twin keeps no durable record), which is
+ * the state a suite that is not about durability wants; a suite that IS about it states the failure
+ * its deployment would report. `tests/start-run.spec.ts` drives the production wiring that fills
+ * this from a real save.
+ *
+ * @param drive - the run to register.
+ * @param saveState - what the run's last durable write did.
+ */
+function registerGatedRun(
+  drive: GatedRun,
+  saveState: () => ResearchRunPersistence | null = () => null,
+): void {
+  rememberRun(
+    drive.run.runId,
+    drive.store,
+    () => project(drive.run, drive.store),
+    // The twin's writer. It answers the way a deployment that configured no snapshot directory
+    // does, so `persisted: false` stays the reported outcome unless a suite registers a real one.
+    async () => null,
+    saveState,
+  )
 }
 
 /**
@@ -473,7 +500,7 @@ describe('§8.1 an Agent cannot self-approve through an ordinary call', () => {
     expect(after.ok ? '' : after.error.code).toBe(APPROVAL_ERROR_CODES.runUnknown)
 
     // Re-register for any later suite.
-    rememberRun(drive.run.runId, drive.store, () => project(drive.run, drive.store))
+    registerGatedRun(drive)
   })
 })
 
@@ -502,6 +529,8 @@ describe('§8.1 a decision is as durable as the run that produced it', () => {
         const written = await writer.save(drive.store, drive.run.runId, { baseRevision: before.revision })
         return { runId: drive.run.runId, revision: written.revision, interrupted: [] }
       },
+      // The same writer's state: it landed, so the approval's precondition has nothing to refuse.
+      () => ({ runId: drive.run.runId, revision: before.revision, interrupted: [] }),
     )
     const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-20', expectedProjectRevision: revisionNow(drive) })
     expect(result.ok).toBe(true)
@@ -516,7 +545,80 @@ describe('§8.1 a decision is as durable as the run that produced it', () => {
     expect(reread.consumedApprovalEventIds).toContain(result.ok ? result.value.approvalEventId : 'no event')
 
     // Leave the shared registry as the other suites expect to find it.
-    rememberRun(drive.run.runId, drive.store, () => project(drive.run, drive.store))
+    registerGatedRun(drive)
+  })
+})
+
+describe('§8.1 a run that is not on disk is not decided', () => {
+  // The defect this covers: the run's durability was consulted only AFTER the decision, so an
+  // approval sent while the deployment could not save the run was APPLIED — E2 moved to `passed` in
+  // memory — and the caller was told `persisted: false`. A restart then read the snapshot, found
+  // `gated`, and asked the person to approve what they already had. The refusal belongs with the
+  // other preconditions, which is where a decision can still be declined.
+
+  it('refuses before the decision, in the deployment’s own words', async () => {
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    // What a full disk reports, verbatim: the message travels from the deployment, not from a
+    // summary written here.
+    const failure = 'ENOSPC: no space left on device, write'
+    registerGatedRun(drive, () => ({ runId: drive.run.runId, revision: null, interrupted: [], error: failure }))
+    try {
+      const refused = await submitApproval({
+        runId: drive.run.runId,
+        stepId: E2,
+        attempt,
+        decision: 'approved',
+        commandId: 'cmd-save-broken',
+        expectedProjectRevision: revisionNow(drive),
+      })
+      expect(refused.ok).toBe(false)
+      expect(refused.ok ? '' : refused.error.code).toBe(APPROVAL_ERROR_CODES.saveFailed)
+      expect(refused.ok ? '' : refused.error.message).toContain(failure)
+
+      // NOTHING WAS DECIDED, which is the whole difference from reporting `persisted: false` after
+      // the fact: the gate is where the reader left it and no approval record exists for the
+      // attempt.
+      const state = e2(drive.store, drive.run.runId)
+      expect(state?.status).toBe('gated')
+      expect(state?.approval).toBeUndefined()
+      expect(approvalsAt(drive.store, drive.run.runId, attempt)).toHaveLength(0)
+      expect(isComplete(drive.store, drive.run.runId, E2)).toBe(false)
+    } finally {
+      registerGatedRun(drive)
+    }
+  })
+
+  it('decides the same command once the run’s next write has landed', async () => {
+    // THE RECOVERY, and why the refusal above is safe to make: it is about a FACT, not about the
+    // command. The fact is cleared by the run's next durable write landing — a checkpoint, while
+    // the run is still being driven — and a refusal is never remembered, so the caller's own retry
+    // under the SAME command id is the decision they meant to make.
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const command = {
+      runId: drive.run.runId,
+      stepId: E2,
+      attempt,
+      decision: 'approved' as const,
+      commandId: 'cmd-save-recovered',
+      expectedProjectRevision: revisionNow(drive),
+    }
+    registerGatedRun(drive, () => ({ runId: drive.run.runId, revision: null, interrupted: [], error: 'ENOTDIR: not a directory' }))
+    try {
+      const refused = await submitApproval(command)
+      expect(refused.ok ? '' : refused.error.code).toBe(APPROVAL_ERROR_CODES.saveFailed)
+
+      // The next write landed.
+      registerGatedRun(drive)
+      const decided = await submitApproval(command)
+      expect(decided.ok).toBe(true)
+      expect(decided.ok ? decided.value.status : '').toBe('passed')
+      expect(e2(drive.store, drive.run.runId)?.status).toBe('passed')
+      expect(approvalsAt(drive.store, drive.run.runId, attempt)).toHaveLength(1)
+    } finally {
+      registerGatedRun(drive)
+    }
   })
 })
 

@@ -252,6 +252,7 @@ declare module '@deepseek-ai/cordis' {
  * @param runPersistence - what the run left on disk, or what it has written so far.
  * @param execution - whether a driver is on the run in THIS process.
  * @param executionError - why the driver stopped with a failure, when it did.
+ * @param saveFailure - why the run's last durable write did not land, when it did not.
  * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
  */
 function snapshotOf(
@@ -262,7 +263,7 @@ function snapshotOf(
   runPersistence: ResearchRunPersistence | null = null,
   execution: ResearchRunExecution = 'stopped',
   executionError?: string,
-  checkpointFailure?: string,
+  saveFailure?: string,
 ): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, runId)
   const readiness = readinessOfRun(store, runId, evidenceProfile)
@@ -322,14 +323,14 @@ function snapshotOf(
     steps,
     evidenceProfile,
     profileEligible: readiness.profileEligible,
-    // A RUN WHOSE LAST CHECKPOINT FAILED IS NOT READY, whatever its gates say. Readiness is a claim
+    // A RUN WHOSE LAST WRITE FAILED IS NOT READY, whatever its gates say. Readiness is a claim
     // about material that exists and is reproducible; material the deployment could not write is
     // neither, and a reader told "ready" about it would be told to submit something nobody can
     // produce again.
-    submissionReady: readiness.ready && checkpointFailure === undefined,
-    readinessNote: checkpointFailure === undefined
+    submissionReady: readiness.ready && saveFailure === undefined,
+    readinessNote: saveFailure === undefined
       ? readiness.reason
-      : `${readiness.reason === '' ? '' : `${readiness.reason}; `}the run's last checkpoint did not reach the disk: ${checkpointFailure}`,
+      : `${readiness.reason === '' ? '' : `${readiness.reason}; `}the run's last save did not reach the disk: ${saveFailure}`,
     execution,
     packageExport,
     runPersistence,
@@ -680,6 +681,10 @@ export class ResearchTeamService extends TypertRemoteService {
       // decision to memory alone left the snapshot saying E2 `gated` after a person had approved
       // it, so a restart asked them to approve what they already had.
       () => this.recordRun(run, store).then(recorded => recorded.persistence),
+      // This run has stopped driving, so its FINAL write is the last word on whether it is on
+      // disk. An approval of it is refused while that write reports a failure, for the same reason
+      // the projection calls it unready.
+      () => persistence,
     )
     return snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence)
   }
@@ -1025,6 +1030,9 @@ export class ResearchTeamService extends TypertRemoteService {
       restored.store,
       () => snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted),
       () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
+      // A resumed run has stopped driving by the time it can be approved, so the write this resume
+      // ended with is what says whether it is on disk.
+      () => persisted,
     )
     return snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted)
   }
@@ -1078,6 +1086,31 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(active.checkpointError === undefined ? {} : { error: active.checkpointError }),
       directory,
     }
+  }
+
+  /**
+   * Project one run this process holds, from the state it holds it in.
+   *
+   * THE RUN'S DURABILITY IS READ ONCE AND USED TWICE: the projection renders the record, and the
+   * same record's error is what makes the run unready. Reading it twice could answer the two
+   * questions differently and leave a page saying "ready" about a run the deployment cannot save.
+   *
+   * @param active - the run this process holds.
+   * @param runId - the run's id.
+   * @returns the run's current projection.
+   */
+  private projectActive(active: ActiveRun, runId: string): ResearchRunSnapshot {
+    const save = this.livePersistence(active, runId)
+    return snapshotOf(
+      active.store,
+      runId,
+      this.hostEvidenceProfile(),
+      active.packageExport,
+      save,
+      active.state,
+      active.error,
+      save?.error,
+    )
   }
 
   /**
@@ -1356,16 +1389,7 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       prepared.runId,
       store,
-      () => snapshotOf(
-        store,
-        prepared.runId,
-        this.hostEvidenceProfile(),
-        active.packageExport,
-        this.livePersistence(active, prepared.runId),
-        active.state,
-        active.error,
-        active.checkpointError,
-      ),
+      () => this.projectActive(active, prepared.runId),
       // THE STATE ONLY. A run still going has no package — exporting one here would write a
       // manifest of the steps that happen to have finished and call it the run's product. What an
       // approval at E2 needs durable is the DECISION, and the decision lives in the state.
@@ -1374,6 +1398,9 @@ export class ResearchTeamService extends TypertRemoteService {
       () => this.serialized(
         () => this.persistRun(store, prepared.runId, this.savedRevisionOf(active) ?? 0),
       ),
+      // LIVE, because this run is still being driven: an approval of it must read the same record
+      // the page is rendering, and that record moves with every checkpoint.
+      () => this.livePersistence(active, prepared.runId),
     )
     // PERSIST AS THE RUN GOES, exactly as `runPipeline` does and for the same reason: a run that
     // only wrote at the end would lose every completed step — including the ones that cost model
@@ -1530,16 +1557,7 @@ export class ResearchTeamService extends TypertRemoteService {
   async runSnapshot(request: ResearchRunQuery): Promise<ResearchRunSnapshot | null> {
     const active = this.activeRuns.get(request.runId)
     if (active !== undefined) {
-      return snapshotOf(
-        active.store,
-        request.runId,
-        this.hostEvidenceProfile(),
-        active.packageExport,
-        this.livePersistence(active, request.runId),
-        active.state,
-        active.error,
-        active.checkpointError,
-      )
+      return this.projectActive(active, request.runId)
     }
     const found = await this.findStoredRun(request.runId)
     if (found === null) return null
@@ -1669,18 +1687,7 @@ export class ResearchTeamService extends TypertRemoteService {
     active: ActiveRun | undefined,
     found: StoredRun | null,
   ): ResearchRunSnapshot {
-    if (active !== undefined) {
-      return snapshotOf(
-        active.store,
-        runId,
-        this.hostEvidenceProfile(),
-        active.packageExport,
-        this.livePersistence(active, runId),
-        active.state,
-        active.error,
-        active.checkpointError,
-      )
-    }
+    if (active !== undefined) return this.projectActive(active, runId)
     if (found === null) throw new Error(`[research] this deployment holds no run '${runId}'`)
     return snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped')
   }

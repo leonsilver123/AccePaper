@@ -14,7 +14,7 @@
  * vitest's own timeout rather than on a fixed sleep of the test's choosing.
  */
 
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createRunPersistence } from '@deepseek-ai/dsh-research-core'
 
 import ResearchTeamService from '../src/index.ts'
+import { APPROVAL_ERROR_CODES, submitApproval } from '../src/approval.ts'
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 
@@ -353,7 +354,7 @@ describe('a study is started and read back', () => {
     }
   })
 
-  it('reports a checkpoint that did not reach the disk, and refuses to call the run ready', async () => {
+  it('reports a save that did not reach the disk, and refuses to call the run ready', async () => {
     // A READER WATCHING A STUDY ADVANCE cannot tell from the steps alone whether the work it is
     // watching is ON THE DISK. The failure used to live only in `RunResult.checkpointErrors`, which
     // a running run has not produced yet — so the page showed progress and said nothing about the
@@ -380,10 +381,110 @@ describe('a study is started and read back', () => {
       // AND IT REFUSES READINESS. "Ready" is a claim about material that exists and can be produced
       // again; material the deployment could not write is neither.
       expect(reported.submissionReady).toBe(false)
-      expect(reported.readinessNote).toContain('checkpoint')
+      expect(reported.readinessNote).toContain('last save did not reach the disk')
       await untilStopped(host.service, started.runId)
     } finally {
       held.release()
+      await host.dispose()
+    }
+  })
+
+  it('refuses to decide a run the deployment could not save, and leaves the gate alone', async () => {
+    // THE DECISION IS REFUSED WHERE THE RUN IS NOT. Reporting `persisted: false` after the fact was
+    // the wrong place for this: the gate had already moved to `passed` in memory while the snapshot
+    // still said `gated`, so a restart asked the person to approve what they already had. The run
+    // here reaches the human gate with every write refused, which is what a full disk leaves.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    try {
+      const started = await host.service.startRun({ commandId: 'command-unsaved' })
+      // The deployment's save path stops working while the run is working, and stays that way: the
+      // checkpoints fail, and so does the write the run ends with.
+      const unwritable = join(snapshotRoot(), 'not-a-directory')
+      writeFileSync(unwritable, 'not a directory')
+      host.setSnapshotDirectory(unwritable)
+      await untilStopped(host.service, started.runId)
+
+      const reported = await host.service.runSnapshot({ runId: started.runId })
+      const e2 = reported?.steps.find(step => step.stepId === 'E2-submit')
+      expect(reported?.runPersistence?.error ?? '').toMatch(/not a directory|ENOTDIR/iu)
+      expect(e2?.status).toBe('gated')
+      expect(reported?.submissionReady).toBe(false)
+      // THE RUN LEVEL SAYS WHAT THE STEPS CANNOT: the study reached the gate, and whatever was
+      // going to finish recording it is gone. The write the run ends with is the one that threw.
+      expect(reported?.execution).toBe('failed')
+      expect(reported?.executionError ?? '').toMatch(/not a directory|ENOTDIR/iu)
+
+      const refused = await submitApproval({
+        runId: started.runId,
+        stepId: 'E2-submit',
+        attempt: e2?.attempt ?? -1,
+        decision: 'approved',
+        commandId: 'command-unsaved-approve',
+        expectedProjectRevision: reported?.projectRevision ?? -1,
+      })
+      expect(refused.ok).toBe(false)
+      expect(refused.ok ? '' : refused.error.code).toBe(APPROVAL_ERROR_CODES.saveFailed)
+      // The reason is the DEPLOYMENT'S — the same one the page renders beside the failure.
+      expect(refused.ok ? '' : refused.error.message).toMatch(/not a directory|ENOTDIR/iu)
+
+      // NOTHING WAS DECIDED. The gate is where the reader left it, which is the difference between
+      // a refusal and a decision that was applied and reported as not durable.
+      const after = await host.service.runSnapshot({ runId: started.runId })
+      expect(after?.steps.find(step => step.stepId === 'E2-submit')?.status).toBe('gated')
+      expect(after?.submissionReady).toBe(false)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('decides once the run’s own next write has landed', async () => {
+    // THE RECOVERY, and why the refusal above is not a dead end. The fact is cleared by the run's
+    // next durable write landing, and the refusal was never remembered — so the caller decides as
+    // soon as the deployment can write the run again.
+    //
+    // The failure here is the run's OWN snapshot being unreadable: a store that cannot read what it
+    // must base a write on cannot write. It is the failure that makes the recovery observable at
+    // all — the repair lands while the run is still working — and it is a real one: a half-written
+    // or damaged snapshot is the state the store's own read is there to refuse.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    try {
+      const started = await host.service.startRun({ commandId: 'command-recovered' })
+      const file = join(root, started.runId, 'research-run-snapshot.json')
+      const readable = readFileSync(file)
+      writeFileSync(file, '{"not":"a run"}')
+
+      const failing = await untilPersistedError(host.service, started.runId)
+      // STILL WORKING: the failure is the run's state while it runs, not only the epitaph of a run
+      // that stopped.
+      expect(failing.execution).toBe('running')
+      expect(failing.submissionReady).toBe(false)
+
+      // The deployment is repaired, and the run's own next write lands.
+      writeFileSync(file, readable)
+      await untilSaveLanded(host.service, started.runId)
+      await untilStopped(host.service, started.runId)
+
+      const reported = await host.service.runSnapshot({ runId: started.runId })
+      expect(reported?.runPersistence?.error).toBeUndefined()
+      const e2 = reported?.steps.find(step => step.stepId === 'E2-submit')
+      expect(e2?.status).toBe('gated')
+
+      const decided = await submitApproval({
+        runId: started.runId,
+        stepId: 'E2-submit',
+        attempt: e2?.attempt ?? -1,
+        decision: 'approved',
+        commandId: 'command-recovered-approve',
+        expectedProjectRevision: reported?.projectRevision ?? -1,
+      })
+      if (!decided.ok) throw new Error(`expected a decision, got ${decided.error.code}: ${decided.error.message}`)
+      expect(decided.value.status).toBe('passed')
+      expect(decided.value.persisted).toBe(true)
+      const after = await host.service.runSnapshot({ runId: started.runId })
+      expect(after?.steps.find(step => step.stepId === 'E2-submit')?.status).toBe('passed')
+    } finally {
       await host.dispose()
     }
   })
@@ -451,6 +552,37 @@ async function untilPersistedError(
     if (snapshot.runPersistence?.error !== undefined) return snapshot
     if (snapshot.execution !== 'running') {
       throw new Error(`the run '${runId}' stopped without reporting a failure to save`)
+    }
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+  }
+}
+
+/**
+ * Wait until the run's last durable write has landed, or report that the repair came too late.
+ *
+ * The wait is on the run's OWN reported persistence — the same read the approval's precondition
+ * performs — so a run that never stops reporting the failure is a run the approval would still
+ * refuse. Stopping while it still reports one is the failure this function NAMES rather than
+ * waiting out: it means the deployment was repaired after the run's final write, and then nothing
+ * would ever write the run again.
+ *
+ * @param service - the service holding the run.
+ * @param runId - the run to wait for.
+ * @returns the snapshot that reported the write landing.
+ */
+async function untilSaveLanded(
+  service: ResearchTeamService,
+  runId: string,
+): Promise<ResearchRunSnapshot> {
+  for (;;) {
+    const snapshot = await service.runSnapshot({ runId })
+    if (snapshot === null) throw new Error(`the run '${runId}' disappeared while waiting for it`)
+    if (snapshot.runPersistence?.error === undefined) return snapshot
+    if (snapshot.execution !== 'running') {
+      throw new Error(
+        `the run '${runId}' stopped with its saves still failing: the deployment was repaired after `
+        + `its final write, so nothing will write it again (${snapshot.runPersistence?.error})`,
+      )
     }
     await new Promise<void>((resolve) => { setImmediate(resolve) })
   }
