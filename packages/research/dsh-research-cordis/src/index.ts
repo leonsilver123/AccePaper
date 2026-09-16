@@ -275,6 +275,14 @@ export interface Config {
    * reason. Set it from the slowest channel the deployment reaches.
    */
   readonly stepTimeoutMs?: number
+  /**
+   * How many revision rounds `D4-rebuttal` may ask the author for.
+   *
+   * Omitted, the executor's own default applies. Set it to bound what one run may spend on a
+   * manuscript that will not converge: a round that closes nothing is retried until this bound or
+   * until the same sections are still open, whichever comes first.
+   */
+  readonly revisionRounds?: number
 }
 
 /**
@@ -410,6 +418,12 @@ export class ResearchEngine extends Service {
    */
   readonly stepTimeoutMs: number | undefined
   /**
+   * How many revision rounds the deployment allows, when it names a bound, else undefined.
+   * Public for the same reason {@link ResearchEngine.stepTimeoutMs} is: the runner-side service
+   * reads it so one deployment decision governs how far a revision cycle may go.
+   */
+  readonly revisionRounds: number | undefined
+  /**
    * What this deployment's evidence is allowed to be, resolved from {@link Config.evidenceProfile}.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the runner-side service reads it
    * so ONE deployment-level claim governs whether evidence may carry a gate and whether the run's
@@ -441,6 +455,14 @@ export class ResearchEngine extends Service {
     this.packageDirectory = resolveCasePackDirectory(config.packageDirectory, this.sessionCwd)
     this.snapshotDirectory = resolveCasePackDirectory(config.snapshotDirectory, this.sessionCwd)
     this.stepTimeoutMs = config.stepTimeoutMs
+    this.revisionRounds = config.revisionRounds
+    // Refused here, where the value enters, rather than at the step it would abort: a bound below
+    // one is a misconfiguration that reads as "the revision cycle did not run".
+    if (this.revisionRounds !== undefined && (!Number.isSafeInteger(this.revisionRounds) || this.revisionRounds < 1)) {
+      throw new Error(
+        `[research] \`revisionRounds\` must be a positive integer, got ${String(this.revisionRounds)}`,
+      )
+    }
     // Refused here, where the value enters, rather than at the first step it would abort: a
     // zero or negative budget is a misconfiguration that reads as "the run stopped for no reason".
     if (this.stepTimeoutMs !== undefined && (!Number.isFinite(this.stepTimeoutMs) || this.stepTimeoutMs <= 0)) {

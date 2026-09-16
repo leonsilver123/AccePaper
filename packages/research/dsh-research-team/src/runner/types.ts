@@ -130,6 +130,14 @@ export interface DriveOptions {
    */
   readonly evidenceSourceDoi?: string | undefined
   /**
+   * How many revision rounds `D4-rebuttal` may ask the author for.
+   *
+   * Deployment configuration: how many times it is worth asking a model to fix a manuscript is a
+   * budget decision, and the executor ships a default. Absent here means that default, the same way
+   * an absent timeout means the registry's.
+   */
+  readonly revisionRounds?: number | undefined
+  /**
    * Called after each step that reached a terminal outcome, so a driver can persist the run's
    * state as it goes instead of only once at the end. A run that saved only when it finished lost
    * every step it had completed when the process died — including the ones that cost model calls.
@@ -160,6 +168,8 @@ export interface DriveStepOptions {
   readonly evidenceProfile?: EvidenceProfile
   /** The assessed source the B channel consults; see {@link VerdictBuildCtx.evidenceSourceDoi}. */
   readonly evidenceSourceDoi?: string | undefined
+  /** See {@link DriveOptions.revisionRounds}. */
+  readonly revisionRounds?: number | undefined
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */

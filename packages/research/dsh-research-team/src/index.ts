@@ -529,8 +529,10 @@ export class ResearchTeamService extends TypertRemoteService {
     const casePackInputs = this.hostCasePackInputs()
     const stepTimeoutMs = this.hostStepTimeoutMs()
     const evidenceProfile = this.hostEvidenceProfile()
+    const revisionRounds = this.hostRevisionRounds()
     const run = await runT19B(store, {
       evidenceProfile,
+      ...(revisionRounds !== undefined ? { revisionRounds } : {}),
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.studyPlan !== undefined ? { studyPlan: options.studyPlan } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -1101,6 +1103,20 @@ export class ResearchTeamService extends TypertRemoteService {
   private hostStepTimeoutMs(): number | undefined {
     const research = this.ctx.get('research') as { stepTimeoutMs?: number } | undefined
     return research?.stepTimeoutMs
+  }
+
+  /**
+   * How many revision rounds the deployment allows `D4-rebuttal`.
+   *
+   * Read from the research engine's own configuration, the same way the step budget is: how many
+   * times it is worth asking a model to fix a manuscript is a deployment's decision, and the
+   * executor ships a default for deployments that make none.
+   *
+   * @returns the configured bound, or undefined for the executor's default.
+   */
+  private hostRevisionRounds(): number | undefined {
+    const research = this.ctx.get('research') as { revisionRounds?: number } | undefined
+    return research?.revisionRounds
   }
 
   private hostProseWriter(): ResearchProseWriter | undefined {

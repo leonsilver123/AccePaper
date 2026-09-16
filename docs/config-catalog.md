@@ -1821,6 +1821,14 @@ export interface Config {
    * reason. Set it from the slowest channel the deployment reaches.
    */
   readonly stepTimeoutMs?: number
+  /**
+   * How many revision rounds `D4-rebuttal` may ask the author for.
+   *
+   * Omitted, the executor's own default applies. Set it to bound what one run may spend on a
+   * manuscript that will not converge: a round that closes nothing is retried until this bound or
+   * until the same sections are still open, whichever comes first.
+   */
+  readonly revisionRounds?: number
 }
 
 /** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */
@@ -1929,7 +1937,7 @@ export interface ResearchTeamServiceConfig {
 }
 ```
 
-Source: [`packages/research/dsh-research-team/src/index.ts:317`](../packages/research/dsh-research-team/src/index.ts)
+Source: [`packages/research/dsh-research-team/src/index.ts:318`](../packages/research/dsh-research-team/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-local"></a>
 

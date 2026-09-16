@@ -87,6 +87,7 @@ function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions 
     ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
     ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
     ...(opts.evidenceSourceDoi !== undefined ? { evidenceSourceDoi: opts.evidenceSourceDoi } : {}),
+    ...(opts.revisionRounds !== undefined ? { revisionRounds: opts.revisionRounds } : {}),
   }
 }
 
@@ -201,6 +202,7 @@ export async function driveStep(
         ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
         ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
         ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
+        ...(opts.revisionRounds !== undefined ? { revisionRounds: opts.revisionRounds } : {}),
       }),
     ...(effectiveTimeoutMs > 0 ? { timeoutMs: effectiveTimeoutMs } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

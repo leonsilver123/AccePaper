@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { createHostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
+import type { HostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 
 import { runT19B } from '../src/runner/drive.ts'
 import { assertWellFormed, parseReply } from '../src/runner/issue-parse.ts'
@@ -96,14 +97,21 @@ function d3Section(request: ResearchProseRequest): string {
  * deliberate: it had no test either, and a revision can only be tested end to end if the draft it
  * revises was written the same way the product writes one.
  */
-function stagedWriter(d4Reply: string): ResearchProseWriter {
+function stagedWriter(d4Reply: string | ReadonlyArray<string>): ResearchProseWriter {
+  // A revision CYCLE asks more than once, so the writer answers round by round. A single reply is
+  // returned for every round, which is what a model that ignores `openIssues` looks like.
+  const d4Replies = typeof d4Reply === 'string' ? [d4Reply] : d4Reply
+  let d4Round = 0
   return {
     channel: 'llm',
     write(request) {
       const text = (() => {
         switch (request.stepId) {
-          case 'D4-rebuttal':
-            return d4Reply
+          case 'D4-rebuttal': {
+            const reply = d4Replies[Math.min(d4Round, d4Replies.length - 1)] ?? ''
+            d4Round += 1
+            return reply
+          }
           case 'D3-writing':
             return d3Section(request)
           // Injecting a writer routes EVERY prose step through it, so the steps before D3 must be
@@ -145,7 +153,31 @@ function stagedWriter(d4Reply: string): ResearchProseWriter {
   }
 }
 
-async function revisedRun(d4Reply: string): Promise<{
+/**
+ * The one approval channel this file decides through.
+ *
+ * The host creates it once at startup and refuses a second creation, which is the behaviour under
+ * test elsewhere; here it just means the tests share one.
+ *
+ * @returns the channel, with this deployment's single registered operator.
+ */
+function approvalChannel(): HostApprovalChannel {
+  if (channel === undefined) {
+    channel = createHostApprovalChannel('spec-secret')
+    channel.registerPrincipal(OPERATOR)
+  }
+  return channel
+}
+
+/** The operator this deployment's host attests. */
+const OPERATOR = 'human-1'
+
+let channel: HostApprovalChannel | undefined
+
+async function revisedRun(
+  d4Reply: string | ReadonlyArray<string>,
+  options: { readonly revisionRounds?: number } = {},
+): Promise<{
   store: ResearchRunStore
   runId: string
   rebuttal: Record<string, unknown> | undefined
@@ -166,6 +198,7 @@ async function revisedRun(d4Reply: string): Promise<{
     studyPlan: DEFAULT_PLAN,
     proseWriter: stagedWriter(d4Reply),
     casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
+    ...(options.revisionRounds === undefined ? {} : { revisionRounds: options.revisionRounds }),
   })
   return {
     store,
@@ -253,13 +286,13 @@ describe('the reply parser tells three intentions apart', () => {
 })
 
 describe('a revision round that leaves a concern open', () => {
-  it('leaves the run NOT ready when the round did not close a concern', async () => {
-    // A CONCERN THE MANUSCRIPT STILL CARRIES. This patch replaces the Method body with the text D3
-    // already wrote, so the applier refuses it as no-diff and leaves that issue OPEN. The step still
-    // passes — the revised draft is a real draft and the A gate reads it — and the run is not ready,
-    // because a reviewer raised something the paper has not answered.
+  it('asks again for a concern the first round could not close', async () => {
+    // A CONCERN THE MANUSCRIPT STILL CARRIES. The first round's Method patch replaces the body with
+    // the text D3 already wrote, so the applier refuses it as no-diff and leaves that concern OPEN.
+    // One round used to be the whole cycle: the round number was hard-coded to 1 and there was
+    // nothing to try again. The second round is told what is still open and closes it.
     const sameBody = d3Section({ stepId: 'D3-writing', instruction: '', context: { sectionId: 'method' } })
-    const reply = [
+    const first = [
       'CONCERN: The method section is terse.',
       'SECTION: method',
       'RESPONSE: It is restated.',
@@ -269,21 +302,83 @@ describe('a revision round that leaves a concern open', () => {
       'RESPONSE: The baseline value is added.',
       `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision, a change of ${CHANGE}%.`,
     ].join('\n')
+    // The second round answers the ONE concern that is still open, against the body as it now is.
+    const second = [
+      'CONCERN: The method section is terse.',
+      'SECTION: method',
+      'RESPONSE: Every parameter the two vehicle classes declare is listed.',
+      'PATCH: Both platoons are run with the Intelligent Driver Model at a fixed 0.02 s step, and the'
+      + ' parameters each vehicle class declares are listed in the table above.',
+    ].join('\n')
 
-    const { store, runId, rebuttal } = await revisedRun(reply)
-    expect(rebuttal?.['openIssues']).toEqual(['d4-issue-1'])
+    const { store, runId, rebuttal } = await revisedRun([first, second])
 
-    // Every gate is closed and a person approved the package, so readiness has nothing else to
-    // report — the open concern is the only thing standing between this run and ready.
-    const channel = createHostApprovalChannel('spec-secret')
-    channel.registerPrincipal('human-1')
-    channel.submit(store, runId, 'E2-submit', 'approved',
-      channel.mintPrincipal(runId, 'E2-submit', 'human-1', 'evt-open-issue'))
+    expect(rebuttal?.['openIssues']).toEqual([])
+    expect(rebuttal?.['stoppedBecause']).toBe('closed')
+    const rounds = rebuttal?.['rounds'] as ReadonlyArray<Record<string, unknown>>
+    expect(rounds.map(round => round['roundId'])).toEqual(['t19s-rebuttal-1', 't19s-rebuttal-2'])
+    expect(rounds[0]?.['openSections']).toEqual(['method'])
+    expect(rounds[1]?.['stoppedBecause']).toBe('closed')
+
+    // Every gate closed and a person approved the package, so readiness has nothing else to report.
+    const decide = approvalChannel()
+    decide.submit(store, runId, 'E2-submit', 'approved',
+      decide.mintPrincipal(runId, 'E2-submit', OPERATOR, 'evt-open-issue'))
+
+    expect(readinessOfRun(store, runId, 'production').ready).toBe(true)
+  })
+
+  it('stops when another round could not change anything, and leaves the concern open', async () => {
+    // THE SAME ROUND TWICE IS NOT PROGRESS. A model that ignores the open concerns writes the same
+    // reply again and the applier refuses the same patch again. A third ask would spend the budget
+    // to learn nothing, so the cycle stops — and the concern stays open, which is what blocks
+    // readiness.
+    const sameBody = d3Section({ stepId: 'D3-writing', instruction: '', context: { sectionId: 'method' } })
+    const stuck = [
+      'CONCERN: The method section is terse.',
+      'SECTION: method',
+      'RESPONSE: It is restated.',
+      `PATCH: ${sameBody}`,
+    ].join('\n')
+
+    const { store, runId, rebuttal } = await revisedRun(stuck)
+
+    expect(rebuttal?.['stoppedBecause']).toBe('no-progress')
+    const rounds = rebuttal?.['rounds'] as ReadonlyArray<Record<string, unknown>>
+    expect(rounds).toHaveLength(2)
+    expect(rounds[1]?.['stoppedBecause']).toBe('no-progress')
+    expect((rebuttal?.['openIssues'] as ReadonlyArray<string>).length).toBeGreaterThan(0)
+
+    const decide = approvalChannel()
+    decide.submit(store, runId, 'E2-submit', 'approved',
+      decide.mintPrincipal(runId, 'E2-submit', OPERATOR, 'evt-stuck-issue'))
 
     const readiness = readinessOfRun(store, runId, 'production')
     expect(readiness.ready).toBe(false)
     expect(readiness.reason).toContain('left 1 concern(s) open')
-    expect(readiness.reason).toContain("d4-issue-1 on 'method'")
+    expect(readiness.reason).toContain("on 'method'")
+  })
+
+  it('asks as many times as the deployment configured, and no more', async () => {
+    // THE BOUND IS CONFIGURATION. A deployment that will not pay for a second attempt says so; the
+    // cycle it gets is one round, and the concern stays open — which is what blocks readiness. The
+    // alternative reading, a hard-coded bound, would make the same manuscript cost whatever the
+    // executor's author decided.
+    const sameBody = d3Section({ stepId: 'D3-writing', instruction: '', context: { sectionId: 'method' } })
+    const stuck = [
+      'CONCERN: The method section is terse.',
+      'SECTION: method',
+      'RESPONSE: It is restated.',
+      `PATCH: ${sameBody}`,
+    ].join('\n')
+
+    const { rebuttal } = await revisedRun(stuck, { revisionRounds: 1 })
+
+    const rounds = rebuttal?.['rounds'] as ReadonlyArray<Record<string, unknown>>
+    expect(rounds).toHaveLength(1)
+    expect(rebuttal?.['revisionRounds']).toBe(1)
+    // One round, and it did not close the concern: the budget is what stopped it.
+    expect(rebuttal?.['stoppedBecause']).toBe('budget')
   })
 
   it('does not read a reason the applier did not give as if it had', () => {

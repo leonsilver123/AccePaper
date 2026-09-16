@@ -415,6 +415,13 @@ export interface ExecCtx {
    */
   readonly invoker?: ResearchToolInvoker
   /**
+   * How many revision rounds `D4-rebuttal` may ask the author for.
+   *
+   * Deployment configuration rather than a constant: how many times it is worth asking a model to
+   * fix a manuscript is a budget decision. Absent means {@link DEFAULT_REVISION_ROUNDS}.
+   */
+  readonly revisionRounds?: number
+  /**
    * Optional real-model prose writer (T34). When absent, prose steps use the fixture
    * text. See {@link ResearchProseWriter}.
    */
@@ -2685,6 +2692,32 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *  record and a revised draft (same sections, revision markers). */
 
 
+/**
+ * How many revision rounds the author may be asked for.
+ *
+ * DEPLOYMENT CONFIGURATION, not a constant inside the executor: how many times it is worth asking a
+ * model to fix a manuscript is a property of the deployment's budget, and this repository requires
+ * deployment-varying choices to be validated config fields rather than `DEFAULT_*` constants.
+ *
+ * @param ctx - the execution context.
+ * @returns the configured bound, or the shipped default when the deployment set none.
+ */
+function revisionRoundsOf(ctx: ExecCtx): number {
+  const configured = ctx.revisionRounds
+  return typeof configured === 'number' && Number.isSafeInteger(configured) && configured >= 1
+    ? configured
+    : DEFAULT_REVISION_ROUNDS
+}
+
+/**
+ * The shipped bound on revision rounds.
+ *
+ * TWO: one round cannot close a concern the applier refused for a reason another round could fix,
+ * and a third is a model being asked the same question again. A deployment that wants a different
+ * bound sets `revisionRounds`.
+ */
+const DEFAULT_REVISION_ROUNDS = 2
+
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const draft = readInput(ctx, 'draft')
@@ -2711,9 +2744,43 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // The exchanges a reply opened and did not complete. Non-empty only for the fixture path here —
   // the model path refuses instead — and reported on the artifact either way.
   let discardedExchanges: ReadonlyArray<DiscardedExchange> = []
-  let points: ReadonlyArray<RebuttalPoint>
+  let points: ReadonlyArray<RebuttalPoint> = []
   let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
+  let applied = applyRevision(sections, [])
+  // HOW MANY ROUNDS THIS TOOK, AND WHY IT STOPPED. One round is not a revision cycle: a concern the
+  // applier refused — written against another version, changing nothing, or conflicting with another
+  // patch — used to end there, with the round number hard-coded to 1 and nothing to try again.
+  // `revisionRounds` bounds how many times the author may be asked; the cycle stops early when
+  // another round could not change anything.
+  let stoppedBecause: 'closed' | 'no-progress' | 'budget' = 'closed'
+  const rounds: Array<Record<string, unknown>> = []
+  /**
+   * What one round did, in the terms a reader needs: what it was asked, what it closed, what it
+   * left, and why the cycle moved on or stopped.
+   *
+   * @param round - the 1-based round number.
+   * @param result - the applier's outcome for it.
+   * @param stopped - why the cycle did not continue past it.
+   * @returns the record for the artifact.
+   */
+  const recordRound = (
+    round: number,
+    result: ReturnType<typeof applyRevision>,
+    stopped: 'closed' | 'no-progress' | 'budget',
+  ): Record<string, unknown> => ({
+    roundId: `t19s-rebuttal-${String(round)}`,
+    opened: result.outcomes.length,
+    closed: result.outcomes.filter(outcome => outcome.disposition !== 'open').length,
+    /// The issues this round left open, so a reader can find them in `issues`.
+    open: result.openIssues,
+    /// The SECTIONS they are on — what the next round is told, and what "no progress" compares:
+    /// issue ids are renumbered every round, so they cannot say whether anything moved.
+    openSections: result.outcomes
+      .filter(outcome => outcome.disposition === 'open')
+      .map(outcome => outcome.sectionId),
+    stoppedBecause: stopped,
+  })
   if (writer === undefined) {
     const resultsBody = bodiesShown.get('results') ?? ''
     points = [
@@ -2749,63 +2816,105 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         patch: `${resultsBody} No published-SOTA row is recorded: a minimum time-to-collision figure has to be read out of a paper, so the comparison is against this study's own measured baseline and says so.`,
       },
     ]
+    applied = applyRevision(
+      sections,
+      issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
+    )
+    // The fixture path writes its issues once; one round IS its whole cycle, and it is recorded as
+    // one rather than pretending a model was asked again.
+    stoppedBecause = applied.openIssues.length === 0 ? 'closed' : 'budget'
+    rounds.push(recordRound(1, applied, stoppedBecause))
   } else {
-    const analysis = await writer.write({
-      stepId: 'D4-rebuttal',
-      instruction: [
-        'Write the review exchanges this paper must answer.',
-        'Reply with one exchange per group of FOUR lines, at least two exchanges:',
-        'CONCERN: <reviewer concern>',
-        'SECTION: <the id of the section the concern is about>',
-        'RESPONSE: <the author response, using only the measurements given in the context>',
-        'PATCH: <the complete replacement body for that section, or exactly NONE when the answer '
-        + 'changes no text>',
-        'A PATCH replaces the whole section, so it must keep every sentence the section still needs.',
-      ].join('\n'),
-      // The bodies travel so a patch can be written against them, and the section ids travel so a
-      // reply can name one without inventing the outline.
-      context: {
-        ...planContextOf(planOf(ctx)),
-        claimRef,
-        measured,
-        sections: sections.map(section => ({ id: section.id, heading: section.heading, bodyText: section.bodyText })),
-      },
-      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
-    // A MALFORMED REPLY IS REFUSED, not partially read. `assertWellFormed` names the exchanges the
-    // reply did not state completely; before this, they were dropped on the floor and the step
-    // passed with an empty `openIssues`, which is the difference between "the author accepted three
-    // concerns" and "the model answered one of them".
-    const reply = parseReply(analysis.text)
-    const parsed = assertWellFormed(reply, 'D4-rebuttal')
-    discardedExchanges = reply.discarded
-    issues = parsed.map(issue => ({
-      issueId: issue.issueId,
-      sectionId: issue.sectionId,
-      concern: issue.concern,
-      response: issue.response,
-      // `declared-none` is a conclusion: the author accepts the concern without changing the text.
-      // `missing` never reaches here — `assertWellFormed` refuses it.
-      requiresTextChange: issue.patchState === 'replacement',
-      ...(issue.patch === undefined ? {} : { patch: issue.patch }),
-    }))
-    points = parsed.map(issue => ({
-      concern: issue.concern,
-      response: issue.response,
-      requiresRevision: issue.patchState === 'replacement',
-    }))
-    rebuttalSource = proseLabelling(writer).source
-    rebuttalRoute = proseRouteOf(analysis)
+    // THE CYCLE. Each round reads what the previous one wrote and is told what it did not close, so
+    // a concern the applier refused for a reason another round could fix gets that round. The bound
+    // is configuration; the early exit is what keeps it from becoming a model asked the same
+    // question twice.
+    const maxRounds = revisionRoundsOf(ctx)
+    let current = sections
+    /** The SECTIONS the previous round left open; see the no-progress test below. */
+    let open: ReadonlyArray<string> = []
+    for (let round = 1; round <= maxRounds; round += 1) {
+      const analysis = await writer.write({
+        stepId: 'D4-rebuttal',
+        instruction: [
+          'Write the review exchanges this paper must answer.',
+          'Reply with one exchange per group of FOUR lines, at least two exchanges:',
+          'CONCERN: <reviewer concern>',
+          'SECTION: <the id of the section the concern is about>',
+          'RESPONSE: <the author response, using only the measurements given in the context>',
+          'PATCH: <the complete replacement body for that section, or exactly NONE when the answer '
+          + 'changes no text>',
+          'A PATCH replaces the whole section, so it must keep every sentence the section still needs.',
+        ].join('\n'),
+        // The bodies travel so a patch can be written against them, and the section ids travel so a
+        // reply can name one without inventing the outline.
+        context: {
+          ...planContextOf(planOf(ctx)),
+          claimRef,
+          measured,
+          sections: current.map(section => ({ id: section.id, heading: section.heading, bodyText: section.bodyText })),
+          // WHAT THE LAST ROUND LEFT. A round told nothing about its own open concerns would write
+          // the same reply again and produce the same refusal.
+          openIssues: open,
+          round,
+        },
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      })
+      // A MALFORMED REPLY IS REFUSED, not partially read. `assertWellFormed` names the exchanges the
+      // reply did not state completely; before this, they were dropped on the floor and the step
+      // passed with an empty `openIssues`, which is the difference between "the author accepted three
+      // concerns" and "the model answered one of them".
+      const reply = parseReply(analysis.text)
+      const parsed = assertWellFormed(reply, 'D4-rebuttal')
+      discardedExchanges = reply.discarded
+      issues = parsed.map(issue => ({
+        issueId: issue.issueId,
+        sectionId: issue.sectionId,
+        concern: issue.concern,
+        response: issue.response,
+        // `declared-none` is a conclusion: the author accepts the concern without changing the text.
+        // `missing` never reaches here — `assertWellFormed` refuses it.
+        requiresTextChange: issue.patchState === 'replacement',
+        ...(issue.patch === undefined ? {} : { patch: issue.patch }),
+      }))
+      points = parsed.map(issue => ({
+        concern: issue.concern,
+        response: issue.response,
+        requiresRevision: issue.patchState === 'replacement',
+      }))
+      rebuttalSource = proseLabelling(writer).source
+      rebuttalRoute = proseRouteOf(analysis)
+
+      // The basis each patch is written against is THIS round's body, not the draft's.
+      const currentBodies = new Map(current.map(section => [section.id, section.bodyText]))
+      applied = applyRevision(
+        current,
+        issues.map(issue => ({ ...issue, basisHash: bodyHashOf(currentBodies.get(issue.sectionId) ?? '') })),
+      )
+      // NO PROGRESS IS MEASURED BY SECTION, NOT BY ISSUE ID. A round numbers its issues from one, so
+      // `d4-issue-1` names a different concern in every round — comparing ids would call two rounds
+      // that failed on the SAME sections "progress" and spend the budget re-asking. What repeated
+      // means is that the manuscript is no better off: the same sections are still open.
+      const leftOpen = applied.outcomes
+        .filter(outcome => outcome.disposition === 'open')
+        .map(outcome => outcome.sectionId)
+      const repeated = leftOpen.length > 0
+        && leftOpen.length === open.length
+        && leftOpen.every(sectionId => open.includes(sectionId))
+      stoppedBecause = leftOpen.length === 0 ? 'closed' : repeated ? 'no-progress' : 'budget'
+      rounds.push(recordRound(round, applied, stoppedBecause))
+      // A round that closed everything is done; one that repeated the previous round's open set has
+      // been answered already; the last allowed round is the budget.
+      if (stoppedBecause !== 'budget' || round === maxRounds) break
+      current = applied.sections
+      open = leftOpen
+    }
   }
 
   // WHAT THE ROUND ACTUALLY CHANGED. Each issue is bound to the version it was written against,
   // and the applier decides: a patch applies, a conflict or an empty diff stays open, an answer
   // without a change is an accepted explanation. `revised` follows from the bodies, never from a
   // flag a caller set.
-  const applied = applyRevision(
-    sections,
-    issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
-  )
   const record = buildRevisionRecord(points)
   const revised: ReadonlyArray<ManuscriptSection & { readonly revised: boolean }> = applied.sections
   return {
@@ -2814,7 +2923,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         fixture: rebuttalSource === 'fixture',
         stepId: 'D4-rebuttal',
         slug: 'rebuttal',
-        roundId: 't19s-rebuttal-1',
+        roundId: rounds[rounds.length - 1]?.['roundId'] ?? 't19s-rebuttal-1',
         claimRef,
         rebuttalSource,
         rebuttalRoute,
@@ -2829,6 +2938,12 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         discardedExchanges,
         patchedSections: applied.patchedSections,
         openIssues: applied.openIssues,
+        // THE CYCLE'S OWN RECORD, so a reader can see whether the author was asked once or as many
+        // times as the configuration allows, and whether the last round stopped because it closed
+        // everything or because asking again could not change anything.
+        rounds,
+        revisionRounds: revisionRoundsOf(ctx),
+        stoppedBecause,
         note: rebuttalSource === 'fixture'
           ? 'exchanges written from this study\'s own design questions, with measured numbers'
           : 'exchanges written by the model from the measured outcome',
