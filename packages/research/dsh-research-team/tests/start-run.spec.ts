@@ -891,3 +891,47 @@ async function untilStopped(service: ResearchTeamService, runId: string): Promis
     await new Promise<void>((resolve) => { setImmediate(resolve) })
   }
 }
+
+describe('a study a previous process left is taken back before it can be decided', () => {
+  /**
+   * A run this process does not hold cannot be decided — the approval refuses it, which is the
+   * right rule and the reason this operation exists: without it a study that reached the human gate
+   * and survived a restart could be found, read, and never decided.
+   */
+  it('adopts a stored run, and only then can a decision be taken on it', async () => {
+    const root = snapshotRoot()
+    const first = await boot({ snapshotDirectory: root })
+    let runId = ''
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-adopt' })).runId
+      await untilStopped(first.service, runId)
+    } finally {
+      await first.dispose()
+    }
+
+    const second = await boot({ snapshotDirectory: root })
+    try {
+      // BEFORE ADOPTION the run is readable and not held: the snapshot answers, the report says
+      // `stopped`, and nothing in this process would write a decision into it.
+      const before = await second.service.runSnapshot({ runId })
+      expect(before?.execution).toBe('stopped')
+
+      const adopted = await second.service.openStoredRun({ runId })
+      // ADOPTION DRIVES NOTHING: the run is reported exactly as it stands, and the step states are
+      // the ones on disk rather than the ones a re-drive would have produced.
+      expect(adopted.execution).toBe('stopped')
+      expect(adopted.run.steps.map(step => step.status))
+        .toEqual(before?.run.steps.map(step => step.status))
+      // The revision a decision would be taken against is the one the disk holds.
+      expect(adopted.projectRevision).toBe(before?.projectRevision)
+
+      // ADOPTING TWICE IS REFUSED: the second call would replace the state a reader is watching
+      // with a copy of what was on disk, and a decision taken meanwhile would be lost with it.
+      await expect(second.service.openStoredRun({ runId })).rejects.toThrow(/already holds/)
+      // A run this deployment has never stored cannot be adopted into existence.
+      await expect(second.service.openStoredRun({ runId: 'no-such-run' })).rejects.toThrow(/holds no run/)
+    } finally {
+      await second.dispose()
+    }
+  })
+})

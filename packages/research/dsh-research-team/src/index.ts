@@ -1180,12 +1180,15 @@ export class ResearchTeamService extends TypertRemoteService {
   /**
    * The revision this run is on disk at, as this process last learned it.
    *
-   * ONE RULE, USED BY EVERY WRITER AND BY THE REPORT. A browser run found what two copies of this
-   * number cost: the report read the finished write's revision while the approval's persistence read
-   * the last CHECKPOINT's, so an approval at E2 was applied and then refused — "the persisted
-   * snapshot is at revision 18 but this write is based on revision 17" — and the decision stayed in
-   * memory and off the disk. The final write's record is the authority once the run has ended;
-   * before that, the last checkpoint's.
+   * ONE RULE, USED BY EVERY WRITER AND BY THE REPORT, and the rule is the FIELD: every write that
+   * lands updates `active.savedRevision` — {@link persistRun} notes its own result, the checkpoint
+   * callback stores the revision its checkpoint wrote, and adopting a stored run starts from the
+   * revision its snapshot carries. A browser run found what two copies of this number cost: the
+   * report read the finished write's revision while the approval's persistence read the last
+   * CHECKPOINT's, so an approval at E2 was applied and then refused — "the persisted snapshot is at
+   * revision 18 but this write is based on revision 17" — and the decision stayed in memory and off
+   * the disk. Reading the last write's RECORD instead reintroduced the same split from the other
+   * side, because that record describes one path's write and says nothing about a checkpoint's.
    *
    * @param active - the run this process holds.
    * @returns the revision to base the next write on, or null when none has landed.
@@ -1575,6 +1578,66 @@ export class ResearchTeamService extends TypertRemoteService {
     }
   }
 
+
+  /**
+   * Take a study this deployment already holds into this process, without driving it.
+   *
+   * WHY A DECISION NEEDS THIS. An approval is refused for a run this process does not hold — the
+   * right rule, since a decision has to be written into the run's state and only this process has
+   * that state. The consequence was that a study which reached the human gate, stopped there and
+   * survived a restart could be FOUND and READ from a page and never decided: the page had no way
+   * to bring it back, and `resumeRunPipeline` refuses a run whose every step is settled (a gate run
+   * has nothing left to drive). So the one thing the gate exists for — a person deciding — was
+   * unreachable for exactly the runs that had reached it.
+   *
+   * IT DRIVES NOTHING. Adoption loads the snapshot into memory, registers the run with the approval
+   * channel and reports it as `stopped`; whether to carry the study further remains a decision
+   * someone makes, and the operation that carries it is the resume.
+   *
+   * @param request - the run to adopt.
+   * @returns the run as this process now holds it.
+   * @throws {Error} when this deployment holds no such run, or when this process already holds it.
+   */
+  @Remote('openStoredRun')
+  async openStoredRun(request: ResearchRunQuery): Promise<ResearchRunSnapshot> {
+    const held = this.activeRuns.get(request.runId)
+    if (held !== undefined) {
+      throw new Error(
+        `[research] this process already holds run '${request.runId}' — adopting it again would `
+        + 'replace the state a reader is watching with a copy of what was on disk',
+      )
+    }
+    const found = await this.findStoredRun(request.runId)
+    if (found === null) {
+      throw new Error(`[research] this deployment holds no run '${request.runId}' to open`)
+    }
+    const active: ActiveRun = {
+      store: found.restored.store,
+      // STOPPED, because nothing here drives it. The status core recorded is the run's own; this is
+      // the fact about THIS PROCESS, and it stays true until someone resumes the study.
+      state: 'stopped',
+      savedRevision: found.restored.revision,
+      packageExport: null,
+      persistence: found.persistence,
+      // A snapshot that loaded and whose LAST write failed is not on disk in the sense a decision
+      // needs: the disagreement is carried forward rather than cleared by the act of opening it.
+      ...(found.persistence.error === undefined ? {} : { checkpointError: found.persistence.error }),
+    }
+    this.activeRuns.set(request.runId, active)
+    rememberRun(
+      request.runId,
+      active.store,
+      () => this.projectActive(active, request.runId),
+      // THE SAME WRITER EVERY OTHER WRITE USES, with the revision this process read: a decision
+      // taken on an adopted run is as durable as one taken on a run this process started, and the
+      // store's own version guard refuses a write prepared against a snapshot that moved.
+      () => this.serialized(
+        () => this.persistRun(active.store, request.runId, this.savedRevisionOf(active) ?? 0),
+      ),
+      () => this.livePersistence(active, request.runId),
+    )
+    return this.projectActive(active, request.runId)
+  }
 
   /**
    * Record a person's request to change the manuscript at the human gate.

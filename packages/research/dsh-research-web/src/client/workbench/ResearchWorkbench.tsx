@@ -99,6 +99,15 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
     onPhase?: (state: ConnectionState) => void,
   ) => Promise<void>
   /**
+   * Take a stored study back into the deployment's process, then follow it. Omitted by a host that
+   * cannot, in which case a stopped study stays readable and undecidable.
+   */
+  readonly onAdoptRun?: (
+    runId: string,
+    onUpdate: (summary: RunSummary) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ) => Promise<void>
+  /**
    * The revision loop's read and its two operations. Omitted by a host that cannot record
    * revisions, in which case the tab says so rather than offering controls that cannot work.
    */
@@ -147,7 +156,7 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  */
 export function ResearchWorkbench({
   t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave, onListRuns, onOpenRun,
-  revisions,
+  revisions, onAdoptRun,
 }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -397,7 +406,7 @@ export function ResearchWorkbench({
         </span>
       )}
       {error !== undefined && (
-        <span className={css.mockBadge}>{t('run.error').replace('{message}', error)}</span>
+        <span className={css.mockBadge} data-research-error="">{t('run.error').replace('{message}', error)}</span>
       )}
 
       {/* THE STUDIES THIS DEPLOYMENT HOLDS. A page whose only handle on a study was the id it kept in
@@ -439,6 +448,27 @@ export function ResearchWorkbench({
               >
                 {t('projects.open')}
               </button>
+              {/* A STOPPED STUDY IS READABLE AND NOT DECIDABLE until it is taken back into the
+                  deployment's process: an approval is refused for a run the process does not hold.
+                  The control is offered only where it can work — a study nothing is driving — and a
+                  host that cannot adopt one shows no control at all. */}
+              {onAdoptRun !== undefined && entry.execution === 'stopped' && (
+                <button
+                  type="button"
+                  className={css.tab}
+                  data-research-adopt={entry.runId}
+                  onClick={() => {
+                    setError(undefined)
+                    const mine = currentRead()
+                    void onAdoptRun(entry.runId, (update) => { appliedTo(mine, update) }, setConnection)
+                      .catch((cause: unknown) => {
+                        setError(cause instanceof Error ? cause.message : String(cause))
+                      })
+                  }}
+                >
+                  {t('projects.adopt')}
+                </button>
+              )}
             </div>
           ))}
         </section>

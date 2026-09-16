@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-study-is-taken-back-before-it-is-decided.md
+2026-09-17-a-study-is-taken-back-before-it-is-decided.md: 4d259d22e785c1833e9202bbd323fbd628ba0721
+2026-09-17-a-study-is-taken-back-before-it-is-decided.zh.md: 548827719834b8c5eb22f6e8d74d3c737ff02332

@@ -29,6 +29,7 @@ export const zh = {
   'projects.steps': '已完成 {passed} / {total} 步',
   'projects.interrupted': '中断时在飞行中的步骤:{steps}',
   'projects.open': '打开这项研究',
+  'projects.adopt': '取回这项研究',
   'run.retrySave': '重试保存',
   'run.retryingSave': '正在重试保存…',
   // The run dialog: the field, the proposals, and the criterion a person confirms.
@@ -330,6 +331,7 @@ export const en: Record<ResearchKey, string> = {
   'projects.steps': '{passed} of {total} steps passed',
   'projects.interrupted': 'in flight when it stopped: {steps}',
   'projects.open': 'Open this study',
+  'projects.adopt': 'Take this study back',
   'run.retrySave': 'Retry the save',
   'run.retryingSave': 'Retrying the save…',
   'propose.title': 'What this run studies',

@@ -72,6 +72,18 @@ export type ResearchRunOpenSource = (
 ) => Promise<void>
 
 /**
+ * Take a study back into the deployment's process, then follow it.
+ *
+ * SEPARATE FROM OPENING, because they are different acts: opening reads a study, adopting is what
+ * lets this deployment WRITE a decision into it. A page that could only open showed a study at its
+ * gate and refused the reader the moment they decided it.
+ */
+export type ResearchRunAdoptSource = (
+  runId: string,
+  onUpdate: (summary: RunSummary) => void,
+) => Promise<void>
+
+/**
  * Build the slot component bound to one run source and one approval endpoint.
  *
  * @param run - starts a run and reports each snapshot as it is read.
@@ -89,6 +101,8 @@ export type ResearchRunOpenSource = (
  * @param openRun - opens one of those studies. Omitted on the same terms as {@link listRuns}.
  * @param revisions - the revision loop's read and its two operations. Omitted by a host that cannot
  *   record revisions, in which case the tab states that rather than offering inert controls.
+ * @param adoptRun - takes a stored study back into the deployment's process. Omitted by a host that
+ *   cannot adopt one, in which case a stopped study is readable and not decidable, as before.
  * @returns a conversation-view component that renders the research workbench.
  */
 export function researchViewWith(
@@ -100,6 +114,7 @@ export function researchViewWith(
   listRuns?: ResearchRunListSource,
   openRun?: ResearchRunOpenSource,
   revisions?: RevisionSource,
+  adoptRun?: ResearchRunAdoptSource,
 ) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
@@ -120,6 +135,7 @@ export function researchViewWith(
         {...listRuns === undefined ? {} : { onListRuns: listRuns }}
         {...openRun === undefined ? {} : { onOpenRun: openRun }}
         {...revisions === undefined ? {} : { revisions }}
+        {...adoptRun === undefined ? {} : { onAdoptRun: adoptRun }}
       />
     )
   }

@@ -166,6 +166,17 @@ interface ResearchRemoteNamespace {
   >
 
   /**
+   * Take a study this deployment already holds into the deployment's process, without driving it.
+   *
+   * The entry point a stopped study needs before it can be decided: an approval is refused for a run
+   * the process does not hold, and following a stored run only READS it.
+   */
+  openStoredRun(request: { readonly runId: string }): Promise<
+    { readonly ok: true; readonly value: WireRunSnapshot }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
    * Judge one candidate on what a pipeline can check without reading its prose.
    */
   reviewCandidate(request: {
@@ -335,6 +346,29 @@ export function apply(ctx: Context): void {
   }
 
   /**
+   * Bring one study back into the deployment's process, and follow it.
+   *
+   * TWO STEPS, IN THIS ORDER, and the order is the point: following a stored run reads it, while
+   * ADOPTING it is what lets this deployment write a decision into it. A page that only followed
+   * could show a study at its gate and be refused the moment the reader decided it.
+   *
+   * @param runId - the study to take back.
+   * @param onUpdate - called with each snapshot the host reports.
+   * @param onPhase - called with the link's state as it changes.
+   * @returns when the run stops leaving more to read.
+   */
+  const adoptRun = async (
+    runId: string,
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ): Promise<void> => {
+    const answered = await namespace().openStoredRun({ runId })
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    rememberRunId(runId)
+    await followToRest(namespace(), runId, null, onUpdate, onPhase)
+  }
+
+  /**
    * Open one study this deployment holds, by the id the person picked.
    *
    * The same follow the run control uses, so a study opened from the list is read exactly like one
@@ -495,5 +529,5 @@ export function apply(ctx: Context): void {
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
   }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun, {
     list: listRevisions, request: requestRevision, step: revisionStep,
-  })))
+  }, adoptRun)))
 }

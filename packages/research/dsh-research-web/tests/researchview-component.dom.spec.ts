@@ -1022,3 +1022,57 @@ describe('the page reports what its link is doing', () => {
     expect(document.querySelector('[data-research-connection]')).toBeNull()
   })
 })
+
+// ===========================================================================
+// A stopped study can be taken back into the deployment's process.
+//
+// An approval is refused for a run the process does not hold — the right rule, since a decision has
+// to be written into the run's state. Without this control a study that reached the human gate and
+// survived a restart could be found, read, and never decided.
+// ===========================================================================
+describe('taking a stopped study back', () => {
+  const studies = [
+    {
+      runId: 'run-stopped', execution: 'stopped', projectRevision: 9, stepsPassed: 15, stepsTotal: 16,
+      submissionReady: false, saveFailure: null, executionError: null, interrupted: [],
+    },
+  ]
+
+  it('offers the control for a study nothing is driving, and calls the host', async () => {
+    const onAdoptRun = vi.fn((_runId: string, onUpdate: (summary: ReturnType<typeof buildSummary>) => void) => {
+      onUpdate(buildSummary(emptyRun('run-stopped', 'completed', [
+        { stepId: 'E2-submit', index: 16, phase: 'E', name: 'Submission', status: 'gated', attempt: 1, humanGate: true, gateOutcomes: [] },
+      ])))
+      return Promise.resolve()
+    })
+    renderComp(createElement(ResearchWorkbench, {
+      t,
+      onListRuns: () => Promise.resolve(studies),
+      onOpenRun: vi.fn(() => Promise.resolve()),
+      onAdoptRun,
+    }))
+    const adopt = await screen.findByRole('button', { name: en['projects.adopt'] })
+    expect(adopt.getAttribute('data-research-adopt')).toBe('run-stopped')
+    fireEvent.click(adopt)
+
+    await waitFor(() => { expect(onAdoptRun).toHaveBeenCalledTimes(1) })
+    expect(onAdoptRun.mock.calls[0]?.[0]).toBe('run-stopped')
+    // The study it reports is the one on screen afterwards, so the reader can go on to decide it.
+    // The picker's row also carries the id, so this reads the run view's own field.
+    await waitFor(() => {
+      expect(document.querySelector('[data-research-run-id]')?.textContent).toContain('run-stopped')
+    })
+  })
+
+  it('offers no adoption when the host cannot adopt one', async () => {
+    renderComp(createElement(ResearchWorkbench, {
+      t,
+      onListRuns: () => Promise.resolve(studies),
+      onOpenRun: vi.fn(() => Promise.resolve()),
+    }))
+    await screen.findByText('run-stopped')
+    // THE CONTROL FOLLOWS THE HOST, not the study: a deployment that cannot adopt shows no button
+    // rather than one whose only outcome is a refusal.
+    expect(document.querySelector('[data-research-adopt]')).toBeNull()
+  })
+})
