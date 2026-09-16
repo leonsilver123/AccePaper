@@ -46,6 +46,7 @@ That migration is what the ~100 spec call sites were for: a test that wants a ga
 
 - The four reproduced defects each have a refusal test at the layer that enforces them: `tests/commit.spec.ts` (F01 replay of the same verdict object after a rollback, F02 replacement after commit), `tests/project-recovery.spec.ts` (F03 two runs in one store), `tests/submission-readiness.spec.ts` and `tests/package-export.spec.ts` (F04).
 - `packages/research` is **1665 passing across 92 files**, and both TypeScript faces build clean.
+- The reviewer's own probe script now aborts at its first observation: the unbound verdict it constructs to demonstrate F01 is one the gate refuses before any of the scenario runs. Re-run through the shipped application, the browser probe is **41/41** against commit `9f3b9a7c` — a model-proposed plan, a person's confirmation, sixteen steps to the human gate (`{"a2":"passed","e2":"gated","steps":16}`) under the stricter gate, the approval recorded at the backend, and an export citing 25 catalogue DOIs.
 - The gate is now stricter in a way that changes what a caller must do: a verdict built without a receipt is refused. `helpers.ts` gained `commitAll` / `bindTo` / `submitBound` so that specs and fixtures commit and bind the way the driver does.
 - `RUN_SNAPSHOT_SCHEMA_VERSION` is unchanged at 3: the persisted verdict gained optional fields that a record written without them still loads without.
 - `readsSlugs`-era claim that the closure was verified stands; what changed is the gate's INPUT, not the dependency graph.

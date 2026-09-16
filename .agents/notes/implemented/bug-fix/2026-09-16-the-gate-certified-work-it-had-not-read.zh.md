@@ -46,6 +46,7 @@ Status: implemented
 
 - 四个复现的缺陷各自在**执行它的那一层**有了拒绝测试:`tests/commit.spec.ts`(F01 回滚后重放同一个判定对象、F02 提交后替换)、`tests/project-recovery.spec.ts`(F03 一个 store 里两个 run)、`tests/submission-readiness.spec.ts` 与 `tests/package-export.spec.ts`(F04)。
 - `packages/research` 在 92 个文件上 **1665 通过**,两个 TypeScript 面构建干净。
+- 复核者自己的探针脚本现在在**第一条观察**就中止:它为演示 F01 构造的那份未绑定判定,在任何场景跑起来之前就被门禁拒绝。经出货应用重跑,浏览器探针在提交 `9f3b9a7c` 上是 **41/41** —— 模型提出方案、人确认、16 步走到人工门(`{"a2":"passed","e2":"gated","steps":16}`)并且是在更严的门禁之下、批准在后端落账、导出包引用 25 条目录 DOI。
 - 门禁现在更严,并且改变了调用方必须做的事:不带 receipt 构建的判定会被拒。`helpers.ts` 新增 `commitAll` / `bindTo` / `submitBound`,让 spec 与 fixture 按驱动器的方式提交与绑定。
 - `RUN_SNAPSHOT_SCHEMA_VERSION` 保持 3:持久化的判定新增的是可选字段,没有它们写下的记录仍能加载。
 - 依赖闭包那条结论不受影响 —— 改的是门禁的**输入**,不是依赖图。
