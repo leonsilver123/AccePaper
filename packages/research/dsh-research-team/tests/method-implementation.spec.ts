@@ -155,3 +155,63 @@ describe('a plan naming an implementation this runner lacks is refused', () => {
     expect(IDM_PLATOON_IMPLEMENTATION.outputs).toEqual(['mvp-results'])
   })
 })
+
+describe('a plan off the wire resolves to the implementation that measures its quantity', () => {
+  /**
+   * The plan a model proposes and a person confirms. It states the quantity it is about and it has
+   * never heard of an implementation id, because the deployment — not the proposal — is what knows
+   * which code it can run.
+   */
+  const PROPOSED = (() => {
+    const { implementationId: _dropped, ...rest } = DEFAULT_PLAN
+    void _dropped
+    return rest
+  })()
+
+  it('resolves rather than refusing, so the browser path can start a run at all', () => {
+    // THE REGRESSION THIS PINS. `requirePlan` accepted a plan with no implementation id and
+    // `resolveImplementation` then found nothing, so `B1-method` threw FOUR STEPS INTO the run: the
+    // pipeline had said it could do the work and discovered midway that it could not. Every browser
+    // run stopped at B1 with the step left `in_progress`.
+    const result = requirePlan(PROPOSED, MEASURED_METRIC)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.plan.implementationId).toBe(IDM_PLATOON_IMPLEMENTATION.id)
+  })
+
+  it('drives a run whose plan states no implementation through B1', async () => {
+    // The unit-level resolution above is the claim; this is the run. A `stopBefore` past B1 is what
+    // makes the step's own outcome part of the assertion rather than its absence.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { studyPlan: PROPOSED, stopBefore: 'B2-data' })
+    const b1 = run.steps.find(step => step.stepId === 'B1-method')
+    expect(b1?.executeError).toBeUndefined()
+    expect(b1?.status).toBe('passed')
+    const spec = getArtifact(store, run.runId, 'method-spec') as { implementation?: { id?: string } } | undefined
+    expect(spec?.implementation?.id).toBe(IDM_PLATOON_IMPLEMENTATION.id)
+  })
+
+  it('refuses a plan whose declared implementation measures a different quantity', () => {
+    // Two statements about one method that disagree. Accepting this would produce a manuscript whose
+    // Method section names an implementation that measured something the paper never reports.
+    const result = requirePlan(
+      { ...PROPOSED, implementationId: 'idm-platoon-simulation', metric: { ...MEASURED_METRIC, key: 'p99-latency-ms' } },
+      { ...MEASURED_METRIC, key: 'p99-latency-ms' },
+    )
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.reason).toContain('idm-platoon-simulation')
+    expect(result.reason).toContain('p99-latency-ms')
+  })
+
+  it('refuses a quantity no implementation this runner has can measure', () => {
+    // The refusal moved from B1 — where it was a thrown error deep in the pipeline — to the plan
+    // boundary, where a caller can be told what to do about it.
+    const latency = { ...MEASURED_METRIC, key: 'p99-latency-ms', label: 'p99 latency (ms)' }
+    const result = requirePlan({ ...PROPOSED, metric: latency }, latency)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.reason).toContain('p99-latency-ms')
+    expect(result.reason).toContain('no implementation this runner has can measure')
+  })
+})

@@ -25,6 +25,7 @@ import { runT19B } from '../src/runner/drive.ts'
 import { requirePlan } from '../src/runner/study-plan.ts'
 import type { StudyPlan } from '../src/runner/study-plan.ts'
 import { MEASURED_METRIC } from '../src/runner/platoon-sim.ts'
+import { IDM_PLATOON_IMPLEMENTATION } from '../src/runner/implementations.ts'
 
 /** A plan that is nobody's default, so "it survived" and "it was re-defaulted" cannot look alike. */
 const CUSTOM_PLAN: StudyPlan = {
@@ -75,7 +76,11 @@ describe('a run records the configuration it was driven with', () => {
     const restored = requirePlan(spec['studyPlan'], MEASURED_METRIC)
     expect(restored.ok).toBe(true)
     if (!restored.ok) throw new Error(restored.reason)
-    expect(restored.plan).toEqual(CUSTOM_PLAN)
+    // The plan that comes back carries the implementation it was RESOLVED to, which the caller did
+    // not state. That is the fact a resume needs: the run's record says which code executed it, so
+    // a deployment whose supported implementations changed under it cannot quietly resume this run
+    // as a different one.
+    expect(restored.plan).toEqual({ ...CUSTOM_PLAN, implementationId: IDM_PLATOON_IMPLEMENTATION.id })
   })
 
   it('says the plan was the deployment default when no caller stated one', async () => {

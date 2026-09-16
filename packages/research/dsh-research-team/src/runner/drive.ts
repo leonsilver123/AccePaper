@@ -50,7 +50,7 @@ import {
 import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
 import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
 import { experimentStudy } from './platoon-sim.ts'
-import { DEFAULT_PLAN, planForDirection } from './study-plan.ts'
+import { DEFAULT_PLAN, planForDirection, requirePlan } from './study-plan.ts'
 import type { StudyPlan } from './study-plan.ts'
 import type {
   DriveOptions,
@@ -345,9 +345,19 @@ export async function runT19B(
   // The research this run carries. A deployment states it; the default stands in otherwise, and
   // the run's seedable direction overrides that default's own direction rather than adding a
   // second place the direction is written.
-  const plan = opts.studyPlan ?? (opts.domainDirection === undefined
+  const requested = opts.studyPlan ?? (opts.domainDirection === undefined
     ? DEFAULT_PLAN
     : planForDirection(opts.domainDirection))
+  // RESOLVED HERE, at the driver's own boundary, and not left for the step that needs it. The
+  // driver accepts a plan without an implementation id — the wire path never carries one — and
+  // `B1-method` used to be where that surfaced, as a thrown error four steps into a run whose
+  // first four gates had already closed. One resolution point, before the first step, means a plan
+  // this runner cannot execute is refused while a caller can still be told why.
+  const resolvedPlan = requirePlan(requested, requested.metric)
+  if (!resolvedPlan.ok) {
+    throw new Error(`T19B drive: the plan cannot be executed — ${resolvedPlan.reason}`)
+  }
+  const plan = resolvedPlan.plan
   const runCtx: RunContext = createRunContext(
     timestamp,
     plan,

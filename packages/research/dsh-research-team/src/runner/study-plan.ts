@@ -19,7 +19,7 @@
  */
 
 import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
-import { resolveImplementation } from './implementations.ts'
+import { SUPPORTED_IMPLEMENTATIONS, resolveImplementation } from './implementations.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, commitmentFrom } from './prediction-gate.ts'
 import { MEASURED_METRIC } from './platoon-sim.ts'
@@ -179,21 +179,68 @@ function textField(source: Record<string, unknown>, key: string): string | undef
  * @returns the plan, or a reason it cannot be used.
  */
 /**
- * Read a plan's declared implementation, requiring one this runner has.
+ * Resolve the implementation that will execute a plan, and refuse a plan this runner cannot run.
+ *
+ * THE WIRE PATH CARRIES NO IMPLEMENTATION ID, and a plan without one used to be accepted here and
+ * fail four steps later: `b1Executor` calls `resolveImplementation`, a plan naming none resolves to
+ * nothing, and B1 threw — the pipeline had said it could do the work and then discovered midway
+ * that it could not. That is what a browser run did, every time.
+ *
+ * What replaces it is a resolution rather than a default: a plan is executed by the implementation
+ * that MEASURES its declared quantity. A plan whose quantity no implementation measures is refused
+ * here, at the boundary, with the reason; a plan that also declares an id has that id checked
+ * against the quantity, because two statements about one method that disagree is how a manuscript
+ * comes to describe an experiment nobody ran.
  *
  * @param source - the plan record being validated.
- * @returns the implementation, or the refusal naming what is missing and what is available.
+ * @param metricKey - the quantity the plan declares it measures.
+ * @returns the resolved id, or the refusal naming what is missing and what is available.
  */
-function requireImplementation(
+function resolvePlanImplementation(
   source: Record<string, unknown>,
-): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
+  metricKey: string,
+): { readonly ok: true; readonly implementationId: string } | { readonly ok: false; readonly reason: string } {
   const declared = source['implementationId']
-  if (declared === undefined) return { ok: true }
-  if (typeof declared !== 'string' || declared.length === 0) {
+  if (declared !== undefined && (typeof declared !== 'string' || declared.length === 0)) {
     return { ok: false, reason: "the plan's implementationId is present but is not a non-empty string" }
   }
-  const resolved = resolveImplementation({ ...DEFAULT_PLAN, implementationId: declared })
-  return resolved.ok ? { ok: true } : { ok: false, reason: resolved.reason }
+  const available = SUPPORTED_IMPLEMENTATIONS.map(candidate => candidate.id).join(', ')
+  if (typeof declared === 'string') {
+    const resolved = resolveImplementation({ ...DEFAULT_PLAN, implementationId: declared })
+    if (!resolved.ok || resolved.implementation === undefined) return { ok: false, reason: resolved.reason }
+    if (resolved.implementation.metric.key !== metricKey) {
+      return {
+        ok: false,
+        reason:
+          `the plan names implementation '${declared}', which measures `
+          + `'${resolved.implementation.metric.key}', but declares '${metricKey}' — a plan and its`
+          + ' implementation disagreeing about the measured quantity is a manuscript that would'
+          + ' describe an experiment nobody ran',
+      }
+    }
+    return { ok: true, implementationId: declared }
+  }
+  const matching = SUPPORTED_IMPLEMENTATIONS.filter(candidate => candidate.metric.key === metricKey)
+  if (matching.length === 0) {
+    return {
+      ok: false,
+      reason:
+        `the plan measures '${metricKey}', which no implementation this runner has can measure`
+        + ` (available: ${available}) — describing a method and measuring something else is the`
+        + ' failure this refusal prevents',
+    }
+  }
+  if (matching.length > 1) {
+    return {
+      ok: false,
+      reason:
+        `the plan measures '${metricKey}', which ${String(matching.length)} implementations can`
+        + ` measure (${matching.map(candidate => candidate.id).join(', ')}) — the plan must name one`,
+    }
+  }
+  const [only] = matching
+  if (only === undefined) return { ok: false, reason: `no implementation can measure '${metricKey}'` }
+  return { ok: true, implementationId: only.id }
 }
 
 export function requirePlan(
@@ -255,11 +302,6 @@ export function requirePlan(
     return { ok: false, reason: `the plan states no ${missing.join(', ')}` }
   }
 
-  // The implementation is a contract too: a plan naming one this runner does not have describes a
-  // method nobody can execute, and the run would go on to measure something else.
-  const implementation = requireImplementation(source)
-  if (!implementation.ok) return { ok: false, reason: implementation.reason }
-
   // The skeleton is a contract, not a preference: every step from D2 on addresses sections by id.
   const expectedIds = DEFAULT_PLAN.outline.map(section => section.id)
   if (outline.map(section => section.id).join(',') !== expectedIds.join(',')) {
@@ -301,9 +343,18 @@ export function requirePlan(
     return { ok: false, reason: `the plan's claim is not gradeable: ${rejection}` }
   }
 
+  // RESOLVED LAST, because it reads the quantity the checks above established. The wire path — a
+  // model proposes a study, a person confirms it — carries no implementation id, and requiring one
+  // would mean the product could not start a run at all. A plan is executed by the implementation
+  // that measures the quantity it declares, and that is a resolution: the returned plan names it,
+  // so nothing downstream has to resolve it again or discover the absence.
+  const implementation = resolvePlanImplementation(source, declaredMetricKey)
+  if (!implementation.ok) return { ok: false, reason: implementation.reason }
+
   return {
     ok: true,
     plan: {
+      implementationId: implementation.implementationId,
       title: title as string,
       field: field as string,
       direction: direction as string,
