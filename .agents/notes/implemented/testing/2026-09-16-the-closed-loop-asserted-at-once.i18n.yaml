@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/testing/2026-09-16-the-closed-loop-asserted-at-once.md
+2026-09-16-the-closed-loop-asserted-at-once.md: 8c7adc9f3003f849aaeba012744818713dc712e5
+2026-09-16-the-closed-loop-asserted-at-once.zh.md: 90e2a72ecd742106b57a5097c3ee06253e2fe2b6
