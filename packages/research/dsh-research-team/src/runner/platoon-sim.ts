@@ -145,6 +145,7 @@ export const SIMULATION_INPUTS = {
 export const MEASURED_METRIC: MeasuredMetric = {
   key: 'min-ttc-seconds',
   label: "the platoon's minimum time-to-collision (s)",
+  unit: 's',
   // A larger safety margin is better.
   direction: 'higher-is-better',
   phrases: [

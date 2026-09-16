@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-every-section-is-written-from-evidence.md
+2026-09-16-every-section-is-written-from-evidence.md: 7fab06d2e604b7dc2148ab8a49e909d924a5b975
+2026-09-16-every-section-is-written-from-evidence.zh.md: dd29db519f473f3ea19fb7c9cddb47b0ca8107be

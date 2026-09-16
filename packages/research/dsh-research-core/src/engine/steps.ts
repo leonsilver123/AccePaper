@@ -143,7 +143,7 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D3-writing', index: 13, phase: 'D', name: '写作',
     purpose: '起草各章节 + 添加参考文献(经 L0 过滤)',
-    inputs: ['paper-outline', 'figure-plan', 'landscape-map', 'result-version'],
+    inputs: ['paper-outline', 'figure-plan', 'landscape-map', 'result-version', 'method-spec'],
     outputs: ['draft'],
     gate: ['A', 'B'],
     falsifiable: null,

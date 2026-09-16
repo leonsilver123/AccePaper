@@ -180,6 +180,9 @@ import {
   resultVersionOf,
 } from './result-version.ts'
 import type { MeasuredOutcome, ResultSource } from './result-version.ts'
+import { sectionEvidenceFor } from './section-evidence.ts'
+import type { SectionEvidence } from './section-evidence.ts'
+import { assessmentsFor } from './evidence-corpus.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -2540,6 +2543,25 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // this pipeline added on its own would be prose no step wrote, and it would land in whichever
   // section happened to come last rather than in the one the figure is about.
   const citable = citableFloats(planFloats(renderedFigures), MODEL_EQUATIONS)
+  // WHAT EACH SECTION IS WRITTEN FROM, and what it cannot be written without. The request below
+  // used to carry labels — a float roster and a claim sentence — and none of the run's data, so a
+  // faithful model was asked to describe results it had never seen. A section whose required
+  // evidence is absent is refused rather than filled; see `section-evidence.ts`.
+  const methodSpec = readInput(ctx, 'method-spec')
+  const resultRecord = readInput(ctx, RESULT_VERSION_SLUG)
+  const reviewedEvidence = assessmentsFor(claimRef)
+  const evidenceFor = (sectionId: string): SectionEvidence =>
+    sectionEvidenceFor(sectionId, {
+      metricKey: ctx.runCtx.metricKey === '' ? planOf(ctx).metric.key : ctx.runCtx.metricKey,
+      metricLabel: planOf(ctx).metric.label,
+      metricUnit: planOf(ctx).metric.unit,
+      metricDirection: planOf(ctx).metric.direction,
+      result: resultRecord,
+      method: methodSpec,
+      figures: figurePlan,
+      landscape,
+      assessments: reviewedEvidence,
+    })
   // Prose path (T34): when the runner injected a prose writer, each section body comes
   // from it; otherwise the built-in fixture sentences are used so the offline pipeline
   // stays deterministic. `proseSource` records which path ran, and `proseRoute` names the
@@ -2555,37 +2577,54 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const d3Outcome = measureOutcomeWithSource(ctx)
   if (writer === undefined) {
     const measured = d3Outcome.measured
-    sections = headings.map(h => ({ ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, references.length) }))
+    sections = headings.map((h) => {
+      const evidence = evidenceFor(h.id)
+      return evidence.missing.length > 0
+        ? { ...h, bodyText: '' }
+        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, references.length) }
+    })
     proseSource = 'fixture'
   } else {
     const written = await Promise.all(
-      headings.map(h =>
-        writer.write({
+      headings.map((h) => {
+        const evidence = evidenceFor(h.id)
+        // A REFUSED SECTION IS NOT WRITTEN AT ALL. Asking the model for a Results section while
+        // withholding the result is how a plausible number gets invented, so the request is not
+        // made and the absence is recorded instead.
+        if (evidence.missing.length > 0) return Promise.resolve(undefined)
+        return writer.write({
           stepId: 'D3-writing',
-          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it.`,
-          // The roster travels as DATA as well as in the instruction: a label the model has to
-          // recover from a sentence is one it can get wrong, and a wrong number in a paper reads as
-          // a citation of something this manuscript does not contain.
+          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain.`,
+          // The evidence travels as DATA, not as prose the model has to parse. `citable` is the
+          // float roster; `evidence` is the run's own material for THIS section.
           context: {
             ...planContextOf(planOf(ctx)),
             sectionId: h.id,
             claimRef,
             figureCount: figures ?? 0,
             citable,
+            evidence: evidence.supplied,
+            requiredEvidence: evidence.required,
           },
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-        }),
-      ),
+        })
+      }),
     )
-    sections = headings.map((h, i) => ({ ...h, bodyText: written[i]?.text ?? '' }))
+    sections = headings.map((h, i) => {
+      const evidence = evidenceFor(h.id)
+      const body = written[i]?.text
+      return { ...h, bodyText: evidence.missing.length > 0 || body === undefined ? '' : body }
+    })
     proseSource = proseLabelling(writer).source
-    const first = written[0]
+    const first = written.find(entry => entry !== undefined)
     proseRoute = proseRouteOf(first)
     // The prefix names the channel, not an assumption about it: the deterministic route is not an
     // LLM call, and a producer string reading `llm:` beside `proseSource: 'deterministic'` is two
     // fields of one artifact contradicting each other.
     if (first !== undefined) producer = `${proseSource === 'model' ? 'llm' : 'deterministic'}:${first.provider}/${first.model}`
   }
+  const sectionEvidence = headings.map(h => evidenceFor(h.id))
+  const refused = sectionEvidence.filter(entry => entry.missing.length > 0)
 
   return {
     draft: tagArtifact(
@@ -2598,6 +2637,16 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sections,
         proseSource,
         proseRoute,
+        // WHAT EACH SECTION WAS WRITTEN FROM, and which sections could not be written. A reader
+        // holding only the prose cannot tell a section backed by the run's measurement from one the
+        // model filled in, and neither can a reviewer.
+        sectionEvidence: sectionEvidence.map(entry => ({
+          sectionId: entry.sectionId,
+          required: entry.required,
+          supplied: Object.keys(entry.supplied),
+          missing: entry.missing,
+        })),
+        refusedSections: refused.map(entry => entry.sectionId),
         // WHICH numbers this draft quotes and where they came from. `result-version` means the
         // step read the run's own record; `recomputed` means it measured the study itself, which
         // in a driven run is the defect `result-version.ts` exists to make visible.

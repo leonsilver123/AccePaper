@@ -48,12 +48,14 @@ export interface SubmissionReadiness {
  * @param profile - the deployment's evidence profile.
  * @param steps - every step the pipeline declares, with the run's recorded status for it.
  * @param manuscriptProduced - whether the run produced the manuscript artifact.
+ * @param refusedSections - sections `D3-writing` refused to write for want of evidence.
  * @returns the decision and the reason.
  */
 export function submissionReadinessOf(
   profile: EvidenceProfile,
   steps: ReadonlyArray<ReadinessStepFact>,
   manuscriptProduced: boolean,
+  refusedSections: ReadonlyArray<string> = [],
 ): SubmissionReadiness {
   const eligibility = evidenceEligibilityOf(profile)
   if (!eligibility.eligible) {
@@ -83,6 +85,21 @@ export function submissionReadinessOf(
       manuscriptProduced: true,
     }
   }
+  if (refusedSections.length > 0) {
+    // Every gate closed and the manuscript exists, and it is still not a paper: a section the
+    // pipeline declined to write for want of evidence leaves a hole the prose does not show. The
+    // alternative — filling it from the built-in sentences — produces something that reads as
+    // complete, which is the failure this whole pipeline is built against.
+    return {
+      ready: false,
+      reason:
+        `the manuscript has no ${refusedSections.join(', ')} section: the run held none of the`
+        + ' evidence that section is written from, and the pipeline refused to write it rather than'
+        + ' fill it in. Supply the missing evidence and re-run that step',
+      profileEligible: true,
+      manuscriptProduced: true,
+    }
+  }
   return {
     ready: true,
     reason:
@@ -92,6 +109,13 @@ export function submissionReadinessOf(
     profileEligible: true,
     manuscriptProduced: true,
   }
+}
+
+/** The sections `D3-writing` recorded as refused, read off the run's draft. */
+function refusedSectionsOf(draft: unknown): ReadonlyArray<string> {
+  if (draft === null || typeof draft !== 'object') return []
+  const recorded = (draft as { refusedSections?: unknown }).refusedSections
+  return Array.isArray(recorded) ? recorded.filter((id): id is string => typeof id === 'string') : []
 }
 
 /**
@@ -113,5 +137,10 @@ export function readinessOfRun(
     status: snapshot.steps[definition.id]?.status ?? 'pending',
     humanGate: definition.humanGate,
   }))
-  return submissionReadinessOf(profile, steps, getArtifact(store, runId, MANUSCRIPT_SLUG) !== undefined)
+  return submissionReadinessOf(
+    profile,
+    steps,
+    getArtifact(store, runId, MANUSCRIPT_SLUG) !== undefined,
+    refusedSectionsOf(getArtifact(store, runId, 'draft')),
+  )
 }

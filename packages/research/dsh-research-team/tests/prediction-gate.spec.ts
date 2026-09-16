@@ -639,6 +639,7 @@ describe('the discipline belongs to the gate, not to the study', () => {
   const LATENCY: MeasuredMetric = {
     key: 'p99-latency-ms',
     label: "the service's p99 request latency (ms)",
+    unit: 'ms',
     direction: 'lower-is-better',
     phrases: ['p99 latency', 'p99 request latency', '99th-percentile latency'],
   }

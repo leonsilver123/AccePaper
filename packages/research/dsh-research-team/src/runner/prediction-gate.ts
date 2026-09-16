@@ -33,6 +33,15 @@ export interface MeasuredMetric {
   readonly key: string
   /** Display label for evidence strings. */
   readonly label: string
+  /**
+   * The unit the quantity is measured in, as a writer must state it beside a value.
+   *
+   * It is a field rather than a substring of {@link MeasuredMetric.label} because a section that
+   * quotes `19.58` without `s` states a number no reader can interpret, and a pipeline cannot check
+   * a label for a unit it never declared. The label carries it for a human; this carries it for a
+   * consumer.
+   */
+  readonly unit: string
   /** Whether a larger value of this quantity is better or worse. */
   readonly direction: MetricDirection
   /**
