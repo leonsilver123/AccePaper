@@ -16,7 +16,7 @@
 
 import { getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
-import { evidenceEligibilityOf } from '@deepseek-ai/dsh-research-core'
+import { approvalStalenessOf, evidenceEligibilityOf } from '@deepseek-ai/dsh-research-core'
 
 /** The artifact E1 writes; a run without one produced no manuscript to submit. */
 const MANUSCRIPT_SLUG = 'formatted-manuscript'
@@ -48,6 +48,9 @@ export interface SubmissionReadiness {
  * @param steps - every step the pipeline declares, with the run's recorded status for it.
  * @param manuscriptProduced - whether the run produced the manuscript artifact.
  * @param refusedSections - sections `D3-writing` refused to write for want of evidence.
+ * @param staleApproval - the revision a step's approval no longer covers, when one moved after the
+ *   decision was made. A person approved the manuscript in front of them; if it is not the same
+ *   manuscript, the approval is not about this one.
  * @returns the decision and the reason.
  */
 export function submissionReadinessOf(
@@ -55,6 +58,7 @@ export function submissionReadinessOf(
   steps: ReadonlyArray<ReadinessStepFact>,
   manuscriptProduced: boolean,
   refusedSections: ReadonlyArray<string> = [],
+  staleApproval?: string,
 ): SubmissionReadiness {
   const eligibility = evidenceEligibilityOf(profile)
   if (!eligibility.eligible) {
@@ -99,6 +103,16 @@ export function submissionReadinessOf(
       manuscriptProduced: true,
     }
   }
+  if (staleApproval !== undefined) {
+    return {
+      ready: false,
+      reason:
+        `an approved step's inputs changed after the decision: ${staleApproval}. The approval was`
+        + ' given for the revision that was in front of the person, and this is not it',
+      profileEligible: true,
+      manuscriptProduced: true,
+    }
+  }
   return {
     ready: true,
     reason:
@@ -135,10 +149,18 @@ export function readinessOfRun(
     stepId: definition.id,
     status: snapshot.steps[definition.id]?.status ?? 'pending',
   }))
+  // A decision binds the revision it was made about. Read from the run's own registry against the
+  // refs frozen into the approval record, so a manuscript edited after the fact — by a later step, a
+  // recovery, or a hand — does not keep the approval it was not given.
+  const staleApproval = getStepDefinitions()
+    .map(definition => approvalStalenessOf(store, runId, definition.id))
+    .find(reason => reason !== undefined)
+
   return submissionReadinessOf(
     profile,
     steps,
     getArtifact(store, runId, MANUSCRIPT_SLUG) !== undefined,
     refusedSectionsOf(getArtifact(store, runId, 'draft')),
+    staleApproval,
   )
 }

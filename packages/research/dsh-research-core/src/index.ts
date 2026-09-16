@@ -69,6 +69,7 @@ export {
   rollback,
   isComplete,
   getAuditHistory,
+  approvalStalenessOf,
 } from './engine/state-machine.ts'
 export { ResearchError, ResearchValueError, ResearchRunError } from './engine/state-machine.ts'
 

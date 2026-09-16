@@ -980,6 +980,47 @@ function snapshotStep(state: StepState): StepSnapshot {
 }
 
 /**
+ * Whether a step's approval still covers the inputs it was given for.
+ *
+ * An approval records the revisions that were in front of the person. This compares them with the
+ * run's registry NOW: a manuscript edited after the decision — by a later step, a recovery, or a
+ * hand — is not the manuscript that was approved, and the difference is reported rather than
+ * assumed away.
+ *
+ * @param store - the run store, still live.
+ * @param runId - the run holding the approval.
+ * @param stepId - the approved step.
+ * @returns undefined when the approval still covers the current inputs, otherwise the revision that
+ *   moved, named so a reader can see which one it was.
+ */
+export function approvalStalenessOf(
+  store: ResearchRunStore,
+  runId: string,
+  stepId: string,
+): string | undefined {
+  const run = ensureRun(store, runId)
+  const record = run.steps.get(stepId)?.approval
+  // No approval, nothing to be stale. Whether the step NEEDS one is readiness's question, not this
+  // function's: this one answers only "does the decision still describe what is there".
+  if (record === undefined) return undefined
+  const step = lookupStep(stepId)
+  if (step === undefined) return undefined
+  for (const slug of step.inputs) {
+    const approved = record.targetRefs.find(ref => ref.artifactId === slug)
+    const current = run.registry[slug]?.ref
+    if (approved === undefined && current === undefined) continue
+    if (approved === undefined || current === undefined) {
+      return `'${slug}' ${approved === undefined ? 'was not present when the decision was made' : 'is gone from the run'}`
+    }
+    if (approved.version !== current.version || approved.contentHash !== current.contentHash) {
+      return `'${slug}' moved from version ${String(approved.version)} (${approved.contentHash.slice(0, 12)}…) `
+        + `to version ${String(current.version)} (${current.contentHash.slice(0, 12)}…)`
+    }
+  }
+  return undefined
+}
+
+/**
  * Package-private: apply a validated human approval (gated → passed/blocked) for a humanGate
  * step. NOT re-exported from the public `index.ts` — the host trust channel (`../host.ts`)
  * imports it relatively; external importers cannot reach it via the built main entry.
@@ -1025,6 +1066,12 @@ export function _applyHumanApproval(
     approval_event_id: approvalEventId,
     decision,
     timestamp: Date.now(),
+    // Frozen HERE, from the run's own registry, so the record says which revision was in front of
+    // the person. A caller cannot supply them, and `approvalStalenessOf` compares them later.
+    targetRefs: step.inputs
+      .map(slug => run.registry[slug]?.ref)
+      .filter((ref): ref is ArtifactRef => ref !== undefined)
+      .map(ref => ({ ...ref })),
   }
   state.approval = approval
   run.consumedApprovals.add(approvalEventId)

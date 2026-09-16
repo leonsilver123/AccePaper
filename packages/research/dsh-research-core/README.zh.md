@@ -12,6 +12,7 @@ AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级�
 
 ## 已知限制与延期工作
 
+- **批准绑定的是一个版本,而它过去绑定的是一个名字**(2026-09-16):`ApprovalRecord` 现在带 `targetRefs` —— 该步的输入,在做出决定的那一刻从运行自己的 registry 冻结,绝不取自调用方 —— 而 `approvalStalenessOf` 拿它与 registry 现在持有的比对,并点名移动了的那个版本。在这之前,记录里只有 `{run_id, step_id, attempt_id, principalId, approval_event_id, decision, timestamp}`,一点内容都没有:一个人批准的是摆在他面前的那份手稿,而记录只写着第 N 次 attempt 可以继续 —— 之后移动过的文档,仍然被一条关于**另一份**文档的决定覆盖着。同一个文件里的 `submitGateVerdict` 早就逐字节比对了,而批准那条路什么都不比。**在本次改动之前写下的记录恢复时没有 targets**,所以它的决定不绑任何东西、也不会被判过期 —— 那是它做出时所处的行为,而不是替它编造出来的 targets。
 - **超时现在会取消执行体,而此前不会**(2026-09-16):`runStep` 过去只在超时时结束**这次 attempt**,别的什么都不做 —— 执行体拿到的是**调用方的** signal,于是一次耗尽时间的执行无从得知这件事,继续跑下去,攥着一次模型调用、一个子进程或一次仿真,而它的结果会被当作迟到结果丢掉。现在执行体收到的是**这次 attempt 自己的** `AbortSignal`:调用方的 abort 与超时都会 abort 它,而预算作为 abort 的 reason 写明。attempt 仍然只结算一次,迟到的结果仍然被拒而不是被写入。**这不做的事**:它**不等待**执行体收尾。执行体若无视自己的 signal,那次步骤仍会在后台跑完;流水线报告超时后继续。
 - **提交 receipt 不持久化**(2026-09-16):`StepState.commit` 记下是哪一次 attempt 提交的、用的哪个幂等键、产出了哪些 revision。`run-persistence` 不带它,所以被恢复的 attempt 读不回自己的 receipt。重放仍被既有的 `DSH_STEP_ALREADY_EXECUTED` 守卫挡住,所以这不会变成重复提交;持久化它属于拥有重启路径的那项 checkpoint 工作。
 - **`recordArtifact` 仍是公开的单产物接缝**(2026-09-16):驱动路径经 `commitStepOutputs` 提交,但 `recordArtifact` 仍然导出,因为 `ctx.research.recordArtifact` 与恢复用 fixture 都在调它。它不是门禁旁路 —— `submitGateVerdict` 要求该 attempt 声明的整个产物集合,所以一次只写一个产物的调用方过不了一步。把两者合并,才会移除这条接缝。

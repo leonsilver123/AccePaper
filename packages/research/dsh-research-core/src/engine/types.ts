@@ -108,6 +108,15 @@ export interface ApprovalRecord {
   readonly decision: 'approved' | 'rejected'
   readonly rationale?: string
   readonly timestamp: number
+  /**
+   * The step's inputs as they stood when the decision was made.
+   *
+   * A person approves a REVISION, not a step name. Without these, an approval said only "this
+   * attempt may proceed" and a manuscript edited afterwards — by a later step, a recovery, or a
+   * hand — was still covered by it. Frozen here, at the moment of the decision, and never taken
+   * from the caller: a decision that named its own targets could name the ones it wanted.
+   */
+  readonly targetRefs: ReadonlyArray<ArtifactRef>
 }
 
 /**

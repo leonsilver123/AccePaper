@@ -451,6 +451,14 @@ function parseApproval(raw: unknown, what: string): ApprovalRecord {
       ? { rationale: asString(o.rationale, `${what}.rationale`) }
       : {}),
     timestamp: asNumber(o.timestamp, `${what}.timestamp`),
+    // A record written before approvals carried their targets restores with NONE, so its decision
+    // binds nothing and `approvalStalenessOf` cannot call it stale. That is the behaviour those
+    // records were made under, and inventing targets for them here would credit a decision with a
+    // binding it never had.
+    targetRefs: o.targetRefs === undefined
+      ? []
+      : asArray(o.targetRefs, `${what}.targetRefs`).map((entry, i) =>
+        parseLooseArtifactRef(entry, `${what}.targetRefs[${i}]`)),
   }
 }
 

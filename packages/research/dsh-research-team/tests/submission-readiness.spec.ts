@@ -21,7 +21,6 @@ function allPassed(): ReadinessStepFact[] {
   return getStepDefinitions().map(definition => ({
     stepId: definition.id,
     status: 'passed',
-    humanGate: definition.humanGate,
   }))
 }
 
@@ -66,5 +65,27 @@ describe('submissionReadinessOf', () => {
     const readiness = submissionReadinessOf('production', steps, true)
     expect(readiness.reason).toMatch(/A1-landscape/)
     expect(readiness.reason).toMatch(/E2-submit/)
+  })
+
+  it('is NOT ready when an approval no longer covers the revision it was given for', () => {
+    // An approval binds the document that was in front of the person. A manuscript that moved after
+    // the decision — by a later step, a recovery from another snapshot, or a hand — is not that
+    // document, and a run whose material changed under its approval has not been approved.
+    const readiness = submissionReadinessOf(
+      'production',
+      allPassed(),
+      true,
+      [],
+      "'formatted-manuscript' moved from version 1 (aaaa…) to version 2 (bbbb…)",
+    )
+    expect(readiness.ready).toBe(false)
+    expect(readiness.profileEligible).toBe(true)
+    expect(readiness.reason).toContain('changed after the decision')
+    expect(readiness.reason).toContain('formatted-manuscript')
+  })
+
+  it('stays ready when no approval went stale', () => {
+    // The default, so every existing caller keeps its answer.
+    expect(submissionReadinessOf('production', allPassed(), true).ready).toBe(true)
   })
 })
