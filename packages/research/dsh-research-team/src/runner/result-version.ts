@@ -159,18 +159,3 @@ export function recordedMetricKey(value: unknown): string | undefined {
   const record = readResultVersion(value)
   return record === undefined ? undefined : record.metricKey
 }
-
-/**
- * The one line a consumer writes when it could not find the run's record.
- *
- * Kept here so every consumer says the same thing, and so a reader of any artifact can search for
- * one phrase to find every place a number was recomputed rather than read.
- *
- * @param stepId - the step doing the reporting.
- * @returns the note.
- */
-export function recomputedNote(stepId: string): string {
-  return `[${stepId}] reported a RECOMPUTED measurement: the run holds no result-version artifact,`
-    + ' so this step measured the study itself. In a driven run that means a defect; here it means'
-    + ' the step was driven without its producer.'
-}

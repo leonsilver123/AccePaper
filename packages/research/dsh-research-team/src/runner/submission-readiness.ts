@@ -25,7 +25,6 @@ const MANUSCRIPT_SLUG = 'formatted-manuscript'
 export interface ReadinessStepFact {
   readonly stepId: string
   readonly status: string
-  readonly humanGate: boolean
 }
 
 /** Whether a run may be submitted, and the sentence that says why or why not. */
@@ -135,7 +134,6 @@ export function readinessOfRun(
   const steps: ReadinessStepFact[] = getStepDefinitions().map(definition => ({
     stepId: definition.id,
     status: snapshot.steps[definition.id]?.status ?? 'pending',
-    humanGate: definition.humanGate,
   }))
   return submissionReadinessOf(
     profile,

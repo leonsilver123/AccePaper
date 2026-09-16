@@ -3449,10 +3449,13 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  */
 export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfulness; basis: string }>> = {
   A: {
-    // No tool function runs here either: `judgeRound` and core `adjudicate` are
-    // package code over a synthetic vote set.
+    // No tool function runs here either: `judgeRound` and core `adjudicate` are package code over
+    // votes this package DERIVED. The three rulebooks read the material under review — the
+    // manuscript once a draft exists, the claim material before that — and each check computes its
+    // own position, so a vote against the work is reachable and a driven run reaches it. What no
+    // part of this channel does is call a model, so the votes are not a second opinion.
     kind: 'local_computation',
-    basis: 'team judgeRound → core adjudicate(\'A\') executes for real; the rebuttal round votes are synthetic fixture input',
+    basis: 'reviewManuscript → reviewClaim rulebooks over the material under review → team judgeRound → core adjudicate(A); deterministic checks, no model votes',
   },
   B: {
     // An external system WAS consulted: the sources are real articles, retrieved once by hand and
