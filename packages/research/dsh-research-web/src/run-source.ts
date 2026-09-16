@@ -159,6 +159,33 @@ export interface WireRunSnapshot {
   readonly executionError?: string
 }
 
+/**
+ * One frame of a run's follow stream, as the wire carries it.
+ *
+ * A STREAM method is not wrapped in `RemoteResult` — the generated client declares it as
+ * `AsyncIterable<T>` and a refusal arrives as a carrier failure — so these are the frames
+ * themselves, not a result around them.
+ *
+ * The `snapshot` frame is the consistent point: its cursor is the position its snapshot was read
+ * at, so a page that reconnects renders a state that already includes what it missed.
+ */
+export type WireRunFrame =
+  | { readonly type: 'snapshot'; readonly cursor: string; readonly snapshot: WireRunSnapshot }
+  | {
+    readonly type: 'event'
+    readonly event: {
+      readonly eventId: string
+      readonly runId: string
+      readonly sequence: number
+      readonly schemaVersion: number
+      readonly kind: string
+      readonly stepId?: string
+      readonly attemptId?: number
+      readonly ts: number
+    }
+  }
+  | { readonly type: 'resync'; readonly reason: string }
+
 /** What one start command answers with, as the wire carries it. */
 export interface WireRunStart {
   readonly runId: string

@@ -46,6 +46,8 @@ import type {
   ResearchProposalAnswer,
   ResearchProposalRequest,
   ResearchRunExecution,
+  ResearchRunFollowRequest,
+  ResearchRunFrame,
   ResearchRunQuery,
   ResearchRunRequest,
   ResearchRunSnapshot,
@@ -62,7 +64,11 @@ export type {
   ResearchProposalEntry,
   ResearchProposalRefusal,
   ResearchProposalRequest,
+  ResearchRunCursor,
   ResearchRunExecution,
+  ResearchRunFollowRequest,
+  ResearchRunFrame,
+  RunEventEnvelope,
   ResearchRunQuery,
   ResearchRunRequest,
   ResearchRunSnapshot,
@@ -78,6 +84,7 @@ import {
 import { MEASURED_METRIC } from './runner/platoon-sim.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
+import { envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
 import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
@@ -347,6 +354,28 @@ export interface ResearchTeamServiceConfig {
    * write tools.
    */
   readonly scopeCheckedTools?: ReadonlyArray<string>
+}
+
+/** A run restored from this deployment's own records. */
+interface StoredRun {
+  readonly restored: RestoredRun<null>
+  readonly persistence: ResearchRunPersistence
+}
+
+/**
+ * The store a restored run lives in.
+ *
+ * @param found - the restored record, which the caller has already established is non-null.
+ * @returns the store holding exactly that run.
+ */
+function findStoredStore(found: StoredRun | null): ResearchRunStore {
+  if (found === null) throw new Error('[research] no run was restored to read events from')
+  return found.restored.store
+}
+
+/** Wait one follow interval. */
+async function waitForRead(): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, RUN_FOLLOW_TICK_MS) })
 }
 
 /**
@@ -1043,10 +1072,7 @@ export class ResearchTeamService extends TypertRemoteService {
    * @param runId - the run to find.
    * @returns the restored record, or null when this deployment stores no such run.
    */
-  private async findStoredRun(runId: string): Promise<{
-    readonly restored: RestoredRun<null>
-    readonly persistence: ResearchRunPersistence
-  } | null> {
+  private async findStoredRun(runId: string): Promise<StoredRun | null> {
     const directory = this.snapshotDirectoryOf(runId)
     // A QUERY MUST NOT CREATE. `hostRunPersistence` makes the directory, which is right when a run
     // is being started and wrong here: asking about a run id that was never used would leave an
@@ -1360,6 +1386,137 @@ export class ResearchTeamService extends TypertRemoteService {
       found.persistence,
       'stopped',
     )
+  }
+
+  /**
+   * Follow one run: an opening snapshot, then the events appended after it.
+   *
+   * THE OTHER HALF OF A RUN BEING READABLE WHILE IT RUNS. {@link runSnapshot} answers "what is this
+   * run doing" and has no position to resume from; this answers "what has happened", in order, from
+   * a cursor the caller can name again. The opening frame is the consistent point §7.2 of the plan
+   * asks for: its cursor IS the position its snapshot was read at, and because the run's log only
+   * grows, that snapshot already contains the effect of every event up to it. A caller that
+   * reconnects is therefore handed a state that includes what it missed rather than being asked to
+   * replay it, and the frames after it are exactly the events appended since.
+   *
+   * READ-ONLY, deliberately: §7.2 puts version-sensitive commands on the authenticated unary path,
+   * so a stream a page can open is not a way to write.
+   *
+   * @param request - the run to follow, and the caller's last position when it holds one.
+   * @param signal - cancellation for the subscription.
+   * @returns the opening snapshot, then one frame per appended event.
+   */
+  @Remote({ mode: 'stream' })
+  followRun(request: ResearchRunFollowRequest, signal: AbortSignal): AsyncIterable<ResearchRunFrame> {
+    return this.runFrames(request, signal)
+  }
+
+  /**
+   * The frames one follow yields.
+   *
+   * @param request - the run to follow and the caller's last position.
+   * @param signal - cancellation for the subscription.
+   * @returns the opening snapshot, then one frame per appended event.
+   */
+  private async * runFrames(
+    request: ResearchRunFollowRequest,
+    signal: AbortSignal,
+  ): AsyncGenerator<ResearchRunFrame> {
+    const active = this.activeRuns.get(request.runId)
+    const found = active === undefined ? await this.findStoredRun(request.runId) : null
+    if (active === undefined && found === null) {
+      // A RUN THIS DEPLOYMENT DOES NOT HOLD IS NOT A STREAM TO OPEN. Naming it is the honest answer;
+      // an empty stream would read exactly like a run that has done nothing.
+      throw new Error(`[research] this deployment holds no run '${request.runId}'`)
+    }
+    const store = active !== undefined ? active.store : findStoredStore(found)
+    const snapshot = this.projectRun(request.runId, active, found)
+    const available = liveRunOf(store, request.runId)?.events.length ?? 0
+    if (request.cursor !== undefined) {
+      // VALIDATED, not replayed from: a cursor naming another run, or a position this run has not
+      // reached, means the caller's window is not this run's history.
+      const read = readRunCursor(request.runId, request.cursor, available)
+      if (!read.ok) {
+        yield { type: 'resync', reason: read.reason }
+        return
+      }
+    }
+    yield { type: 'snapshot', cursor: runCursorOf(request.runId, available), snapshot }
+
+    let from = available
+    for (;;) {
+      signal.throwIfAborted()
+      const events = liveRunOf(store, request.runId)?.events ?? []
+      let appended = 0
+      for (let index = from; index < events.length; index += 1) {
+        const event = events[index]
+        // `noUncheckedIndexedAccess` is off, so the bound above is what guarantees this; a log that
+        // shrank under the loop would be a different failure entirely, and skipping it silently is
+        // the one thing this must not do.
+        if (event === undefined) break
+        yield { type: 'event', event: envelopeOf(request.runId, index, event) }
+        appended += 1
+      }
+      // THE STATE AFTER THOSE EVENTS, so a reader renders the projection this service owns instead
+      // of replaying events into one of its own. The cursor and the projection are read in one
+      // synchronous step, which is what makes them the same point in the run's history.
+      if (appended > 0) {
+        const at = liveRunOf(store, request.runId)?.events.length ?? 0
+        yield { type: 'snapshot', cursor: runCursorOf(request.runId, at), snapshot: this.projectRun(request.runId, active, found) }
+        from = at
+      } else {
+        from = events.length
+      }
+      // NOTHING IS DRIVING IT ANY MORE and its tail is delivered: this run has said everything it
+      // will say in this process. A later decision appends more, and a caller that wants it opens a
+      // new follow — which is also what keeps a browser connection from being held open for the
+      // hours a person may take to decide.
+      if (active === undefined || active.state !== 'running') {
+        // AND THE LAST FRAME SAYS SO. The run's own state moved AFTER the batch that finished it, so
+        // the snapshot beside that batch can still say `running` — and since this stream ends here,
+        // a follower would be left reading `running` about a run with no driver, with no next frame
+        // to correct it. A run this process never drove needs no such frame: its opening snapshot
+        // was already read at this position and already says `stopped`.
+        if (active !== undefined) {
+          const at = liveRunOf(store, request.runId)?.events.length ?? 0
+          yield {
+            type: 'snapshot',
+            cursor: runCursorOf(request.runId, at),
+            snapshot: this.projectRun(request.runId, active, found),
+          }
+        }
+        return
+      }
+      await waitForRead()
+    }
+  }
+
+  /**
+   * One run's projection, from whichever record this process holds for it.
+   *
+   * @param runId - the run to project.
+   * @param active - the in-memory record, when this process is driving or drove it.
+   * @param found - the restored record, when it came off the disk instead.
+   * @returns the run's current projection.
+   */
+  private projectRun(
+    runId: string,
+    active: ActiveRun | undefined,
+    found: StoredRun | null,
+  ): ResearchRunSnapshot {
+    if (active !== undefined) {
+      return snapshotOf(
+        active.store,
+        runId,
+        this.hostEvidenceProfile(),
+        active.packageExport,
+        this.livePersistence(active, runId),
+        active.state,
+        active.error,
+      )
+    }
+    if (found === null) throw new Error(`[research] this deployment holds no run '${runId}'`)
+    return snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped')
   }
 
   /**

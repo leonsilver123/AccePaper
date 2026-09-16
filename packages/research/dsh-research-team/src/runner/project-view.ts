@@ -64,16 +64,20 @@ export function stepProjectionsOf(
   runId: string,
 ): ReadonlyArray<StepProjection> {
   const snapshot = getRunSnapshot(store, runId)
-  // The LAST execution record per step, which is what "how did it end" means. An earlier attempt's
-  // record is history: reading the first would report a failure the step has since recovered from.
+  // HOW THE STEP'S CURRENT ATTEMPT ENDED — keyed by `(stepId, attemptId)`, never by `stepId` alone.
+  // Keying on the step and taking the last record let a SUPERSEDED attempt's record win: a timeout
+  // or cancellation is emitted from the attempt that was started, without re-checking whether the
+  // step has since moved on (`engine/pipeline.ts`), so an old attempt's late record lands after the
+  // new attempt's and overwrote it. The step's own state carries the attempt it is on; a record for
+  // any other attempt is history about an attempt this run no longer has.
   const execution = new Map<string, StepExecutionView>()
   for (const event of snapshot.events) {
-    if (event.kind !== 'step-executed' || event.stepId === undefined) continue
+    if (event.kind !== 'step-executed' || event.stepId === undefined || event.attemptId === undefined) continue
     const detail = event.detail as
       | { status?: unknown; errorMessage?: unknown; durationMs?: unknown; recordedAt?: unknown }
       | undefined
     if (detail === undefined || typeof detail.status !== 'string') continue
-    execution.set(event.stepId, {
+    execution.set(`${event.stepId}#${String(event.attemptId)}`, {
       status: detail.status,
       ...(typeof detail.errorMessage === 'string' ? { errorMessage: detail.errorMessage } : {}),
       ...(typeof detail.durationMs === 'number' ? { durationMs: detail.durationMs } : {}),
@@ -92,7 +96,9 @@ export function stepProjectionsOf(
 
   return [...STEP_EXECUTOR_REGISTRY.values()].map((entry): StepProjection => {
     const state = snapshot.steps[entry.stepId]
-    const ran = execution.get(entry.stepId)
+    // The record for the attempt the step is ON. A step that has not been started has no attempt to
+    // match, and then no record is claimed — which is the same fact as "it has not executed".
+    const ran = state === undefined ? undefined : execution.get(`${entry.stepId}#${String(state.attemptId)}`)
     const verdicts: Record<string, string> = {}
     // `gateResults` is a partial map of the three components; only the ones that were graded
     // appear, so iterating the entries is what keeps an ungraded component absent rather than

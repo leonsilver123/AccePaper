@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-runs-progress-is-a-position.md
+2026-09-16-a-runs-progress-is-a-position.md: 7967601990f556e0414923cabc9c4774fc120918
+2026-09-16-a-runs-progress-is-a-position.zh.md: 59926773684e6927acbe95ca708d126ca2bb9a8e

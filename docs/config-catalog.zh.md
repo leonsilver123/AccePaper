@@ -1939,7 +1939,7 @@ export interface ResearchTeamServiceConfig {
 }
 ```
 
-来源：[`packages/research/dsh-research-team/src/index.ts:341`](../packages/research/dsh-research-team/src/index.ts)
+来源：[`packages/research/dsh-research-team/src/index.ts:348`](../packages/research/dsh-research-team/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-local"></a>
 

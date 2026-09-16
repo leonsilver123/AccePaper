@@ -15,12 +15,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { buildSummary } from '../loader.ts'
-import { summaryInputFrom, type WireRunSnapshot } from '../run-source.ts'
+import type { WireRunSnapshot } from '../run-source.ts'
 import { buildApprovalSubmitter } from './approval-source.ts'
+import { followToRest } from './follow-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
-import type { WireRunStart } from '../run-source.ts'
+import type { WireRunFrame, WireRunStart } from '../run-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -69,6 +70,17 @@ interface ResearchRemoteNamespace {
     { readonly ok: true; readonly value: WireRunStart }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
+
+  /**
+   * Follow one run: the opening snapshot, then the events appended after it.
+   *
+   * A STREAM method: it is not wrapped in `RemoteResult` (the generated client declares it as
+   * `AsyncIterable`), and it takes a cancellation signal the carrier owns.
+   */
+  followRun(
+    request: { readonly runId: string; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): AsyncIterable<WireRunFrame>
 
   /**
    * Read one run as it stands.
@@ -123,15 +135,6 @@ function rememberedRunId(): string | null {
 }
 
 /**
- * How long to wait between reads of a running study.
- *
- * A study takes minutes and its steps take tens of seconds, so this is a reader's patience rather
- * than a bound on anything the host does. It is a constant of the CLIENT because it is a display
- * choice: nothing about the run depends on how often a page asks about it.
- */
-const POLL_INTERVAL_MS = 1500
-
-/**
  * A fresh command id.
  *
  * `randomUUID` over a counter, because the id has to survive a reload: a page that came back and
@@ -142,11 +145,6 @@ const POLL_INTERVAL_MS = 1500
  */
 function newCommandId(): string {
   return globalThis.crypto.randomUUID()
-}
-
-/** Wait one poll interval. */
-async function pause(): Promise<void> {
-  await new Promise<void>((resolve) => { setTimeout(resolve, POLL_INTERVAL_MS) })
 }
 
 /** Required services: the conversation slot, registries, sessions, locale, and Remote. */
@@ -223,21 +221,7 @@ export function apply(ctx: Context): void {
     if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`)
     const runId = started.value.runId
     rememberRunId(runId)
-
-    for (;;) {
-      const read = await remote.runSnapshot({ runId })
-      if (!read.ok) throw new Error(`${read.error.code}: ${read.error.message}`)
-      if (read.value === null) {
-        // THIS DEPLOYMENT HAS NO SUCH RUN. It was never stored, or its records are gone. Saying so
-        // is the only honest answer: continuing to poll would suggest something is still working.
-        rememberRunId(null)
-        throw new Error(`the service holds no record of run ${runId}`)
-      }
-      const summary = buildSummary(summaryInputFrom(read.value))
-      onUpdate(summary)
-      if (read.value.execution !== 'running') return
-      await pause()
-    }
+    await followToRest(remote, runId, null, onUpdate)
   }
   /**
    * Ask the host for research directions. The failure is surfaced rather than turned into an empty
@@ -259,21 +243,12 @@ export function apply(ctx: Context): void {
   const resume = async (onUpdate: (summary: ReturnType<typeof buildSummary>) => void): Promise<void> => {
     const remembered = rememberedRunId()
     if (remembered === null) return
-    const remote = namespace()
-    for (;;) {
-      const read = await remote.runSnapshot({ runId: remembered })
-      if (!read.ok) throw new Error(`${read.error.code}: ${read.error.message}`)
-      if (read.value === null) {
-        // The run is not in this deployment's records at all — a different host, a cleared
-        // directory. The handle was this browser's, so it is this browser's to drop.
-        rememberRunId(null)
-        return
-      }
-      const summary = buildSummary(summaryInputFrom(read.value))
-      onUpdate(summary)
-      if (read.value.execution !== 'running') return
-      await pause()
-    }
+    await followToRest(namespace(), remembered, null, onUpdate).catch((cause: unknown) => {
+      // A run this deployment no longer holds is not an error on a page that simply came back: the
+      // handle was this browser's, so it is this browser's to drop.
+      rememberRunId(null)
+      if (!(cause instanceof Error) || !cause.message.includes('holds no such run')) throw cause
+    })
   }
 
   const propose = async (field: string): Promise<WireProposalAnswer> => {

@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getRunSnapshot, rollback, startStep, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 
 import { runT19B } from '../src/runner/drive.ts'
 import { stepProjectionsOf } from '../src/runner/project-view.ts'
@@ -70,6 +70,35 @@ describe('a running study reports its steps', () => {
     expect(steps.get('A2-claim')?.executeError).toContain('the claim channel is unreachable')
     // A step that never executed reports NO outcome, which is a different fact from a success.
     expect(steps.get('B1-method')?.executeStatus).toBeUndefined()
+  })
+
+  it('reports the attempt the step is ON, not the one it replaced', async () => {
+    // THE LATE-RECORD HAZARD. A timed-out or cancelled attempt records its outcome from the attempt
+    // that was STARTED, without re-checking whether the step has since moved on
+    // (`engine/pipeline.ts`), so a superseded attempt's record can land after the new attempt's. A
+    // projection keyed by step and taking the last record would report it — the step would read as
+    // failed while the run is executing its replacement. What is asserted here is the rule that
+    // makes that impossible: the record reported is the one for the step's CURRENT attempt, and a
+    // step that has moved to a new attempt reports no outcome until that attempt produces one.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      executorOverride: (stepId: string) =>
+        stepId === 'A2-claim'
+          ? () => { throw new Error('the first attempt cannot reach the claim channel') }
+          : undefined,
+    })
+    expect(byId(store, run.runId).get('A2-claim')?.executeStatus).toBe('error')
+
+    // The step is rolled back and started again, which is what a recovery does before re-driving.
+    rollback(store, run.runId, 'A2-claim')
+    const second = startStep(store, run.runId, 'A2-claim')
+    expect(second.attemptId).toBeGreaterThan(1)
+
+    const after = byId(store, run.runId).get('A2-claim')
+    // The superseded attempt's failure is history about an attempt this run no longer has.
+    expect(after?.executeStatus).toBeUndefined()
+    expect(after?.executeError).toBeUndefined()
+    expect(after?.attemptId).toBe(second.attemptId)
   })
 
   it('reads the LAST execution of a step, not an attempt it recovered from', async () => {

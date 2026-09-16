@@ -470,6 +470,88 @@ export interface ResearchStartRequest {
   readonly plan?: StudyPlan
 }
 
+/**
+ * A position in one run's append-only event log.
+ *
+ * OPAQUE, and scoped: the string carries the run it belongs to, so a cursor presented for a
+ * different run is refused rather than read as a position in that run's history. What it names is
+ * the event's INDEX — see `runner/run-events.ts` for why an index and not a timestamp.
+ */
+export type ResearchRunCursor = string & { readonly [DSH_RESEARCH_TEAM_BRAND]: 'ResearchRunCursor' }
+
+/**
+ * The envelope format this build writes — plan §7.1's `EventEnvelope`.
+ *
+ * A reader compares it against the one it knows and refuses an envelope it cannot read, rather than
+ * parsing fields that may have moved.
+ */
+export const RUN_EVENT_ENVELOPE_VERSION = 1
+
+/**
+ * One recorded event, as a subscriber receives it.
+ *
+ * `sequence` is the position the cursor names; `eventId` is the same position written as the
+ * scoped string a caller can hand back. Two things are deliberately NOT here:
+ *   - the run's `revision`: the log does not record which revision each event was appended under,
+ *     and one read off the run at delivery time would be a claim about the past made from the
+ *     present. The snapshot frame carries the run's revision, which is a fact a reader has;
+ *   - the event's own `detail`: a bare `unknown` has no place on a wire boundary, and the typert
+ *     generator refuses it (it caught this on the first build). What a subscriber needs from an
+ *     event is WHICH event it was and WHERE it sits — the state it produced arrives as the
+ *     projection beside it. A consumer that needs a specific payload gets a typed field for it.
+ */
+export interface RunEventEnvelope {
+  readonly eventId: string
+  readonly runId: string
+  /** The event's index in the run's log. Strictly increasing, never reused. */
+  readonly sequence: number
+  readonly schemaVersion: number
+  /** The `AuditEventKind` this event was appended as. */
+  readonly kind: string
+  readonly stepId?: string
+  readonly attemptId?: number
+  /** When the run appended it (`AuditEvent.ts`). */
+  readonly ts: number
+}
+
+/**
+ * What one follow stream yields.
+ *
+ * THE SNAPSHOT FRAME IS THE CONSISTENT POINT, and it is the answer to "no gap between snapshot and
+ * subscription": the cursor it carries is the position the snapshot was read at, and the run's log
+ * only grows, so the snapshot already contains the effect of every event at or before it. A reader
+ * that reconnects does not have to replay what it missed — it is handed a state that includes it —
+ * and the frames after it are exactly the events appended since.
+ */
+export type ResearchRunFrame =
+  | {
+    readonly type: 'snapshot'
+    readonly cursor: ResearchRunCursor
+    readonly snapshot: ResearchRunSnapshot
+  }
+  /** One event appended after the opening cursor, in sequence order. */
+  | { readonly type: 'event'; readonly event: RunEventEnvelope }
+  /**
+   * The cursor cannot be served, so the reader must take a fresh opening.
+   *
+   * Today this is reachable for a cursor that names another run, or one the run's log has not
+   * reached. The run's log is never trimmed, so no cursor this deployment ever produced becomes
+   * unservable on its own; a build that introduces trimming owes this frame a second reason.
+   */
+  | { readonly type: 'resync'; readonly reason: string }
+
+/** What a client sends to follow a run. */
+export interface ResearchRunFollowRequest {
+  readonly runId: string
+  /**
+   * The last position the caller holds, or absent to start at the current end.
+   *
+   * It is VALIDATED, not replayed from: the opening snapshot is read at the current position and
+   * already contains everything up to it.
+   */
+  readonly cursor?: string
+}
+
 /** The query a client sends to read one run. */
 export interface ResearchRunQuery {
   readonly runId: string
