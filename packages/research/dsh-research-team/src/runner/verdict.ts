@@ -42,6 +42,8 @@ import { judgeRound } from '../redteam/judge.ts'
 import { adjudicateClaimSupport } from '../experiment/support.ts'
 
 import { B_CHANNEL_INCONCLUSIVE_REF, buildBChannelAnchors } from './anchor-fixture.ts'
+import type { BChannelEvidence } from './anchor-fixture.ts'
+import { buildEvidenceAnchors } from './evidence-anchors.ts'
 import { REVIEW_ROLES, reviewClaim } from './redteam-review.ts'
 import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC, measureStudy } from './platoon-sim.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
@@ -127,29 +129,52 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
 }
 
 /**
- * Build the B-channel verdict: T23 anchor fixture (stance) + core `verifyCitation`
- * over `MockCitationResolverAdapter` (anchoring evidence) → core `adjudicate('B')`.
+ * Build the B-channel verdict: an external anchor (reviewed literature, or the T23 fixture) + core
+ * `verifyCitation` (anchoring evidence) → core `adjudicate('B')`.
  *
- * The anchor the fixture produces is declared `fixture` provenance, so the run's profile
- * decides whether it may carry this gate at all. When the policy does not admit it, the
- * verifications are withheld and core reaches its own missing-anchor abstention — the
+ * TWO PATHS, ONE GATE. When the checked-in evidence corpus holds a reviewed judgement for THIS
+ * claim version, that source is the anchor: a real article, a real excerpt, and a person's recorded
+ * verdict on whether it supports the claim. Otherwise the T23 fixture supplies the stance, as
+ * before — that path is what the demonstration profile still runs on, and its provenance says
+ * `fixture` so the policy decides its fate rather than this function.
+ *
+ * The run does NOT choose the stance and neither does this function: on the corpus path it is the
+ * reviewer's recorded verdict, on the fixture path the fixture row's. `requireExternalAnchor` is
+ * true either way, so a step with no usable anchor abstains rather than passing.
+ *
+ * The profile decides whether the anchor may carry the gate at all. When the policy does not admit
+ * it, the verifications are withheld and core reaches its own missing-anchor abstention — the
  * adjudication stays in one place, and nothing here reinterprets the outcome.
  *
- * The abstention scenario is driven by DATA, not by a bypass: it points the T23 lookup at
- * the INCONCLUSIVE fixture row — material that takes no stance — so no anchoring verification
- * is requested and the real core gate abstains on its own. It used to point at the contradict
+ * The abstention scenario is driven by DATA, not by a bypass: it points the T23 lookup at the
+ * INCONCLUSIVE fixture row — material that takes no stance — so no anchoring verification is
+ * requested and the real core gate abstains on its own. It used to point at the contradict
  * row, which was interchangeable with this one only while a contradiction and a gap both
  * abstained; the contradict row now blocks, and a scenario named "abstain" must not block.
  */
 async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
   const useAbstain = ctx.abstain.has('B')
   const claimId = (ctx.runCtx.claimId || CANONICAL.claimId) as ClaimId
-  const anchors = await buildBChannelAnchors({
-    claimId,
-    stepId: ctx.step.id,
-    timestamp: ctx.runCtx.timestamp,
-    ...(useAbstain ? { anchorRef: B_CHANNEL_INCONCLUSIVE_REF } : {}),
-  })
+  // The claim sentence this run states. A judgement recorded about a different sentence is not
+  // about this claim, so the corpus path declines rather than reusing it.
+  const claimRef = ctx.runCtx.claimRef || CANONICAL.claimRef
+  const corpus = useAbstain
+    ? undefined
+    : await buildEvidenceAnchors({
+      claimId,
+      claimRef,
+      stepId: ctx.step.id,
+      timestamp: ctx.runCtx.timestamp,
+      sourceDoi: ctx.evidenceSourceDoi,
+    })
+  const anchors: BChannelEvidence =
+    corpus ??
+    (await buildBChannelAnchors({
+      claimId,
+      stepId: ctx.step.id,
+      timestamp: ctx.runCtx.timestamp,
+      ...(useAbstain ? { anchorRef: B_CHANNEL_INCONCLUSIVE_REF } : {}),
+    }))
   const admission = admitAsEvidence(ctx.evidenceProfile, anchors.provenance)
   // A policy refusal is a HOLD, not a finding about the claim: the anchor cannot carry this
   // gate, which says "we cannot judge", never "the claim is wrong". `blocked` and `failed`
@@ -176,7 +201,16 @@ async function verdictB(ctx: VerdictBuildCtx): Promise<GateVerdict> {
       (admission.disposition === 'admitted'
         ? ''
         : `anchor withheld from adjudication — ${admission.code}: ${admission.reason}; `) +
-      anchors.basis,
+      anchors.basis +
+      // The material the gate was NOT handed is stated on the verdict, not left for a reader to
+      // find in the corpus: a counter-assessed source that nothing adjudicates and nothing reports
+      // is indistinguishable from one that was never retrieved.
+      (corpus === undefined || corpus.assessments.length <= 1
+        ? ''
+        : `; this claim version holds ${String(corpus.assessments.length)} reviewed assessments: `
+          + corpus.assessments
+            .map(entry => `${entry.sourceDoi}=${entry.verdict}${entry.anchor ? ' (anchor)' : ''}`)
+            .join(', ')),
     rationale: result.reasonCode,
     timestamp: ctx.runCtx.timestamp,
   }

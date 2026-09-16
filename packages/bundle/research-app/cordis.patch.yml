@@ -63,11 +63,12 @@
         # reliability. Add `mailto: <address>` to either row to do that — the value
         # is a fact about the deployment, so this file does not invent one.
         #
-        # WHAT IS STILL NOT REAL, stated here because the two now travel together in
-        # one artifact: the B channel's ANCHOR reads a simulated resolver over a
-        # synthetic DOI (`runner/anchor-fixture.ts`), and its own basis string says
-        # so on every verdict. Real retrieval beside a labelled synthetic anchor is
-        # the current state, not a finished one.
+        # THE B CHANNEL'S ANCHOR IS NOW RETRIEVED MATERIAL, for the default study's claim. It
+        # reads `runner/evidence-corpus.ts`: sources that were fetched once by hand, each with the
+        # literal passage a reviewer judged and a recorded verdict on whether it supports the
+        # claim. The run does NOT re-fetch them, and each source's provenance note says so. A claim
+        # version the corpus does not hold falls back to the synthetic anchor in
+        # `runner/anchor-fixture.ts`, whose own basis string labels it on every verdict.
         literatureSearch:
           kind: openalex
         citationResolver:
@@ -118,8 +119,14 @@
         # abstentions and consumed approval events all survive the boundary, while no service
         # object or credential is persisted. Omitted, runs are not persisted and cannot resume.
         snapshotDirectory: .workbuddy/tmp/research-run-snapshot
-        # EVALUATION, not production: the B channel's anchor still resolves against a simulated
-        # resolver over a synthetic corpus (`runner/anchor-fixture.ts`), so the output is unsubmittable.
+        # EVALUATION, not production, and this is now a deliberate choice rather than a
+        # consequence: with a retrieved anchor the production profile drives all fifteen steps and
+        # stops at the human gate, so a demo run that declared it would export a package whose
+        # manifest says `profileEligible: true`. The two facts are separate (`submissionReady`
+        # stays false until a person approves), but a demonstration app that declares the
+        # submission profile is claiming a standing for its output that its checked-in literature
+        # and its offline prose stand-in do not have. Moving this to `production` belongs to the
+        # release gate, not to this row.
         evidenceProfile: evaluation
 
     # Team / fleet orchestration service exposing `ctx.agentTeams` (red-team,

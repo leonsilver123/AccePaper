@@ -1,6 +1,6 @@
 /**
- * The B channel's anchor is a FIXTURE, and the evidence profile decides whether that may carry
- * the gate.
+ * The B channel's FALLBACK anchor is a fixture, and the evidence profile decides whether it may
+ * carry the gate.
  *
  * The defect this pins: the production B channel — the judgment that a claim is anchored in
  * external evidence — passed on a synthetic anchor. The citation identity chain really ran, but
@@ -14,6 +14,12 @@
  * a `production` profile refuses it. The refusal WITHHOLDS the verifications and lets core reach
  * its own `GATE_MISSING_EXTERNAL_ANCHOR` abstention, so the gate still has exactly one
  * adjudication source and no outcome is reinterpreted here.
+ *
+ * WHAT THIS FILE IS ABOUT, NOW THAT REAL EVIDENCE EXISTS. This is the FALLBACK path — the one a
+ * run takes when the checked-in evidence corpus holds no reviewed judgement for its claim version
+ * — and it is still the path the demonstration profile runs on for any other claim. The reviewed
+ * path, where the anchor is a real article, is `reviewed-evidence.spec.ts`; the two are separate
+ * because the profile's decision is the same in both and the evidence is not.
  *
  * `A1-landscape` is the step under test because its gate is exactly `['B']`: the assertion is
  * about the B channel and cannot be satisfied by another component's outcome.
@@ -32,13 +38,19 @@ import { receiptFor } from './support/receipt.ts'
 /** A1's gate is `['B']` alone, so every verdict this spec builds comes from the B channel. */
 const A1: StepDefinition | undefined = getStepDefinitionById('A1-landscape')
 
+/**
+ * A claim sentence no reviewer has assessed. The corpus path declines on it, which is what makes
+ * this spec's subject the fallback rather than the reviewed anchor.
+ */
+const UNREVIEWED_CLAIM = 'a claim the evidence corpus holds no reviewed judgement for'
+
 function ctxWith(evidenceProfile: EvidenceProfile): VerdictBuildCtx {
   if (A1 === undefined) throw new Error('production-evidence-policy: A1-landscape is not a core step')
   return {
     step: A1,
     attemptId: 1,
     commit: receiptFor('A1-landscape', A1.outputs ?? []),
-    runCtx: createRunContext(),
+    runCtx: { ...createRunContext(), claimRef: UNREVIEWED_CLAIM },
     abstain: new Set(),
     evidenceProfile,
   }
@@ -51,7 +63,7 @@ async function verdictBUnder(evidenceProfile: EvidenceProfile) {
   return built[0]
 }
 
-describe('the B channel anchor is a fixture, and production refuses it', () => {
+describe('the B channel fallback anchor is a fixture, and production refuses it', () => {
   it('HOLDS the step under the production profile instead of passing on the synthetic anchor', async () => {
     // The anchor this run would use is real in every respect except the one that matters: the
     // chain executed and the resolver agreed. Building it here proves the abstention below is

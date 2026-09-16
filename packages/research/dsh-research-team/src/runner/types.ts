@@ -122,6 +122,14 @@ export interface DriveOptions {
    */
   readonly evidenceProfile?: EvidenceProfile
   /**
+   * Which of the claim's reviewed sources the B channel consults.
+   *
+   * Absent means the corpus's own anchor for this claim version — a normal run needs no value here.
+   * A caller names one to ask what the gate does when the evidence it consults is the assessed
+   * source that does NOT support the claim.
+   */
+  readonly evidenceSourceDoi?: string | undefined
+  /**
    * Called after each step that reached a terminal outcome, so a driver can persist the run's
    * state as it goes instead of only once at the end. A run that saved only when it finished lost
    * every step it had completed when the process died — including the ones that cost model calls.
@@ -150,6 +158,8 @@ export interface DriveStepOptions {
    * driver was given; see {@link DriveOptions.evidenceProfile}.
    */
   readonly evidenceProfile?: EvidenceProfile
+  /** The assessed source the B channel consults; see {@link VerdictBuildCtx.evidenceSourceDoi}. */
+  readonly evidenceSourceDoi?: string | undefined
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */
@@ -174,4 +184,13 @@ export interface VerdictBuildCtx {
    * rather than inferring a profile of its own.
    */
   readonly evidenceProfile: EvidenceProfile
+  /**
+   * The assessed source the B channel consults, when a caller names one.
+   *
+   * Absent means the corpus's own reviewed anchor for this claim version, so a normal run needs no
+   * value here. A caller names one to drive a scenario — "what does this gate do when the evidence
+   * it consults is the source that does NOT support the claim" — which is a fact about the source,
+   * not a bypass: the gate still adjudicates whatever the citation chain returns from it.
+   */
+  readonly evidenceSourceDoi?: string | undefined
 }

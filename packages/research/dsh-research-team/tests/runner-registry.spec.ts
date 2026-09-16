@@ -282,9 +282,17 @@ describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
   it('declares the truthfulness of each trinity gate channel with a basis', () => {
     for (const comp of ['A', 'B', 'C'] as const) {
       expect(TRUTHFULNESS_LEVELS).toContain(VERDICT_CHANNELS[comp].kind)
-      expect(VERDICT_CHANNELS[comp].kind).not.toBe('live_external')
       expect(VERDICT_CHANNELS[comp].basis.trim().length).toBeGreaterThan(20)
     }
+    // A and C run no external system: A is package code over a synthetic vote set, C is this
+    // package's own measurement. Only B consults material from outside the process.
+    expect(VERDICT_CHANNELS.A.kind).toBe('local_computation')
+    expect(VERDICT_CHANNELS.C.kind).toBe('local_computation')
+    // B reads the reviewed evidence corpus. That claim has to name what it read and what it falls
+    // back to, because the label is the only thing a reader of a report sees.
+    expect(VERDICT_CHANNELS.B.kind).toBe('live_external')
+    expect(VERDICT_CHANNELS.B.basis).toContain('reviewed evidence corpus')
+    expect(VERDICT_CHANNELS.B.basis).toContain('T23 synthetic anchor fixture')
   })
 })
 

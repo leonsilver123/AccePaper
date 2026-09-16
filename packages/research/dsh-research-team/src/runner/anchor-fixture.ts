@@ -109,18 +109,29 @@ export interface AnchorVerificationSpec {
   readonly anchorRef?: string
 }
 
-/** What the B channel feeds into core `adjudicate('B')`, plus its audit trail. */
-export interface BChannelAnchors {
-  /** Verifications handed to core `adjudicate('B')` (audit bridge + optional anchor). */
+/**
+ * What the B channel hands to core `adjudicate('B')`, plus what the policy and a reader need.
+ *
+ * This is the subset both B-channel paths produce — the simulated anchor here and the reviewed
+ * corpus anchors in `evidence-anchors.ts` — so the gate consumes one type whatever produced the
+ * evidence. Nothing here names how the evidence was obtained: that is `provenance`'s job, and it is
+ * the only thing the evidence policy reads.
+ */
+export interface BChannelEvidence {
+  /** Verifications handed to core `adjudicate('B')`. */
   readonly verifications: ReadonlyArray<VerificationResult>
-  /** The T23 anchor signal that decided whether to seek an anchoring verification. */
-  readonly anchorSignal: AnchorSignal
   /** True when a core-usable external anchor was produced. */
   readonly anchoring: boolean
   /** What produced this anchor; the B channel admits or refuses it by this and the run's profile. */
   readonly provenance: Provenance
   /** Human-readable basis for the report / gate evidence string. */
   readonly basis: string
+}
+
+/** What the B channel feeds into core `adjudicate('B')`, plus its audit trail. */
+export interface BChannelAnchors extends BChannelEvidence {
+  /** The T23 anchor signal that decided whether to seek an anchoring verification. */
+  readonly anchorSignal: AnchorSignal
 }
 
 /**

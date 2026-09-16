@@ -103,17 +103,36 @@ describe('sanitizeForExport', () => {
 })
 
 describe('F04 — eligibility is not readiness', () => {
-  it('reports a production run blocked at A1 as eligible and NOT ready', async () => {
+  it('reports a production run blocked at its first step as eligible and NOT ready', async () => {
     const store: ResearchRunStore = new Map()
-    const run = await runT19B(store, { evidenceProfile: 'production' })
+    // A1 is held by core's own missing-anchor abstention: the run stops at the first step, so it
+    // has no manuscript. This is the F04 shape — a blocked run whose manifest must not say it is
+    // ready. The run is produced by driving the B channel's abstention scenario, not by a bypass.
+    const run = await runT19B(store, {
+      evidenceProfile: 'production',
+      abstainComponents: (stepId: string) => (stepId === 'A1-landscape' ? ['B'] : []),
+    })
     const plan = planRunPackage(store, run, 'production')
-    // The run stopped at A1: no manuscript, most steps pending. The deployment's profile is still
-    // `production`, so the output is ELIGIBLE — and nothing about it is ready to submit.
+    // The deployment's profile is still `production`, so the output is ELIGIBLE — and nothing
+    // about it is ready to submit.
     expect(plan.manifest.profileEligible).toBe(true)
     expect(plan.manifest.submissionReady).toBe(false)
     // The reason names the most immediate missing thing. For a run stopped at its first step that
     // is the manuscript; the unfinished-step branch is pinned in `submission-readiness.spec.ts`.
     expect(plan.manifest.readinessNote).toMatch(/no formatted manuscript/)
+  })
+
+  it('reports a production run that reached the human gate as eligible and NOT ready', async () => {
+    // The other half of the same pair, and the one the reviewed evidence made reachable: with a
+    // real literature anchor at B, a production run drives all fifteen steps and stops at
+    // `E2-submit`. It is eligible, it produced a manuscript, and it is STILL not ready — a person
+    // has not approved it.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { evidenceProfile: 'production' })
+    const plan = planRunPackage(store, run, 'production')
+    expect(plan.manifest.profileEligible).toBe(true)
+    expect(plan.manifest.submissionReady).toBe(false)
+    expect(plan.manifest.readinessNote).toMatch(/E2-submit/)
   })
 
   it('reports an evaluation run that finished every step as eligible-and-not-ready too', async () => {

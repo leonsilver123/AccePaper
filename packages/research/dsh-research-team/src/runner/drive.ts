@@ -86,6 +86,7 @@ function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions 
     ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
     ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
     ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
+    ...(opts.evidenceSourceDoi !== undefined ? { evidenceSourceDoi: opts.evidenceSourceDoi } : {}),
   }
 }
 
@@ -249,6 +250,7 @@ export async function driveStep(
       // Resolved once, here, so every channel is built under the run's declared profile. The
       // default is the demo profile: an undeclared run executes and cannot be submitted.
       evidenceProfile: opts.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE,
+      evidenceSourceDoi: opts.evidenceSourceDoi,
     }
     const built = await buildStepVerdicts(vctx)
     for (const v of built) {

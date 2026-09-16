@@ -3331,10 +3331,12 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  *  - A: the REAL team `judgeRound` → core `adjudicate('A')` runs; the votes are a
  *    synthetic complete rebuttal round (fixture input). No TOOL runs, so this is
  *    `local_computation`, not `real_tool_fixture_input`.
- *  - B: the REAL core `verifyCitation` identity chain runs against the SIMULATED
- *    `MockCitationResolverAdapter`, with the claim stance taken from the T23
- *    synthetic anchor fixture → core `adjudicate('B')`. Real adapter logic +
- *    mocked external system.
+ *  - B: the REAL core `verifyCitation` identity chain runs against the reviewed evidence corpus
+ *    (`runner/evidence-corpus.ts`: articles retrieved once by hand, with the passage a reviewer
+ *    judged) when the run's claim version has one, and against the SIMULATED
+ *    `MockCitationResolverAdapter` (+ the T23 synthetic anchor fixture) when it does not → core
+ *    `adjudicate('B')`. The `live_external` label below describes the corpus path, which is the
+ *    one a run of the default study takes; the fallback is labelled where it is built.
  *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over a
  *    `live` experiment report MEASURED by platoon-sim over the study's declared scenario
  *    profile; the claim and its prediction are the fixture-supplied input. The
@@ -3348,8 +3350,11 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
     basis: 'team judgeRound → core adjudicate(\'A\') executes for real; the rebuttal round votes are synthetic fixture input',
   },
   B: {
-    kind: 'mock_external',
-    basis: 'core verifyCitation identity chain executes against MockCitationResolverAdapter (simulated external resolver); stance comes from the T23 synthetic anchor fixture → core adjudicate(\'B\')',
+    // An external system WAS consulted: the sources are real articles, retrieved once by hand and
+    // checked in with the passage a reviewer read. What this label does NOT claim is that the run
+    // fetched them live — it does not, and each source's provenance note says so.
+    kind: 'live_external',
+    basis: 'core verifyCitation identity chain executes against the reviewed evidence corpus (retrieved sources + recorded reviewer verdicts) → core adjudicate(\'B\'); falls back to MockCitationResolverAdapter + the T23 synthetic anchor fixture for a claim version the corpus does not hold',
   },
   C: {
     // The measurement is made by this package's experiment module, not by a tool.

@@ -369,7 +369,7 @@ describe('T19-B happy path — genuine trinity gate channels', () => {
     expect(String(a2?.gateResults.C?.evidence)).toContain("adjudicate('C')")
   })
 
-  it('sources the B verdict from the T23 anchor fixture + core verifyCitation over a mock resolver', async () => {
+  it('sources the B verdict from the reviewed evidence corpus + core verifyCitation', async () => {
     const { store, run } = await happyRun()
     const snap = getRunSnapshot(store, run.runId)
     const b = snap.steps['A1-landscape']?.gateResults.B
@@ -377,10 +377,17 @@ describe('T19-B happy path — genuine trinity gate channels', () => {
     const evidence = String(b?.evidence)
     expect(evidence).toContain("core:adjudicate('B')")
     expect(evidence).toContain('anchoring=true')
-    expect(evidence).toContain('T23 anchor')
-    expect(evidence).toContain('MockCitationResolverAdapter')
-    // Truthfulness is declared as mock_external, NEVER as real verification.
-    expect(VERDICT_CHANNELS.B.kind).toBe('mock_external')
+    // The anchor is a real article the reviewer assessed, and the verdict names which — a passing
+    // B gate that did not say what it anchored on would be the thing this whole path exists to fix.
+    expect(evidence).toContain('10.1109/tits.2026.3727135')
+    expect(evidence).toContain('full-text')
+    expect(evidence).toContain('assessed supports')
+    // The claim version's OTHER reviewed sources are on the verdict, not left in the corpus: a
+    // counter-assessed source nothing reports is indistinguishable from one never retrieved.
+    expect(evidence).toContain('10.1016/j.trb.2025.103352')
+    expect(evidence).toContain('NOT handed to the gate')
+    // The channel's truthfulness is still declared, and it is no longer `mock_external`.
+    expect(VERDICT_CHANNELS.B.kind).toBe('live_external')
   })
 
   it('adjudicates the C2 A+B+C triple gate through all three real channels', async () => {
