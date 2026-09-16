@@ -70,6 +70,13 @@ async function boot(options: {
 }): Promise<{
   readonly ctx: Context
   readonly service: ResearchTeamService
+  /**
+   * The research engine the service reads its deployment facts from.
+   *
+   * Exposed for the one test that needs the deployment's directory to answer differently over time —
+   * which is how a root that moved, or a write that failed, is expressed without touching internals.
+   */
+  readonly engine: { snapshotDirectory?: string; toolDeps?: { literatureAdapter: LiteratureSearchAdapter } }
   directoryEntries(name: string): ReadonlyArray<string>
   /** Point the deployment's saves at another directory, as a reconfiguration would. */
   setSnapshotDirectory(directory: string): void
@@ -102,6 +109,7 @@ async function boot(options: {
   return {
     ctx,
     service: ctx.agentTeams as unknown as ResearchTeamService,
+    engine,
     // What the deployment actually wrote, read off the disk rather than from the service: a count
     // taken from the thing under test would agree with itself.
     setSnapshotDirectory: (directory: string) => { engine.snapshotDirectory = directory },
@@ -349,6 +357,72 @@ describe('a study is started and read back', () => {
       await expect(
         persistence.save(restored!.store, started, { baseRevision: reported ?? 0 }),
       ).resolves.toBeDefined()
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('records the command before the run it names, so a crash between them cannot start a second study', async () => {
+    // THE WINDOW THIS CLOSES. Written the other way round — the run first, the command record after
+    // — a process that died between the two left a study on disk with nothing naming its command,
+    // and the caller's retry, finding no record, started a SECOND one. The order is what makes the
+    // retry able to find something; this test observes the order at the deployment's own seam.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    const commandId = 'command-order'
+    const record = join(root, 'commands', `${commandId}.json`)
+    // Every resolution of the deployment's directory, and whether the command's record was already
+    // there when it happened.
+    const recordExistedWhenRead: boolean[] = []
+    Object.defineProperty(host.engine, 'snapshotDirectory', {
+      configurable: true,
+      get: () => {
+        recordExistedWhenRead.push(existsSync(record))
+        return root
+      },
+    })
+    try {
+      const started = await host.service.startRun({ commandId })
+      expect(started.persisted).toBe(true)
+      // THE RUN'S OWN WRITE RESOLVED THE DIRECTORY AFTER THE RECORD HAD LANDED. Under the reverse
+      // order no resolution can see it: the record is written last, after every read.
+      expect(recordExistedWhenRead).toContain(true)
+      // ...and the retry lookup, which comes first, must find nothing for a command nobody has sent.
+      expect(recordExistedWhenRead[0]).toBe(false)
+      expect(existsSync(record)).toBe(true)
+      await untilStopped(host.service, started.runId)
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('takes the command record back when the start it named did not happen', async () => {
+    // THE PRICE OF THAT ORDER, paid here. The record lands before the run, so a start that then
+    // fails has left a record naming a run nobody began — and a retry that met it would be refused
+    // for good. It is removed where it was written, so the id is free again.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    const commandId = 'command-unwritten'
+    const record = join(root, 'commands', `${commandId}.json`)
+    const unwritable = join(snapshotRoot(), 'not-a-directory')
+    writeFileSync(unwritable, 'not a directory')
+    Object.defineProperty(host.engine, 'snapshotDirectory', {
+      configurable: true,
+      get: () => (existsSync(record) ? unwritable : root),
+    })
+    try {
+      await expect(host.service.startRun({ commandId })).rejects.toThrow(/could not be recorded/u)
+      // NOTHING IS LEFT, NEITHER HALF. The record was written (the test above proves the order) and
+      // the run's own write failed, so what remains is neither a record nor a run.
+      expect(existsSync(record)).toBe(false)
+      expect(readdirSync(root)).toEqual(['commands'])
+
+      // THE ID IS FREE AGAIN: the deployment is repaired and the same command starts the study.
+      Object.defineProperty(host.engine, 'snapshotDirectory', { configurable: true, writable: true, value: root })
+      const started = await host.service.startRun({ commandId })
+      expect(started.persisted).toBe(true)
+      expect(host.directoryEntries('commands')).toEqual([`${commandId}.json`])
+      await untilStopped(host.service, started.runId)
     } finally {
       await host.dispose()
     }

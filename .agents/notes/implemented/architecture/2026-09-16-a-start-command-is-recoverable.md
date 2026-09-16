@@ -24,9 +24,19 @@ caller could be handed a study it did not ask for and had no way to notice.
 registered before anything is awaited.**
 
 - `StartCommandRecord` (`{commandId, runId, paramsDigest, startedAt}`) is written to
-  `<snapshotDirectory>/commands/<commandId>.json`, by write-and-rename, BEFORE the driver starts.
-  A start whose record cannot be written FAILS: a command that cannot be recovered is worse than one
-  that did not run, because the caller would hold an id nothing can look up.
+  `<snapshotDirectory>/commands/<commandId>.json`, by write-and-rename, **before the run it names is
+  saved**. A start whose record cannot be written FAILS: a command that cannot be recovered is worse
+  than one that did not run, because the caller would hold an id nothing can look up.
+- **The order of those two writes is the window between them.** Written the other way round, a
+  process dying after the run's first save and before the record left a study on disk with nothing
+  naming its command, and the retry — finding no record — started a second one. Written first, the
+  retry always finds something, and the window's worst case is a command id that has to be replaced:
+  a record whose run is missing is reported (`persisted: false`, naming the missing run) and never
+  re-run, because a study that was begun may have produced something.
+- **A start that did not happen takes its record back**, from the path it wrote it to rather than
+  from a re-resolved directory — the snapshot root is a deployment fact read live, and a root that
+  moved between the two writes would otherwise send the removal to the wrong place. If the removal
+  fails the record stays, which is the safe direction: the retry refuses instead of duplicating.
 - `startRun` registers a promise synchronously — `startCommandOnce` runs to its first `await` before
   the map is written, and no other call can interleave with that synchronous block — so a second
   arrival waits for the first answer instead of creating a run. A failed start deletes the entry,

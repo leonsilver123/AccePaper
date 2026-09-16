@@ -37,7 +37,7 @@
 // needed to keep the durable fold or the guard current.
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { Context } from '@deepseek-ai/cordis'
@@ -1302,7 +1302,9 @@ export class ResearchTeamService extends TypertRemoteService {
     try {
       return await started
     } catch (error) {
-      // A FAILED START IS RETRYABLE. Nothing was recorded, so the id is free again.
+      // A FAILED START IS RETRYABLE. Nothing was begun, and the one thing the attempt may have left
+      // behind — its command record, removed where it was written — is undone with this entry so
+      // the id is free again.
       this.startCommands.delete(commandId)
       throw error
     }
@@ -1353,29 +1355,45 @@ export class ResearchTeamService extends TypertRemoteService {
 
     const store: ResearchRunStore = new Map()
     const prepared = prepareRun(store, driveOpts)
-    const persistence = this.hostRunPersistence(prepared.runId)
-    let persisted = false
-    let persistenceError: string | undefined
+    const startedAt = Date.now()
+    // THE RECORD LANDS BEFORE THE RUN DOES, which is the order that closes the window between them.
+    // Written afterwards, a process dying between the run's first save and this write leaves a study
+    // that exists with nothing naming its command — and the caller's retry, finding no record,
+    // starts a SECOND one. Written first, the retry always has something to find: it is answered
+    // from the record, and the only thing the window can cost is a command id that has to be
+    // replaced. A record whose run is missing is reported as such rather than re-run, because a
+    // study that was begun may have produced something, and starting another is not a way to find
+    // out. The failed-start path removes this record again (see `removeStartCommand`).
+    const commandRecord = await this.writeStartCommand({
+      commandId,
+      runId: prepared.runId,
+      paramsDigest: digest,
+      startedAt,
+    })
     // The revision the run is on disk at. It starts as the write below and moves with each
     // checkpoint, so a later writer — an approval's persistence, most of all — bases its save on
     // the revision that is actually stored rather than on zero.
-    let savedRevision: number | null = null
-    if (persistence === undefined) {
-      persistenceError = 'no snapshot directory is configured for this deployment'
-    } else {
-      try {
-        // BEFORE the driver: a run that exists only in memory cannot be found after a reload, and
-        // a start that answered success would have promised it could.
-        savedRevision = (await persistence.save(store, prepared.runId, { baseRevision: 0 })).revision
-        persisted = true
-      } catch (error) {
-        persistenceError = error instanceof Error ? error.message : String(error)
-      }
-    }
-    if (!persisted) {
-      // NOT STARTED. The caller is told the run id was not made durable and nothing was begun, so
-      // a retry is safe; starting anyway would leave a study running that no record names.
-      throw new Error(`[research] the run could not be recorded, so it was not started: ${String(persistenceError)}`)
+    let savedRevision: number
+    try {
+      const persistence = this.hostRunPersistence(prepared.runId)
+      if (persistence === undefined) throw new Error('no snapshot directory is configured for this deployment')
+      // BEFORE the driver: a run that exists only in memory cannot be found after a reload, and a
+      // start that answered success would have promised it could.
+      savedRevision = (await persistence.save(store, prepared.runId, { baseRevision: 0 })).revision
+    } catch (error) {
+      // NOT STARTED, AND THE RECORD GOES BACK WITH IT. The caller is told the run id was not made
+      // durable and nothing was begun, so a retry is safe; starting anyway would leave a study
+      // running that no record names, and keeping the record would leave the id unusable — the two
+      // halves of "this command did not happen" are undone together. The whole start is inside this
+      // `try` because the failure arrives in two shapes — resolving the deployment's directory can
+      // throw before anything is written — and a compensation that covered only one of them would
+      // leave the record behind exactly when the deployment is broken.
+      await this.removeStartCommand(commandRecord).catch(() => {
+        // NOTHING ELSE TO DO, and nothing extra is reported: the caller is being told why its start
+        // failed. A record left behind is the safe direction — the retry refuses rather than
+        // starting a second study.
+      })
+      throw new Error(`[research] the run could not be recorded, so it was not started: ${errorMessage(error)}`)
     }
 
     const active: ActiveRun = {
@@ -1427,21 +1445,9 @@ export class ResearchTeamService extends TypertRemoteService {
     // ONE place records what became of the run, so the query can report it.
     void this.driveInBackground(store, prepared.runId, prepared.runCtx, driving, active)
 
-    const started: ResearchRunStart = {
-      runId: prepared.runId,
-      persisted,
-      startedAt: Date.now(),
-    }
-    // THE COMMAND IS RECORDED BEFORE THE DRIVER STARTS, beside the run it names. A restart reads it
-    // to answer the retry; a record that cannot be written is a start that cannot be recovered, so
-    // it fails here rather than leaving a caller with an id nothing can look up.
-    await this.writeStartCommand({
-      commandId,
-      runId: prepared.runId,
-      paramsDigest: digest,
-      startedAt: started.startedAt,
-    })
-    return started
+    // ALWAYS TRUE HERE: a run that could not be recorded threw above rather than reaching this, and
+    // the caller of a `persisted: false` receipt is the retry path, which reads it off the record.
+    return { runId: prepared.runId, persisted: true, startedAt }
   }
 
   /**
@@ -1479,10 +1485,11 @@ export class ResearchTeamService extends TypertRemoteService {
    * Write one command's durable record.
    *
    * @param record - what the command produced.
+   * @returns the file written, or undefined when this deployment records no commands.
    */
-  private async writeStartCommand(record: StartCommandRecord): Promise<void> {
+  private async writeStartCommand(record: StartCommandRecord): Promise<string | undefined> {
     const directory = this.startCommandDirectory()
-    if (directory === undefined) return
+    if (directory === undefined) return undefined
     mkdirSync(directory, { recursive: true })
     const target = join(directory, `${record.commandId}.json`)
     const temporary = `${target}.tmp`
@@ -1490,6 +1497,28 @@ export class ResearchTeamService extends TypertRemoteService {
     // record or none, never one a crash left half-written.
     await writeFile(temporary, JSON.stringify(record), { encoding: 'utf8' })
     await rename(temporary, target)
+    return target
+  }
+
+  /**
+   * Drop one command's durable record, for a start that did not happen.
+   *
+   * A record is written BEFORE the run it names, so that a process dying between the two leaves a
+   * retry able to SEE the command instead of starting a second study. That ordering costs one thing:
+   * a start that then failed for an ordinary reason — the run's snapshot could not be written — has
+   * left a record naming a run nobody began. Removing it is what keeps the id retryable, and it is a
+   * compensating write rather than a second source of truth: if it fails, the retry meets a record
+   * whose run is missing, refuses, and asks for a new command id.
+   *
+   * The PATH is passed rather than re-resolved: the directory is a deployment fact read live, so a
+   * root that moved between the write and this removal would otherwise send it to the wrong place
+   * and leave the record it was meant to take back.
+   *
+   * @param target - the file {@link writeStartCommand} returned, when it wrote one.
+   */
+  private async removeStartCommand(target: string | undefined): Promise<void> {
+    if (target === undefined) return
+    await rm(target, { force: true })
   }
 
   /**
