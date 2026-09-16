@@ -17,7 +17,7 @@
 
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { en } from '../src/client/locales.ts'
 import {
   toRunSummary,
@@ -454,9 +454,9 @@ describe('research workbench run control', () => {
     expect(screen.queryByRole('button', { name: en['run.action'] })).toBeNull()
   })
 
-  it('starts a run and renders the summary it resolves with', async () => {
+  it('starts a run and renders the summary it reports', async () => {
     const live = toRunSummary({ ...fixtureInput(), runId: 'run-live-42', source: 'live' })
-    const onRun = vi.fn().mockResolvedValue(live)
+    const onRun = vi.fn(async (_plan: unknown, onUpdate: (summary: typeof live) => void) => { onUpdate(live) })
     renderComp(createElement(ResearchWorkbench, { t, onRun }))
 
     // Before the run there is nothing to label: no badge, and the page says so.
@@ -467,6 +467,82 @@ describe('research workbench run control', () => {
     expect(onRun).toHaveBeenCalledTimes(1)
     expect(screen.queryByText(en['intro.noRun'])).toBeNull()
     expect(screen.getAllByText(en['source.live']).length).toBeGreaterThan(0)
+  })
+
+  it('renders a run the source is still following, and says what is driving it', async () => {
+    // THE POINT OF THE STREAMING SEAM. The run source holds the promise open — the study is not
+    // over — and the page already shows the run: its identity, its state, and the fact that
+    // something is driving it. The alternative was a blank page for the eight minutes a study takes.
+    const partial = toRunSummary({
+      ...fixtureInput(),
+      runId: 'run-live-7',
+      source: 'live',
+      execution: 'running',
+    })
+    let finish: () => void = () => {}
+    const onRun = vi.fn(async (_plan: unknown, onUpdate: (summary: typeof partial) => void) => {
+      onUpdate(partial)
+      await new Promise<void>((resolve) => { finish = resolve })
+    })
+    renderComp(createElement(ResearchWorkbench, { t, onRun }))
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    // The run is on screen while its promise is unresolved. (Two panels carry the source badge, so
+    // this counts rather than fetching one node.)
+    expect(screen.getAllByText(en['source.live']).length).toBeGreaterThan(0)
+    expect(screen.getByText(en['run.id'].replace('{runId}', 'run-live-7'))).toBeTruthy()
+    expect(screen.getByText(en['run.execution.running'])).toBeTruthy()
+    // And the control says it is still working, so nobody reads the page as finished.
+    expect(screen.getByRole('button', { name: en['run.running'] })).toBeTruthy()
+
+    await act(async () => { finish() })
+  })
+
+  it('picks up the run a reload interrupted, without waiting for a new one', async () => {
+    // A RELOAD IS NOT A NEW STUDY. The host is still driving the run this browser started, so the
+    // page asks what became of it on arrival. Nothing to resume is the normal first-visit case and
+    // reports nothing.
+    const known = toRunSummary({ ...fixtureInput(), runId: 'run-after-reload', source: 'live', execution: 'running' })
+    const onResume = vi.fn(async (onUpdate: (summary: typeof known) => void) => { onUpdate(known) })
+    renderComp(createElement(ResearchWorkbench, { t, onResume }))
+
+    await waitFor(() => { expect(onResume).toHaveBeenCalledTimes(1) })
+    expect(screen.getByText(en['run.id'].replace('{runId}', 'run-after-reload'))).toBeTruthy()
+    expect(screen.queryByText(en['intro.noRun'])).toBeNull()
+  })
+
+  it('shows no run when there is nothing to resume, and does not report one as an error', async () => {
+    // The common case: a first visit. A resume that found nothing must leave the orientation block
+    // alone rather than putting a failure on a page where nothing went wrong.
+    const onResume = vi.fn(async () => {})
+    renderComp(createElement(ResearchWorkbench, { t, onResume }))
+
+    await waitFor(() => { expect(onResume).toHaveBeenCalledTimes(1) })
+    expect(screen.getByText(en['intro.noRun'])).toBeTruthy()
+    expect(document.querySelector('[data-research-run-id]')).toBeNull()
+  })
+
+  it('shows the failure a run stopped with, and does not claim it is still running', async () => {
+    // A driver that threw is a run-level fact: the steps say how far the study got, and this says
+    // whatever was going to continue it is gone. Reporting only the steps leaves a reader waiting
+    // on a run nothing is driving.
+    const broken = toRunSummary({
+      ...fixtureInput(),
+      runId: 'run-live-9',
+      source: 'live',
+      execution: 'failed',
+      executionError: 'the claim channel is unreachable',
+    })
+    const onRun = vi.fn(async (_plan: unknown, onUpdate: (summary: typeof broken) => void) => { onUpdate(broken) })
+    renderComp(createElement(ResearchWorkbench, { t, onRun }))
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    const badge = document.querySelector('[data-research-execution]')
+    expect(badge?.textContent).toContain(en['run.execution.failed'])
+    // The REASON, not just the state: "it failed" without "why" is the report the user cannot act on.
+    expect(badge?.textContent).toContain('the claim channel is unreachable')
   })
 
   it('reports a failed run instead of leaving the fixture on screen', async () => {

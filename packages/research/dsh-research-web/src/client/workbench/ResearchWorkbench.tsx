@@ -10,7 +10,7 @@
  * though they were a result. It now says that nothing has been run, and renders no panel: there is
  * nothing to report until a run produces something to report.
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   ConvViewProps,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -46,13 +46,18 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * plan is omitted by a caller that has none to state — the run then carries the deployment's
    * default, which is what a host with no proposal seam can offer.
    */
-  readonly onRun?: (plan?: WirePlan) => Promise<RunSummary>
+  readonly onRun?: (plan: WirePlan | undefined, onUpdate: (summary: RunSummary) => void) => Promise<void>
   /**
    * Ask the host for research directions within a field. Omitted by a host that cannot reach a
    * model, in which case the run control starts the default plan directly rather than opening a
    * dialog that could only ever fail.
    */
   readonly onPropose?: (field: string) => Promise<WireProposalAnswer>
+  /**
+   * Pick up the run this browser was following before a reload, reporting snapshots through the
+   * callback. Omitted by a host that cannot name a run again, in which case a reload shows none.
+   */
+  readonly onResume?: (onUpdate: (summary: RunSummary) => void) => Promise<void>
   /**
    * Submit one human-gate decision to the backend. Omitted by a host whose deployment serves no
    * authenticated approval endpoint, in which case the approval panel's buttons stay disabled.
@@ -99,7 +104,7 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  * @param props - slot runtime props, the `research` namespace translate `t`, an optional
  *   `summary` to render, and the optional run and approval seams.
  */
-export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove }: ResearchViewProps) {
+export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove, onResume }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [running, setRunning] = useState(false)
@@ -109,13 +114,31 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
   // No run means the next action is the one that starts a run, so there is nothing to derive.
   const nextAction = summary === undefined ? undefined : selectNextAction(summary)
 
+  // ONCE, ON ARRIVAL. A reload is not a new study: the host is still driving the run this browser
+  // started, and this asks it what became of it. An injected summary means the caller already knows
+  // which run to show, and a resume would then be a second opinion about the same page.
+  useEffect(() => {
+    if (onResume === undefined || injected !== undefined) return
+    let cancelled = false
+    void onResume((update) => { if (!cancelled) setLive(update) }).catch((cause: unknown) => {
+      if (cancelled) return
+      // A resume that was REFUSED is reported. A resume that found nothing is not an error and does
+      // not come through here — the page simply still shows no run.
+      setError(cause instanceof Error ? cause.message : String(cause))
+    })
+    return () => { cancelled = true }
+  }, [onResume, injected])
+
   const start = useCallback((plan?: WirePlan) => {
     if (onRun === undefined) return
     setDialogOpen(false)
     setRunning(true)
     setError(undefined)
-    void onRun(plan).then(
-      (result) => { setLive(result); setRunning(false) },
+    // THE PAGE FOLLOWS THE RUN RATHER THAN WAITING FOR IT. Every snapshot the run source reads is
+    // rendered as it arrives, so a study that takes minutes is visible while it happens; the
+    // promise settles when there is nothing left to read.
+    void onRun(plan, (update) => { setLive(update) }).then(
+      () => { setRunning(false) },
       (cause: unknown) => {
         // A run that failed is reported as a failure. Showing anything else would leave a
         // reader looking at numbers no run produced.
@@ -192,6 +215,22 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
       {summary !== undefined && summary.projectRevision !== null && (
         <span className={css.mockBadge} data-research-revision="">
           {t('run.revision', { revision: String(summary.projectRevision) })}
+        </span>
+      )}
+      {/* WHICH RUN THIS IS, AND WHETHER ANYTHING IS STILL DRIVING IT. Two facts a reader cannot get
+          from the numbers: the id is what they quote when they ask about it, and the execution
+          state is the difference between a study that is working and one that stopped — a run
+          whose steps all read 未开始 looks identical in the panels either way. Unstated stays
+          unstated: a host that names no execution state is not claiming the run has stopped. */}
+      {summary !== undefined && (
+        <span className={css.mockBadge} data-research-run-id="">
+          {t('run.id', { runId: summary.runId })}
+        </span>
+      )}
+      {summary !== undefined && summary.execution !== null && (
+        <span className={css.mockBadge} data-research-execution="">
+          {t(`run.execution.${summary.execution}`)}
+          {summary.executionError !== null ? ` — ${summary.executionError}` : ''}
         </span>
       )}
       {onRun !== undefined && (

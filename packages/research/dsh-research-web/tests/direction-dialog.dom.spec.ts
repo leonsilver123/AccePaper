@@ -195,7 +195,12 @@ describe('the run dialog', () => {
     const onRun = vi.fn(async () => { throw new Error('stop here') })
     render(createElement(ResearchWorkbench, { t, onRun }))
     fireEvent.click(screen.getByRole('button', { name: en['run.action'] }))
-    await waitFor(() => { expect(onRun).toHaveBeenCalledWith(undefined) })
+    await waitFor(() => { expect(onRun).toHaveBeenCalledTimes(1) })
+    // No plan, because a host that cannot propose has none to offer — and a place to report
+    // snapshots, which the page uses to follow the run it just started.
+    const [plan, onUpdate] = onRun.mock.calls[0] as unknown as [unknown, unknown]
+    expect(plan).toBeUndefined()
+    expect(typeof onUpdate).toBe('function')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

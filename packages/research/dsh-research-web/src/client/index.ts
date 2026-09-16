@@ -20,6 +20,7 @@ import { buildApprovalSubmitter } from './approval-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
+import type { WireRunStart } from '../run-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -52,6 +53,100 @@ interface ResearchRemoteNamespace {
     { readonly ok: true; readonly value: WireProposalAnswer }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
+
+  /**
+   * Create a run and answer with its id, before the study has finished.
+   *
+   * The third method on the same surface, and the one the run control calls: {@link run} waits for
+   * the whole study, so a person who pressed a button had nothing to look at until it ended and a
+   * reload lost the only handle they had.
+   */
+  startRun(request: {
+    readonly commandId: string
+    readonly domainDirection?: string
+    readonly plan?: WirePlan
+  }): Promise<
+    { readonly ok: true; readonly value: WireRunStart }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Read one run as it stands.
+   *
+   * `null` on success means this deployment holds no such run — not in memory, and not on disk.
+   * That is a different answer from a refused call, and the reader is told which.
+   */
+  runSnapshot(request: { readonly runId: string }): Promise<
+    { readonly ok: true; readonly value: WireRunSnapshot | null }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+}
+
+/**
+ * Where this tab remembers the run it was following before a reload.
+ *
+ * A RELOAD IS NOT A NEW STUDY. The run keeps going on the host — the driver is the service's — but
+ * the page had no way to name it again, so a refresh showed "nothing has been run in this session"
+ * over a study that was still working.
+ *
+ * SESSION storage, not local: what a reload needs is a handle, and a handle that outlived the tab
+ * would come back with the NEXT visit — a page opening tomorrow onto a run the reader did not come
+ * back for, reported as `stopped`. A day-old run is not what "restore what I was watching" means,
+ * and the narrower store says exactly the narrower thing.
+ */
+const LAST_RUN_KEY = 'dsh.research.lastRunId'
+
+/**
+ * Record the run this browser is following, or forget it.
+ * @param runId - the run to remember, or null to forget the remembered one.
+ */
+function rememberRunId(runId: string | null): void {
+  try {
+    if (runId === null) globalThis.sessionStorage.removeItem(LAST_RUN_KEY)
+    else globalThis.sessionStorage.setItem(LAST_RUN_KEY, runId)
+  } catch {
+    // Storage can be refused (a private window, blocked site data). The page then cannot restore a
+    // run after a reload, which is a limit on a convenience and never on the run itself.
+  }
+}
+
+/**
+ * The run this browser was following, or null when it was following none.
+ * @returns the remembered run id.
+ */
+function rememberedRunId(): string | null {
+  try {
+    return globalThis.sessionStorage.getItem(LAST_RUN_KEY)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * How long to wait between reads of a running study.
+ *
+ * A study takes minutes and its steps take tens of seconds, so this is a reader's patience rather
+ * than a bound on anything the host does. It is a constant of the CLIENT because it is a display
+ * choice: nothing about the run depends on how often a page asks about it.
+ */
+const POLL_INTERVAL_MS = 1500
+
+/**
+ * A fresh command id.
+ *
+ * `randomUUID` over a counter, because the id has to survive a reload: a page that came back and
+ * pressed again with a counter starting at one would send an id the host has already answered, and
+ * would be handed the earlier run instead of starting the one the person asked for.
+ *
+ * @returns an id no other command of this client can carry.
+ */
+function newCommandId(): string {
+  return globalThis.crypto.randomUUID()
+}
+
+/** Wait one poll interval. */
+async function pause(): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, POLL_INTERVAL_MS) })
 }
 
 /** Required services: the conversation slot, registries, sessions, locale, and Remote. */
@@ -68,14 +163,19 @@ export function apply(ctx: Context): void {
   // Registration-time text (the view tab label) reads through the bound
   // translate as a thunk, so it follows the active locale without re-registration.
   const t = ctx.locale.bind(NS)
-  // The namespace is read through `ctx.get`, never the property proxy. A mounted namespace is a
-  // service named `remote.<namespace>`, and the proxy resolves a property only for a context whose
-  // fiber carries it or that declares it in `inject`; this plugin declares `remote`, not each
-  // namespace, so `ctx.remote.research` threw `cannot get property "remote.research" without
-  // inject` on the first real click. `ctx.get` reads the global service store, which is the
-  // documented read for a service this plugin does not declare — the same distinction the prose
-  // writer needed for `ctx.agentLoop` (docs/postmortem/0001-acp-default-export-drops-inject.md).
-  const run = async (plan?: WirePlan): Promise<ReturnType<typeof buildSummary>> => {
+  /**
+   * The host's research namespace, or a refusal naming why there is none.
+   *
+   * Read through `ctx.get`, never the property proxy: a mounted namespace is a service named
+   * `remote.<namespace>`, and the proxy resolves a property only for a context whose fiber carries
+   * it or that declares it in `inject`; this plugin declares `remote`, not each namespace, so
+   * `ctx.remote.research` threw `cannot get property "remote.research" without inject` on the first
+   * real click. `ctx.get` reads the global service store, which is the documented read for a
+   * service this plugin does not declare — the same distinction the prose writer needed for
+   * `ctx.agentLoop` (docs/postmortem/0001-acp-default-export-drops-inject.md).
+   * @returns the namespace, or throws naming the assembly that failed to mount it.
+   */
+  const namespace = (): ResearchRemoteNamespace => {
     const remote = ctx.get('remote.research') as unknown as ResearchRemoteNamespace | undefined
     if (remote === undefined) {
       throw new Error(
@@ -83,11 +183,61 @@ export function apply(ctx: Context): void {
         + 'namespaces did not mount the research one',
       )
     }
-    const result = await remote.run(plan === undefined ? {} : { plan })
+    return remote
+  }
+
+  /**
+   * START → READ → FOLLOW, instead of waiting for the study.
+   *
+   * The old body awaited one `run` call and returned when the whole pipeline had finished, which
+   * meant the page had nothing to show for the eight minutes it was working and lost the run's
+   * identity on every reload. This starts the run, hands the page its first snapshot as soon as
+   * the host can produce one, and keeps reading until nothing is driving the run — reporting each
+   * snapshot to `onUpdate` as it arrives, so the page follows the study rather than waiting on it.
+   *
+   * THE COMMAND ID IS THE CALLER'S RETRY TOKEN. A dropped response is not a refusal, and the
+   * client cannot tell one from the other; it sends the SAME id again, and the host answers with
+   * the run it already started rather than beginning a second study. A new id is a new study, and
+   * only a deliberate second press produces one.
+   *
+   * THE PAGE CLOSING DOES NOT CANCEL THE RUN. This loop is the page's interest in the study, not
+   * the study: the driver is owned by the host service, and a reader who comes back reads the same
+   * run — from this process's memory while it is alive, and from the run's own checkpoints after a
+   * restart, where it is reported as stopped rather than as still running.
+   *
+   * @param plan - the plan the person confirmed, or undefined for the deployment's own.
+   * @param onUpdate - called with every snapshot, starting with the first one available.
+   * @returns when the run has stopped, failed, or left this deployment's records.
+   */
+  const run = async (
+    plan: WirePlan | undefined,
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+  ): Promise<void> => {
+    const remote = namespace()
+    const started = await remote.startRun({
+      commandId: newCommandId(),
+      ...(plan === undefined ? {} : { plan }),
+    })
     // A refused call carries the host's own failure; surfacing it here is what keeps the tab
     // from showing a stale fixture as though the run had produced it.
-    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-    return buildSummary(summaryInputFrom(result.value))
+    if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`)
+    const runId = started.value.runId
+    rememberRunId(runId)
+
+    for (;;) {
+      const read = await remote.runSnapshot({ runId })
+      if (!read.ok) throw new Error(`${read.error.code}: ${read.error.message}`)
+      if (read.value === null) {
+        // THIS DEPLOYMENT HAS NO SUCH RUN. It was never stored, or its records are gone. Saying so
+        // is the only honest answer: continuing to poll would suggest something is still working.
+        rememberRunId(null)
+        throw new Error(`the service holds no record of run ${runId}`)
+      }
+      const summary = buildSummary(summaryInputFrom(read.value))
+      onUpdate(summary)
+      if (read.value.execution !== 'running') return
+      await pause()
+    }
   }
   /**
    * Ask the host for research directions. The failure is surfaced rather than turned into an empty
@@ -96,15 +246,38 @@ export function apply(ctx: Context): void {
    * @param field - the domain the person stated, or an empty string for none.
    * @returns what the host could propose, and what it refused.
    */
-  const propose = async (field: string): Promise<WireProposalAnswer> => {
-    const remote = ctx.get('remote.research') as unknown as ResearchRemoteNamespace | undefined
-    if (remote === undefined) {
-      throw new Error(
-        'the client has no `remote.research` namespace: the assembly that mounts Remote '
-        + 'namespaces did not mount the research one',
-      )
+  /**
+   * Pick up the run this browser was following before the page was reloaded.
+   *
+   * Nothing to resume is the NORMAL case, not a failure: a first visit, or a browser whose run this
+   * deployment no longer holds. Both resolve without reporting anything, and the second also forgets
+   * the id — a stored handle to a run that is gone would make every later visit ask about it again.
+   *
+   * @param onUpdate - called with each snapshot, starting with the one read on arrival.
+   * @returns when the resumed run has stopped, or immediately when there is nothing to resume.
+   */
+  const resume = async (onUpdate: (summary: ReturnType<typeof buildSummary>) => void): Promise<void> => {
+    const remembered = rememberedRunId()
+    if (remembered === null) return
+    const remote = namespace()
+    for (;;) {
+      const read = await remote.runSnapshot({ runId: remembered })
+      if (!read.ok) throw new Error(`${read.error.code}: ${read.error.message}`)
+      if (read.value === null) {
+        // The run is not in this deployment's records at all — a different host, a cleared
+        // directory. The handle was this browser's, so it is this browser's to drop.
+        rememberRunId(null)
+        return
+      }
+      const summary = buildSummary(summaryInputFrom(read.value))
+      onUpdate(summary)
+      if (read.value.execution !== 'running') return
+      await pause()
     }
-    const result = await remote.proposeDirections({ field })
+  }
+
+  const propose = async (field: string): Promise<WireProposalAnswer> => {
+    const result = await namespace().proposeDirections({ field })
     if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
     return result.value
   }
@@ -125,5 +298,5 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run, approve, propose)))
+  }, researchViewWith(run, approve, propose, resume)))
 }

@@ -346,6 +346,26 @@ export async function runT19B(
   store: ResearchRunStore,
   opts: DriveOptions = {},
 ): Promise<RunResult> {
+  const prepared = prepareRun(store, opts)
+  return await driveRun(store, prepared.runId, prepared.runCtx, opts)
+}
+
+/**
+ * Create the run and write everything that must exist before it is driven.
+ *
+ * SPLIT FROM DRIVING so a caller can answer a start command with a run id before the work happens.
+ * The two halves have different owners: this one creates, seeds and freezes — and a run id created
+ * here is THE run id, not a first attempt at one. A command that returns an id while a second
+ * `createRun` waits inside the driver would hand the caller an id no artifact will ever carry.
+ *
+ * @param store - the run store the run is created in.
+ * @param opts - the drive options; `runId` is ignored, since this is what creates one.
+ * @returns the run id and the context the driver runs with.
+ */
+export function prepareRun(
+  store: ResearchRunStore,
+  opts: DriveOptions = {},
+): { readonly runId: string; readonly runCtx: RunContext } {
   const timestamp = opts.fixedTimestamp ?? FIXED_TS
   // The research this run carries. A deployment states it; the default stands in otherwise, and
   // the run's seedable direction overrides that default's own direction rather than adding a
@@ -384,6 +404,24 @@ export async function runT19B(
   // so without this record they can only be re-defaulted.
   setRunSpec(store, runId, runSpecOf(plan, planSourceOf(opts), opts))
 
+  return { runId, runCtx }
+}
+
+/**
+ * Drive a run that already exists, step by step.
+ *
+ * @param store - the store holding the run.
+ * @param runId - the run to drive; it must have been prepared.
+ * @param runCtx - the context {@link prepareRun} built for it.
+ * @param opts - the drive options.
+ * @returns the per-step outcomes, and any checkpoint failures alongside them.
+ */
+export async function driveRun(
+  store: ResearchRunStore,
+  runId: string,
+  runCtx: RunContext,
+  opts: DriveOptions = {},
+): Promise<RunResult> {
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
   const checkpointErrors: string[] = []

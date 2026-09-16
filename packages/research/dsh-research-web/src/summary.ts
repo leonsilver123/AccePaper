@@ -188,6 +188,20 @@ export interface DegradationNote {
   readonly message: string
 }
 
+/**
+ * Whether the process that answered still has a driver on the run.
+ *
+ * NOT the same fact as {@link RunStatus}, and kept apart from it for the same reason the readiness
+ * facts are kept apart: `RunStatus` is derived from the run's steps and gates and says what the
+ * study has reached; this says whether anything here is still working on it. A run whose steps all
+ * read `pending` is both `running` (nothing failed, nothing finished) and `stopped` (no driver) at
+ * once when the page is reloaded mid-flight — and a reader told only one of those learns the wrong
+ * thing.
+ */
+export type RunExecution = 'running' | 'stopped' | 'failed'
+
+const RUN_EXECUTIONS: ReadonlyArray<RunExecution> = ['running', 'stopped', 'failed']
+
 /** Flattened input the view consumes. A T19-B runner snapshot maps into this. */
 export interface RunSummaryInput {
   readonly runId: string
@@ -206,6 +220,10 @@ export interface RunSummaryInput {
   readonly submissionReady?: boolean
   /** Why the run is not ready, in the host's own words. */
   readonly readinessNote?: string
+  /** Whether the host still has a driver on this run; see {@link RunExecution}. */
+  readonly execution?: string
+  /** Why the driver stopped with a failure, when it did. */
+  readonly executionError?: string
   /**
    * Where this summary came from.
    *
@@ -265,6 +283,15 @@ export interface RunSummary {
   readonly profileEligible: boolean | null
   readonly submissionReady: boolean | null
   readonly readinessNote: string | null
+  /**
+   * Whether a driver is on the run, or null when the host named none.
+   *
+   * Null is not `stopped`: a host that never reports this has told the reader nothing, and
+   * rendering its silence as "nothing is running" would state a fact nobody observed.
+   */
+  readonly execution: RunExecution | null
+  /** Why the driver stopped with a failure, or null when the host named none. */
+  readonly executionError: string | null
   readonly status: RunStatus
   readonly steps: ReadonlyArray<StepView>
   readonly artifacts: ReadonlyArray<ArtifactView>
@@ -339,6 +366,10 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     profileEligible: input.profileEligible ?? null,
     submissionReady: input.submissionReady ?? null,
     readinessNote: input.readinessNote ?? null,
+    // REPORT, do not default. An unrecognised value is a host saying something this build cannot
+    // name; folding it into `stopped` would show a running study as an abandoned one.
+    execution: RUN_EXECUTIONS.find(execution => execution === input.execution) ?? null,
+    executionError: input.executionError ?? null,
     status: input.status,
     steps: input.steps,
     artifacts: input.artifacts,

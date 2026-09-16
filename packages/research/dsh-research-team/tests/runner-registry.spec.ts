@@ -142,6 +142,7 @@ describe('the Remote snapshot shape is frozen', () => {
     expectTypeOf<keyof ResearchRunSnapshot>().toEqualTypeOf<
       'run' | 'catalog' | 'gates' | 'artifacts' | 'steps' | 'projectRevision'
       | 'evidenceProfile' | 'profileEligible' | 'submissionReady' | 'readinessNote'
+      | 'execution' | 'executionError'
       | 'packageExport' | 'runPersistence'
     >()
     expectTypeOf<keyof RunResult['steps'][number]>().toEqualTypeOf<

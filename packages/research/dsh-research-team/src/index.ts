@@ -36,7 +36,7 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
-import { mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { Context } from '@deepseek-ai/cordis'
@@ -45,8 +45,12 @@ import type {
   ResearchGateVerdictView,
   ResearchProposalAnswer,
   ResearchProposalRequest,
+  ResearchRunExecution,
+  ResearchRunQuery,
   ResearchRunRequest,
   ResearchRunSnapshot,
+  ResearchRunStart,
+  ResearchStartRequest,
   ResearchPackageExport,
   ResearchRunPersistence,
   ResearchStepCatalogEntry,
@@ -58,8 +62,12 @@ export type {
   ResearchProposalEntry,
   ResearchProposalRefusal,
   ResearchProposalRequest,
+  ResearchRunExecution,
+  ResearchRunQuery,
   ResearchRunRequest,
   ResearchRunSnapshot,
+  ResearchRunStart,
+  ResearchStartRequest,
   ResearchStepCatalogEntry,
 } from './types.ts'
 import {
@@ -69,6 +77,9 @@ import {
 } from './runner/direction-proposals.ts'
 import { MEASURED_METRIC } from './runner/platoon-sim.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
+import { stepProjectionsOf } from './runner/project-view.ts'
+import type { DriveOptions } from './runner/types.ts'
+import { driveRun, prepareRun } from './runner/drive.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -97,7 +108,7 @@ import {
   rollback,
 } from '@deepseek-ai/dsh-research-core'
 import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
-import type { RunPersistence } from '@deepseek-ai/dsh-research-core'
+import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
 import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
@@ -105,7 +116,7 @@ import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
 import { experimentStudy, studyFromPack } from './runner/platoon-sim.ts'
 import { firstNonTerminalStep, materialWithCommitment, needsReleaseBeforeResume } from './runner/resume.ts'
-import type { ResearchProseWriter } from './runner/registry.ts'
+import type { ResearchProseWriter, RunContext } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 import {
   forgetRuns,
@@ -225,19 +236,26 @@ declare module '@deepseek-ai/cordis' {
  * (with the evidence a reader checks) and the artifact metadata live. Rebuilding either
  * from {@link RunResult} would mean inventing the evidence strings.
  *
- * @param run - the driver's result.
  * @param store - the store the run populated.
+ * @param runId - the run to project.
+ * @param evidenceProfile - the profile this deployment declared.
+ * @param packageExport - what the run exported, when it finished.
+ * @param runPersistence - what the run left on disk, or what it has written so far.
+ * @param execution - whether a driver is on the run in THIS process.
+ * @param executionError - why the driver stopped with a failure, when it did.
  * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
  */
 function snapshotOf(
-  run: RunResult,
   store: ResearchRunStore,
+  runId: string,
   evidenceProfile: EvidenceProfile,
   packageExport: ResearchPackageExport | null = null,
   runPersistence: ResearchRunPersistence | null = null,
+  execution: ResearchRunExecution = 'stopped',
+  executionError?: string,
 ): ResearchRunSnapshot {
-  const snapshot = getRunSnapshot(store, run.runId)
-  const readiness = readinessOfRun(store, run.runId, evidenceProfile)
+  const snapshot = getRunSnapshot(store, runId)
+  const readiness = readinessOfRun(store, runId, evidenceProfile)
   const catalog: ReadonlyArray<ResearchStepCatalogEntry> = getStepDefinitions().map(step => ({
     id: step.id,
     index: step.index,
@@ -282,7 +300,11 @@ function snapshotOf(
   }))
 
   return {
-    run,
+    run: { runId, steps: stepProjectionsOf(store, runId) },
+    // A driver that THREW is a run-level fact: the steps say how far the study got, and this says
+    // that whatever was going to continue it is gone. Reporting only the steps leaves a reader
+    // waiting on a run nothing is driving.
+    ...(executionError === undefined ? {} : { executionError }),
     projectRevision: snapshot.revision,
     catalog,
     gates,
@@ -292,6 +314,7 @@ function snapshotOf(
     profileEligible: readiness.profileEligible,
     submissionReady: readiness.ready,
     readinessNote: readiness.reason,
+    execution,
     packageExport,
     runPersistence,
   }
@@ -324,6 +347,30 @@ export interface ResearchTeamServiceConfig {
    * write tools.
    */
   readonly scopeCheckedTools?: ReadonlyArray<string>
+}
+
+/**
+ * One run this process holds, and whether it still has a driver on it.
+ *
+ * `state` is a PROCESS fact, never a durable one: it says whether a driver is on the run here and
+ * now, which is exactly what a query must answer after a restart and what no stored record can.
+ */
+interface ActiveRun {
+  readonly store: ResearchRunStore
+  state: ResearchRunExecution
+  error?: string
+  /**
+   * The revision of the last durable write, or null when none has landed yet.
+   *
+   * A run checkpointed mid-flight and a run whose checkpoints all failed are both "running"; what
+   * a reader deciding whether to close the page needs is whether anything is on disk, and that is
+   * this number rather than the process's own opinion of its health.
+   */
+  savedRevision: number | null
+  /** What the run's export produced, once it finished. Null while it has not. */
+  packageExport: ResearchPackageExport | null
+  /** What the last durable write reported, once the run finished. Null while it has not. */
+  persistence: ResearchRunPersistence | null
 }
 
 /** Research-team service: members, CAS tasks, and the write-scope guard. */
@@ -563,14 +610,14 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       run.runId,
       store,
-      () => snapshotOf(run, store, evidenceProfile, packageExport, persistence),
+      () => snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence),
       // The approval persists through the SAME writer the run did, so a decision is as durable as
       // the run that produced it — and only the persistence half is wanted here. Handing the
       // decision to memory alone left the snapshot saying E2 `gated` after a person had approved
       // it, so a restart asked them to approve what they already had.
       () => this.recordRun(run, store).then(recorded => recorded.persistence),
     )
-    return snapshotOf(run, store, evidenceProfile, packageExport, persistence)
+    return snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence)
   }
 
   /**
@@ -591,7 +638,7 @@ export class ResearchTeamService extends TypertRemoteService {
     const persistence = await this.serialized(async () => {
       // The predecessor read here is THIS run's earlier revision, if any — never another run's.
       const stored = await this.readStoredRun(run.runId)
-      return this.persistRun(store, run, stored?.revision ?? 0)
+      return this.persistRun(store, run.runId, stored?.revision ?? 0)
     })
     return { persistence, packageExport: this.exportRunPackage(store, run) }
   }
@@ -718,28 +765,33 @@ export class ResearchTeamService extends TypertRemoteService {
    * been misled. `baseRevision` is 0 because this store has never been persisted — a directory
    * that already holds a newer snapshot refuses the write instead of overwriting it.
    *
+   * The id is a parameter and not a `RunResult`, because the state of a run that has not finished
+   * is exactly what a mid-run approval has to persist — and reaching for a drive result to get an
+   * id is how a half-executed run ends up described by a fabricated one.
+   *
    * @param store - the run store, still live at this point.
-   * @param run - the driven run.
+   * @param runId - the run to write.
+   * @param baseRevision - the revision this state is derived from.
    * @returns the persisted revision, or the failure, or null when no directory is configured.
    */
   private async persistRun(
     store: ResearchRunStore,
-    run: RunResult,
+    runId: string,
     baseRevision: number,
   ): Promise<ResearchRunPersistence | null> {
-    const persistence = this.hostRunPersistence(run.runId)
+    const persistence = this.hostRunPersistence(runId)
     if (persistence === undefined) return null
     try {
-      const payload = await persistence.save(store, run.runId, { baseRevision })
-      const directory = this.snapshotDirectoryOf(run.runId)
+      const payload = await persistence.save(store, runId, { baseRevision })
+      const directory = this.snapshotDirectoryOf(runId)
       return {
-        runId: run.runId,
+        runId,
         revision: payload.revision,
         interrupted: [],
         ...(directory === undefined ? {} : { directory }),
       }
     } catch (error) {
-      return { runId: run.runId, revision: null, interrupted: [], error: errorMessage(error) }
+      return { runId, revision: null, interrupted: [], error: errorMessage(error) }
     }
   }
 
@@ -907,10 +959,10 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       restored.runId,
       restored.store,
-      () => snapshotOf(run, restored.store, evidenceProfile, null, persisted),
+      () => snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted),
       () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
     )
-    return snapshotOf(run, restored.store, evidenceProfile, null, persisted)
+    return snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted)
   }
 
   /**
@@ -927,14 +979,94 @@ export class ResearchTeamService extends TypertRemoteService {
    *
    * @param store - the run store, still live at this point.
    * @param runId - the run to checkpoint.
+   * @returns the revision written, or null when this deployment configures no directory.
    */
-  private async checkpointRun(store: ResearchRunStore, runId: string): Promise<void> {
+  private async checkpointRun(store: ResearchRunStore, runId: string): Promise<number | null> {
     const persistence = this.hostRunPersistence(runId)
-    if (persistence === undefined) return
-    await this.serialized(async () => {
+    if (persistence === undefined) return null
+    return await this.serialized(async () => {
       const stored = await this.readStoredRun(runId)
-      await persistence.save(store, runId, { baseRevision: stored?.revision ?? 0 })
+      const payload = await persistence.save(store, runId, { baseRevision: stored?.revision ?? 0 })
+      return payload.revision
     })
+  }
+
+  /**
+   * The save state of a run this process is still driving.
+   *
+   * Built from the run's own checkpoints rather than from a file read on every query: a client
+   * polling a live run asks this far more often than the run writes. `revision: null` therefore
+   * means "nothing has landed YET", and the directory says where it will land — which is the whole
+   * answer for a reader deciding whether a page reload would lose their study.
+   *
+   * @param active - the run this process holds.
+   * @param runId - the run's id.
+   * @returns what can be said about its durable state now, or null when none is configured.
+   */
+  private livePersistence(active: ActiveRun, runId: string): ResearchRunPersistence | null {
+    if (active.persistence !== null) return active.persistence
+    const directory = this.snapshotDirectoryOf(runId)
+    if (directory === undefined) return null
+    return { runId, revision: this.savedRevisionOf(active), interrupted: [], directory }
+  }
+
+  /**
+   * The revision this run is on disk at, as this process last learned it.
+   *
+   * ONE RULE, USED BY EVERY WRITER AND BY THE REPORT. A browser run found what two copies of this
+   * number cost: the report read the finished write's revision while the approval's persistence read
+   * the last CHECKPOINT's, so an approval at E2 was applied and then refused — "the persisted
+   * snapshot is at revision 18 but this write is based on revision 17" — and the decision stayed in
+   * memory and off the disk. The final write's record is the authority once the run has ended;
+   * before that, the last checkpoint's.
+   *
+   * @param active - the run this process holds.
+   * @returns the revision to base the next write on, or null when none has landed.
+   */
+  private savedRevisionOf(active: ActiveRun): number | null {
+    return active.persistence?.revision ?? active.savedRevision
+  }
+
+  /**
+   * Locate a run this process did NOT start, from its durable record.
+   *
+   * THIS IS RESTART RECOVERY. A process that came up after the one driving a study has no
+   * in-memory run and no driver — but the run's checkpoints are on disk, and reading them is what
+   * lets the query answer "here is the run, it is stopped here, these steps were in flight" instead
+   * of `null`, which a reader would take for "this run never existed".
+   *
+   * `tryLoad` distinguishes the two absences the answer depends on: no snapshot file at all is
+   * `null` (nothing to find), while a corrupt or version-incompatible one THROWS — reporting a
+   * damaged record as an absent run is the same error-degraded-to-a-neutral-statement pattern the
+   * store itself refuses.
+   *
+   * @param runId - the run to find.
+   * @returns the restored record, or null when this deployment stores no such run.
+   */
+  private async findStoredRun(runId: string): Promise<{
+    readonly restored: RestoredRun<null>
+    readonly persistence: ResearchRunPersistence
+  } | null> {
+    const directory = this.snapshotDirectoryOf(runId)
+    // A QUERY MUST NOT CREATE. `hostRunPersistence` makes the directory, which is right when a run
+    // is being started and wrong here: asking about a run id that was never used would leave an
+    // empty directory named after it, for the recovery listing to find and fail to load.
+    if (directory === undefined || !existsSync(directory)) return null
+    const persistence = this.hostRunPersistence(runId)
+    if (persistence === undefined) return null
+    const restored = await persistence.tryLoad(null)
+    if (restored === null) return null
+    return {
+      restored,
+      persistence: {
+        runId,
+        revision: restored.revision,
+        // WHAT WAS IN FLIGHT when the snapshot was taken. A resumed run rolls these back and
+        // re-executes them, so a reader told "stopped" is also told what stopping cost.
+        interrupted: restored.interrupted.map(step => step.stepId),
+        ...(directory === undefined ? {} : { directory }),
+      },
+    }
   }
 
   /**
@@ -988,6 +1120,258 @@ export class ResearchTeamService extends TypertRemoteService {
    *   seedable input; omitting it uses the driver's default.
    * @param signal - cancellation supplied by the caller.
    * @returns the per-step outcomes plus the run id, as {@link runPipeline} returns.
+   */
+  /** Runs this process is executing or has executed, by id. */
+  private readonly activeRuns = new Map<string, ActiveRun>()
+
+  /**
+   * The answer each start command produced.
+   *
+   * In memory, and that is the honest boundary: across a restart a retried command meets a service
+   * that holds no such run, and the caller is told so rather than being handed a second study. The
+   * durable form of this is the run record itself, which `runSnapshot` reads.
+   */
+  private readonly startCommands = new Map<string, ResearchRunStart>()
+
+  /**
+   * The deployment's own drive options.
+   *
+   * Extracted so {@link startRun} and {@link runPipeline} cannot drift: a run started through one
+   * entry and a run started through the other must be the same study under the same configuration,
+   * and two hand-written option lists is how they stop being.
+   *
+   * @returns the resolved tool deps, prose writer, case pack, timeout, profile and revision bound.
+   */
+  private driveOptions(): DriveOptions {
+    const toolDeps = this.hostToolDeps()
+    const proseWriter = this.hostProseWriter()
+    const casePackInputs = this.hostCasePackInputs()
+    const stepTimeoutMs = this.hostStepTimeoutMs()
+    const revisionRounds = this.hostRevisionRounds()
+    return {
+      evidenceProfile: this.hostEvidenceProfile(),
+      ...(toolDeps !== undefined ? { toolDeps } : {}),
+      ...(proseWriter !== undefined ? { proseWriter } : {}),
+      ...(casePackInputs !== undefined ? { casePackInputs } : {}),
+      ...(stepTimeoutMs !== undefined ? { timeoutMs: stepTimeoutMs } : {}),
+      ...(revisionRounds !== undefined ? { revisionRounds } : {}),
+    }
+  }
+
+  /**
+   * ONE RUN PER COMMAND, AND THE ID COMES BACK BEFORE THE WORK DOES.
+   *
+   * {@link run} waits for the whole study; a person who pressed a button has nothing to look at
+   * until it ends, and a page reload loses the only handle they had. This method creates the run,
+   * freezes its resolved configuration, writes it to disk, and hands back the id — then drives it
+   * in the background, owned by this service.
+   *
+   * The order is the guarantee: the id returned is THE run's id, and by the time a caller has it,
+   * the run is on disk (or `persisted: false` says it is not). A failure to save does not return
+   * success and does not start anything.
+   *
+   * A command that is still running when this returns is NOT cancelled by the caller's interest
+   * ending: the driver is this service's, so a closed page does not stop a study.
+   *
+   * @param request - the command id, plus the same seed {@link run} takes.
+   * @returns the run id and whether it is on disk.
+   */
+  @Remote('startRun')
+  async startRun(request: ResearchStartRequest): Promise<ResearchRunStart> {
+    // A RETRY READS THE FIRST ANSWER. The caller could not read the response — a timeout, a reload
+    // — and sends the same command again; creating a second run for it would spend a second study.
+    // The id names the COMMAND, so one id is one run however many times it is sent, and a caller
+    // that wants a second study sends a second id.
+    const answered = this.startCommands.get(request.commandId)
+    if (answered !== undefined) return answered
+
+    const seed: DriveOptions = request.plan !== undefined
+      ? (() => {
+        const validated = requirePlan(request.plan, MEASURED_METRIC)
+        if (!validated.ok) {
+          throw new Error(`[research] the run's plan cannot be used: ${validated.reason}`)
+        }
+        return { studyPlan: validated.plan }
+      })()
+      : (request.domainDirection !== undefined ? { domainDirection: request.domainDirection } : {})
+    const driveOpts: DriveOptions = { ...this.driveOptions(), ...seed }
+
+    const store: ResearchRunStore = new Map()
+    const prepared = prepareRun(store, driveOpts)
+    const persistence = this.hostRunPersistence(prepared.runId)
+    let persisted = false
+    let persistenceError: string | undefined
+    // The revision the run is on disk at. It starts as the write below and moves with each
+    // checkpoint, so a later writer — an approval's persistence, most of all — bases its save on
+    // the revision that is actually stored rather than on zero.
+    let savedRevision: number | null = null
+    if (persistence === undefined) {
+      persistenceError = 'no snapshot directory is configured for this deployment'
+    } else {
+      try {
+        // BEFORE the driver: a run that exists only in memory cannot be found after a reload, and
+        // a start that answered success would have promised it could.
+        savedRevision = (await persistence.save(store, prepared.runId, { baseRevision: 0 })).revision
+        persisted = true
+      } catch (error) {
+        persistenceError = error instanceof Error ? error.message : String(error)
+      }
+    }
+    if (!persisted) {
+      // NOT STARTED. The caller is told the run id was not made durable and nothing was begun, so
+      // a retry is safe; starting anyway would leave a study running that no record names.
+      throw new Error(`[research] the run could not be recorded, so it was not started: ${String(persistenceError)}`)
+    }
+
+    const active: ActiveRun = {
+      store,
+      state: 'running',
+      savedRevision,
+      packageExport: null,
+      persistence: null,
+    }
+    this.activeRuns.set(prepared.runId, active)
+    rememberRun(
+      prepared.runId,
+      store,
+      () => snapshotOf(
+        store,
+        prepared.runId,
+        this.hostEvidenceProfile(),
+        active.packageExport,
+        this.livePersistence(active, prepared.runId),
+        active.state,
+        active.error,
+      ),
+      // THE STATE ONLY. A run still going has no package — exporting one here would write a
+      // manifest of the steps that happen to have finished and call it the run's product. What an
+      // approval at E2 needs durable is the DECISION, and the decision lives in the state.
+      // `savedRevisionOf` and not a field: this is the same number the snapshot reports, so the
+      // write cannot be based on a revision the reader was never shown.
+      () => this.serialized(
+        () => this.persistRun(store, prepared.runId, this.savedRevisionOf(active) ?? 0),
+      ),
+    )
+    // PERSIST AS THE RUN GOES, exactly as `runPipeline` does and for the same reason: a run that
+    // only wrote at the end would lose every completed step — including the ones that cost model
+    // calls — to a process death, and would leave a restarted process nothing to find.
+    const driving: DriveOptions = {
+      ...driveOpts,
+      checkpointAfterStep: async (checkpointRunId: string) => {
+        active.savedRevision = await this.checkpointRun(store, checkpointRunId)
+      },
+    }
+    // THE SERVICE OWNS THE DRIVER. A bare floating promise would be collected with nothing able to
+    // say the run had died, and a rejection escaping a `.then` handler would be an unhandled one.
+    // ONE place records what became of the run, so the query can report it.
+    void this.driveInBackground(store, prepared.runId, prepared.runCtx, driving, active)
+
+    const started: ResearchRunStart = {
+      runId: prepared.runId,
+      persisted,
+      startedAt: Date.now(),
+    }
+    this.startCommands.set(request.commandId, started)
+    return started
+  }
+
+  /**
+   * Drive a started run to its end, and record what became of it.
+   *
+   * Everything after the driver — persisting the finished state and exporting the package — is in
+   * the same `try` as the driver, because a rejection that escaped a `.then` handler would be an
+   * unhandled one, and the run would be left reading `running` with nothing driving it. The export
+   * is a FINISHED run's product, so it is written here rather than at every checkpoint.
+   *
+   * Both halves of {@link recordRun} report their own failures, so the `catch` is for the
+   * unexpected: the run's outcome is unknown to this process at that point, and `failed` with the
+   * message is what can honestly be said about it.
+   *
+   * @param store - the run's store, live until this returns.
+   * @param runId - the run.
+   * @param runCtx - the run's shared context, as {@link prepareRun} built it.
+   * @param opts - the options the run was prepared with, plus its checkpoint hook.
+   * @param active - what this process holds about the run, updated in place.
+   */
+  private async driveInBackground(
+    store: ResearchRunStore,
+    runId: string,
+    runCtx: RunContext,
+    opts: DriveOptions,
+    active: ActiveRun,
+  ): Promise<void> {
+    try {
+      const run = await driveRun(store, runId, runCtx, opts)
+      const recorded = await this.recordRun(run, store)
+      active.persistence = recorded.persistence
+      active.packageExport = recorded.packageExport
+      // THE FINAL WRITE MOVED THE FILE PAST THE LAST CHECKPOINT. An approval's persistence is based
+      // on this number, and leaving it at the checkpoint's revision is how a browser run's approval
+      // at E2 was APPLIED and then refused — "the persisted snapshot is at revision 18 but this
+      // write is based on revision 17" — leaving the decision in memory and off the disk.
+      active.savedRevision = recorded.persistence?.revision ?? active.savedRevision
+      active.state = 'stopped'
+    } catch (error) {
+      active.state = 'failed'
+      active.error = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  /**
+   * Read one run as it stands.
+   *
+   * Three answers, and they are three different facts:
+   *   - a run this process is driving: its live projection, `execution: 'running'`;
+   *   - a run this process drove to an end: the same projection, `execution: 'stopped'` (or
+   *     `'failed'`, with `executionError`), and its exported package;
+   *   - a run this process never held but whose checkpoints are on disk — the case a RESTART
+   *     creates: the record is restored and reported as `stopped`, with the steps that were in
+   *     flight named. What it is NOT reported as is `running`: nothing here is driving it, and a
+   *     stale `running` read back from a record written by a process that is gone is the lie this
+   *     field exists to prevent.
+   *
+   * `null` therefore means what it says: this deployment has no such run — not in memory, not on
+   * disk.
+   *
+   * @param request - the run to read.
+   * @returns the run's current projection, or null when this deployment holds no such run.
+   */
+  @Remote('runSnapshot')
+  async runSnapshot(request: ResearchRunQuery): Promise<ResearchRunSnapshot | null> {
+    const active = this.activeRuns.get(request.runId)
+    if (active !== undefined) {
+      return snapshotOf(
+        active.store,
+        request.runId,
+        this.hostEvidenceProfile(),
+        active.packageExport,
+        this.livePersistence(active, request.runId),
+        active.state,
+        active.error,
+      )
+    }
+    const found = await this.findStoredRun(request.runId)
+    if (found === null) return null
+    return snapshotOf(
+      found.restored.store,
+      request.runId,
+      this.hostEvidenceProfile(),
+      null,
+      found.persistence,
+      'stopped',
+    )
+  }
+
+  /**
+   * Drive one study to its end and answer with the run's projection.
+   *
+   * The synchronous entry point: it is what an in-process caller uses, and what the browser used
+   * before {@link startRun} existed. It answers when the study is over, so a caller that wants to
+   * show progress while it works wants {@link startRun} instead.
+   *
+   * @param request - the plan this run carries, or the deployment's default.
+   * @param signal - cancellation for the whole study.
+   * @returns the finished run's projection.
    */
   @Remote('run')
   run(request: ResearchRunRequest, signal?: AbortSignal): Promise<ResearchRunSnapshot> {

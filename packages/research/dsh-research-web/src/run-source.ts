@@ -144,6 +144,28 @@ export interface WireRunSnapshot {
   readonly profileEligible?: boolean
   readonly submissionReady?: boolean
   readonly readinessNote?: string
+  /**
+   * Whether the HOST still has a driver on this run, and why it stopped when it threw.
+   *
+   * The host reports this per response rather than storing it, and the distinction is the whole
+   * point: `running` says a driver is on the run in the process that answered, `stopped` says
+   * nothing is. A page reload does not end a study, so a client that reads `stopped` after a
+   * restart is being told the truth about the process, not about the work.
+   *
+   * OPTIONAL on the same terms as the fields above: a host that predates them still satisfies this
+   * declaration, and an absent value is reported as unnamed rather than folded into `stopped`.
+   */
+  readonly execution?: string
+  readonly executionError?: string
+}
+
+/** What one start command answers with, as the wire carries it. */
+export interface WireRunStart {
+  readonly runId: string
+  /** Whether a restart could find this run on disk. FALSE is not a failure; it is a limit. */
+  readonly persisted: boolean
+  readonly persistenceError?: string
+  readonly startedAt: number
 }
 
 /** The Host's export result, structurally. */
@@ -384,6 +406,8 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     // revision 0, which is a revision a run genuinely starts at. The readiness facts follow the same
     // rule — an unstated readiness is not a failed one.
     ...(snapshot.projectRevision === undefined ? {} : { projectRevision: snapshot.projectRevision }),
+    ...(snapshot.execution === undefined ? {} : { execution: snapshot.execution }),
+    ...(snapshot.executionError === undefined ? {} : { executionError: snapshot.executionError }),
     ...(typeof snapshot.evidenceProfile === 'string' ? { evidenceProfile: snapshot.evidenceProfile } : {}),
     ...(typeof snapshot.profileEligible === 'boolean' ? { profileEligible: snapshot.profileEligible } : {}),
     ...(typeof snapshot.submissionReady === 'boolean' ? { submissionReady: snapshot.submissionReady } : {}),

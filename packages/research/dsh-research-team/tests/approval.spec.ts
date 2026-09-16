@@ -120,6 +120,7 @@ function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
   return {
     run,
     projectRevision: snapshot.revision,
+    execution: 'stopped' as const,
     catalog: [],
     gates: [],
     artifacts: [],

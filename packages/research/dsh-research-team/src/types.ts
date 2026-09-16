@@ -412,7 +412,7 @@ export type { PlanClaim, PlanSection, StudyPlan } from './runner/study-plan.ts'
  * exported from a public non-root type subpath (`./types`), so the boundary types are
  * re-exported here rather than reached through the root entry.
  */
-import type { RunResult } from './runner/types.ts'
+import type { StepProjection } from './runner/project-view.ts'
 
 export type { RunResult, StepOutcome, StepArtifactEvidence } from './runner/types.ts'
 
@@ -440,6 +440,51 @@ export interface ResearchStepCatalogEntry {
  * because `evidence` and `rationale` are what a reader checks a verdict against and
  * they exist only on the recorded verdict.
  */
+/**
+ * What a start command answers with.
+ *
+ * The run id is usable IMMEDIATELY — the driver is already on it — and `persisted` says whether a
+ * restart could find it. That is a separate fact and it is reported separately: a deployment with
+ * no snapshot directory answers `persisted: false`, which is not a failure of the start but is the
+ * reason a reader must not close the page and expect the run to still be there.
+ */
+export interface ResearchRunStart {
+  readonly runId: string
+  /** Whether the run is on disk. FALSE means a restart cannot find it. */
+  readonly persisted: boolean
+  /** Why it is not on disk, when it is not. */
+  readonly persistenceError?: string
+  /** When this process received the command. */
+  readonly startedAt: number
+}
+
+/**
+ * One start command.
+ *
+ * `commandId` is the caller's, and it is what makes a retry a retry: the same id reads the answer
+ * the first send produced instead of beginning a second study.
+ */
+export interface ResearchStartRequest {
+  readonly commandId: string
+  readonly domainDirection?: string
+  readonly plan?: StudyPlan
+}
+
+/** The query a client sends to read one run. */
+export interface ResearchRunQuery {
+  readonly runId: string
+}
+
+/** Whether this process still has a driver on a run. */
+export type ResearchRunExecution =
+  /** A driver is on it here and now. */
+  | 'running'
+  /** Nothing is driving it here: it finished, it was never started here, or the driver is gone. */
+  | 'stopped'
+  /** A driver was on it and threw; the snapshot's `executionError` says what. */
+  | 'failed'
+
+/** One gate verdict recorded during a run, with the evidence it carried. */
 export interface ResearchGateVerdictView {
   readonly stepId: string
   readonly component: string
@@ -481,8 +526,19 @@ export interface ResearchStepStateView {
 
 /** What `ResearchTeamService.runPipeline` returns, and what the Remote `run` sends. */
 export interface ResearchRunSnapshot {
-  /** The runner's own result, unchanged. */
-  readonly run: RunResult
+  /**
+   * The run and its steps, read from the run's own records.
+   *
+   * NOT the drive call's result: a run still executing has none, and a query that had to wait for
+   * one would not be a query. `stepProjectionsOf` builds every step from the run snapshot, the
+   * artifact registry, the executor registry and the `step-executed` audit records — so a running
+   * study reports its real steps, its real artifacts, and WHY a step stopped, whether or not the
+   * drive call has returned.
+   */
+  readonly run: {
+    readonly runId: string
+    readonly steps: ReadonlyArray<StepProjection>
+  }
   /**
    * The project revision this snapshot was read at.
    *
@@ -511,6 +567,16 @@ export interface ResearchRunSnapshot {
   readonly profileEligible: boolean
   readonly submissionReady: boolean
   readonly readinessNote: string
+  /**
+   * Whether this PROCESS is still executing the run.
+   *
+   * Not a durable fact, and deliberately not persisted: a restart has no drivers, so reporting
+   * `running` from a record written by a process that is gone would be the lie this field exists
+   * to prevent. `running` means a driver is on it here and now; `stopped` means nothing is.
+   */
+  readonly execution: ResearchRunExecution
+  /** Why the driver stopped with a failure, when it did. */
+  readonly executionError?: string
   /**
    * The export result, when the deployment configured a package directory.
    *
