@@ -707,6 +707,7 @@ function buildReferences(rawHits: unknown): ReadonlyArray<Record<string, unknown
     const hit = raw as {
       title?: unknown
       venue?: unknown
+      year?: unknown
       ref?: { kind?: unknown; id?: unknown; authors?: unknown }
     }
     if (typeof hit.title !== 'string' || hit.title.trim() === '') continue
@@ -719,6 +720,10 @@ function buildReferences(rawHits: unknown): ReadonlyArray<Record<string, unknown
       authors: Array.isArray(hit.ref?.authors)
         ? (hit.ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string')
         : [],
+      // Carried so the reference a reader sees can be placed in time. E1 already reads `year` off
+      // each entry and `formatReference` already renders it; nothing upstream produced it, so every
+      // exported reference named a venue, authors and a DOI and no year.
+      year: typeof hit.year === 'number' && Number.isInteger(hit.year) ? hit.year : null,
     })
   }
   return out

@@ -8,6 +8,7 @@ The seven tool implementations of the research pipeline (literature search / cit
 
 ## Known Limitations and Deferred Work
 
+- **`LiteratureHit` carries a year now** (2026-09-16): it had **no `year` field**, so no adapter could hand over the year its source had already stated, while everything downstream was ready to read one. The field is optional, and **absent means "the source did not say"** — an adapter must not fill it with a placeholder, because an invented year makes an unplaceable reference look complete. The synthetic corpus states one too, so the renderer's year branch is exercised by the fixture and not only by the live catalogue.
 - **All seven tools currently take fixture input**: the tool functions really execute, but the data fed to them is synthetic, so their output does not constitute a real research result. This is the honest boundary corresponding to the `real_tool_fixture_input` label in `runner/registry.ts`.
 - The `citation-verify` tool **has no production consumer**: the team-side B channel goes through core's `verifyCitation` rather than this tool; it stays registered in the directory to satisfy the "seven tools" roster declaration.
 - External data sources (Crossref / OpenAlex / tier tables) all go through the adapter seam; the repository ships no real credentials and no dataset whose licence is unconfirmed.

@@ -56,6 +56,11 @@ export interface LiteratureHit {
   readonly id: LiteratureHitId
   readonly venue: string
   readonly title: string
+  /**
+   * Publication year as the source states it. ABSENT when the catalogue does not state one — never
+   * a placeholder, because a fabricated year is not a missing field, it is a wrong citation.
+   */
+  readonly year?: number | undefined
   readonly ref: LiteratureCitationRef
 }
 

@@ -49,6 +49,10 @@ describe('OpenAlexLiteratureAdapter', () => {
     expect(outcome.hits).toHaveLength(1)
     // The length assertion above pins the only element this test reads.
     expect(outcome.hits[0]!.venue).toBe('Synthetic Journal of Transport')
+    // The year the catalogue states travels with the hit. It did not: the record declared
+    // `publication_year` and `toHit` never read it, so every reference the pipeline exported named
+    // a venue, authors and a DOI and could not be placed in time.
+    expect(outcome.hits[0]!.year).toBe(2020)
     expect(outcome.hits[0]!.ref).toMatchObject({
       kind: 'doi',
       // The https://doi.org/ prefix is stripped down to the bare identifier.
@@ -58,6 +62,40 @@ describe('OpenAlexLiteratureAdapter', () => {
     })
     // `total` is the catalogue's pre-cap match count, not the returned length.
     expect(outcome.total).toBe(1234)
+  })
+
+  it('leaves the year absent when the catalogue does not state a usable one', async () => {
+    // A MISSING year is a missing year. Coercing `null`, a range, or a value outside what a
+    // citation can carry would replace a visibly incomplete reference with a wrong one, and the
+    // reader has no way to tell the difference.
+    const adapter = new OpenAlexLiteratureAdapter({
+      fetchImpl: jsonFetch({
+        meta: { count: 3 },
+        results: [
+          work({ id: 'https://openalex.org/W1', publication_year: null }),
+          work({ id: 'https://openalex.org/W2', publication_year: 'forthcoming' }),
+          work({ id: 'https://openalex.org/W3', publication_year: 12020 }),
+        ],
+      }),
+    })
+
+    const outcome = await adapter.search({ topic: 'x' })
+
+    expect(outcome.status).toBe('ok')
+    if (outcome.status !== 'ok') return
+    expect(outcome.hits.map(hit => 'year' in hit)).toEqual([false, false, false])
+  })
+
+  it('reads a numeric-string year, which some proxies emit', async () => {
+    const adapter = new OpenAlexLiteratureAdapter({
+      fetchImpl: jsonFetch({ meta: { count: 1 }, results: [work({ publication_year: '2019' })] }),
+    })
+
+    const outcome = await adapter.search({ topic: 'x' })
+
+    expect(outcome.status).toBe('ok')
+    if (outcome.status !== 'ok') return
+    expect(outcome.hits[0]!.year).toBe(2019)
   })
 
   it('caps hits at maxResults while still reporting the pre-cap total', async () => {

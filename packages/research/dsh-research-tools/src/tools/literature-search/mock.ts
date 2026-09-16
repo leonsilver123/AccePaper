@@ -40,6 +40,9 @@ interface CorpusRecord {
   readonly refKind: 'doi' | 'arxiv'
   readonly refId: string
   readonly authors: ReadonlyArray<string>
+  /** Synthetic year. The corpus states one because the OpenAlex adapter does, so the reference
+   *  renderer's year branch is exercised by the fixture rather than only by the live catalogue. */
+  readonly year: number
 }
 
 /** Synthetic corpus (FIXTURE ONLY — clearly synthetic titles/venues/DOIs, not
@@ -47,22 +50,22 @@ interface CorpusRecord {
  *  drives the stable `syn-lit-NNNN` hit ids. */
 const SYNTHETIC_CORPUS: ReadonlyArray<CorpusRecord> = [
   // tier1 — Synthetic Journal A / Synthetic Conference A
-  { venueTier: 'tier1', venue: 'Synthetic Journal A', title: 'Synthetic attention over memory hierarchies', refKind: 'doi', refId: '10.1000/synth-lit-0001', authors: ['A. Synthetic', 'B. Plausible'] },
-  { venueTier: 'tier1', venue: 'Synthetic Journal A', title: 'Synthetic benchmark for long-context recall', refKind: 'doi', refId: '10.1000/synth-lit-0002', authors: ['C. Hypothetical', 'A. Synthetic'] },
-  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic evidence review of retrieval pipelines', refKind: 'doi', refId: '10.1000/synth-lit-0003', authors: ['D. Invented'] },
-  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic graph reasoning on knowledge corpora', refKind: 'arxiv', refId: '2499.00001', authors: ['E. Fabricated', 'A. Synthetic'] },
-  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic multimodal grounding for question answering', refKind: 'arxiv', refId: '2499.00002', authors: ['F. Madeup'] },
+  { venueTier: 'tier1', venue: 'Synthetic Journal A', title: 'Synthetic attention over memory hierarchies', refKind: 'doi', refId: '10.1000/synth-lit-0001', authors: ['A. Synthetic', 'B. Plausible'], year: 2019 },
+  { venueTier: 'tier1', venue: 'Synthetic Journal A', title: 'Synthetic benchmark for long-context recall', refKind: 'doi', refId: '10.1000/synth-lit-0002', authors: ['C. Hypothetical', 'A. Synthetic'], year: 2020 },
+  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic evidence review of retrieval pipelines', refKind: 'doi', refId: '10.1000/synth-lit-0003', authors: ['D. Invented'], year: 2018 },
+  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic graph reasoning on knowledge corpora', refKind: 'arxiv', refId: '2499.00001', authors: ['E. Fabricated', 'A. Synthetic'], year: 2021 },
+  { venueTier: 'tier1', venue: 'Synthetic Conference A', title: 'Synthetic multimodal grounding for question answering', refKind: 'arxiv', refId: '2499.00002', authors: ['F. Madeup'], year: 2017 },
   // tier2 — Synthetic Journal B / Synthetic Conference B
-  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic causal estimation under distribution shift', refKind: 'doi', refId: '10.1000/synth-lit-0006', authors: ['G. Fictitious', 'H. Borrowed'] },
-  { venueTier: 'tier2', venue: 'Synthetic Conference B', title: 'Synthetic fault analysis of memory controllers', refKind: 'doi', refId: '10.1000/synth-lit-0007', authors: ['I. Imagined'] },
-  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic survey of attention speedups', refKind: 'arxiv', refId: '2499.00003', authors: ['J. Notional', 'K. Whimsical'] },
-  { venueTier: 'tier2', venue: 'Synthetic Conference B', title: 'Synthetic field study of citation practices', refKind: 'doi', refId: '10.1000/synth-lit-0009', authors: ['L. Suppositional'] },
-  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic model merging for retrieval quality', refKind: 'doi', refId: '10.1000/synth-lit-0010', authors: ['A. Synthetic', 'M. Prefabricated'] },
+  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic causal estimation under distribution shift', refKind: 'doi', refId: '10.1000/synth-lit-0006', authors: ['G. Fictitious', 'H. Borrowed'], year: 2022 },
+  { venueTier: 'tier2', venue: 'Synthetic Conference B', title: 'Synthetic fault analysis of memory controllers', refKind: 'doi', refId: '10.1000/synth-lit-0007', authors: ['I. Imagined'], year: 2016 },
+  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic survey of attention speedups', refKind: 'arxiv', refId: '2499.00003', authors: ['J. Notional', 'K. Whimsical'], year: 2023 },
+  { venueTier: 'tier2', venue: 'Synthetic Conference B', title: 'Synthetic field study of citation practices', refKind: 'doi', refId: '10.1000/synth-lit-0009', authors: ['L. Suppositional'], year: 2015 },
+  { venueTier: 'tier2', venue: 'Synthetic Journal B', title: 'Synthetic model merging for retrieval quality', refKind: 'doi', refId: '10.1000/synth-lit-0010', authors: ['A. Synthetic', 'M. Prefabricated'], year: 2020 },
   // tier3 — Synthetic Regional Journal A
-  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic regional case notes on dataset reuse', refKind: 'doi', refId: '10.1000/synth-lit-0011', authors: ['N. Apocryphal'] },
-  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic replication of reasoning baselines', refKind: 'arxiv', refId: '2499.00004', authors: ['O. Hypothetical', 'P. Asserted'] },
-  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic teaching materials for research integrity', refKind: 'doi', refId: '10.1000/synth-lit-0013', authors: ['Q. Stipulated'] },
-  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic audit of memory scheduling policies', refKind: 'doi', refId: '10.1000/synth-lit-0014', authors: ['R. Postulated', 'A. Synthetic'] },
+  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic regional case notes on dataset reuse', refKind: 'doi', refId: '10.1000/synth-lit-0011', authors: ['N. Apocryphal'], year: 2014 },
+  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic replication of reasoning baselines', refKind: 'arxiv', refId: '2499.00004', authors: ['O. Hypothetical', 'P. Asserted'], year: 2019 },
+  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic teaching materials for research integrity', refKind: 'doi', refId: '10.1000/synth-lit-0013', authors: ['Q. Stipulated'], year: 2013 },
+  { venueTier: 'tier3', venue: 'Synthetic Regional Journal A', title: 'Synthetic audit of memory scheduling policies', refKind: 'doi', refId: '10.1000/synth-lit-0014', authors: ['R. Postulated', 'A. Synthetic'], year: 2021 },
 ]
 
 /** Lower-cased, whitespace-separated tokens of a topic string. */
@@ -88,6 +91,7 @@ function toHit(record: CorpusRecord, id: LiteratureHitId): LiteratureHit {
     id,
     venue: record.venue,
     title: record.title,
+    year: record.year,
     ref: {
       kind: record.refKind,
       id: record.refId,

@@ -63,6 +63,19 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined
 }
 
+/**
+ * Read a publication year, refusing anything that is not a plausible one.
+ *
+ * The catalogue states this as a number; a JSON round trip through some proxies states it as a
+ * numeric string. Anything else — a null, a range, a year outside what a citation can carry — is
+ * treated as NOT STATED rather than coerced, because a coerced year is a wrong citation.
+ */
+function asYear(value: unknown): number | undefined {
+  const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value
+  if (typeof parsed !== 'number' || !Number.isInteger(parsed)) return undefined
+  return parsed >= 1000 && parsed <= 9999 ? parsed : undefined
+}
+
 /** Strip the OpenAlex work URL down to a stable opaque id (`W123...`). */
 function workId(work: OpenAlexWork): string | undefined {
   const raw = asString(work.id)
@@ -82,11 +95,15 @@ function toHit(work: OpenAlexWork): LiteratureHit | undefined {
   const authors = (work.authorships ?? [])
     .map(authorship => asString(authorship?.author?.display_name))
     .filter((name): name is string => name !== undefined)
+  // The record declares this field and used not to read it, so every reference the pipeline
+  // exported carried a venue, authors and a DOI and no year — a citation a reader cannot place.
+  const year = asYear(work.publication_year)
 
   return {
     id: id as LiteratureHitId,
     venue: asString(work.primary_location?.source?.display_name) ?? 'unknown venue',
     title,
+    ...(year === undefined ? {} : { year }),
     ref: {
       kind: 'doi',
       id: doiUrl.startsWith(DOI_PREFIX) ? doiUrl.slice(DOI_PREFIX.length) : doiUrl,

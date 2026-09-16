@@ -21,6 +21,7 @@
 
 ## 已知限制与延期工作
 
+- **引用条目现在带年份,而这一条链曾经只缺提供者**(2026-09-16)。`LiteratureHit` 曾**没有 year 字段**,于是 `OpenAlexLiteratureAdapter` 把目录已经给出的 `publication_year` 丢掉 —— 一份真实运行的导出里,25 条参考文献每条都有 venue、作者与 DOI,**没有一条有年份**。渲染侧早已就绪:E1 会从每个条目读 `year`、`paper-format.ts` 的 `formatReference` 会渲染它;缺的只是提供它的人。现在 `LiteratureHit.year` 是可选字段,`toHit` 读目录的那个字段,**读不出可信年份时留空而不是编造**(`null`、`forthcoming`、五位数一律算「目录没说」),因为一个被编造出来的年份不是缺失字段,而是一条错误引用。
 - 本服务**不把闸门结果自动写回 StepState**。这是刻意的设计边界(服务是纯委托层,由 driver 决定何时调用 `submitGateVerdict` / `completeStep`),而不是约定缺口——`hold_abstained` 的容身处由 core 提供(状态机把 abstained 步骤钉在 `gated` 并记 `holdReason='gate_abstained'`)。
 - **工具注册改为等待 `tools` 服务出现(2026-09-14 修复)**。此前引擎在 `[Service.init]` 里直接挂载七工具插件,而 loader 是**并发**启动各 entry 的:真实 1120 boot 上实测 `ctx.get('tools')` 在引擎初始化时是 `undefined`、约 50 ms 后才出现。于是那次挂载被永久跳过,**出货 bundle 从未注册过任何一个 research 工具**,而 tolerant 分支把这个跳过吞掉了。现在改用 `ctx.inject(['tools'], …)`,注册在服务可用的那一刻提交;`ctx.research.toolsReady` 是它的提交点状态。
 - `requireResearchTools` 的语义随之更正:它**不是**"没有 tools 服务就不许启动"(那个缺席在加载期无法与"还没起来"区分),而是"服务在、但注册未产出 Ours 时,抛错而不是吞掉"。出货 bundle 已设置它。

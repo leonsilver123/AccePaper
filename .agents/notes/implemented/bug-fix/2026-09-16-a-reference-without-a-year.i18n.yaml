@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-a-reference-without-a-year.md
+2026-09-16-a-reference-without-a-year.md: 4c00d8f84939f2abbc9f4e4e90663697bb7d4df6
+2026-09-16-a-reference-without-a-year.zh.md: 2aa424d31ea7634b6fa979c340a008626275004c

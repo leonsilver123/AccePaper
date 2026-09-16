@@ -53,6 +53,27 @@ describe('a production run carries real material to the human gate', () => {
     expect(b).not.toContain('MockCitationResolverAdapter')
   })
 
+  it('writes a reference a reader can place in time, not just a title and a DOI', async () => {
+    // EVERY LAYER OF THIS CHAIN ALREADY KNEW ABOUT THE YEAR EXCEPT THE ONE THAT PROVIDED IT. E1
+    // reads `year` off each entry, `formatReference` renders it, and the catalogue states it — while
+    // `LiteratureHit` had no such field, so the adapter dropped it and every exported reference
+    // named a venue, authors and a DOI with no year at all.
+    const { store, runId } = await productionRun()
+    const draft = getArtifact(store, runId, 'draft') as
+      | { references?: ReadonlyArray<{ title?: string; year?: unknown }> }
+      | undefined
+    expect(draft?.references?.length).toBeGreaterThan(0)
+    expect(draft?.references?.every(entry => typeof entry.year === 'number')).toBe(true)
+
+    // And it reaches the document a reader gets, not only the artifact behind it.
+    const manuscript = getArtifact(store, runId, 'formatted-manuscript') as
+      | { manuscript?: string }
+      | undefined
+    const years = draft?.references?.map(entry => String(entry.year)) ?? []
+    expect(years.length).toBeGreaterThan(0)
+    expect(manuscript?.manuscript).toContain(years[0]!)
+  })
+
   it('writes a manuscript whose sections record the evidence they were written from', async () => {
     const { store, runId } = await productionRun()
     const draft = getArtifact(store, runId, 'draft') as
