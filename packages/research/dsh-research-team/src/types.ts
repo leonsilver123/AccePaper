@@ -691,6 +691,86 @@ export interface ResearchStepApprovalView {
   readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
+/**
+ * One request to revise the manuscript, as the page asks for it.
+ *
+ * The instruction is the person's own words; the run and the gate say which study and which
+ * decision it answers. The revision is read by the SERVICE rather than stated by the caller, for the
+ * same reason an approval's revision is: a caller that named its own would be promising it read one.
+ */
+export interface ResearchRevisionRequest {
+  readonly requestId: string
+  readonly runId: string
+  /** The gate step the request was made at. */
+  readonly stepId: string
+  readonly instruction: string
+}
+
+/** One operation on an existing request: write a candidate, or judge one. */
+export interface ResearchCandidateRequest {
+  readonly runId: string
+  readonly requestId: string
+  /** The candidate to act on; ignored when writing one, which mints its own. */
+  readonly candidateId: string
+}
+
+/** One candidate section, as the page renders it. */
+export interface ResearchCandidateSectionView {
+  readonly sectionId: string
+  readonly heading: string
+  /** False means the candidate left this section exactly as it was. */
+  readonly changed: boolean
+  /** The body the candidate replaced, so the page shows a diff rather than a claim of one. */
+  readonly basisText: string
+  readonly bodyText: string
+}
+
+/** One candidate manuscript, as the page renders it. */
+export interface ResearchCandidateView {
+  readonly candidateId: string
+  /** Which channel wrote it (`llm` / `deterministic`), so the text's provenance is on screen. */
+  readonly writer: string
+  readonly createdAt: number
+  readonly sections: ReadonlyArray<ResearchCandidateSectionView>
+}
+
+/** One check's verdict, as the page renders it. */
+export interface ResearchReviewFindingView {
+  readonly check: string
+  readonly passed: boolean
+  readonly detail: string
+}
+
+/** One candidate's review, as the page renders it. */
+export interface ResearchReviewView {
+  readonly candidateId: string
+  readonly passed: boolean
+  readonly findings: ReadonlyArray<ResearchReviewFindingView>
+}
+
+/**
+ * One revision request with everything recorded against it.
+ *
+ * WHAT IS NOT IN HERE, deliberately: an acceptance. A candidate cannot be made the official
+ * manuscript yet — that needs the accepting transaction the module design describes as a core
+ * operation — so the view carries no field that would let a page render one as accepted.
+ */
+export interface ResearchRevisionView {
+  readonly runId: string
+  readonly requestId: string
+  readonly instruction: string
+  readonly operator: string
+  /** The project revision the person was reading when they asked. */
+  readonly projectRevision: number
+  readonly requestedAt: number
+  /** The sections the request read, with the body hash each one had. */
+  readonly sections: ReadonlyArray<{ readonly sectionId: string; readonly heading: string; readonly basisHash: string }>
+  /** The sections the instruction is about; the rest of the manuscript is carried unchanged. */
+  readonly targets: ReadonlyArray<string>
+  readonly candidates: ReadonlyArray<ResearchCandidateView>
+  readonly reviews: ReadonlyArray<ResearchReviewView>
+}
+
 /** What `ResearchTeamService.runPipeline` returns, and what the Remote `run` sends. */
 export interface ResearchRunSnapshot {
   /**

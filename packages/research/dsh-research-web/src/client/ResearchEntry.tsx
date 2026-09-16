@@ -14,6 +14,7 @@ import type { ApprovalSubmitter } from './approval-source.ts'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
 import type { RunListEntryView } from '../run-source.ts'
 import { ResearchWorkbench } from './workbench/ResearchWorkbench.tsx'
+import type { RevisionSource } from './workbench/RevisionPanel.tsx'
 
 /**
  * Start one real run and follow it to its end.
@@ -86,6 +87,8 @@ export type ResearchRunOpenSource = (
  * @param listRuns - the studies this deployment holds. Omitted by a host that cannot list them, in
  *   which case the picker is absent and a page with nothing on screen stays that way.
  * @param openRun - opens one of those studies. Omitted on the same terms as {@link listRuns}.
+ * @param revisions - the revision loop's read and its two operations. Omitted by a host that cannot
+ *   record revisions, in which case the tab states that rather than offering inert controls.
  * @returns a conversation-view component that renders the research workbench.
  */
 export function researchViewWith(
@@ -96,6 +99,7 @@ export function researchViewWith(
   retrySave?: ResearchSaveRetrySource,
   listRuns?: ResearchRunListSource,
   openRun?: ResearchRunOpenSource,
+  revisions?: RevisionSource,
 ) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
@@ -115,6 +119,7 @@ export function researchViewWith(
         {...retrySave === undefined ? {} : { onRetrySave: retrySave }}
         {...listRuns === undefined ? {} : { onListRuns: listRuns }}
         {...openRun === undefined ? {} : { onOpenRun: openRun }}
+        {...revisions === undefined ? {} : { revisions }}
       />
     )
   }

@@ -161,7 +161,13 @@ function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
       const state = snapshot.steps[definition.id]
       return state === undefined
         ? []
-        : [{ stepId: state.stepId, status: state.status, attempt: state.attemptId, holdReason: state.holdReason ?? null }]
+        : [{
+          stepId: state.stepId, status: state.status, attempt: state.attemptId,
+          holdReason: state.holdReason ?? null,
+          // The twin states the field the wire now carries: a step with no decision says so, rather
+          // than omitting a field a client would read as a host built before it existed.
+          approval: null,
+        }]
     }),
     packageExport: null,
     runPersistence: null,
@@ -747,6 +753,63 @@ describe('§8.1 the decision arrives on the host-authenticated channel', () => {
 
     const malformed = await handler(APPROVAL_DECIDE_ENDPOINT, { actor: 'human' }, new AbortController().signal)
     expect(malformed.ok ? '' : malformed.error.code).toBe(APPROVAL_ERROR_CODES.requestInvalid)
+  })
+
+  describe('the endpoint hands an applied decision to the service', () => {
+    it('calls the hook with the receipt, and not for a refusal', async () => {
+    // THE HOOK IS THE LOOP'S ONLY PRODUCTION CALLER. A change request is an instruction, and the
+    // service is the layer that turns it into a durable revision request; this pins that the
+    // endpoint actually hands it the applied decision — and stays silent when there is none.
+      const seen: Array<{ decision: string; request?: string }> = []
+      const connection = fakeConnection()
+      installApprovalEndpoint(connection.host, {
+        onDecided: (receipt) => {
+          seen.push({
+            decision: receipt.decision,
+            ...(receipt.request === undefined ? {} : { request: receipt.request }),
+          })
+        },
+      })
+      const handler = connection.handler
+      if (handler === undefined) throw new Error('installApprovalEndpoint registered no handler')
+
+      const drive = await gatedRun()
+      const attempt = regate(drive)
+      const decided = await handler(APPROVAL_DECIDE_ENDPOINT, {
+        runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+        commandId: 'cmd-hook-1', expectedProjectRevision: revisionNow(drive),
+        request: 'tighten the claim in the results',
+      }, new AbortController().signal)
+      if (!decided.ok) throw new Error(`the decision was refused: ${decided.error.message}`)
+      expect(seen).toEqual([{ decision: 'request_changes', request: 'tighten the claim in the results' }])
+
+      // A REFUSAL DECIDES NOTHING, so there is nothing for the service to record.
+      const refused = await handler(APPROVAL_DECIDE_ENDPOINT, {
+        runId: drive.run.runId, stepId: E2, attempt, decision: 'approved',
+        commandId: 'cmd-hook-2', expectedProjectRevision: revisionNow(drive) + 5,
+      }, new AbortController().signal)
+      expect(refused.ok).toBe(false)
+      expect(seen).toHaveLength(1)
+    })
+
+    it('answers with the decision even when the hook throws', async () => {
+    // THE DECISION IS APPLIED AND DURABLE BEFORE THE HOOK RUNS. Reporting a hook failure as a refusal
+    // would tell the operator their decision did not land while the run says it did.
+      const connection = fakeConnection()
+      installApprovalEndpoint(connection.host, {
+        onDecided: () => { throw new Error('the revision root is gone') },
+      })
+      const handler = connection.handler
+      if (handler === undefined) throw new Error('installApprovalEndpoint registered no handler')
+
+      const drive = await gatedRun()
+      const attempt = regate(drive)
+      const decided = await handler(APPROVAL_DECIDE_ENDPOINT, {
+        runId: drive.run.runId, stepId: E2, attempt, decision: 'approved',
+        commandId: 'cmd-hook-3', expectedProjectRevision: revisionNow(drive),
+      }, new AbortController().signal)
+      expect(decided.ok).toBe(true)
+    })
   })
 })
 

@@ -231,6 +231,43 @@ export interface WirePackageExport {
 }
 
 /**
+ * One revision request, as the wire carries it.
+ *
+ * Structural twin of the Host's `ResearchRevisionView`. There is no `accepted` field, and its
+ * absence is the contract: a candidate cannot be made the official manuscript yet, so nothing here
+ * could render one as accepted.
+ */
+export interface WireRevisionView {
+  readonly runId: string
+  readonly requestId: string
+  readonly instruction: string
+  readonly operator: string
+  readonly projectRevision: number
+  readonly requestedAt: number
+  readonly sections: ReadonlyArray<{ readonly sectionId: string; readonly heading: string; readonly basisHash: string }>
+  /** The sections the instruction is about; the rest of the manuscript is carried unchanged. */
+  readonly targets: ReadonlyArray<string>
+  readonly candidates: ReadonlyArray<{
+    readonly candidateId: string
+    readonly writer: string
+    readonly createdAt: number
+    readonly sections: ReadonlyArray<{
+      readonly sectionId: string
+      readonly heading: string
+      readonly changed: boolean
+      /** The body the candidate replaced, so a page shows the change rather than claiming one. */
+      readonly basisText: string
+      readonly bodyText: string
+    }>
+  }>
+  readonly reviews: ReadonlyArray<{
+    readonly candidateId: string
+    readonly passed: boolean
+    readonly findings: ReadonlyArray<{ readonly check: string; readonly passed: boolean; readonly detail: string }>
+  }>
+}
+
+/**
  * One study the deployment holds, as the list query carries it.
  *
  * Structural twin of the Host's `ResearchRunSummaryEntry`. The page needs no more than this to offer

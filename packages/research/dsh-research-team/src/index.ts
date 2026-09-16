@@ -36,6 +36,7 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -60,6 +61,9 @@ import type {
   ResearchRunPersistence,
   ResearchStepCatalogEntry,
   ResearchStepStateView,
+  ResearchRevisionView,
+  ResearchRevisionRequest,
+  ResearchCandidateRequest,
 } from './types.ts'
 
 export type {
@@ -132,11 +136,20 @@ import { firstNonTerminalStep, materialWithCommitment, needsReleaseBeforeResume 
 import type { ResearchProseWriter, RunContext } from './runner/registry.ts'
 import type { RunResult } from './runner/types.ts'
 import {
+  OPERATOR_PRINCIPAL_ID,
   forgetRuns,
   installApprovalEndpoint,
   rememberRun,
   type ApprovalConnectionHost,
 } from './approval.ts'
+import {
+  buildCandidate, createRevisionRequest, readRevision, reviewCandidate, revisionStoreOf,
+  sectionsOf, writeCandidate, writeReview, writeRevisionRequest, writeSection,
+} from './manuscript-revision.ts'
+import type {
+  RevisionCandidateRecord, RevisionReviewMaterial, RevisionStore,
+} from './manuscript-revision.ts'
+import type { ApprovalDecision } from './approval.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
 // The package entry re-exports its caller-visible brands, errors, entities,
@@ -494,7 +507,12 @@ export class ResearchTeamService extends TypertRemoteService {
     ctx.inject(['connection'], (connectionCtx) => {
       const connection = connectionCtx.get('connection') as ApprovalConnectionHost | undefined
       if (connection === undefined) return
-      installApprovalEndpoint(connection)
+      installApprovalEndpoint(connection, {
+        // THE DECISION IS WHERE THE LOOP STARTS. A change request is an instruction; recording it
+        // as a revision request is what gives the work that answers it something to answer, and it
+        // happens here rather than in the page because the run's records are this service's.
+        onDecided: receipt => this.recordRevisionRequestFor(receipt),
+      })
     })
     ctx.effect(() => {
       const disposers: Array<() => void> = [
@@ -1552,6 +1570,271 @@ export class ResearchTeamService extends TypertRemoteService {
       // told. Treating the second as the first is how a retry becomes a second study.
       if ((error as { code?: unknown }).code === 'ENOENT') return null
       throw new Error(`[research] the start command '${commandId}' cannot be read: ${errorMessage(error)}`)
+    }
+  }
+
+
+  /**
+   * Record a person's request to change the manuscript at the human gate.
+   *
+   * THE OTHER HALF OF A CHANGE REQUEST. The decision itself (see `approval.ts`) leaves the gate open
+   * and records what was asked for; this turns that instruction into a durable request that names
+   * the sections it read, each with the body hash it had, so the work that answers it can be shown
+   * to answer THAT version rather than whatever the manuscript says later.
+   *
+   * @param request - the run, the gate step, the revision the person read, and the instruction.
+   * @returns the recorded request, re-projected for the page.
+   * @throws {Error} when this process holds no such run, when the run has no manuscript yet, or when
+   *   the deployment keeps no durable root to record a request in.
+   */
+  @Remote('requestRevision')
+  async requestRevision(request: ResearchRevisionRequest): Promise<ResearchRevisionView> {
+    const active = this.heldRun(request.runId)
+    const store = this.revisionStoreOrThrow()
+    if (request.instruction.trim() === '') {
+      throw new Error('[revision-instruction-empty] a request to change the manuscript must say what to change')
+    }
+    const sections = sectionsOf(this.manuscriptMarkdownOf(request.runId))
+    if (sections.length === 0) {
+      throw new Error(
+        `[revision-no-manuscript] run '${request.runId}' has no manuscript yet — there is nothing to revise`,
+      )
+    }
+    const record = createRevisionRequest({
+      requestId: request.requestId,
+      runId: request.runId,
+      stepId: request.stepId,
+      projectRevision: getRunSnapshot(active.store, request.runId).revision,
+      instruction: request.instruction,
+      operator: OPERATOR_PRINCIPAL_ID,
+      sections,
+    })
+    await writeRevisionRequest(store, record)
+    return await this.revisionViewOf(request.runId, record.requestId)
+  }
+
+  /**
+   * Write a candidate for one recorded request.
+   *
+   * THE WRITER IS THE DEPLOYMENT'S OWN PROSE CHANNEL, the seam D3 and D4 write through, so the
+   * candidate's text carries the same provenance as the manuscript it revises. A deployment whose
+   * route is the deterministic offline one gets deterministic revision text, and the candidate
+   * records which channel wrote it rather than leaving a reader to assume.
+   *
+   * @param request - the request to answer.
+   * @returns the request re-projected with its new candidate.
+   * @throws {Error} when the request or its run is unknown, when the manuscript moved since the
+   *   request read it, or when the writer produced no text.
+   */
+  @Remote('generateCandidate')
+  async generateCandidate(request: ResearchCandidateRequest): Promise<ResearchRevisionView> {
+    this.heldRun(request.runId)
+    const store = this.revisionStoreOrThrow()
+    const read = await readRevision(store, request.requestId)
+    if (read.request === null) {
+      throw new Error(`[revision-unknown] this deployment holds no request '${request.requestId}'`)
+    }
+    const writer = this.hostProseWriter()
+    if (writer === undefined) {
+      throw new Error(
+        '[revision-no-writer] this deployment configured no prose channel, so no candidate text can be written',
+      )
+    }
+    const current = sectionsOf(this.manuscriptMarkdownOf(request.runId))
+    const byId = new Map(current.map(section => [section.sectionId, section]))
+    const context = { instruction: read.request.instruction, sectionIds: read.request.sections.map(section => section.sectionId) }
+    const written = new Map<string, string>()
+    let provenance: RevisionCandidateRecord['writer'] | undefined
+    for (const basis of read.request.sections) {
+      const section = byId.get(basis.sectionId)
+      if (section === undefined) continue
+      const result = await writeSection(writer, read.request.instruction, section, context)
+      written.set(basis.sectionId, result.text)
+      provenance ??= { channel: writer.channel, provider: result.provider, model: result.model }
+    }
+    const candidate = buildCandidate({
+      candidateId: request.candidateId,
+      request: read.request,
+      current,
+      written,
+      writer: provenance ?? { channel: writer.channel, provider: '', model: '' },
+    })
+    await writeCandidate(store, candidate)
+    return await this.revisionViewOf(request.runId, request.requestId)
+  }
+
+  /**
+   * Judge one candidate on what a pipeline can check without reading its prose.
+   *
+   * @param request - the candidate to review.
+   * @returns the request re-projected with the review.
+   * @throws {Error} when the candidate is unknown.
+   */
+  @Remote('reviewCandidate')
+  async reviewCandidate(request: ResearchCandidateRequest): Promise<ResearchRevisionView> {
+    this.heldRun(request.runId)
+    const store = this.revisionStoreOrThrow()
+    const read = await readRevision(store, request.requestId)
+    const candidate = read.candidates.find(entry => entry.candidateId === request.candidateId)
+    if (candidate === undefined) {
+      throw new Error(`[revision-unknown] this deployment holds no candidate '${request.candidateId}'`)
+    }
+    const review = reviewCandidate(candidate, this.reviewMaterialOf(request.runId))
+    await writeReview(store, request.requestId, review)
+    return await this.revisionViewOf(request.runId, request.requestId)
+  }
+
+  /**
+   * The revisions this process holds for one run.
+   *
+   * @param request - the run to read.
+   * @returns one view per request, newest first, each with its candidates and reviews.
+   */
+  @Remote('listRevisions')
+  async listRevisions(request: { readonly runId: string }): Promise<ReadonlyArray<ResearchRevisionView>> {
+    const store = this.revisionStoreOfDeployment()
+    if (store === undefined) return []
+    let directories: string[] = []
+    try {
+      directories = readdirSync(store.directory)
+    } catch {
+      // No revision directory yet is an empty history, not a failure to read one.
+      directories = []
+    }
+    const views: ResearchRevisionView[] = []
+    for (const requestId of directories) {
+      const read = await readRevision(store, requestId).catch(() => null)
+      if (read?.request === null || read === null) continue
+      if (read.request.runId !== request.runId) continue
+      views.push(await this.revisionViewOf(request.runId, requestId))
+    }
+    return views.sort((left, right) => right.requestedAt - left.requestedAt)
+  }
+
+  /**
+   * Record the revision request a change decision asks for.
+   *
+   * Called with the receipt of a decision that was APPLIED, so it never reports anything to the
+   * operator: the decision stands whatever happens here. What it adds is the other durable record —
+   * the sections the person's instruction was about, each with the body hash it had — which is what
+   * a candidate is later bound to.
+   *
+   * @param receipt - the applied decision.
+   */
+  private async recordRevisionRequestFor(receipt: ApprovalDecision): Promise<void> {
+    if (receipt.decision !== 'request_changes' || receipt.request === undefined) return
+    const store = this.revisionStoreOfDeployment()
+    // NO DURABLE ROOT MEANS NO REVISION RECORD. Holding it in memory would ask the person to make
+    // the request again after a restart, which is worse than telling them this deployment keeps none.
+    if (store === undefined) return
+    const sections = sectionsOf(this.manuscriptMarkdownOf(receipt.runId))
+    if (sections.length === 0) return
+    await writeRevisionRequest(store, createRevisionRequest({
+      requestId: randomUUID(),
+      runId: receipt.runId,
+      stepId: receipt.stepId,
+      projectRevision: receipt.snapshot?.projectRevision ?? getRunSnapshot(
+        this.heldRun(receipt.runId).store, receipt.runId).revision,
+      instruction: receipt.request,
+      operator: receipt.operator,
+      sections,
+    }))
+  }
+
+  /** The run this process holds, or a refusal naming the fact. */
+  private heldRun(runId: string): ActiveRun {
+    const active = this.activeRuns.get(runId)
+    if (active === undefined) {
+      throw new Error(`[revision-run-unknown] this process holds no run '${runId}' — a run id is not a revision credential`)
+    }
+    return active
+  }
+
+  /** This deployment's revision store, or a refusal saying it keeps none. */
+  private revisionStoreOrThrow(): RevisionStore {
+    const store = this.revisionStoreOfDeployment()
+    if (store === undefined) {
+      throw new Error('[revision-no-root] this deployment keeps no snapshot root, so a revision cannot be recorded')
+    }
+    return store
+  }
+
+  private revisionStoreOfDeployment(): RevisionStore | undefined {
+    const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
+    return revisionStoreOf({ snapshotDirectory: research?.snapshotDirectory })
+  }
+
+  /** The official manuscript's markdown, as the run's own artifact holds it. */
+  private manuscriptMarkdownOf(runId: string): string {
+    const active = this.heldRun(runId)
+    const value = getArtifact(active.store, runId, 'formatted-manuscript')
+    const record = typeof value === 'object' && value !== null ? (value as { manuscript?: unknown }) : undefined
+    return typeof record?.manuscript === 'string' ? record.manuscript : ''
+  }
+
+  /**
+   * What the checks read about one run: its own numbers, its reference labels and its headings.
+   *
+   * EVERY VALUE IS READ FROM THE RUN, not from the candidate and not from the instruction: a check
+   * that took its expectations from the text under test would pass whatever the text said.
+   */
+  private reviewMaterialOf(runId: string): RevisionReviewMaterial {
+    const active = this.heldRun(runId)
+    const markdown = this.manuscriptMarkdownOf(runId)
+    const sections = sectionsOf(markdown)
+    // EVERY NUMBER THE RUN HOLDS, from its own registry rather than from the text under test: the
+    // check is "this number came from somewhere in this study", and a value the candidate invented
+    // is exactly what it must not find.
+    const numbers = new Set<string>()
+    for (const definition of getStepDefinitions()) {
+      for (const slug of definition.outputs) {
+        const value = getArtifact(active.store, runId, slug)
+        if (value === undefined || value === null) continue
+        for (const match of JSON.stringify(value).match(/-?\d+(?:\.\d+)?/g) ?? []) numbers.add(match)
+      }
+    }
+    const labels = new Set<string>()
+    for (const match of markdown.matchAll(/\[(\d+)\]/g)) labels.add(match[1] as string)
+    return {
+      knownNumbers: [...numbers],
+      referenceLabels: [...labels],
+      headings: sections.map(section => section.heading),
+    }
+  }
+
+  /** One request, as the page renders it. */
+  private async revisionViewOf(runId: string, requestId: string): Promise<ResearchRevisionView> {
+    const store = this.revisionStoreOrThrow()
+    const read = await readRevision(store, requestId)
+    if (read.request === null) {
+      throw new Error(`[revision-unknown] this deployment holds no request '${requestId}'`)
+    }
+    return {
+      runId,
+      requestId: read.request.requestId,
+      instruction: read.request.instruction,
+      operator: read.request.operator,
+      projectRevision: read.request.projectRevision,
+      requestedAt: read.request.requestedAt,
+      sections: read.request.sections.map(section => ({ ...section })),
+      targets: [...read.request.targets],
+      candidates: read.candidates.map(candidate => ({
+        candidateId: candidate.candidateId,
+        writer: candidate.writer.channel,
+        createdAt: candidate.createdAt,
+        sections: candidate.sections.map(section => ({
+          sectionId: section.sectionId,
+          heading: section.heading,
+          changed: section.changed,
+          basisText: section.basisText,
+          bodyText: section.bodyText,
+        })),
+      })),
+      reviews: read.reviews.map(review => ({
+        candidateId: review.candidateId,
+        passed: review.passed,
+        findings: review.findings.map(finding => ({ ...finding })),
+      })),
     }
   }
 

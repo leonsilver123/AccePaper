@@ -23,7 +23,9 @@ import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
 import { runListFrom } from '../run-source.ts'
-import type { RunListEntryView, WireRunFrame, WireRunSaveRetry, WireRunStart, WireRunSummaryEntry } from '../run-source.ts'
+import type {
+  RunListEntryView, WireRevisionView, WireRunFrame, WireRunSaveRetry, WireRunStart, WireRunSummaryEntry,
+} from '../run-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -103,6 +105,57 @@ interface ResearchRemoteNamespace {
    */
   listRuns(): Promise<
     { readonly ok: true; readonly value: ReadonlyArray<WireRunSummaryEntry> }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * The revisions this deployment holds for one run, newest first.
+   *
+   * A revision is a durable object: a request that names the version it read, the candidates that
+   * answer it, and the reviews bound to those candidates. The page reads them rather than holding
+   * any of it, so what it shows survives a reload.
+   */
+  listRevisions(request: { readonly runId: string }): Promise<
+    { readonly ok: true; readonly value: ReadonlyArray<WireRevisionView> }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Record a person's request to change the manuscript at the gate.
+   *
+   * The service reads the revision and the sections itself; the caller states only what to change.
+   */
+  requestRevision(request: {
+    readonly requestId: string
+    readonly runId: string
+    readonly stepId: string
+    readonly instruction: string
+  }): Promise<
+    { readonly ok: true; readonly value: WireRevisionView }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Write a candidate that answers one request, through the deployment's own prose channel.
+   */
+  generateCandidate(request: {
+    readonly runId: string
+    readonly requestId: string
+    readonly candidateId: string
+  }): Promise<
+    { readonly ok: true; readonly value: WireRevisionView }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Judge one candidate on what a pipeline can check without reading its prose.
+   */
+  reviewCandidate(request: {
+    readonly runId: string
+    readonly requestId: string
+    readonly candidateId: string
+  }): Promise<
+    { readonly ok: true; readonly value: WireRevisionView }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
 
@@ -333,6 +386,59 @@ export function apply(ctx: Context): void {
     })
   }
 
+  /**
+   * The revisions this deployment holds for one run.
+   *
+   * @param runId - the run to read.
+   * @returns the requests with their candidates and reviews, as the host records them.
+   */
+  const listRevisions = async (runId: string): Promise<ReadonlyArray<WireRevisionView>> => {
+    const answered = await namespace().listRevisions({ runId })
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    return answered.value
+  }
+
+  /**
+   * Ask the host to record a request to change the manuscript.
+   *
+   * @param input - the run, the gate, and what to change.
+   * @returns the recorded request.
+   */
+  const requestRevision = async (input: {
+    readonly runId: string
+    readonly stepId: string
+    readonly instruction: string
+  }): Promise<WireRevisionView> => {
+    const answered = await namespace().requestRevision({
+      requestId: globalThis.crypto.randomUUID(),
+      runId: input.runId,
+      stepId: input.stepId,
+      instruction: input.instruction,
+    })
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    return answered.value
+  }
+
+  /**
+   * Ask the host to write a candidate for one request, or to judge one.
+   *
+   * @param call - which of the two operations to perform, and on what.
+   * @returns the request as it stands after the operation.
+   */
+  const revisionStep = async (call: {
+    readonly runId: string
+    readonly requestId: string
+    readonly candidateId: string
+    readonly operation: 'generate' | 'review'
+  }): Promise<WireRevisionView> => {
+    const request = { runId: call.runId, requestId: call.requestId, candidateId: call.candidateId }
+    const answered = call.operation === 'generate'
+      ? await namespace().generateCandidate(request)
+      : await namespace().reviewCandidate(request)
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    return answered.value
+  }
+
   const propose = async (field: string): Promise<WireProposalAnswer> => {
     const result = await namespace().proposeDirections({ field })
     if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
@@ -355,5 +461,7 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun)))
+  }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun, {
+    list: listRevisions, request: requestRevision, step: revisionStep,
+  })))
 }

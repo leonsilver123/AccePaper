@@ -33,6 +33,8 @@ import { ApprovalPanel } from './ApprovalPanel.tsx'
 import { RecoveryPanel } from './RecoveryPanel.tsx'
 import { StageNavigation } from './StageNavigation.tsx'
 import { StageWorkspace } from './StageWorkspace.tsx'
+import { RevisionPanel } from './RevisionPanel.tsx'
+import type { RevisionSource } from './RevisionPanel.tsx'
 import css from './ResearchWorkbench.module.css'
 
 /**
@@ -82,12 +84,17 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * Open one of those studies. Omitted on the same terms as {@link onListRuns}.
    */
   readonly onOpenRun?: (runId: string, onUpdate: (summary: RunSummary) => void) => Promise<void>
+  /**
+   * The revision loop's read and its two operations. Omitted by a host that cannot record
+   * revisions, in which case the tab says so rather than offering controls that cannot work.
+   */
+  readonly revisions?: RevisionSource
 }
 
 /** Workbench sub-panel tab identifiers. */
 type WorkbenchTab =
   | 'summary' | 'pipeline' | 'figures' | 'tables' | 'roadmap'
-  | 'gates' | 'adversarial' | 'approval' | 'recovery'
+  | 'gates' | 'adversarial' | 'approval' | 'revision' | 'recovery'
 
 /** Tab roster: id → label dictionary key (kept in `research` namespace order). */
 const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
@@ -99,6 +106,7 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
   { id: 'gates', labelKey: 'tab.gates' },
   { id: 'adversarial', labelKey: 'tab.adversarial' },
   { id: 'approval', labelKey: 'tab.approval' },
+  { id: 'revision', labelKey: 'tab.revision' },
   { id: 'recovery', labelKey: 'tab.recovery' },
 ]
 
@@ -125,6 +133,7 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  */
 export function ResearchWorkbench({
   t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave, onListRuns, onOpenRun,
+  revisions,
 }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -482,6 +491,13 @@ export function ResearchWorkbench({
               t={t}
               {...onApprove === undefined ? {} : { onSubmit: onApprove }}
               onDecided={setLive}
+            />
+          )}
+          {active === 'revision' && (
+            <RevisionPanel
+              summary={summary}
+              t={t}
+              {...revisions === undefined ? {} : { revisions }}
             />
           )}
           {active === 'recovery' && <RecoveryPanel summary={summary} t={t} />}

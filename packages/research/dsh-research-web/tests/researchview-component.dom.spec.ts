@@ -192,7 +192,7 @@ describe('research workbench DOM', () => {
 
     const tabLabels = [
       'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',
-      'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.recovery',
+      'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.revision', 'tab.recovery',
     ] as const
     for (const key of tabLabels) {
       expect(screen.getByRole('button', { name: en[key] })).toBeTruthy()
@@ -202,7 +202,7 @@ describe('research workbench DOM', () => {
     // and a page-wide count made every one of those a failure of this test.
     const strip = screen.getByRole('button', { name: en['tab.summary'] }).closest('nav')
     expect(strip).not.toBeNull()
-    expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(9)
+    expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(10)
 
     // Default view is the Summary panel.
     expect(screen.getByText(/Step progress/)).toBeTruthy()

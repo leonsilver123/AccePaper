@@ -148,6 +148,13 @@ export interface ApprovalDecision {
   readonly status: StepStatus
   /** Which decision was recorded. A caller renders the receipt from this, not from its own intent. */
   readonly decision: 'approved' | 'rejected' | 'request_changes'
+  /**
+   * What a `request_changes` decision asked for, as it was recorded.
+   *
+   * ABSENT for the other two decisions, which have nothing to instruct. A request without it would
+   * be a decision whose whole content the caller cannot read.
+   */
+  readonly request?: string
   /** The host-attested principal that decided. */
   readonly operator: string
   /** The single-use event id the decision was recorded under. */
@@ -519,7 +526,8 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
         attempt,
         status,
         decision,
-        ...(decision === 'request_changes' ? { request: submission.request?.trim() } : {}),
+        ...(decision === 'request_changes' && submission.request !== undefined
+          ? { request: submission.request.trim() } : {}),
         operator: OPERATOR_PRINCIPAL_ID,
         approvalEventId,
         decidedAt: Date.now(),
@@ -565,7 +573,11 @@ export async function decideApprovalRequest(endpoint: string, payload: unknown):
   }
   const submission = readSubmission(payload)
   if (submission === undefined) {
-    return refuse(APPROVAL_ERROR_CODES.requestInvalid, 'an approval request needs string runId, string stepId, integer attempt and decision approved|rejected')
+    return refuse(
+      APPROVAL_ERROR_CODES.requestInvalid,
+      'an approval request needs string runId, string stepId, integer attempt and a decision of '
+      + 'approved, rejected or request_changes (the last requiring a non-empty request)',
+    )
   }
   return submitApproval(submission)
 }
@@ -581,14 +593,46 @@ export async function decideApprovalRequest(endpoint: string, payload: unknown):
  *
  * @param connection - the Host Connection service to register the authenticated channel on.
  */
-export function installApprovalEndpoint(connection: ApprovalConnectionHost): void {
+/** What an endpoint installation may do after a decision has been applied. */
+export interface ApprovalEndpointOptions {
+  /**
+   * Called with the receipt of a decision that WAS applied.
+   *
+   * THE GATE IS WHERE THE REVISION LOOP STARTS, which is why this exists: a `request_changes`
+   * decision is an instruction, and the service that owns the run's records is the only layer that
+   * can turn it into a durable request naming the sections it read. A hook failure does NOT change
+   * the answer — the decision is applied and durable by the time this runs, and reporting it as
+   * refused would tell the operator their decision did not land while the run says it did.
+   */
+  readonly onDecided?: (receipt: ApprovalDecision) => Promise<void> | void
+}
+
+export function installApprovalEndpoint(
+  connection: ApprovalConnectionHost,
+  options: ApprovalEndpointOptions = {},
+): void {
   if (installed?.host === connection) return
   const previous = installed
   installed = undefined
   if (previous !== undefined) void previous.dispose()
   const dispose = connection.rpc.handle(
     APPROVAL_CHANNEL,
-    (endpoint, payload) => Promise.resolve(decideApprovalRequest(endpoint, payload)),
+    async (endpoint: string, payload: unknown) => {
+      const result = await decideApprovalRequest(endpoint, payload)
+      if (result.ok && options.onDecided !== undefined) {
+        // AWAITED, so a caller that decides and immediately reads the loop sees the request this
+        // decision created. GUARDED AROUND THE CALL ITSELF, not only around its promise: a hook that
+        // throws synchronously — a missing revision root, a store that refuses — would otherwise
+        // reject this handler and report a decision that WAS applied as one that never landed.
+        try {
+          await options.onDecided(result.value)
+        } catch {
+          // Swallowed on purpose, and it is the only safe direction: the decision is applied and
+          // durable before this runs. The hook's own caller records the failure it can act on.
+        }
+      }
+      return result
+    },
   )
   installed = { host: connection, dispose }
 }
