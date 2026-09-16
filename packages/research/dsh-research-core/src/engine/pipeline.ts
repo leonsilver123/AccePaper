@@ -180,6 +180,13 @@ export function runStep(
   return new Promise<RunStepResult>((resolve) => {
     let done = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    // THE EXECUTOR'S OWN CANCELLATION, which is not the caller's. A timeout used to end the ATTEMPT
+    // and nothing else: the executor was handed the caller's signal, so it could not learn that its
+    // time was up and kept running — spending a model call, a subprocess or a simulation whose
+    // result was already discarded as late. This controller is what the executor is given, and both
+    // the caller's abort and the timeout abort it. The attempt still settles exactly once, and a
+    // result that arrives after it settled is still refused rather than written.
+    const attempt = new AbortController()
     const finish = (result: RunStepResult): void => {
       done = true
       if (signal) signal.removeEventListener('abort', onAbort)
@@ -187,10 +194,13 @@ export function runStep(
       resolve(result)
     }
     const onAbort = (): void => {
+      attempt.abort(signal?.reason)
       finish(emit(store, buildRecord(runId, stepId, attemptId, 'cancelled', [], undefined)))
     }
     if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        const expired = new Error(`step '${stepId}' exceeded its ${String(opts.timeoutMs)} ms budget`)
+        attempt.abort(expired)
         finish(emit(store, buildRecord(runId, stepId, attemptId, 'timeout', [], undefined)))
       }, opts.timeoutMs)
     }
@@ -204,7 +214,7 @@ export function runStep(
     const expectedRevision = ensureRun(store, runId).revision
 
     Promise.resolve()
-      .then(() => opts.executor({ runId, stepId, attemptId, ...(signal !== undefined ? { signal } : {}) }))
+      .then(() => opts.executor({ runId, stepId, attemptId, signal: attempt.signal }))
       .then((artifacts: unknown) => {
         if (done) return // already timed out / cancelled → ignore late success
         const arts: Record<string, unknown> =

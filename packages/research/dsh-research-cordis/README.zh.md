@@ -21,6 +21,7 @@
 
 ## 已知限制与延期工作
 
+- **失败的轮次现在就是失败的写入,不管它吐了多少文本**(2026-09-16):失败检查曾经坐在 `LlmProseWriter.write` 的**零长度分支里**,于是一次吐出几句之后死掉的会话 —— 流中途的 provider 错误、被取消的请求、再也没回来的工具调用 —— 把那几句话当作该步的产物返回,该步也就认证了一段没有任何轮次写完的散文。现在先查失败,消息里同时带上原因与被拒的未完成文本长度。失败读的是**最后一条** `turn/end`:更早一轮失败而更后一轮成功,是一个恢复了的会话,不是一个失败的会话。
 - **引用条目现在带年份,而这一条链曾经只缺提供者**(2026-09-16)。`LiteratureHit` 曾**没有 year 字段**,于是 `OpenAlexLiteratureAdapter` 把目录已经给出的 `publication_year` 丢掉 —— 一份真实运行的导出里,25 条参考文献每条都有 venue、作者与 DOI,**没有一条有年份**。渲染侧早已就绪:E1 会从每个条目读 `year`、`paper-format.ts` 的 `formatReference` 会渲染它;缺的只是提供它的人。现在 `LiteratureHit.year` 是可选字段,`toHit` 读目录的那个字段,**读不出可信年份时留空而不是编造**(`null`、`forthcoming`、五位数一律算「目录没说」),因为一个被编造出来的年份不是缺失字段,而是一条错误引用。
 - 本服务**不把闸门结果自动写回 StepState**。这是刻意的设计边界(服务是纯委托层,由 driver 决定何时调用 `submitGateVerdict` / `completeStep`),而不是约定缺口——`hold_abstained` 的容身处由 core 提供(状态机把 abstained 步骤钉在 `gated` 并记 `holdReason='gate_abstained'`)。
 - **工具注册改为等待 `tools` 服务出现(2026-09-14 修复)**。此前引擎在 `[Service.init]` 里直接挂载七工具插件,而 loader 是**并发**启动各 entry 的:真实 1120 boot 上实测 `ctx.get('tools')` 在引擎初始化时是 `undefined`、约 50 ms 后才出现。于是那次挂载被永久跳过,**出货 bundle 从未注册过任何一个 research 工具**,而 tolerant 分支把这个跳过吞掉了。现在改用 `ctx.inject(['tools'], …)`,注册在服务可用的那一刻提交;`ctx.research.toolsReady` 是它的提交点状态。

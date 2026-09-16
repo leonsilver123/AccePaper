@@ -170,16 +170,22 @@ function assistantTextFrom(events: ReadonlyArray<unknown>): string {
 }
 
 /**
- * The most recent failed-turn reason in a session's events.
+ * How the LAST turn in a session's events ended, when it ended in error.
+ *
+ * Only the final turn end decides. A session can end several turns, and an earlier one that failed
+ * while a later one succeeded is a session that recovered, not one that failed. What matters is
+ * whether the write finished.
  *
  * @param events - the session's snapshot events, in log order.
- * @returns the last reported message, or undefined when no turn ended in error.
+ * @returns the last-reported message when the FINAL turn ended in error, otherwise undefined.
  */
 function lastTurnErrorFrom(events: ReadonlyArray<unknown>): string | undefined {
   let failure: string | undefined
   for (const event of events) {
-    const message = turnErrorOf(event)
-    if (message !== undefined) failure = message
+    if (event === null || typeof event !== 'object') continue
+    if ((event as { type?: unknown }).type !== 'turn/end') continue
+    // Every turn end RESETS the answer: a later clean end clears an earlier failure.
+    failure = turnErrorOf(event)
   }
   return failure
 }
@@ -313,19 +319,23 @@ export class LlmProseWriter {
     await settled
 
     const events = agent.session.snapshotEvents()
+    // A FAILED TURN IS A FAILURE, WHATEVER TEXT IT MANAGED TO EMIT. The failure check used to sit
+    // INSIDE the zero-length branch, so a turn that died after a few sentences — a provider error
+    // mid-stream, a cancelled request, a tool call that never came back — returned those sentences
+    // as the step's product. The step then certified prose no turn ever finished writing, and the
+    // only record of why was a `turn/end` reason nothing read.
+    const failure = lastTurnErrorFrom(events)
     const text = assistantTextFrom(events)
+    if (failure !== undefined) {
+      throw new Error(
+        `[research-prose] ${request.stepId}: the turn failed`
+        + (text.length === 0
+          ? ' before the model produced text'
+          : ` after ${String(text.length)} characters of partial text, which are NOT a product`)
+        + `: ${failure}`,
+      )
+    }
     if (text.length === 0) {
-      // Separate the two outcomes a zero-length product can mean. A turn that ENDED
-      // IN ERROR never reached the provider (unresolved prompt variable, provider
-      // failure, cancellation), and reporting that as "the model produced no text"
-      // hides the cause in exactly the way the engine's own discipline forbids.
-      const failure = lastTurnErrorFrom(events)
-      if (failure !== undefined) {
-        throw new Error(
-          `[research-prose] ${request.stepId}: the request failed before the model produced `
-          + `text: ${failure}`,
-        )
-      }
       throw new Error(`[research-prose] ${request.stepId}: the model produced no text (no default pass)`)
     }
     return { text, provider: this.config.provider, model: this.config.model }

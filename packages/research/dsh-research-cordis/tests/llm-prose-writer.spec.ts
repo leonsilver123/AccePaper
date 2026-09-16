@@ -266,6 +266,42 @@ describe('LlmProseWriter against a real agent loop', () => {
     await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
   })
 
+  it('refuses the partial text of a turn that failed, instead of certifying it', async () => {
+    // THE FAILURE CHECK USED TO LIVE INSIDE THE ZERO-LENGTH BRANCH, so any text at all was enough
+    // to return a product: a provider error mid-stream, a cancelled request or a tool call that
+    // never came back left a few sentences behind, and the step certified prose no turn ever
+    // finished writing. The failure is checked FIRST now, and the message carries both why it
+    // failed and how much unfinished text it refused.
+    // TWO TURNS: the first writes text and asks for a tool, the second dies. This is the shape the
+    // writer used to certify — a session that ended in error while a complete assistant message with
+    // text was already in the log, so `assistantTextFrom` had something to return.
+    const { ctx } = await setupRuntime([
+      [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: 'The method section begins' },
+        { type: 'block-end', index: 0, block: { type: 'text', text: 'The method section begins' } },
+        { type: 'block-start', index: 1, blockType: 'tool-call' },
+        { type: 'tool-call-delta', index: 1, id: ToolCallId('c1'), name: 'no-such-tool', argumentsDelta: '{}' },
+        { type: 'block-end', index: 1, block: { type: 'tool-call', id: ToolCallId('c1'), name: 'no-such-tool', arguments: '{}' } },
+        { type: 'usage', usage: { inputTokens: 5, outputTokens: 30 } },
+        { type: 'finish', reason: { kind: 'tool-calls' } },
+      ],
+      [
+        { type: 'usage', usage: { inputTokens: 5, outputTokens: 0 } },
+        { type: 'finish', reason: { kind: 'error', failure: { message: 'provider dropped the stream', code: 'TRANSPORT' } } },
+      ],
+    ])
+    const failure = await writerFor(ctx)
+      .write({ stepId: STEP, instruction: 'x', context: {} })
+      .then(() => undefined, (error: unknown) => error as Error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure?.message).toContain('the turn failed')
+    expect(failure?.message).toContain('partial text, which are NOT a product')
+    expect(failure?.message).toContain('provider dropped the stream')
+    await (ctx as unknown as { fiber: { dispose: () => Promise<void> } }).fiber.dispose()
+  })
+
   it('fails the write on idle timeout instead of hanging forever', async () => {
     const { ctx } = await setupRuntime(['hang'])
     await expect(

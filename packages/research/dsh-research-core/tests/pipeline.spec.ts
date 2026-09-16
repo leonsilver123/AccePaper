@@ -212,6 +212,34 @@ describe('P3 timeout — deterministic failure, no hang, late result ignored', (
     expect(getRunSnapshot(store, id).steps[STEP]!.artifacts).toEqual({})
   })
 
+  it('aborts the executor when the attempt times out, so a spent budget stops being spent', async () => {
+    // A TIMEOUT THAT ONLY ENDS THE ATTEMPT LEAVES THE WORK RUNNING. The executor used to be handed
+    // the CALLER's signal, so an attempt that ran out of time could not tell: it kept holding a
+    // model call, a subprocess or a simulation whose result would be discarded as late. The signal
+    // the executor receives is the attempt's own, and the timeout aborts it.
+    vi.useFakeTimers()
+    const [store, id] = started()
+    const seen: Array<AbortSignal | undefined> = []
+    const reasons: unknown[] = []
+    const executor = (ctx: { signal?: AbortSignal }) => {
+      seen.push(ctx.signal)
+      ctx.signal?.addEventListener('abort', () => reasons.push(ctx.signal?.reason), { once: true })
+      return new Promise<Record<string, unknown>>(() => {})
+    }
+    const p = runStep(store, id, STEP, { executor, timeoutMs: 100 })
+    // The executor is invoked on a microtask, so let that land before asking what it was handed.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.aborted).toBe(false)
+    vi.advanceTimersByTime(100)
+    const res = await p
+    expect(res.status).toBe('timeout')
+    expect(seen[0]?.aborted).toBe(true)
+    // And it says WHY, so the executor can report the budget rather than a bare cancellation.
+    expect(String(reasons[0])).toMatch(/exceeded its 100 ms budget/u)
+    vi.useRealTimers()
+  })
+
   it('does not install a timer when timeoutMs is 0', async () => {
     const [store, id] = started()
     const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }), timeoutMs: 0 })
