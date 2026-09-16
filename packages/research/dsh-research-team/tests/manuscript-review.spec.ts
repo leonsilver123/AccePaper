@@ -130,6 +130,39 @@ describe('a clean manuscript passes every check', () => {
     expect(positionOf(input, 'red-citation')).toBe('support')
   })
 
+  it('does not read a citation’s volume and page as measurements', () => {
+    // THE SECOND THING THE REAL RUN TAUGHT THIS CHECK. With the identifiers handled, the same
+    // manuscript was refused for `62` and `1805` — the volume and page of
+    // `Physical Review E 62(2):1805`, cited in running text with no parentheses and no year.
+    // The rule that holds is not another scheme: it is what a QUANTITY looks like. A number stated
+    // as a result carries a unit or a percent sign, or is a count small enough to be one. A bare
+    // integer above that range in prose is a citation, an index or a year.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'method',
+          heading: 'Method',
+          bodyText:
+            'The car-following model is the standard one (Treiber, Hennecke & Helbing, Physical'
+            + ' Review E 62(2):1805, 2000), integrated at a fixed 0.02 s step.',
+        },
+      ],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('support')
+  })
+
+  it('still counts a quantity that carries its unit', () => {
+    // The cost of that rule, stated: a bare integer above the count range is not checked. A number
+    // with a unit still is, which is what the shipped study's sections state.
+    const input = cleanInput({
+      sections: [
+        { id: 'results', heading: 'Results', bodyText: 'The platoon held 47 s of minimum time-to-collision.' },
+      ],
+      declaredNumbers: [],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('refute')
+  })
+
   it('still refuses a measurement in a prose section beside an identifier', () => {
     // The exclusion has to be narrow, or it becomes a way to smuggle a number past the check.
     const input = cleanInput({

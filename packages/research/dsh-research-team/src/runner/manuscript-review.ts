@@ -119,15 +119,42 @@ function implementationNamedIn(body: string, names: ReadonlyArray<string>): stri
   return undefined
 }
 
-/** Decimal literals in a piece of prose, as numbers. */
-function numbersIn(text: string): ReadonlyArray<number> {
+/**
+ * The numbers a piece of prose states as QUANTITIES, in order.
+ *
+ * @param text - a section body with its citations already blanked out.
+ * @returns each quantity the prose states.
+ */
+function quantitiesIn(text: string): ReadonlyArray<number> {
   const found: number[] = []
-  for (const match of text.matchAll(/\d+(?:\.\d+)?/gu)) {
-    const value = Number(match[0])
-    if (Number.isFinite(value)) found.push(value)
+  for (const match of text.matchAll(/\d+(?:\.\d+)?\s*%?/gu)) {
+    const raw = match[0]
+    const value = Number(raw.replace(/\s*%$/u, ''))
+    if (!Number.isFinite(value)) continue
+    // WHAT A QUANTITY LOOKS LIKE. A number a section states as a result carries a unit or a
+    // percent sign, or is a small count it can declare — "19.58 s", "−38.20 %", "three vehicles".
+    // A bare integer above that range in running prose is a citation: the real run that produced
+    // this rule was refused twice, first for 47 DOIs and then for `62` and `1805`, which are the
+    // volume and page of `Physical Review E 62(2):1805`. Enumerating the shapes identifiers take is
+    // the losing game; saying what a measurement looks like is the winning one.
+    //
+    // The cost is stated rather than hidden: a fabricated bare integer above the count range —
+    // "the platoon held 47 s", with no unit — is not checked. A fabricated number that carries its
+    // unit, or any decimal, still is.
+    const hasMarker = /%$/u.test(raw) || /\d\.\d/u.test(raw) || /\s/u.test(raw)
+    if (!hasMarker && value > DECLARED_COUNT_RANGE) continue
+    found.push(value)
   }
   return found
 }
+
+/**
+ * The largest bare integer prose may state as a count rather than as a citation.
+ *
+ * A section legitimately says "three vehicles", "the two platoons", "both arms"; a page number is
+ * never that small.
+ */
+const DECLARED_COUNT_RANGE = 20
 
 /**
  * Every number the run's own evidence can account for.
@@ -295,7 +322,7 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
     // this check reads the sections that state results, and the check that matters for a reference
     // list is `red-citation`, which compares what the prose cites against what the list holds.
     if (section.id === 'references') continue
-    for (const [index, value] of numbersIn(withoutCitations(section.bodyText)).entries()) {
+    for (const [index, value] of quantitiesIn(withoutCitations(section.bodyText)).entries()) {
       if (accountable.has(value)) continue
       // The findings name the section and the value, so a reader can find the sentence. The
       // ordinal is not a quotation: quoting the sentence would put the manuscript's own text into
@@ -439,7 +466,7 @@ function reviewManuscriptConclusion(
   // arithmetic, and it is checkable without reading anything.
   if (input.commitment !== undefined) {
     const bound = anchorBoundIn(input.predictionText)
-    for (const value of numbersIn(clause)) {
+    for (const value of quantitiesIn(clause)) {
       if (!/%/u.test(String(value))) continue
       if (bound === 'at-least' && value > Math.abs(record.improvementPct) && value !== input.commitment.thresholdPct) {
         findings.push({
