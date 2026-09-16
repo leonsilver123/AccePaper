@@ -16,6 +16,10 @@ export const zh = {
   'run.running': '运行中…',
   'run.revision': '项目版本 {revision}',
   'run.error': '运行失败:{message}',
+  // 保存失败是"这次运行不在盘上":把后端自己的原因原样显示,并提供唯一能修好它的操作。
+  'run.saveFailure': '最新成果没有落盘:{message}',
+  'run.retrySave': '重试保存',
+  'run.retryingSave': '正在重试保存…',
   // The run dialog: the field, the proposals, and the criterion a person confirms.
   'propose.title': '这次运行研究什么',
   'propose.note': '给一个领域,AI 会提出若干研究方向。每个方向都带着它的可证伪预测和判定标准 —— 确认之后流水线才会开始,并且只跑你确认的那一个。',
@@ -217,6 +221,11 @@ export const en: Record<ResearchKey, string> = {
   'run.running': 'Running…',
   'run.revision': 'Project revision {revision}',
   'run.error': 'Run failed: {message}',
+  // A failed save is "this run is not on disk": the host's own reason, shown as it stated it, beside
+  // the one operation that fixes it.
+  'run.saveFailure': 'The latest work did not reach the disk: {message}',
+  'run.retrySave': 'Retry the save',
+  'run.retryingSave': 'Retrying the save…',
   'propose.title': 'What this run studies',
   'propose.note': 'Give a field and the model proposes research directions. Each carries the falsifiable prediction it commits to and the criterion it will be graded against — the pipeline starts only after you confirm, and runs only the one you confirmed.',
   'propose.fieldLabel': 'Field',

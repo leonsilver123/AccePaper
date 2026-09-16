@@ -40,6 +40,17 @@ export type ResearchProposalSource = (field: string) => Promise<WireProposalAnsw
 export type ResearchResumeSource = (onUpdate: (summary: RunSummary) => void) => Promise<void>
 
 /**
+ * Write one run's current state to its snapshot again, after a write that failed.
+ *
+ * `onUpdate` has the same meaning it has in {@link ResearchRunSource}. A refusal rejects with the
+ * host's own reason, which the workbench shows where it shows every other failure.
+ */
+export type ResearchSaveRetrySource = (
+  runId: string,
+  onUpdate: (summary: RunSummary) => void,
+) => Promise<void>
+
+/**
  * Build the slot component bound to one run source and one approval endpoint.
  *
  * @param run - starts a run and reports each snapshot as it is read.
@@ -49,6 +60,9 @@ export type ResearchResumeSource = (onUpdate: (summary: RunSummary) => void) => 
  *   model, in which case the run control starts the default plan without opening a dialog.
  * @param resume - picks up the run this browser was following before a reload. Omitted by a host
  *   whose runs cannot be named again, in which case a reload shows no run.
+ * @param retrySave - retries a run's write after the host reported it did not land. Omitted by a
+ *   host that cannot retry one, in which case the control that offers it is absent rather than
+ *   inert.
  * @returns a conversation-view component that renders the research workbench.
  */
 export function researchViewWith(
@@ -56,6 +70,7 @@ export function researchViewWith(
   approve?: ApprovalSubmitter,
   propose?: ResearchProposalSource,
   resume?: ResearchResumeSource,
+  retrySave?: ResearchSaveRetrySource,
 ) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
@@ -72,6 +87,7 @@ export function researchViewWith(
         {...(onPropose === undefined ? {} : { onPropose })}
         {...(resume === undefined ? {} : { onResume: resume })}
         {...approve === undefined ? {} : { onApprove: approve }}
+        {...retrySave === undefined ? {} : { onRetrySave: retrySave }}
       />
     )
   }

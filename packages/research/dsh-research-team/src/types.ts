@@ -459,6 +459,31 @@ export interface ResearchRunStart {
 }
 
 /**
+ * What one retry of a run's write did, and the run as it stands after it.
+ *
+ * The remedy for a save that failed, and the reason it is a separate command rather than a second
+ * `startRun`: the state it writes is the one this process already holds. Nothing is re-executed —
+ * a finished study has already cost what it cost, and running it again to make a write succeed
+ * would produce different numbers under the same name.
+ */
+export interface ResearchRunSaveRetry {
+  readonly runId: string
+  /** Whether the run's current state reached its snapshot. */
+  readonly persisted: boolean
+  /** Why it did not, when it did not. */
+  readonly persistenceError?: string
+  /**
+   * The run re-projected after the retry, so the caller renders backend truth rather than its own.
+   *
+   * A retry moves the SNAPSHOT's revision — the write counter in `runPersistence` — and deliberately
+   * not the run's `projectRevision`: that one counts what the study committed, and writing the same
+   * state to disk again commits nothing. A decision taken before the retry therefore still names a
+   * current revision, and the binding it is held to is unchanged by the recovery.
+   */
+  readonly snapshot: ResearchRunSnapshot
+}
+
+/**
  * One start command.
  *
  * `commandId` is the caller's, and it is what makes a retry a retry: the same id reads the answer

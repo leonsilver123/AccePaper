@@ -545,6 +545,56 @@ describe('research workbench run control', () => {
     expect(badge?.textContent).toContain('the claim channel is unreachable')
   })
 
+  it('offers a save retry on the host’s own report, and hands the refreshed run to the page', async () => {
+    // THE ONE REMEDY FOR A RUN THAT IS NOT ON DISK. The host reports the failure with its own reason,
+    // and the control that fixes it is offered on THAT report — not on a guess, and not as a new run:
+    // the retry writes the state the host already holds, so the study is not carried out again.
+    const broken = toRunSummary({
+      ...fixtureInput(),
+      runId: 'run-live-9',
+      source: 'live',
+      saveFailure: 'ENOSPC: no space left on device, write',
+    })
+    const healed = toRunSummary({
+      ...fixtureInput(),
+      runId: 'run-live-9',
+      source: 'live',
+      projectRevision: 16,
+    })
+    const onRun = vi.fn(async (_plan: unknown, onUpdate: (summary: typeof broken) => void) => { onUpdate(broken) })
+    const onRetrySave = vi.fn(async (_runId: string, onUpdate: (summary: typeof healed) => void) => { onUpdate(healed) })
+    renderComp(createElement(ResearchWorkbench, { t, onRun, onRetrySave }))
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    // THE HOST'S REASON IS SHOWN AS IT STATED IT, beside the control that fixes it.
+    const failure = document.querySelector('[data-research-save-failure]')
+    expect(failure?.textContent).toContain('ENOSPC: no space left on device, write')
+    const retry = screen.getByRole('button', { name: en['run.retrySave'] })
+
+    await act(async () => { fireEvent.click(retry) })
+
+    // THE RUN ID IS THE HOST'S, and the page renders the run the retry answered with — the revision a
+    // decision has to be taken against, not one this page remembered.
+    expect(onRetrySave).toHaveBeenCalledWith('run-live-9', expect.any(Function))
+    expect(document.querySelector('[data-research-save-failure]')).toBeNull()
+    expect(document.querySelector('[data-research-revision]')?.textContent)
+      .toContain('16')
+  })
+
+  it('offers no save retry when the host reports no failed write', async () => {
+    // THE CONTROL FOLLOWS THE FACT. A retry button on a run that is on disk would read as a remedy
+    // this deployment does not need, and a host that cannot retry one has no control at all.
+    const healthy = toRunSummary({ ...fixtureInput(), source: 'live' })
+    const onRun = vi.fn(async (_plan: unknown, onUpdate: (summary: typeof healthy) => void) => { onUpdate(healthy) })
+    renderComp(createElement(ResearchWorkbench, { t, onRun, onRetrySave: vi.fn() }))
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['run.action'] })) })
+
+    expect(screen.queryByRole('button', { name: en['run.retrySave'] })).toBeNull()
+    expect(document.querySelector('[data-research-save-failure]')).toBeNull()
+  })
+
   it('reports a failed run instead of leaving the fixture on screen', async () => {
     const onRun = vi.fn().mockRejectedValue(new Error('gateway refused the call'))
     renderComp(createElement(ResearchWorkbench, { t, onRun }))

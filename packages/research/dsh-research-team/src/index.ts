@@ -51,6 +51,7 @@ import type {
   ResearchRunFrame,
   ResearchRunQuery,
   ResearchRunRequest,
+  ResearchRunSaveRetry,
   ResearchRunSnapshot,
   ResearchRunStart,
   ResearchStartRequest,
@@ -72,6 +73,7 @@ export type {
   RunEventEnvelope,
   ResearchRunQuery,
   ResearchRunRequest,
+  ResearchRunSaveRetry,
   ResearchRunSnapshot,
   ResearchRunStart,
   ResearchStartRequest,
@@ -1329,9 +1331,11 @@ export class ResearchTeamService extends TypertRemoteService {
     if (recorded !== null) {
       requireSameCommand(commandId, recorded.paramsDigest, digest)
       const found = await this.findStoredRun(recorded.runId)
-      if (found === null) {
-        // The command is known and the run it named is not: reporting success would promise a study
-        // this deployment cannot produce, so it says which of the two is missing.
+      if (found !== null) return { runId: recorded.runId, persisted: true, startedAt: recorded.startedAt }
+      if (recorded.runStored) {
+        // The study DID begin and its record is gone: reporting success would promise a study this
+        // deployment cannot produce, and starting another would be a second study for a command
+        // that may already have produced results.
         return {
           runId: recorded.runId,
           persisted: false,
@@ -1339,7 +1343,13 @@ export class ResearchTeamService extends TypertRemoteService {
           startedAt: recorded.startedAt,
         }
       }
-      return { runId: recorded.runId, persisted: true, startedAt: recorded.startedAt }
+      // A RECORD WHOSE RUN WAS NEVER STORED IS A COMMAND THAT NEVER BEGAN A STUDY, and the two
+      // answers available here are each wrong for the other's case: returning the run id in the file
+      // hands the caller a study this deployment does not hold, and refusing forever makes the id
+      // unusable although nothing was started. Falling through carries the command out NOW, under
+      // the same id — safe precisely because no study has run — and the record written below (one
+      // file per command id) replaces this one, so the retry after THAT is answered with the run
+      // that actually exists.
     }
 
     const seed: DriveOptions = request.plan !== undefined
@@ -1369,6 +1379,10 @@ export class ResearchTeamService extends TypertRemoteService {
       runId: prepared.runId,
       paramsDigest: digest,
       startedAt,
+      // THE RUN IS NOT STORED YET, and the record says so until it is. A process that dies in
+      // between leaves this file naming a run that does not exist, which is what a retry needs to
+      // know to carry the command out instead of answering with a study nobody has.
+      runStored: false,
     })
     // The revision the run is on disk at. It starts as the write below and moves with each
     // checkpoint, so a later writer — an approval's persistence, most of all — bases its save on
@@ -1395,6 +1409,24 @@ export class ResearchTeamService extends TypertRemoteService {
       })
       throw new Error(`[research] the run could not be recorded, so it was not started: ${errorMessage(error)}`)
     }
+    // THE RUN EXISTS NOW, SO THE RECORD SAYS SO — outside the `try` above, because a start that has
+    // already happened must not be undone by a failure to describe it: the compensation there
+    // removes the record on the way out, and a run on disk with no record naming it is exactly what
+    // the ordering above exists to prevent. A failure HERE is therefore swallowed rather than
+    // raised: the caller would be told its start failed while its study is running, and its retry
+    // would find `runStored: false` beside a stored run — which the retry resolves by answering
+    // with the run, since the run existing is the stronger fact.
+    await this.writeStartCommand({
+      commandId,
+      runId: prepared.runId,
+      paramsDigest: digest,
+      startedAt,
+      runStored: true,
+    }).catch(() => {
+      // Swallowed for the reason above: the run is stored and findable, and the record is one
+      // `runStored` flag behind rather than wrong. Nothing else can reach this — the write is the
+      // only statement.
+    })
 
     const active: ActiveRun = {
       store,
@@ -1479,6 +1511,72 @@ export class ResearchTeamService extends TypertRemoteService {
       if ((error as { code?: unknown }).code === 'ENOENT') return null
       throw new Error(`[research] the start command '${commandId}' cannot be read: ${errorMessage(error)}`)
     }
+  }
+
+  /**
+   * Write one run's CURRENT state to its snapshot again, after a write that failed.
+   *
+   * THE REMEDY FOR A SAVE THAT DID NOT LAND, and deliberately not a re-run: the state written here
+   * is the one this process already holds, so a study that has finished stays finished — a second
+   * execution would spend its model calls again and produce different numbers under the same name.
+   * Only a run THIS PROCESS HOLDS can be retried, because only then is there state in memory that
+   * the disk does not have; a run read back from its file is already at the state its file records.
+   *
+   * It RECONCILES WITH THE DISK rather than trusting a remembered number: the base revision is read
+   * from the snapshot as it stands now, so a file another writer moved is not overwritten blind.
+   * Each attempt moves the SNAPSHOT's revision — the write counter — and never the run's
+   * `projectRevision`, which counts what the study committed: rewriting the same state commits
+   * nothing, so a decision taken before the retry still names a current revision and the binding it
+   * is held to is exactly what it was.
+   *
+   * @param request - the run whose write to retry.
+   * @returns what the write did, and the run re-projected after it.
+   * @throws {Error} when this process holds no such run.
+   */
+  @Remote('retryRunSave')
+  async retryRunSave(request: ResearchRunQuery): Promise<ResearchRunSaveRetry> {
+    const active = this.activeRuns.get(request.runId)
+    if (active === undefined) {
+      throw new Error(
+        `[research] this process holds no run '${request.runId}': a save is retried with the state held in memory, and re-running a finished study is not a way to make a write succeed`,
+      )
+    }
+    const stored = await this.readStoredRun(request.runId)
+    const persistence = await this.serialized(
+      () => this.persistRun(active.store, request.runId, stored?.revision ?? 0),
+    )
+    this.noteSave(active, persistence)
+    const persisted = persistence !== null && persistence.revision !== null
+    return {
+      runId: request.runId,
+      persisted,
+      ...(persisted
+        ? {}
+        : { persistenceError: persistence?.error ?? 'no snapshot directory is configured for this deployment' }),
+      snapshot: this.projectActive(active, request.runId),
+    }
+  }
+
+  /**
+   * Record what a durable write did, on the run this process holds.
+   *
+   * ONE RULE, USED BY EVERY WRITER THE RUN'S READERS DEPEND ON. `livePersistence` reports this
+   * record; `submissionReady` and the approval's precondition read it. A write that LANDED must stop
+   * reading as a failure — otherwise a retried save would report success while the page and the
+   * approval still saw the failure it just recovered from — and a write that failed must report ITS
+   * reason rather than the previous one.
+   *
+   * @param active - the run this process holds.
+   * @param persistence - what the write did, or null when no directory is configured.
+   */
+  private noteSave(active: ActiveRun, persistence: ResearchRunPersistence | null): void {
+    if (persistence !== null) active.persistence = persistence
+    if (persistence !== null && persistence.revision !== null) {
+      active.savedRevision = persistence.revision
+      delete active.checkpointError
+      return
+    }
+    active.checkpointError = persistence?.error ?? 'no snapshot directory is configured for this deployment'
   }
 
   /**

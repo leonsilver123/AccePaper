@@ -225,6 +225,15 @@ export interface RunSummaryInput {
   /** Why the driver stopped with a failure, when it did. */
   readonly executionError?: string
   /**
+   * Why the run's last write to its snapshot did not land, when it did not.
+   *
+   * The host's own reason, carried so the page can say what is wrong and offer the one operation
+   * that fixes it — a retry of the write against the state the host holds. Absent means the host
+   * named no failure, which is not the same as "the run is on disk": a deployment that keeps no
+   * durable record says nothing here either.
+   */
+  readonly saveFailure?: string
+  /**
    * Where this summary came from.
    *
    * The view used to render a MOCK badge unconditionally, and the model declared
@@ -292,6 +301,13 @@ export interface RunSummary {
   readonly execution: RunExecution | null
   /** Why the driver stopped with a failure, or null when the host named none. */
   readonly executionError: string | null
+  /**
+   * Why the run's last write to its snapshot did not land, or null when none was reported.
+   *
+   * Null is not "saved": it is the host naming no failure. The page offers a save retry on this
+   * fact and on nothing else.
+   */
+  readonly saveFailure: string | null
   readonly status: RunStatus
   readonly steps: ReadonlyArray<StepView>
   readonly artifacts: ReadonlyArray<ArtifactView>
@@ -370,6 +386,7 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     // name; folding it into `stopped` would show a running study as an abandoned one.
     execution: RUN_EXECUTIONS.find(execution => execution === input.execution) ?? null,
     executionError: input.executionError ?? null,
+    saveFailure: input.saveFailure ?? null,
     status: input.status,
     steps: input.steps,
     artifacts: input.artifacts,

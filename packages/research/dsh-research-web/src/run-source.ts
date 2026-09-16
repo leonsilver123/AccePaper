@@ -202,6 +202,20 @@ export interface WirePackageExport {
   readonly directory?: string
 }
 
+/**
+ * What one save retry answers with, structurally.
+ *
+ * The same fields {@link WireRunStart} carries for a start, because they are the same facts: whether
+ * the run's state reached its snapshot, why not when it did not, and the run as it stands after the
+ * attempt — which is what the page re-renders from rather than re-reading separately.
+ */
+export interface WireRunSaveRetry {
+  readonly runId: string
+  readonly persisted: boolean
+  readonly persistenceError?: string
+  readonly snapshot: WireRunSnapshot
+}
+
 /** The Host's durability result, structurally. */
 export interface WireRunPersistence {
   readonly runId: string
@@ -435,6 +449,10 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     ...(snapshot.projectRevision === undefined ? {} : { projectRevision: snapshot.projectRevision }),
     ...(snapshot.execution === undefined ? {} : { execution: snapshot.execution }),
     ...(snapshot.executionError === undefined ? {} : { executionError: snapshot.executionError }),
+    // THE RUN'S DURABILITY IS READ OFF THE SAME RECORD THE HOST'S OWN PRECONDITIONS READ, and it is
+    // carried as its own fact rather than left to the deliverables list: the page offers a save
+    // retry on it, and a reader looking for a reason there would be reading a list of files.
+    ...(typeof snapshot.runPersistence?.error === 'string' ? { saveFailure: snapshot.runPersistence.error } : {}),
     ...(typeof snapshot.evidenceProfile === 'string' ? { evidenceProfile: snapshot.evidenceProfile } : {}),
     ...(typeof snapshot.profileEligible === 'boolean' ? { profileEligible: snapshot.profileEligible } : {}),
     ...(typeof snapshot.submissionReady === 'boolean' ? { submissionReady: snapshot.submissionReady } : {}),

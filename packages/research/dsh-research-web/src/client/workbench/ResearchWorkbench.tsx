@@ -63,6 +63,12 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * authenticated approval endpoint, in which case the approval panel's buttons stay disabled.
    */
   readonly onApprove?: ApprovalSubmitter
+  /**
+   * Retry a run's write after the host reported that it did not land. Omitted by a host that cannot
+   * retry one, in which case the control is absent — a button that could not do anything would read
+   * as a remedy this deployment does not have.
+   */
+  readonly onRetrySave?: (runId: string, onUpdate: (summary: RunSummary) => void) => Promise<void>
 }
 
 /** Workbench sub-panel tab identifiers. */
@@ -104,10 +110,11 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  * @param props - slot runtime props, the `research` namespace translate `t`, an optional
  *   `summary` to render, and the optional run and approval seams.
  */
-export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove, onResume }: ResearchViewProps) {
+export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [running, setRunning] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const summary = useMemo(() => live ?? injected, [live, injected])
   const [active, setActive] = useState<WorkbenchTab>('summary')
@@ -253,6 +260,36 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
           onConfirm={start}
           onCancel={() => { setDialogOpen(false) }}
         />
+      )}
+      {/* THE ONE OPERATION THAT FIXES A RUN THAT IS NOT ON DISK, offered on the host's own report of
+          the failure rather than on a guess. It is NOT a re-run: the host writes the state it already
+          holds, so a study that finished stays finished. Shown only when the host reported a failed
+          write and can retry one. */}
+      {onRetrySave !== undefined && summary !== undefined && summary.saveFailure !== null && (
+        <button
+          type="button"
+          className={css.tab}
+          data-research-retry-save=""
+          disabled={retrying}
+          onClick={() => {
+            setRetrying(true)
+            setError(undefined)
+            void onRetrySave(summary.runId, (update) => { setLive(update) }).then(
+              () => { setRetrying(false) },
+              (cause: unknown) => {
+                setError(cause instanceof Error ? cause.message : String(cause))
+                setRetrying(false)
+              },
+            )
+          }}
+        >
+          {retrying ? t('run.retryingSave') : t('run.retrySave')}
+        </button>
+      )}
+      {summary !== undefined && summary.saveFailure !== null && (
+        <span className={css.mockBadge} data-research-save-failure="">
+          {t('run.saveFailure', { message: summary.saveFailure })}
+        </span>
       )}
       {error !== undefined && (
         <span className={css.mockBadge}>{t('run.error').replace('{message}', error)}</span>

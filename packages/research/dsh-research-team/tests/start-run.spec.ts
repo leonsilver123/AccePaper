@@ -14,9 +14,11 @@
  * vitest's own timeout rather than on a fixed sleep of the test's choosing.
  */
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { LiteratureSearchAdapter, LiteratureSearchOutcome } from '@deepseek-ai/dsh-research-tools'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -27,6 +29,12 @@ import ResearchTeamService from '../src/index.ts'
 import { APPROVAL_ERROR_CODES, submitApproval } from '../src/approval.ts'
 import type { ResearchRunSnapshot } from '../src/types.ts'
 import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
+
+/** The crash fixture, spawned as a child process the way the process-boundary suite requires. */
+const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+const CRASH_FIXTURE = join(
+  repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'start-crash', 'start-and-die.ts',
+)
 
 /** One adapter that blocks the run inside its first retrieval until the test releases it. */
 interface Barrier {
@@ -563,6 +571,104 @@ describe('a study is started and read back', () => {
     }
   })
 
+  it('writes a run that could not be saved, without carrying the study out again', async () => {
+    // THE REMEDY FOR A SAVE THAT DID NOT LAND. A run whose last write failed is not on disk, so a
+    // restart loses it — and the one thing that must NOT be done about that is running the study
+    // again: it has already cost what it cost, and a second execution would produce different
+    // numbers under the same name. The retry writes the state this process holds.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    try {
+      const started = await host.service.startRun({ commandId: 'command-retry-save' })
+      const unwritable = join(snapshotRoot(), 'not-a-directory')
+      writeFileSync(unwritable, 'not a directory')
+      host.setSnapshotDirectory(unwritable)
+      await untilStopped(host.service, started.runId)
+
+      const broken = await host.service.runSnapshot({ runId: started.runId })
+      const e2 = broken?.steps.find(step => step.stepId === 'E2-submit')
+      expect(broken?.runPersistence?.error ?? '').toMatch(/not a directory|ENOTDIR/iu)
+      // Everything about the study as it stands, to be compared after the retry.
+      const before = broken?.steps.map(step => [step.stepId, step.attempt, step.status])
+      expect(before?.length).toBe(STEP_EXECUTOR_REGISTRY.size)
+
+      // A DECISION IS REFUSED WHILE THE RUN IS NOT ON DISK (the unit before this one).
+      const refused = await submitApproval({
+        runId: started.runId, stepId: 'E2-submit', attempt: e2?.attempt ?? -1,
+        decision: 'approved', commandId: 'command-retry-save-1',
+        expectedProjectRevision: broken?.projectRevision ?? -1,
+      })
+      expect(refused.ok ? '' : refused.error.code).toBe(APPROVAL_ERROR_CODES.saveFailed)
+
+      // THE DEPLOYMENT IS REPAIRED AND THE WRITE IS RETRIED.
+      host.setSnapshotDirectory(root)
+      const retried = await host.service.retryRunSave({ runId: started.runId })
+      expect(retried.persisted).toBe(true)
+      expect(retried.snapshot.runPersistence?.error).toBeUndefined()
+      expect(retried.snapshot.runPersistence?.revision ?? 0).toBeGreaterThan(0)
+      // THE STUDY WAS NOT CARRIED OUT AGAIN: the same steps, at the same attempts, in the same
+      // states — and still nothing driving it.
+      expect(retried.snapshot.steps.map(step => [step.stepId, step.attempt, step.status])).toEqual(before)
+      expect(retried.snapshot.execution).not.toBe('running')
+      // ONE STUDY ON DISK, not a second one produced to make the write succeed.
+      expect(readdirSync(root).filter(name => name !== 'commands')).toEqual([started.runId])
+
+      // THE VERSION BINDING IS UNCHANGED BY THE RECOVERY, and that is the point of checking it here
+      // rather than assuming a working save reopens the gate: a decision naming a revision the run
+      // is not at is refused, exactly as it was before the write landed.
+      const stale = await submitApproval({
+        runId: started.runId, stepId: 'E2-submit', attempt: e2?.attempt ?? -1,
+        decision: 'approved', commandId: 'command-retry-save-2',
+        // A retry moves the SNAPSHOT's write counter, not the revision the study committed, so the
+        // reader's revision is still current — this names one that is not, to show the check is live.
+        expectedProjectRevision: (broken?.projectRevision ?? 0) - 1,
+      })
+      expect(stale.ok ? '' : stale.error.code).toBe(APPROVAL_ERROR_CODES.staleRevision)
+
+      // The revision the reader had IS accepted, and the retry's own projection is where the page
+      // re-reads it: the save moved the snapshot's counter and left the version the study is at.
+      expect(retried.snapshot.projectRevision).toBe(broken?.projectRevision)
+      const decided = await submitApproval({
+        runId: started.runId, stepId: 'E2-submit', attempt: e2?.attempt ?? -1,
+        decision: 'approved', commandId: 'command-retry-save-3',
+        expectedProjectRevision: retried.snapshot.projectRevision,
+      })
+      if (!decided.ok) throw new Error(`expected a decision, got ${decided.error.code}: ${decided.error.message}`)
+      expect(decided.value.status).toBe('passed')
+      expect(decided.value.persisted).toBe(true)
+
+      // THE DECISION IS ON DISK, read through a writer this test did not decide with.
+      const reread = await createRunPersistence({ dir: join(root, started.runId) }).read()
+      expect(reread.steps.find(step => step.stepId === 'E2-submit')?.status).toBe('passed')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('refuses to retry the save of a run it does not hold', async () => {
+    // A RUN READ BACK FROM DISK HAS NOTHING TO RETRY: it is already at the state its file records,
+    // and re-running it is not a save. The refusal says which of the two the caller asked for.
+    const root = snapshotRoot()
+    const first = await boot({ snapshotDirectory: root })
+    let runId = ''
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-retry-unheld' })).runId
+      await untilStopped(first.service, runId)
+    } finally {
+      await first.dispose()
+    }
+
+    const second = await boot({ snapshotDirectory: root })
+    try {
+      // The run IS findable through a query — the refusal is about where its state lives, not about
+      // whether this deployment has it.
+      expect(await second.service.runSnapshot({ runId })).not.toBeNull()
+      await expect(second.service.retryRunSave({ runId })).rejects.toThrow(/holds no run/u)
+    } finally {
+      await second.dispose()
+    }
+  })
+
   it('finds a run started by a process that is gone', async () => {
     // THE RESTART CASE. The first service drives a run to its end and is disposed; the second has
     // no memory of it at all. The run's checkpoints are on disk, so the query answers with the
@@ -604,6 +710,61 @@ describe('a study is started and read back', () => {
       await third.dispose()
     }
   })
+})
+
+describe('a start command across a process boundary', () => {
+  it('carries the command out after a crash between its record and its run', async () => {
+    // WHAT A REAL CRASH LEAVES, AND WHAT A RETRY DOES WITH IT. The record lands before the run, so a
+    // process that dies in between leaves a record naming a run that does not exist. Answering the
+    // retry with that id hands the caller a study this deployment does not hold; refusing makes the
+    // id unusable although nothing was started. The command is carried out instead — which is only
+    // safe because no study was begun, and only knowable from the record's own `runStored`.
+    //
+    // A separate process, not an injected exception: the in-process failure path REMOVES the record
+    // it wrote, so the state under test cannot be produced without dying for real.
+    const root = snapshotRoot()
+    const commandId = 'command-crashed'
+    const killed = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', CRASH_FIXTURE, '--dir', root, '--command', commandId],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )
+    // THE DEATH IS THE SETUP, not a fixture failure: this process was killed at the seam, so a
+    // non-zero status is what a working fixture looks like.
+    expect(killed.status).not.toBe(0)
+
+    // ...and this is the state it left, read off the DISK rather than from anything this process
+    // holds: a record naming a run whose directory was never created.
+    const crashed = JSON.parse(readFileSync(join(root, 'commands', `${commandId}.json`), 'utf8')) as { runId: string; runStored: boolean; commandId: string }
+    expect(crashed.commandId).toBe(commandId)
+    expect(crashed.runStored).toBe(false)
+    expect(existsSync(join(root, crashed.runId))).toBe(false)
+
+    // A RESTART: a service that has never heard of this command, over the same root.
+    const host = await boot({ snapshotDirectory: root })
+    try {
+      const started = await host.service.startRun({ commandId })
+      // IT RECOVERS, WITH A RUN THAT EXISTS — not the id the crashed attempt recorded.
+      expect(started.persisted).toBe(true)
+      expect(started.runId).not.toBe(crashed.runId)
+      expect(await host.service.runSnapshot({ runId: started.runId })).not.toBeNull()
+      // ONE STUDY, NOT TWO: the crashed attempt never wrote a run, and the only run on disk is the
+      // one this command produced.
+      expect(readdirSync(root).filter(name => name !== 'commands')).toEqual([started.runId])
+
+      // AND THE RECORD NOW NAMES IT, so the retry after THIS one is answered rather than starting a
+      // third study.
+      const settled = JSON.parse(readFileSync(join(root, 'commands', `${commandId}.json`), 'utf8')) as { runId: string; runStored: boolean }
+      expect(settled).toEqual(expect.objectContaining({ runId: started.runId, runStored: true }))
+      const retried = await host.service.startRun({ commandId })
+      expect(retried.runId).toBe(started.runId)
+      expect(retried.persisted).toBe(true)
+      expect(readdirSync(root).filter(name => name !== 'commands')).toEqual([started.runId])
+      await untilStopped(host.service, started.runId)
+    } finally {
+      await host.dispose()
+    }
+  }, 180_000)
 })
 
 /**

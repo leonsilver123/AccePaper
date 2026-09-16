@@ -15,13 +15,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { buildSummary } from '../loader.ts'
+import { summaryInputFrom } from '../run-source.ts'
 import type { WireRunSnapshot } from '../run-source.ts'
 import { buildApprovalSubmitter } from './approval-source.ts'
 import { followToRest } from './follow-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
-import type { WireRunFrame, WireRunStart } from '../run-source.ts'
+import type { WireRunFrame, WireRunSaveRetry, WireRunStart } from '../run-source.ts'
 
 /**
  * Structural face of the Host's `research` Remote namespace.
@@ -90,6 +91,17 @@ interface ResearchRemoteNamespace {
    */
   runSnapshot(request: { readonly runId: string }): Promise<
     { readonly ok: true; readonly value: WireRunSnapshot | null }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Write one run's current state to its snapshot again, after a write that failed.
+   *
+   * The remedy the page offers on `saveFailure`, and the reason it is this method rather than a new
+   * run: the state written is the one the host already holds. A finished study stays finished.
+   */
+  retryRunSave(request: { readonly runId: string }): Promise<
+    { readonly ok: true; readonly value: WireRunSaveRetry }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
 }
@@ -224,6 +236,31 @@ export function apply(ctx: Context): void {
     await followToRest(remote, runId, null, onUpdate)
   }
   /**
+   * Ask the host to write the run's current state to its snapshot again, after a write that failed.
+   *
+   * THE PAGE'S ONLY REMEDY FOR A RUN THAT IS NOT ON DISK, and the reason it is not "run it again":
+   * the study has already been carried out, and its results are held by the host. A second run would
+   * spend its model calls again and produce different numbers under the same name. The refreshed run
+   * the host answers with is handed to `onUpdate`, so the page shows the state the write produced —
+   * including the revision a decision has to be taken against.
+   *
+   * @param runId - the run whose write to retry.
+   * @param onUpdate - called with the run the host re-projected after the attempt.
+   * @returns when the host has answered; a refusal is thrown with the host's own reason.
+   */
+  const retrySave = async (
+    runId: string,
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+  ): Promise<void> => {
+    const answered = await namespace().retryRunSave({ runId })
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    // THE VIEW IS REBUILT FROM THE HOST'S OWN PROJECTION, and the attempt's outcome is not read out
+    // of the receipt: the snapshot inside it already carries the durability record the retry
+    // produced, so "did it land" has one home rather than two that can disagree.
+    onUpdate(buildSummary(summaryInputFrom(answered.value.snapshot)))
+  }
+
+  /**
    * Ask the host for research directions. The failure is surfaced rather than turned into an empty
    * answer: "the host could not propose" and "the host proposed nothing" are different facts, and
    * the dialog says which.
@@ -273,5 +310,5 @@ export function apply(ctx: Context): void {
     // the T26 run-summary view, and the remaining tabs host the pipeline / figure
     // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
-  }, researchViewWith(run, approve, propose, resume)))
+  }, researchViewWith(run, approve, propose, resume, retrySave)))
 }
