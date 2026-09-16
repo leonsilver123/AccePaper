@@ -262,6 +262,7 @@ function snapshotOf(
   runPersistence: ResearchRunPersistence | null = null,
   execution: ResearchRunExecution = 'stopped',
   executionError?: string,
+  checkpointFailure?: string,
 ): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, runId)
   const readiness = readinessOfRun(store, runId, evidenceProfile)
@@ -321,8 +322,14 @@ function snapshotOf(
     steps,
     evidenceProfile,
     profileEligible: readiness.profileEligible,
-    submissionReady: readiness.ready,
-    readinessNote: readiness.reason,
+    // A RUN WHOSE LAST CHECKPOINT FAILED IS NOT READY, whatever its gates say. Readiness is a claim
+    // about material that exists and is reproducible; material the deployment could not write is
+    // neither, and a reader told "ready" about it would be told to submit something nobody can
+    // produce again.
+    submissionReady: readiness.ready && checkpointFailure === undefined,
+    readinessNote: checkpointFailure === undefined
+      ? readiness.reason
+      : `${readiness.reason === '' ? '' : `${readiness.reason}; `}the run's last checkpoint did not reach the disk: ${checkpointFailure}`,
     execution,
     packageExport,
     runPersistence,
@@ -419,6 +426,15 @@ interface ActiveRun {
   packageExport: ResearchPackageExport | null
   /** What the last durable write reported, once the run finished. Null while it has not. */
   persistence: ResearchRunPersistence | null
+  /**
+   * Why the run's last checkpoint could not be written, when it could not.
+   *
+   * A CHECKPOINT THAT FAILED IS A RUN-LEVEL FACT, not a note the driver keeps to itself: a reader
+   * watching a study advance has to be able to tell that the work it is watching is not on the
+   * disk, and an operation whose result depends on durability — an approval, a publication — has to
+   * be able to refuse. It is cleared by the next checkpoint that lands.
+   */
+  checkpointError?: string
 }
 
 /** Research-team service: members, CAS tasks, and the write-scope guard. */
@@ -1055,7 +1071,13 @@ export class ResearchTeamService extends TypertRemoteService {
     if (active.persistence !== null) return active.persistence
     const directory = this.snapshotDirectoryOf(runId)
     if (directory === undefined) return null
-    return { runId, revision: this.savedRevisionOf(active), interrupted: [], directory }
+    return {
+      runId,
+      revision: this.savedRevisionOf(active),
+      interrupted: [],
+      ...(active.checkpointError === undefined ? {} : { error: active.checkpointError }),
+      directory,
+    }
   }
 
   /**
@@ -1342,6 +1364,7 @@ export class ResearchTeamService extends TypertRemoteService {
         this.livePersistence(active, prepared.runId),
         active.state,
         active.error,
+        active.checkpointError,
       ),
       // THE STATE ONLY. A run still going has no package — exporting one here would write a
       // manifest of the steps that happen to have finished and call it the run's product. What an
@@ -1358,7 +1381,18 @@ export class ResearchTeamService extends TypertRemoteService {
     const driving: DriveOptions = {
       ...driveOpts,
       checkpointAfterStep: async (checkpointRunId: string) => {
-        active.savedRevision = await this.checkpointRun(store, checkpointRunId)
+        try {
+          active.savedRevision = await this.checkpointRun(store, checkpointRunId)
+          // IT LANDED, so whatever failed before is no longer the run's state.
+          delete active.checkpointError
+        } catch (error) {
+          // RECORDED AND RETHROWN. The driver keeps its own accounting of checkpoint failures
+          // (`RunResult.checkpointErrors`) and the run continues — its step has already committed —
+          // but the failure also becomes the run's own reported state, which is what a reader and a
+          // writer both need.
+          active.checkpointError = errorMessage(error)
+          throw error
+        }
       },
     }
     // THE SERVICE OWNS THE DRIVER. A bare floating promise would be collected with nothing able to
@@ -1504,6 +1538,7 @@ export class ResearchTeamService extends TypertRemoteService {
         this.livePersistence(active, request.runId),
         active.state,
         active.error,
+        active.checkpointError,
       )
     }
     const found = await this.findStoredRun(request.runId)
@@ -1643,6 +1678,7 @@ export class ResearchTeamService extends TypertRemoteService {
         this.livePersistence(active, runId),
         active.state,
         active.error,
+        active.checkpointError,
       )
     }
     if (found === null) throw new Error(`[research] this deployment holds no run '${runId}'`)

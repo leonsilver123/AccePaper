@@ -70,6 +70,8 @@ async function boot(options: {
   readonly ctx: Context
   readonly service: ResearchTeamService
   directoryEntries(name: string): ReadonlyArray<string>
+  /** Point the deployment's saves at another directory, as a reconfiguration would. */
+  setSnapshotDirectory(directory: string): void
   dispose(): Promise<void>
 }> {
   const ctx = new Context()
@@ -89,16 +91,19 @@ async function boot(options: {
   ctx.provide('tools', { guard: () => () => {} })
   // The research engine the service reads its deployment facts from. This is the seam the real
   // deployment fills from cordis.yml, so a test that fills it is testing the production path.
-  ctx.provide('research', {
-    ...(options.snapshotDirectory === undefined ? {} : { snapshotDirectory: options.snapshotDirectory }),
-    ...(options.literatureAdapter === undefined ? {} : { toolDeps: { literatureAdapter: options.literatureAdapter } }),
-  })
+  // ONE mutable object, because the service reads this per save — which is what makes "the
+  // deployment's directory stopped being writable" expressible in a test without a race.
+  const engine: { snapshotDirectory?: string; toolDeps?: { literatureAdapter: LiteratureSearchAdapter } } = {}
+  if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
+  if (options.literatureAdapter !== undefined) engine.toolDeps = { literatureAdapter: options.literatureAdapter }
+  ctx.provide('research', engine)
   const fiber = await ctx.plugin(ResearchTeamService, {})
   return {
     ctx,
     service: ctx.agentTeams as unknown as ResearchTeamService,
     // What the deployment actually wrote, read off the disk rather than from the service: a count
     // taken from the thing under test would agree with itself.
+    setSnapshotDirectory: (directory: string) => { engine.snapshotDirectory = directory },
     directoryEntries: (name: string) => {
       const directory = options.snapshotDirectory === undefined ? undefined : join(options.snapshotDirectory, name)
       return directory === undefined || !existsSync(directory) ? [] : readdirSync(directory)
@@ -348,6 +353,41 @@ describe('a study is started and read back', () => {
     }
   })
 
+  it('reports a checkpoint that did not reach the disk, and refuses to call the run ready', async () => {
+    // A READER WATCHING A STUDY ADVANCE cannot tell from the steps alone whether the work it is
+    // watching is ON THE DISK. The failure used to live only in `RunResult.checkpointErrors`, which
+    // a running run has not produced yet — so the page showed progress and said nothing about the
+    // fact that none of it could be found again.
+    const held = barrier()
+    const host = await boot({ literatureAdapter: held.adapter, snapshotDirectory: snapshotRoot() })
+    try {
+      const started = await host.service.startRun({ commandId: 'command-checkpoint' })
+      // The run is INSIDE its first step: its initial save has landed, so it is startable, and every
+      // checkpoint from here on is the one about to fail.
+      await held.entered
+      // THE DEPLOYMENT'S OWN FAILURE MODE, through the deployment's own seam: the directory it saves
+      // into stops being writable while the run is working.
+      const unwritable = join(snapshotRoot(), 'not-a-directory')
+      writeFileSync(unwritable, 'not a directory')
+      host.setSnapshotDirectory(unwritable)
+
+      held.release()
+      const reported = await untilPersistedError(host.service, started.runId)
+
+      // THE FAILURE IS REPORTED WHERE SAVING IS REPORTED, while the run is still going, and it is
+      // the deployment's OWN reason — not a summary this layer invented for it.
+      expect(reported.runPersistence?.error ?? '').toMatch(/not a directory|ENOTDIR/iu)
+      // AND IT REFUSES READINESS. "Ready" is a claim about material that exists and can be produced
+      // again; material the deployment could not write is neither.
+      expect(reported.submissionReady).toBe(false)
+      expect(reported.readinessNote).toContain('checkpoint')
+      await untilStopped(host.service, started.runId)
+    } finally {
+      held.release()
+      await host.dispose()
+    }
+  })
+
   it('finds a run started by a process that is gone', async () => {
     // THE RESTART CASE. The first service drives a run to its end and is disposed; the second has
     // no memory of it at all. The run's checkpoints are on disk, so the query answers with the
@@ -390,6 +430,31 @@ describe('a study is started and read back', () => {
     }
   })
 })
+
+/**
+ * Wait until the run reports a failure to save, or throws when it stops without one.
+ *
+ * The wait is on the run's OWN reported persistence, which is the fact under test: a run that never
+ * reports the failure is a run whose page would never show it.
+ *
+ * @param service - the service holding the run.
+ * @param runId - the run to wait for.
+ * @returns the snapshot that reported the failure.
+ */
+async function untilPersistedError(
+  service: ResearchTeamService,
+  runId: string,
+): Promise<ResearchRunSnapshot> {
+  for (;;) {
+    const snapshot = await service.runSnapshot({ runId })
+    if (snapshot === null) throw new Error(`the run '${runId}' disappeared while waiting for it`)
+    if (snapshot.runPersistence?.error !== undefined) return snapshot
+    if (snapshot.execution !== 'running') {
+      throw new Error(`the run '${runId}' stopped without reporting a failure to save`)
+    }
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+  }
+}
 
 /**
  * Wait until the run reports that nothing is driving it.
