@@ -33,6 +33,21 @@ DOI/URL/arXiv/bracket shapes) was a scheme list, which is one scheme away from t
 refusal; the rule that holds is narrower and truer: the check reads the sections that state results,
 and a reference list is not one of them.
 
+**2b. Two more of the A gate's checks said a correct manuscript was wrong.** With the number check
+fixed, the same run was blocked again, by two checks that had never seen a model-written manuscript:
+
+- `red-citation` compared the prose's `Figure 1` against the float's **title** rather than its
+  numbered **label**, so every citation in the document looked dangling;
+- `red-claim` read the first sentence naming the measured quantity, which in a real manuscript is
+  usually the **hypothesis** — "the HV-AV-HV platoon shall exceed the all-HV platoon in minimum
+  time-to-collision by at least 20 %" — and graded a faithful restatement of the claim as a false
+  finding. It now requires a magnitude and excludes the commitment's own vocabulary
+  (`at least` / `at most` / `within`, and the future `shall` / `will`), so a sentence reporting
+  "lowered it by 38.20 %" is read and a prediction is not.
+
+Both were the checks being wrong about a correct paper, and both were invisible to the suite
+because every fixture the suite reviews was written by the same author as the checks.
+
 **3. A wire-type change needs BOTH faces rebuilt.** Adding the required `MeasuredMetric.unit` broke
 the browser while every in-process test passed: the client bundle's generated wire schema predated
 the field, so it stripped it and the host answered
@@ -48,7 +63,7 @@ venue filter were indistinguishable at the last step — and reproducing the sam
 outside the app process succeeded every time. That made the one question that mattered — is this the
 environment or my change — unanswerable.
 
-## What this changes about how the round is verified
+## Decision
 
 The browser probe is not a slower version of the suite; it is the only thing that can see this class
 of defect. The suite's 1758 tests say the parts work. The probe says the product works, and this
@@ -58,6 +73,30 @@ The cost is real and worth stating: one probe cycle is a full build of both face
 refresh, a booted app, a Chrome instance and up to twenty minutes of a live model driving sixteen
 steps. That is why the probe runs per delivery and not per commit, and why the closed loop in
 `tests/e2e/closed-loop.spec.ts` exists beside it.
+
+## Alternatives considered
+
+**Run the browser probe on every commit instead of once per delivery.** Rejected on cost, and the
+cost is measured rather than assumed: one cycle is a full build of both faces, a profile-install
+refresh, a booted app, a Chrome instance and up to twenty minutes of a live model driving sixteen
+steps. A check that expensive runs rarely, and a check that runs rarely is one whose failures are
+found late — which is exactly what happened here, and it is still better than not running it at all.
+
+**Treat the in-process suite as sufficient and close the round on it.** Rejected: it was green
+through all four defects. The suite and the probe answer different questions, and this round is the
+evidence that they can disagree four times in a row.
+
+**Widen the number check's identifier blacklist instead of exempting the references section.**
+Rejected after the second attempt. Each scheme added (DOI, URL, arXiv, bracketed index) left the
+next real string unhandled — `18051527`, then `802.11` — because a reference list can contain any
+identifier scheme its sources use. The narrower rule does not enumerate; it says which sections the
+check reads.
+
+**Have the A channel's checks tolerate a model-written manuscript by loosening them until a real run
+passes.** Rejected, and it is the tempting failure mode for a round like this. Each of the two
+check defects was fixed by making the rule *narrower* — compare against the numbered label, require
+a magnitude, exclude the commitment's own vocabulary — not by removing a check or widening a
+tolerance. A check loosened until a specific document passes is a check that no longer checks.
 
 ## Consequences
 
