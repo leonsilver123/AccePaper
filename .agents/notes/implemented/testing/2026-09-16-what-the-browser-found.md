@@ -124,7 +124,13 @@ tolerance. A check loosened until a specific document passes is a check that no 
   before, and that remains the most likely explanation; it is not established.
 - **A1's behaviour under that outage is correct and unchanged**: an outage fails the step rather
   than producing an empty landscape, because a landscape derived from no records is an invented one.
-- **The browser loop has still not been observed reaching `E2-submit`.** The furthest a browser run
-  has got is D3, and each stop so far has been a defect that is now fixed or an outage. The
-  in-process closed loop is what says the chain closes; the browser has confirmed the parts of it
-  that only a browser can, and that distinction is the point of this note.
+- **The browser loop closed, at `cdf9e69f`**: **41/41**, up from 38/41. The run drove all sixteen
+  steps to the human gate (`{"a2":"passed","e2":"gated","steps":16}`), the operator approved it
+  through the page and the BACKEND recorded it (`{"e2":"passed"}`), and the exported package cites
+  25 real DOIs from the live catalogue with none of them the synthetic anchor. Its manuscript was
+  written by the deployment's configured model route and passed an adversarial read of four checks.
+  This is the first time this pipeline has carried a claim from retrieval to an approved package
+  through the shipped application.
+- **The run that closed it is the fifth attempt.** Four stopped on defects, one on an outage, and the
+  count is the point: a verification that only runs once reports whichever of those it happens to
+  meet first.
