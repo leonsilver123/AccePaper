@@ -255,12 +255,33 @@ describe('a conclusion its own evidence contradicts is found', () => {
         {
           id: 'conclusion',
           heading: 'Conclusion',
-          bodyText: 'The autonomous vehicle raises the platoon minimum time-to-collision.',
+          // A FINDING states a magnitude. A direction with no number is a hypothesis, and the
+          // check abstains on it rather than grading it — see the test below.
+          bodyText: 'The autonomous vehicle raises the platoon minimum time-to-collision by 12.5%.',
         },
       ],
     })
     expect(NUMBER).toBeLessThan(0)
     expect(positionOf(input, 'red-claim')).toBe('refute')
+  })
+
+  it('abstains rather than refuting when the manuscript states no finding', () => {
+    // A hypothesis is not a finding. Grading one as a false finding is how a correct manuscript
+    // gets blocked for describing its own claim, which is what the first version of this check did
+    // to a real browser run.
+    const input = cleanInput({
+      sections: [
+        { id: 'method', heading: 'Method', bodyText: 'The Intelligent Driver Model at a 0.02 s step.' },
+        {
+          id: 'introduction',
+          heading: 'Introduction',
+          bodyText:
+            'We test whether the autonomous vehicle raises the platoon minimum time-to-collision.'
+            + ' The mixed platoon shall exceed the baseline in minimum time-to-collision by at least 20%.',
+        },
+      ],
+    })
+    expect(positionOf(input, 'red-claim')).toBe('abstain')
   })
 
   it('accepts the direction the record holds', () => {
@@ -270,7 +291,7 @@ describe('a conclusion its own evidence contradicts is found', () => {
         {
           id: 'conclusion',
           heading: 'Conclusion',
-          bodyText: 'The autonomous vehicle lowers the platoon minimum time-to-collision.',
+          bodyText: `The autonomous vehicle lowers the platoon minimum time-to-collision by ${String(Math.abs(NUMBER))}%.`,
         },
       ],
     })

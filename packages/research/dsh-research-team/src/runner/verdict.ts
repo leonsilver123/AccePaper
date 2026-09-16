@@ -92,9 +92,13 @@ function manuscriptUnderReview(ctx: VerdictBuildCtx): {
     const draft = value as { references?: unknown; renderedFigures?: unknown }
     const references = Array.isArray(draft.references) ? draft.references : []
     const figures = Array.isArray(draft.renderedFigures) ? draft.renderedFigures : []
+    // THE NUMBERED LABEL, not the title. `D1-figure-map` numbers a float when it decides the float
+    // exists, and the manuscript cites `Figure 1`; the title is the caption. Reading titles here
+    // made every citation look dangling — the check compared `Figure 1` against
+    // `Platoon Minimum Time-to-Collision by Composition`.
     const floatLabels = figures
-      .map(entry => (entry !== null && typeof entry === 'object' ? (entry as { title?: unknown }).title : undefined))
-      .filter((title): title is string => typeof title === 'string')
+      .map(entry => (entry !== null && typeof entry === 'object' ? (entry as { label?: unknown }).label : undefined))
+      .filter((label): label is string => typeof label === 'string')
     const method = ctx.readInput('method-spec')
     const implementation = method !== null && typeof method === 'object'
       ? (method as { implementation?: { id?: unknown; algorithm?: unknown; parameters?: unknown; varied?: unknown } }).implementation

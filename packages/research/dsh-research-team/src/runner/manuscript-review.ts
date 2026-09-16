@@ -171,12 +171,41 @@ function accountableNumbers(input: ManuscriptReviewInput, record: MeasuredOutcom
 }
 
 /** The clause that names the measured quantity, or the whole text when it names none. */
-function measuringClauseOf(text: string, metricPhrases: ReadonlyArray<string>): string {
+/**
+ * The sentence that STATES A FINDING about the measured quantity, or undefined when none does.
+ *
+ * A manuscript says two kinds of thing about its quantity, and only one is a claim about what
+ * happened:
+ *
+ *   - the hypothesis — "we test whether the autonomous vehicle raises the platoon minimum
+ *     time-to-collision", which restates the CLAIM and is evidence of nothing;
+ *   - the finding — "the autonomous vehicle lowers the platoon minimum time-to-collision by
+ *     38.20 %", which asserts a magnitude the run measured.
+ *
+ * The discriminator is the MAGNITUDE. The first version of this check read whichever sentence
+ * named the quantity first, so a model's honest restatement of its claim in the abstract was
+ * graded as a false finding and the step was blocked.
+ *
+ * @param text - the manuscript's prose.
+ * @param metricPhrases - the phrasings the study's quantity requires.
+ * @returns the first finding sentence, or undefined.
+ */
+function findingClauseOf(text: string, metricPhrases: ReadonlyArray<string>): string | undefined {
   for (const sentence of text.split(/(?<=[.!?])\s+/u)) {
     const lowered = sentence.toLowerCase()
-    if (metricPhrases.some(phrase => lowered.includes(phrase))) return sentence
+    if (!metricPhrases.some(phrase => lowered.includes(phrase))) continue
+    if (!/\d+(?:\.\d+)?\s*%/u.test(sentence)) continue
+    // A PREDICTION IS NOT A FINDING, and the markers are the claim's own vocabulary rather than a
+    // reading of the sentence: a commitment states its bound with "at least" / "at most" /
+    // "within", and a prediction is written in the future ("shall", "will"). The shipped study's
+    // own introduction states "the HV-AV-HV platoon shall exceed the all-HV platoon in minimum
+    // time-to-collision by at least 20 %", which pairs the quantity with a percentage and is a
+    // restatement of the claim. A Results sentence — "lowered it by 38.20 %" — carries neither.
+    if (/\b(?:shall|will)\b/iu.test(sentence)) continue
+    if (/\b(?:at least|at most|within)\s+\d+(?:\.\d+)?\s*%/iu.test(sentence)) continue
+    return sentence
   }
-  return text
+  return undefined
 }
 
 /**
@@ -374,7 +403,19 @@ function reviewManuscriptConclusion(
     return review('red-claim', findings)
   }
   const prose = input.sections.map(section => section.bodyText).join('\n')
-  const clause = measuringClauseOf(prose, input.metricPhrases)
+  const clause = findingClauseOf(prose, input.metricPhrases)
+  if (clause === undefined) {
+    // Nothing states a direction with a magnitude, so there is no finding to compare against the
+    // record. A gap, not a contradiction — the gate grades the two differently.
+    findings.push({
+      check: 'does the manuscript state the direction the measurement found?',
+      found:
+        'no sentence pairs the measured quantity with a percentage, so the manuscript states no '
+        + `finding to compare against the record (${String(record.improvementPct)} %)`,
+      position: 'abstain',
+    })
+    return review('red-claim', findings)
+  }
   const rose = /\b(?:raise[sd]?|increase[sd]?|higher|greater|improve[sd]?|exceed[sd]?)\b/iu.test(clause)
   const fell = /\b(?:lower(?:s|ed)?|decrease[sd]?|reduc(?:e|es|ed)|less|worse|smaller)\b/iu.test(clause)
   const measuredRose = record.improvementPct > 0
