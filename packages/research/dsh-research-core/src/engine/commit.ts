@@ -30,7 +30,7 @@ import type { ArtifactRef } from '../domain/artifact.ts'
 import { contentHashOf } from '../domain/artifact.ts'
 import type { ContentHash, InputDigest, ProjectRevision } from '../domain/ids.ts'
 import { nextProjectRevision } from '../domain/project.ts'
-import type { ResearchRunStore, RunState, StepState } from './types.ts'
+import type { GateVerdict, ResearchRunStore, RunState, StepState } from './types.ts'
 import { ResearchError, appendAuditEvent, ensureRun, nextArtifactVersion } from './state-machine.ts'
 import { lookupStep } from './steps.ts'
 
@@ -269,6 +269,40 @@ export function commitStepOutputs(
   state.commit = receipt
   appendAuditEvent(store, runId, 'step-committed', stepId, state.attempt_id, receipt)
   return { ok: true, receipt }
+}
+
+/**
+ * Stamp a verdict with the artifact revisions and input digest it was built against.
+ *
+ * This is the ONLY way a verdict acquires targets, and it is called where the verdict is BUILT —
+ * by the layer that read the attempt's commit receipt to decide what to judge. The gate never
+ * calls it: a verdict assembled at submit time would say it judged the outputs it arrived beside,
+ * which is the claim that made an old judgment able to approve a new attempt's products.
+ *
+ * @param verdict - the gate verdict, without targets.
+ * @param receipt - the commit receipt the verdict was built from.
+ * @returns the verdict, carrying the receipt's artifact revisions and input digest.
+ */
+export function bindVerdict(verdict: GateVerdict, receipt: CommitReceipt): GateVerdict {
+  return {
+    ...verdict,
+    targetRefs: receipt.artifacts.map(artifact => artifact.ref),
+    inputDigest: receipt.inputDigest,
+  }
+}
+
+/**
+ * Whether two target sets name exactly the same revisions, order-insensitively.
+ *
+ * @param a - one set of artifact references.
+ * @param b - the other.
+ * @returns true when every reference in each set has a match in the other.
+ */
+export function sameTargetSet(a: ReadonlyArray<ArtifactRef>, b: ReadonlyArray<ArtifactRef>): boolean {
+  if (a.length !== b.length) return false
+  const key = (ref: ArtifactRef): string => `${ref.artifactId}@${String(ref.version)}#${ref.contentHash}`
+  const wanted = new Set(b.map(key))
+  return a.every(ref => wanted.has(key(ref)))
 }
 
 /**

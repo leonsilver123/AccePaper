@@ -17,6 +17,7 @@
 
 import type { StepExecutor, StepStatus } from './imports.ts'
 import {
+  bindVerdict,
   lookupStep,
   STEPS,
   canStart,
@@ -119,10 +120,18 @@ export async function runStepWithGate(
   }
 
   const ctxBase = { runId, stepId, attemptId }
+  // The verdict factory produces an UNBOUND verdict; the runner binds it to the attempt's commit
+  // receipt, exactly as the production driver does. A verdict that cannot say what it judged is
+  // refused by the gate, so binding belongs to whoever read the receipt — not to the factory, and
+  // never to the gate.
+  const receipt = getRunSnapshot(store, runId).steps[stepId]?.commit
+  if (receipt === undefined) {
+    throw new Error(`E2E runner: step '${stepId}' reached its gate with no commit receipt`)
+  }
   let lastStatus: StepStatus = 'in_progress'
   for (const comp of stepDef.gate) {
     const ctx: VerdictContext = { ...ctxBase, component: comp }
-    submitGateVerdict(store, runId, stepId, verdictFactory(ctx))
+    submitGateVerdict(store, runId, stepId, bindVerdict(verdictFactory(ctx), receipt))
     lastStatus = getRunSnapshot(store, runId).steps[stepId]!.status
   }
   return { runId, stepId, attemptId, status: lastStatus, outputSlugs: res.outputSlugs, usedRealTool }

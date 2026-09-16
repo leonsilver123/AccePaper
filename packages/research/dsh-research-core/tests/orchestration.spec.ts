@@ -30,6 +30,7 @@ import {
   submitGateVerdict,
 } from '../src/index.ts'
 import type { ResearchRunStore, RunState, StepDefinition } from '../src/index.ts'
+import { bindTo } from './helpers.ts'
 
 const EXPECTED_ORDER = [
   'A1-landscape', 'A2-claim', 'A3-agenda', 'A4-venue',
@@ -136,14 +137,16 @@ describe('orchestration surface — runStep (run/step/attempt validation + resul
     await runStep(store, runId, 'A1-landscape', {
       executor: () => ({ 'landscape-map': {}, 'gap-list': [] }),
     })
-    submitGateVerdict(store, runId, 'A1-landscape', {
+    // BOUND: the verdict carries the revisions the attempt committed. See `helpers.ts` — the gate
+    // refuses a verdict that cannot say what it judged.
+    submitGateVerdict(store, runId, 'A1-landscape', bindTo(store, runId, 'A1-landscape', {
       component: 'B',
       outcome: 'passed',
       passed: true,
       evidence: 'e',
       rationale: 'r',
       timestamp: 1,
-    })
+    }))
     expect(getRunSnapshot(store, runId).steps['A1-landscape']?.status).toBe('passed')
     await expect(async () => {
       await runStep(store, runId, 'A1-landscape', { executor: () => ({}) })

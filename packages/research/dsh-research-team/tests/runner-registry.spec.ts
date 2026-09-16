@@ -141,7 +141,7 @@ describe('the Remote snapshot shape is frozen', () => {
   it('names every field the Remote boundary carries', () => {
     expectTypeOf<keyof ResearchRunSnapshot>().toEqualTypeOf<
       'run' | 'catalog' | 'gates' | 'artifacts' | 'steps'
-      | 'evidenceProfile' | 'submittable' | 'submittabilityNote'
+      | 'evidenceProfile' | 'profileEligible' | 'submissionReady' | 'readinessNote'
       | 'packageExport' | 'runPersistence'
     >()
     expectTypeOf<keyof RunResult['steps'][number]>().toEqualTypeOf<

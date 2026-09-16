@@ -500,8 +500,9 @@ export interface ResearchRunSnapshot {
    * for the second.
    */
   readonly evidenceProfile: EvidenceProfile
-  readonly submittable: boolean
-  readonly submittabilityNote: string
+  readonly profileEligible: boolean
+  readonly submissionReady: boolean
+  readonly readinessNote: string
   /**
    * The export result, when the deployment configured a package directory.
    *

@@ -10,6 +10,8 @@
 
 ## 已知限制与延期工作
 
+- **判定带着它所审查的东西,由门禁比对**(2026-09-16):`GateVerdict` 新增 `targetRefs` 与 `inputDigest`,由 `bindVerdict` 在**构建判定**的地方设置 —— 绝不在提交时 —— 而 `submitGateVerdict` 拒绝目标与该 attempt 提交 receipt 不完全一致的判定(`DSH_GATE_STALE_TARGET`、`DSH_GATE_STALE_INPUTS`、`DSH_GATE_UNBOUND_VERDICT`)。门禁还要求 receipt 本身(`DSH_GATE_WITHOUT_COMMIT`、`DSH_GATE_COMMIT_MISMATCH`),而 `recordArtifact` 在该 attempt 提交之后拒绝(`DSH_ARTIFACT_AFTER_COMMIT`)。这四条都由一次独立复核先行复现;逐 slug 的接缝仍为 `ctx.research.recordArtifact`、恢复用 fixture 与 E2 的空门路径保留。
+- **资格不是就绪**(2026-09-16):manifest 与运行摘要同时带上 `profileEligible`(部署的证据 profile 是否**有可能**承载投稿)与 `submissionReady`(**这次运行**是否产出了门禁全部关闭、且经人批准的手稿),两者分开。`submittabilityOf` 因此改名 `evidenceEligibilityOf` —— 它旧的名字承诺了一个它从未计算过的、关于某次运行的事实,而一次在 A1 就停住的 production 运行导出了 `submittable: true`。**就绪不是投稿、也不是批准**:它说的是材料存在、门禁关闭,而最终包仍由人批准。
 - **修订仍是一个标志,不是一份 Patch**(2026-09-16,实测):`D4-rebuttal` 把每一节都映射成 `{ ...section, revised: record.hasRevisions }`,于是一条"要求改稿"的意见会把**每一节**都标成已修订,而没有任何正文改变。一个离线探针比对 D3 与 D4 的正文,量到 `unchangedBodies: true, revisedFlags: [true, true]`。审查要的是一个 Issue–Patch–Verify 循环:只有在正文**确实**变过之后才置 `revised`,而要求改稿的意见在拿不出 diff 时不许关闭。**这是剩下最大的一个 P0,且尚未开工** —— 要做的是 D4 散文请求上的逐节 patch 格式、一步纯逻辑的"应用并验证",以及每条意见的 `disposition`(`patched` / `accepted_explanation` / `open`)。
 - **A 门禁审的是 claim 材料,不是手稿**(2026-09-16,实测):`verdictA` 调的是 `reviewClaim(runCtx.claimMaterial)`,所以那三本离线规则手册判的是主张自己的字段,与 D3/D4 写了什么无关。一个离线探针改掉正文里的一个数字、删掉一节方法、跳过修订,三项都没有让 A 的票动一下。审查要的是一个绑定到 `targetVersion`、真的去读手稿及其证据的审稿任务。**尚未开工。**
 - **写作者的上下文带的是标签,不是证据**(2026-09-16,实测):D3 请求的 context 键是 `field, direction, sectionId, claimRef, figureCount, citable`,最后一个是标签清单。方法规范、结果表、图数据和文献记录都在这次运行里,却一条都没有到达写作者,所以一个忠实的模型仍然写不出真实的 Results 一节。**尚未开工**;它与上面 A 门禁那条是同一个缺口的两半。

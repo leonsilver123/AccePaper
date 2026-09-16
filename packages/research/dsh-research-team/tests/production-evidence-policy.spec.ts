@@ -20,20 +20,28 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { admitAsEvidence, getStepDefinitionById, submittabilityOf } from '@deepseek-ai/dsh-research-core'
+import { admitAsEvidence, evidenceEligibilityOf, getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
 import type { EvidenceProfile, StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
 import { buildBChannelAnchors } from '../src/runner/anchor-fixture.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
+import { receiptFor } from './support/receipt.ts'
 
 /** A1's gate is `['B']` alone, so every verdict this spec builds comes from the B channel. */
 const A1: StepDefinition | undefined = getStepDefinitionById('A1-landscape')
 
 function ctxWith(evidenceProfile: EvidenceProfile): VerdictBuildCtx {
   if (A1 === undefined) throw new Error('production-evidence-policy: A1-landscape is not a core step')
-  return { step: A1, attemptId: 1, runCtx: createRunContext(), abstain: new Set(), evidenceProfile }
+  return {
+    step: A1,
+    attemptId: 1,
+    commit: receiptFor('A1-landscape', A1.outputs ?? []),
+    runCtx: createRunContext(),
+    abstain: new Set(),
+    evidenceProfile,
+  }
 }
 
 /** The B verdict this step's gate produces under one profile, over the default fixture anchor. */
@@ -107,11 +115,11 @@ describe('the evaluation profile is the demo path, and it is not a permission to
     expect(String(b?.evidence)).not.toContain('production')
   })
 
-  it('stamps that same passing verdict unsubmittable, while production stays submittable', async () => {
+  it('stamps that same passing verdict ineligible, while production stays eligible', async () => {
     // The pair matters more than either value: a function that answered `false` always would
     // satisfy an assertion on `evaluation` alone and say nothing about the profiles.
-    expect(submittabilityOf('evaluation').submittable).toBe(false)
-    expect(submittabilityOf('evaluation').reason).toContain('evaluation profile')
-    expect(submittabilityOf('production').submittable).toBe(true)
+    expect(evidenceEligibilityOf('evaluation').eligible).toBe(false)
+    expect(evidenceEligibilityOf('evaluation').reason).toContain('evaluation profile')
+    expect(evidenceEligibilityOf('production').eligible).toBe(true)
   })
 })

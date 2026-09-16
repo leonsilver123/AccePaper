@@ -17,8 +17,10 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getArtifact, getAuditHistory, submittabilityOf } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getAuditHistory } from '@deepseek-ai/dsh-research-core'
+import { readinessOfRun } from './submission-readiness.ts'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import type { SubmissionReadiness } from './submission-readiness.ts'
 import type { RunResult, StepOutcome } from './types.ts'
 
 /** One file the package will contain, as content rather than as a name. */
@@ -54,15 +56,17 @@ export interface RunPackageManifest {
   /** Where each numeric figure came from, so a reader can trace it. */
   readonly numberSources: Readonly<Record<string, string>>
   /**
-   * The evidence profile this run was conducted under, and whether its output may be submitted.
+   * The evidence profile this run was conducted under, whether that profile's evidence may ever
+   * carry a submission, and whether THIS run is ready.
    *
-   * A package outlives the process that wrote it and travels further than the run's own logs, so
-   * the profile is stamped into the manifest rather than left to be inferred from the artifacts
-   * it happens to contain.
+   * Two facts, not one. `profileEligible` is what the deployment is on record as claiming;
+   * `submissionReady` is what the run actually produced. A production run blocked at A1 is
+   * eligible and not ready, and a manifest that collapsed them reported the first as the second.
    */
   readonly evidenceProfile: EvidenceProfile
-  readonly submittable: boolean
-  readonly submittabilityNote: string
+  readonly profileEligible: boolean
+  readonly submissionReady: boolean
+  readonly readinessNote: string
   readonly note: string
 }
 
@@ -158,7 +162,7 @@ export function planRunPackage(
   evidenceProfile: EvidenceProfile,
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
-  const submittability = submittabilityOf(evidenceProfile)
+  const readiness: SubmissionReadiness = readinessOfRun(store, runId, evidenceProfile)
   const manuscript = artifactRecord(store, runId, 'formatted-manuscript')
   const claim = artifactRecord(store, runId, 'claim')
   const landscape = artifactRecord(store, runId, 'landscape-map')
@@ -185,7 +189,8 @@ export function planRunPackage(
       `- steps driven: ${run.steps.length} of 16`,
       `- final status: \`${run.steps[run.steps.length - 1]?.status ?? 'none'}\``,
       `- evidence profile: \`${evidenceProfile}\``,
-      `- submittable: ${submittability.submittable ? 'yes' : '**NO**'}`,
+      `- evidence eligible: ${readiness.profileEligible ? 'yes' : 'NO'}`,
+      `- submission ready: ${readiness.ready ? 'yes' : '**NO**'}`,
       '',
       '## What this package is',
       '',
@@ -193,7 +198,7 @@ export function planRunPackage(
       'session log are real; the measurements are the study\'s own deterministic simulation over a',
       'measured demand profile. Nothing here is a published result.',
       '',
-      submittability.reason,
+      readiness.reason,
       '',
       '## Step outcomes',
       '',
@@ -265,8 +270,9 @@ export function planRunPackage(
         [path, written.has(path) ? source : 'NOT PRODUCED by this run']),
     ),
     evidenceProfile,
-    submittable: submittability.submittable,
-    submittabilityNote: submittability.reason,
+    profileEligible: readiness.profileEligible,
+    submissionReady: readiness.ready,
+    readinessNote: readiness.reason,
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
       + 'records no absolute directory and no credential.',

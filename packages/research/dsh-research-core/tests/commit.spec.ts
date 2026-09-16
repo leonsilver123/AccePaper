@@ -5,6 +5,7 @@ import type { ProjectRevision } from '../src/domain/ids.ts'
 import {
   ResearchError,
   getArtifact,
+  recordArtifact,
   getRunSnapshot,
   rollback,
   startStep,
@@ -12,7 +13,7 @@ import {
 } from '../src/engine/state-machine.ts'
 import { runStep } from '../src/engine/pipeline.ts'
 import type { ArtifactRef } from '../src/domain/artifact.ts'
-import { freshStore, seedRun, verdict } from './helpers.ts'
+import { bindTo, freshStore, seedRun, submitBound, verdict } from './helpers.ts'
 
 /**
  * The single commit point (src/engine/commit.ts) and the gate binding it enables.
@@ -75,7 +76,7 @@ function expectRefusal(outcome: CommitOutcome, code: string): Extract<CommitOutc
 describe('J01 — a gate cannot certify a step that produced nothing', () => {
   it('refuses a well-formed verdict when the step has no outputs at all', () => {
     const [store, id] = started()
-    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_OUTPUTS/)
+    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_COMMIT/)
   })
 
   it('refuses a verdict when only SOME declared outputs are present', () => {
@@ -85,13 +86,39 @@ describe('J01 — a gate cannot certify a step that produced nothing', () => {
       outputs: [{ slug: 'landscape-map', value: 'm' }],
     })
     expectRefusal(outcome, 'DSH_COMMIT_OUTPUTS_INCOMPLETE')
-    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_OUTPUTS/)
+    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_COMMIT/)
   })
 
-  it('accepts the verdict once the whole declared set is committed', () => {
+  it('accepts a BOUND verdict once the whole declared set is committed', () => {
     const [store, id] = started()
     expect(commitStepOutputs(store, id, STEP, request(store, id)).ok).toBe(true)
-    expect(submitGateVerdict(store, id, STEP, verdict('B', true))).toBe('passed')
+    // Bound: `submitBound` stamps the verdict with the revisions the attempt committed, which is
+    // what every real gate submission carries. The same verdict UNBOUND is refused above.
+    expect(submitBound(store, id, STEP, verdict('B', true))).toBe('passed')
+  })
+
+  it('refuses an UNBOUND verdict even when the attempt committed the right outputs', () => {
+    const [store, id] = started()
+    expect(commitStepOutputs(store, id, STEP, request(store, id)).ok).toBe(true)
+    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_UNBOUND_VERDICT/)
+  })
+
+  it('refuses a verdict bound to a DIFFERENT commit than the attempt holds', () => {
+    const [store, id] = started()
+    expect(commitStepOutputs(store, id, STEP, request(store, id)).ok).toBe(true)
+    // A verdict stamped against another revision set: the shape an old judgment has when it is
+    // replayed against a new attempt. Nothing about it is malformed; it is simply about other
+    // outputs, which is the whole point of carrying targets.
+    const other = {
+      ...verdict('B', true),
+      targetRefs: [{
+        artifactId: 'landscape-map' as never,
+        version: 99 as never,
+        contentHash: 'f'.repeat(64) as never,
+      }],
+      inputDigest: 'e'.repeat(64) as never,
+    }
+    expect(() => submitGateVerdict(store, id, STEP, other)).toThrow(/DSH_GATE_STALE_TARGET/)
   })
 
   it('refuses a verdict backed only by the PREVIOUS attempt\'s artifacts', () => {
@@ -101,7 +128,77 @@ describe('J01 — a gate cannot certify a step that produced nothing', () => {
     startStep(store, id, STEP)
     // The registry still holds the first attempt's entries, marked invalidated. A step that has
     // not re-produced them must not pass on them.
-    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_OUTPUTS/)
+    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/DSH_GATE_WITHOUT_COMMIT/)
+  })
+})
+
+describe('F02 — the per-slug seam cannot write beside a commit', () => {
+  it('refuses recordArtifact once the attempt has committed, and changes nothing', () => {
+    const [store, id] = started()
+    const committed = commitStepOutputs(store, id, STEP, request(store, id))
+    if (!committed.ok) throw new Error(committed.reason)
+    const before = getRunSnapshot(store, id)
+
+    expect(() =>{  recordArtifact(store, id, STEP, 'landscape-map', 'replaced outside commit') }).toThrow(
+      /DSH_ARTIFACT_AFTER_COMMIT/,
+    )
+
+    const after = getRunSnapshot(store, id)
+    // The official record is unchanged, and the revision did not move: the bypass that used to
+    // replace a committed artifact while leaving the revision at 1 now does nothing at all.
+    expect(getArtifact(store, id, 'landscape-map')).toBe('m')
+    expect(after.revision).toBe(before.revision)
+    expect(after.registry['landscape-map']?.ref).toEqual(before.registry['landscape-map']?.ref)
+  })
+
+  it('still allows recordArtifact BEFORE any commit, which is what the seam is for', () => {
+    const [store, id] = started()
+    expect(() =>{  recordArtifact(store, id, STEP, 'landscape-map', 'staged') }).not.toThrow()
+    expect(getArtifact(store, id, 'landscape-map')).toBe('staged')
+  })
+
+  it('re-opens the write after a rollback, because a new attempt is a new commit', () => {
+    const [store, id] = started()
+    expect(commitStepOutputs(store, id, STEP, request(store, id)).ok).toBe(true)
+    rollback(store, id, STEP)
+    startStep(store, id, STEP)
+    expect(() =>{  recordArtifact(store, id, STEP, 'landscape-map', 'new attempt staging') }).not.toThrow()
+  })
+})
+
+describe('F01 — an old verdict cannot approve a new attempt', () => {
+  it('refuses the SAME verdict object after a rollback and a new commit', async () => {
+    const [store, id] = started()
+    const first = await runStep(store, id, STEP, {
+      executor: () => ({ 'landscape-map': { version: 'old' }, 'gap-list': ['old'] }),
+    })
+    expect(first.ok).toBe(true)
+    // The verdict attempt 1 was adjudicated with — the object itself, kept for the replay.
+    const oldVerdict = bindTo(store, id, STEP, verdict('B', true))
+    expect(submitGateVerdict(store, id, STEP, oldVerdict)).toBe('passed')
+
+    rollback(store, id, STEP)
+    startStep(store, id, STEP)
+    const second = await runStep(store, id, STEP, {
+      executor: () => ({ 'landscape-map': { version: 'new' }, 'gap-list': ['new'] }),
+    })
+    expect(second.ok).toBe(true)
+    // Attempt 2's own verdict passes; the OLD one is refused, because it names attempt 1's
+    // revisions and the attempt it is being offered to wrote different ones.
+    expect(() => submitGateVerdict(store, id, STEP, oldVerdict)).toThrow(/DSH_GATE_STALE_TARGET/)
+    expect(submitBound(store, id, STEP, verdict('B', true))).toBe('passed')
+  })
+
+  it('refuses a verdict whose INPUTS changed, even when the targets did not', () => {
+    const [store, id] = started()
+    const receipt = commitStepOutputs(store, id, STEP, request(store, id))
+    if (!receipt.ok) throw new Error(receipt.reason)
+    const wrongInputs = {
+      ...verdict('B', true),
+      targetRefs: receipt.receipt.artifacts.map(artifact => artifact.ref),
+      inputDigest: 'a'.repeat(64) as never,
+    }
+    expect(() => submitGateVerdict(store, id, STEP, wrongInputs)).toThrow(/DSH_GATE_STALE_INPUTS/)
   })
 })
 
@@ -148,7 +245,7 @@ describe('J02 — a superseded attempt cannot write', () => {
     const [store, id] = started()
     let release!: (v: Record<string, unknown>) => void
     const first = runStep(store, id, STEP, {
-      executor: () => new Promise<Record<string, unknown>>(resolve => { release = resolve }),
+      executor: () => new Promise<Record<string, unknown>>((resolve) => { release = resolve }),
     })
     await Promise.resolve()
     // The step is rolled back and re-started while attempt 1 is still executing — a retry after a
@@ -239,11 +336,11 @@ describe('concurrent commits — only the one holding the current revision succe
     const prepared = [request(store, id), { ...request(store, id), idempotencyKey: 'k2' }]
     // A barrier, not a sleep: both callers have read the same revision before either commits, so
     // the outcome does not depend on which one the scheduler runs first.
-    const gate = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<undefined>()
     let arrived = 0
     const bothReady = async (): Promise<void> => {
       arrived += 1
-      if (arrived === prepared.length) gate.resolve()
+      if (arrived === prepared.length) gate.resolve(undefined)
       await gate.promise
     }
     const results = await Promise.all(
@@ -323,9 +420,9 @@ describe('the receipt names the inputs the attempt read', () => {
 })
 
 describe('the commit point is the only writer the gate accepts', () => {
-  it('names the missing outputs in the refusal so a reader is not sent hunting', () => {
+  it('names the step and attempt in the refusal, so a reader is not sent hunting', () => {
     const [store, id] = started()
-    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/gap-list/)
+    expect(() => submitGateVerdict(store, id, STEP, verdict('B', true))).toThrow(/A1-landscape/)
   })
 
   it('leaves the step startable-again path intact after a refused commit', () => {

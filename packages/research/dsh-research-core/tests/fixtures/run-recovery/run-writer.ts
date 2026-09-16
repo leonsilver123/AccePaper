@@ -13,11 +13,12 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { createRunPersistence } from '../../../src/run-persistence.ts'
-import { recordArtifact, rollback, startStep, submitGateVerdict } from '../../../src/engine/state-machine.ts'
+import { getRunSnapshot, rollback, startStep } from '../../../src/engine/state-machine.ts'
+import { commitStepOutputs } from '../../../src/engine/commit.ts'
 import { runStep } from '../../../src/engine/pipeline.ts'
 import { createHostApprovalChannel } from '../../../src/host.ts'
 import type { ResearchRunStore } from '../../../src/engine/types.ts'
-import { abstainVerdict, freshStore, passStep, runFullPipeline, seedRun } from '../../helpers.ts'
+import { abstainVerdict, freshStore, passStep, runFullPipeline, seedRun, submitBound } from '../../helpers.ts'
 import { BOUNDARY_RUN_ID, WRITER_APPROVAL_EVENT_ID } from './constants.ts'
 import { emitReport, errorInfo, parseArgs, projectRun, requireArg } from './report.ts'
 
@@ -67,9 +68,16 @@ async function driveScenario(store: ResearchRunStore): Promise<void> {
   if (scenario === 'abstained') {
     // A held abstention: the run is stopped by the gate, not by a failure.
     startStep(store, runId, 'A1-landscape')
-    recordArtifact(store, runId, 'A1-landscape', 'landscape-map', 'writer-process-landscape-map')
-    recordArtifact(store, runId, 'A1-landscape', 'gap-list', 'writer-process-gap-list')
-    submitGateVerdict(store, runId, 'A1-landscape', abstainVerdict('B'))
+    commitStepOutputs(store, runId, 'A1-landscape', {
+      attemptId: 1,
+      expectedRevision: getRunSnapshot(store, runId).revision,
+      idempotencyKey: 'A1-landscape#1',
+      outputs: [
+        { slug: 'landscape-map', value: 'writer-process-landscape-map' },
+        { slug: 'gap-list', value: 'writer-process-gap-list' },
+      ],
+    })
+    submitBound(store, runId, 'A1-landscape', abstainVerdict('B'))
     return
   }
 

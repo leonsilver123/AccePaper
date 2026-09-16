@@ -40,6 +40,8 @@ import type {
   TrinityComponent,
 } from './types.ts'
 import { lookupStep, SEEDABLE_INPUTS, STEPS } from './steps.ts'
+import { sameTargetSet } from './commit.ts'
+import type { CommitReceipt } from './commit.ts'
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -617,6 +619,20 @@ export function recordArtifact(store: ResearchRunStore, runId: string, stepId: s
   if (!state || state.status !== 'in_progress') {
     throw new ResearchError('DSH_NOT_IN_PROGRESS', `recordArtifact: step '${stepId}' is not in_progress`)
   }
+  // THE COMMIT IS THE WRITE OF RECORD. Once this attempt has committed, its official outputs exist
+  // with a receipt that names their revisions, and a per-slug write beside them would replace one
+  // of those values while the receipt still described the old one — the registry and the receipt
+  // would disagree, and nothing advanced the run revision to say so. Closing the seam here is
+  // what makes "one commit point" a property of the code rather than of the driver's habits: the
+  // way to write again is a new attempt, which is a new commit.
+  if (state.commit !== undefined) {
+    throw new ResearchError(
+      'DSH_ARTIFACT_AFTER_COMMIT',
+      `recordArtifact: step '${stepId}' attempt ${String(state.attempt_id)} has already committed`
+        + ` (key '${state.commit.idempotencyKey}'); its outputs are written for this attempt —`
+        + ' rolling the step back and starting a new attempt is what re-opens the write',
+    )
+  }
   const cloned = cloneValue(value)
   const hashed = contentHashOf(cloned)
   if (!hashed.ok) {
@@ -702,27 +718,76 @@ export function submitGateVerdict(store: ResearchRunStore, runId: string, stepId
   }
   const state = run.steps.get(stepId)
   if (!state) throw new ResearchError('DSH_NO_STATE', `submitGateVerdict: no state for '${stepId}'`)
-  // A GATE CERTIFIES WORK, AND WORK WITH NO OUTPUT IS NOT WORK. This check is what binds the
-  // verdict to the products it claims to be about; without it a step adjudicated `passed` over an
-  // empty registry, which was reproduced (A1, gate B, zero artifacts).
+  // A GATE CERTIFIES WORK, AND THE WORK IT CERTIFIES IS THE ATTEMPT'S COMMITTED OUTPUT SET.
   //
-  // "This attempt's" is the point of comparing the producer attempt: after a rollback the registry
-  // still holds the abandoned attempt's entries, marked invalidated, and a step that has not yet
-  // re-run must not pass on them.
+  // Three separate things are checked here, and each closes a defect that was reproduced:
+  //
+  //  1. the attempt has a COMMIT receipt. Per-slug writes that add up to the declared set are not
+  //     a commit: they carry no receipt, no revision, and no input digest, so nothing binds a
+  //     verdict to them.
+  //  2. the registry still AGREES with that receipt. A value replaced beside the commit leaves the
+  //     receipt describing one content and the registry holding another; the step would then pass
+  //     on work nobody wrote.
+  //  3. the VERDICT names exactly those revisions. Without this an old judgment approves a new
+  //     attempt's products — reproduced as: attempt 1 commits and passes B, the step is rolled
+  //     back, attempt 2 commits different values, and re-submitting the SAME verdict object
+  //     reports `passed` for attempt 2.
+  //
+  // The gate never stamps a verdict with the current targets; see {@link GateVerdict.targetRefs}.
+  const receipt = state.commit
+  if (receipt === undefined) {
+    throw new ResearchError(
+      'DSH_GATE_WITHOUT_COMMIT',
+      `submitGateVerdict: step '${stepId}' attempt ${String(state.attempt_id)} has no commit receipt —`
+        + ' a step is adjudicated on what its attempt committed, and writing the declared outputs'
+        + ' one at a time is not a commit (NO DEFAULT PASS)',
+    )
+  }
   {
-    const missing = step.outputs.filter((slug) => {
+    const committed = new Map(receipt.artifacts.map(artifact => [artifact.slug, artifact.ref]))
+    const wrong = step.outputs.filter((slug) => {
       const record = run.registry[slug]
+      const wanted = committed.get(slug)
       return (
+        wanted === undefined ||
         record === undefined ||
         record.invalidated ||
         record.producerStepId !== stepId ||
-        record.producerAttemptId !== state.attempt_id
+        record.producerAttemptId !== state.attempt_id ||
+        record.ref.version !== wanted.version ||
+        record.ref.contentHash !== wanted.contentHash
       )
     })
-    if (missing.length > 0) {
+    if (wrong.length > 0) {
       throw new ResearchError(
-        'DSH_GATE_WITHOUT_OUTPUTS',
-        `submitGateVerdict: step '${stepId}' attempt ${String(state.attempt_id)} has not produced ${missing.join(', ')} of its declared outputs (${step.outputs.join(', ')}) — a verdict for this step would certify work that is not there`,
+        'DSH_GATE_COMMIT_MISMATCH',
+        `submitGateVerdict: step '${stepId}' attempt ${String(state.attempt_id)} does not hold what its`
+          + ` commit receipt records for ${wrong.join(', ')} — the receipt names the revisions this`
+          + ' attempt wrote, and the registry is what it wrote them to',
+      )
+    }
+    const targets = snapshot.targetRefs
+    if (targets === undefined || snapshot.inputDigest === undefined) {
+      throw new ResearchError(
+        'DSH_GATE_UNBOUND_VERDICT',
+        `submitGateVerdict: the '${component}' verdict for '${stepId}' names no target revisions —`
+          + ' a verdict that cannot say what it judged is a verdict about whatever the registry'
+          + ' happens to hold when it arrives (build it with bindVerdict)',
+      )
+    }
+    if (!sameTargetSet(targets, receipt.artifacts.map(artifact => artifact.ref))) {
+      throw new ResearchError(
+        'DSH_GATE_STALE_TARGET',
+        `submitGateVerdict: the '${component}' verdict for '${stepId}' judged a different set of`
+          + ` revisions than attempt ${String(state.attempt_id)} committed — an old judgment cannot`
+          + " approve a new attempt's products",
+      )
+    }
+    if (snapshot.inputDigest !== receipt.inputDigest) {
+      throw new ResearchError(
+        'DSH_GATE_STALE_INPUTS',
+        `submitGateVerdict: the '${component}' verdict for '${stepId}' was built over a different`
+          + ` input digest than attempt ${String(state.attempt_id)} read`,
       )
     }
   }
@@ -910,6 +975,7 @@ function snapshotStep(state: StepState): StepSnapshot {
     // P2-3: CLONE, never hand out the internal (frozen) definition's array — the
     // snapshot stays correct even if the freeze on `STEPS` were ever relaxed.
     outputs: [...state.outputs],
+    ...(state.commit !== undefined ? { commit: cloneValue(state.commit) as CommitReceipt } : {}),
   }
 }
 

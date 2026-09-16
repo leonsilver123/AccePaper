@@ -6,11 +6,10 @@ import {
   recordArtifact,
   rollback,
   startStep,
-  submitGateVerdict,
 } from '../src/engine/state-machine.ts'
 import { runStep } from '../src/engine/pipeline.ts'
 import type { StepExecutedRecord } from '../src/engine/types.ts'
-import { freshStore, seedRun, verdict } from './helpers.ts'
+import { freshStore, seedRun, submitBound, verdict } from './helpers.ts'
 import { lookupStep } from '../src/engine/steps.ts'
 
 /**
@@ -276,7 +275,7 @@ describe('P3 gate integration — caller continues the gate after success', () =
     const res = await runStep(store, id, STEP, { executor: () => ({ 'landscape-map': 1, 'gap-list': 2 }) })
     expect(res.ok).toBe(true)
     // upper layer continues the gate via the EXISTING submitGateVerdict (single-source adjudication)
-    const status = submitGateVerdict(store, id, STEP, verdict('B', true))
+    const status = submitBound(store, id, STEP, verdict('B', true))
     expect(status).toBe('passed')
     expect(getRunSnapshot(store, id).steps[STEP]?.status).toBe('passed')
   })

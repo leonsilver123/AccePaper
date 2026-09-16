@@ -20,7 +20,7 @@
  */
 
 import type { ArtifactRef } from '../domain/artifact.ts'
-import type { ProjectRevision } from '../domain/ids.ts'
+import type { InputDigest, ProjectRevision } from '../domain/ids.ts'
 import type { CommitReceipt } from './commit.ts'
 
 /** Methodology phase (v1.0 design doc). */
@@ -74,6 +74,22 @@ export interface GateVerdict {
   readonly evidence: string
   readonly rationale: string
   readonly timestamp: number
+  /**
+   * The artifact revisions this verdict judged, as `bindVerdict` stamped them at BUILD time.
+   *
+   * Absent means the verdict names nothing, and the gate refuses it: a verdict that cannot say
+   * what it was about is a verdict about whatever the registry happens to hold when it arrives.
+   * Present, it is compared against the attempt's own commit receipt, so a verdict built for one
+   * set of outputs cannot be replayed against another — which is what let an old judgment approve
+   * a new attempt's products.
+   *
+   * The gate NEVER fills these in. A verdict that arrives without them was not built from a
+   * receipt, and stamping it at submit time would make an unrelated judgment look like a judgment
+   * about the outputs it happened to land beside.
+   */
+  readonly targetRefs?: ReadonlyArray<ArtifactRef> | undefined
+  /** The digest of the inputs the judging attempt read, stamped beside {@link GateVerdict.targetRefs}. */
+  readonly inputDigest?: InputDigest | undefined
 }
 
 /**
@@ -280,6 +296,12 @@ export interface StepSnapshot {
   readonly finishedAt?: number
   /** Declared output slugs (mirrors the immutable StepDefinition). */
   readonly outputs: ReadonlyArray<string>
+  /**
+   * The commit that produced this attempt's outputs, when one has. A verdict is bound to THIS:
+   * the receipt names the artifact revisions the attempt wrote, and the gate refuses a verdict
+   * whose targets are not exactly these.
+   */
+  readonly commit?: CommitReceipt
 }
 
 /** Artifact metadata (no value) for {@link RunSnapshot}; use `getArtifact` for the value (HOLE-4). */

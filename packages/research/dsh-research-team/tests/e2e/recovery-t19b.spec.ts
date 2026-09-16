@@ -91,6 +91,9 @@ describe('T19-B recovery — gate abstention holds the step (no default pass)', 
         ? (undefined as never)
         : ({ ...stepDef, gate: ['B'], humanGate: false } as never),
       attemptId: 1,
+      // The run's OWN receipt: this verdict is legitimately bound, so the refusal below is the one
+      // the test is about (a held step refuses a re-submit) rather than a binding mismatch.
+      commit: getRunSnapshot(store, runId).steps['A1-landscape']!.commit!,
       runCtx,
       abstain: new Set(),
       evidenceProfile: DEFAULT_EVIDENCE_PROFILE,

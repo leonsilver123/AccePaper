@@ -26,7 +26,7 @@ Status: implemented
 - **围栏。** 请求带着它启动时的那个 attempt;步骤已经走过去之后再提交,拒绝(`DSH_COMMIT_STALE_ATTEMPT`)。
 - **原子。** 每个值在**校验阶段**就被克隆并取哈希。其后的写入阶段不再有任何失败模式,所以一次拒绝既不留产物,也不留 revision,也不留审计事件。
 
-`submitGateVerdict` 现在会在任何声明产物缺失、或存在但由别的步骤、别的 attempt 产出时,拒绝该判定(`DSH_GATE_WITHOUT_OUTPUTS`)。这才让门禁的判定**关于某个东西**。比对产出 attempt 正是让回滚有意义的那一步:registry 里仍然躺着被放弃那次的条目(标记为 `invalidated`),而一个尚未重跑的步骤不许靠它们通过。
+`submitGateVerdict` 现在拒绝:该 attempt 没有提交 receipt(`DSH_GATE_WITHOUT_COMMIT`)、registry 不再持有 receipt 所记内容(`DSH_GATE_COMMIT_MISMATCH`)、以及判定没有**恰好**具名那些 revision(`DSH_GATE_STALE_TARGET` / `DSH_GATE_STALE_INPUTS` / `DSH_GATE_UNBOUND_VERDICT`)。前两条是这篇的改动;第三条在同一天关闭了一个被复现的缺陷 —— 旧判定批准新 attempt 的产物 —— 并取代了本篇原先描述的"registry 中存在性"检查,见[门禁认证了它没读过的产物](2026-09-16-the-gate-certified-work-it-had-not-read.zh.md)。一步能否通过,仍然由它的 **attempt** 产出了什么决定 —— 这才是让回滚有意义的那件事。
 
 **运行 revision。** `RunState.revision` 从 0 起,**只有提交**能让它前进,且恰好加一。提交所带的 `expectedRevision` 不再匹配时拒绝(`DSH_COMMIT_REVISION_CONFLICT`)。`runStep` 在入口读一次 revision,并按它提交,所以一个从运行已经离开的状态算出来的结果无法落地。
 
@@ -40,15 +40,15 @@ Status: implemented
 
 **提交 receipt 不持久化。** `StepState.commit` 是内存里的事实。恢复之后 receipt 没了,而同一个 `runStep` 调用的重放会被既有的 `DSH_STEP_ALREADY_EXECUTED` 守卫挡住 —— 所以这个省略**不会**变成重复提交,但它确实意味着被恢复的 attempt 读不回自己的 receipt。持久化它属于拥有重启路径的那项 checkpoint 工作。
 
-**`recordArtifact` 仍是公开接缝。** `ctx.research.recordArtifact` 与恢复用 fixture 都在调它,它仍然写单个产物、不带完整性规则。它不是任何要紧之事的旁路:单靠它无法让门禁通过,因为门禁现在要求该 attempt 声明的**整个**产物集合。把两者合并,才是移除这条接缝的那次改动。
+**`recordArtifact` 仍是公开接缝,但提交之后被关闭。** `ctx.research.recordArtifact`、恢复用 fixture 与 E2 的空门路径都在调它,它仍然写单个产物、不带完整性规则。现在有两件事让它不构成旁路:该 attempt 一旦提交它就拒绝(`DSH_ARTIFACT_AFTER_COMMIT`);而门禁要求该 attempt 的提交 **receipt**,不再从 registry 推断完整性 —— 所以逐个补齐声明输出的 attempt 过不了门。两者都在 2026-09-16 加入,见[门禁认证了它没读过的产物](2026-09-16-the-gate-certified-work-it-had-not-read.zh.md):此前一次复核复现了这条旁路 —— 替换已提交的产物,revision 停在 1,门禁照样通过。
 
-**门禁按"存在 + attempt"绑定,不按摘要绑定。** 判定仍然不具名一个哈希。`domain/quality.ts` 里的 `GateReport` 与 `reportAnswers` 是那种绑定的词汇,而签发报告的审查层才是它的使用者。
+**门禁按"存在 + attempt"绑定,不按摘要绑定** —— 这是本篇写时的状态。同一天它就被补上了:判定现在带着 `targetRefs` 与 `inputDigest`,在**构建它**的地方绑定,不匹配即拒。见[门禁认证了它没读过的产物](2026-09-16-the-gate-certified-work-it-had-not-read.zh.md)。`domain/quality.ts` 里的 `GateReport` 与 `reportAnswers` 仍是那份比 attempt 活得更久的报告的词汇。
 
 ## Alternatives considered
 
 **保留逐 slug 写入,只在前面加一遍全量校验。** 拒绝,理由是不充分:校验一个值这件事**本身**就会失败,所以"先校验再写"必须包含克隆与取哈希,而那已经是大半个提交点了。剩下的那块 —— attempt 围栏 —— 根本无法活在一个逐 slug 的写入器里,因为它是**没有一个单一时刻**可供检查的。
 
-**让门禁改为要求一份提交 receipt,而不是从 registry 推导完整性。** 暂时拒绝,因为它会要求改写每一个"先合法地 `recordArtifact` 再开门禁"的既有 spec,而两条规则拒绝的是同一件事。receipt 依然被记录,也依然是幂等读取的东西;只是门禁的**输入**保持了可推导。
+**让门禁改为要求一份提交 receipt,而不是从 registry 推导完整性。** **当时**拒绝,理由是代价:它会要求改写每一个"先合法地 `recordArtifact` 再开门禁"的既有 spec,而两条规则**看起来**拒绝的是同一件事。同一天,一次复核表明它们不是同一件事 —— 逐个补齐声明输出的 attempt 能通过从 registry 推导的检查,而它没有 receipt 可供判定绑定。receipt 成了门禁的输入,spec 也随之迁移。
 
 **给 `recordArtifact` 加一个 `expectedAttemptId` 参数,而不是新建模块。** 拒绝:那会给下一个调用方留下"忘了传"的口子,而这一整类缺陷恰恰就是"某个调用方在没有围栏的情况下写了正式产物"。
 

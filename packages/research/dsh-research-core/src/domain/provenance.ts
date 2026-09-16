@@ -216,32 +216,35 @@ export function admitAsEvidence(profile: EvidenceProfile, provenance: Provenance
   )
 }
 
-/** Whether a profile's output may be submitted, and the sentence that says why. */
-export interface Submittability {
-  readonly submittable: boolean
+/** Whether a profile's evidence may EVER carry a submission, and the sentence that says why. */
+export interface EvidenceEligibility {
+  readonly eligible: boolean
   readonly reason: string
 }
 
 /**
- * Whether a run under one profile may produce a submittable manuscript.
+ * Whether evidence produced under one profile is eligible to carry a submission at all.
  *
- * This is the safety property the profiles exist for, and it is a property of the PROFILE rather
- * than of a run's contents: a run cannot become submittable by containing no fixture evidence,
- * because the profile is what a deployment is on record as claiming. A submission needs one more
- * step beyond this — the human approval bound to the final package — and this function does not
- * stand in for it.
+ * ELIGIBILITY, not readiness. It is a property of the PROFILE — what a deployment is on record as
+ * claiming about its evidence — and says nothing about any particular run: a production run that
+ * stopped at its first step is eligible and nowhere near submittable.
+ *
+ * This function was named `submittabilityOf` and its field `submittable` until 2026-09-16, and a
+ * production run blocked at A1 was exported with `submittable: true`, because the name promised a
+ * fact about the run that the function never computed. Whether a RUN is ready is decided from the
+ * run's own state (`submissionReadinessOf` in `@deepseek-ai/dsh-research-team`).
  *
  * @param profile - the profile the run declares.
  * @returns the decision and its reason.
  */
-export function submittabilityOf(profile: EvidenceProfile): Submittability {
+export function evidenceEligibilityOf(profile: EvidenceProfile): EvidenceEligibility {
   return profile === 'production'
     ? {
-      submittable: true,
+      eligible: true,
       reason: 'production profile: gates are decided from evidence classes that may carry a submission',
     }
     : {
-      submittable: false,
+      eligible: false,
       reason:
           'evaluation profile: synthetic evidence is admitted so the pipeline can be exercised, so no'
           + ' output of this run may be submitted',

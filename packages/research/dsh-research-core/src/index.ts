@@ -163,7 +163,7 @@ export type {
   EvidenceDisposition,
   EvidenceAdmissionCode,
   EvidenceAdmission,
-  Submittability,
+  EvidenceEligibility,
 } from './domain/provenance.ts'
 export {
   SOURCE_CLASSES,
@@ -174,7 +174,7 @@ export {
   isSourceAccess,
   isEvidenceProfile,
   admitAsEvidence,
-  submittabilityOf,
+  evidenceEligibilityOf,
 } from './domain/provenance.ts'
 
 export type {
@@ -256,7 +256,7 @@ export { runStep } from './engine/pipeline.ts'
 // but a caller that wants the gate to accept its step's work must commit: the gate requires the
 // attempt's declared outputs to be present, and only a commit writes them together with the
 // revision that makes the attempt's state current.
-export { commitStepOutputs, inputDigestOf, throwCommitRefusal } from './engine/commit.ts'
+export { bindVerdict, commitStepOutputs, inputDigestOf, sameTargetSet, throwCommitRefusal } from './engine/commit.ts'
 export type {
   CommitCandidate,
   CommitErrorCode,

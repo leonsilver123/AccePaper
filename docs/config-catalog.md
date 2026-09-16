@@ -1929,7 +1929,7 @@ export interface ResearchTeamServiceConfig {
 }
 ```
 
-Source: [`packages/research/dsh-research-team/src/index.ts:315`](../packages/research/dsh-research-team/src/index.ts)
+Source: [`packages/research/dsh-research-team/src/index.ts:317`](../packages/research/dsh-research-team/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-local"></a>
 

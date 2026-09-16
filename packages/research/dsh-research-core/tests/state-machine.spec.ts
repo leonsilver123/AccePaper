@@ -19,7 +19,7 @@ import {
   submitGateVerdict,
 } from '../src/engine/state-machine.ts'
 import * as Core from '../src/index.ts'
-import { freshStore, passStep, runFullPipeline, seedRun, verdict } from './helpers.ts'
+import { bindTo, commitAll, freshStore, passStep, runFullPipeline, receiptOf, seedRun, submitBound, verdict } from './helpers.ts'
 
 const anyCore = Core as Record<string, unknown>
 
@@ -97,8 +97,7 @@ describe('INV-DEP-PASSED — downstream canStart requires an upstream `passed` (
     const store = freshStore()
     const id = seedRun(store)
     startStep(store, id, 'A1-landscape')
-    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')
-    recordArtifact(store, id, 'A1-landscape', 'gap-list', 'g')
+    commitAll(store, id, 'A1-landscape')
     expect(getRunSnapshot(store, id).steps['A1-landscape']?.status).toBe('in_progress')
     expect(canStart(store, id, 'A2-claim')).toBe(false)
   })
@@ -153,10 +152,9 @@ describe('gate adjudication (INV-GATE-COMPONENT / INV-VERDICT-STATUS / INV-VERDI
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     startStep(store, id, 'A2-claim') // gate ['A','C']
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('B', true))).toThrow(ResearchError)
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('B', true))).toThrow(/GATE_COMPONENT_NOT_DECLARED/)
+    commitAll(store, id, 'A2-claim')
+    expect(() => submitBound(store, id, 'A2-claim', verdict('B', true))).toThrow(ResearchError)
+    expect(() => submitBound(store, id, 'A2-claim', verdict('B', true))).toThrow(/GATE_COMPONENT_NOT_DECLARED/)
   })
   it('submitGateVerdict throws on an empty-gate step (use completeStep)', () => {
     const store = freshStore()
@@ -171,19 +169,18 @@ describe('gate adjudication (INV-GATE-COMPONENT / INV-VERDICT-STATUS / INV-VERDI
     const store = freshStore()
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape') // passed
-    expect(() => submitGateVerdict(store, id, 'A1-landscape', verdict('B', true))).toThrow(ResearchError)
-    expect(() => submitGateVerdict(store, id, 'A1-landscape', verdict('B', true))).toThrow(/VERDICT_BAD_STATUS/)
+    expect(() => submitBound(store, id, 'A1-landscape', verdict('B', true))).toThrow(ResearchError)
+    expect(() => submitBound(store, id, 'A1-landscape', verdict('B', true))).toThrow(/VERDICT_BAD_STATUS/)
   })
   it('submitGateVerdict rejects a second verdict for the same component (INV-VERDICT-IMMUTABLE)', () => {
     const store = freshStore()
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     startStep(store, id, 'A2-claim') // gate ['A','C']
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', true)) // A in, C missing → in_progress
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toThrow(ResearchError)
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toThrow(/VERDICT_ALREADY_SET/)
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', true)) // A in, C missing → in_progress
+    expect(() => submitBound(store, id, 'A2-claim', verdict('A', true))).toThrow(ResearchError)
+    expect(() => submitBound(store, id, 'A2-claim', verdict('A', true))).toThrow(/VERDICT_ALREADY_SET/)
   })
   it('all-pass on a falsifiable C-step → passed; C-fail → failed; other fail → blocked (INV-ADJUDICATE-SHARED)', () => {
     const store = freshStore()
@@ -191,24 +188,21 @@ describe('gate adjudication (INV-GATE-COMPONENT / INV-VERDICT-STATUS / INV-VERDI
     passStep(store, id, 'A1-landscape')
     // A2: gate ['A','C'], falsifiable non-null
     startStep(store, id, 'A2-claim')
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('passed') // all-pass, non-humanGate
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', true))
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('passed') // all-pass, non-humanGate
     // fresh A2 with a C-fail → failed (refutation)
     rollback(store, id, 'A2-claim')
     startStep(store, id, 'A2-claim')
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c2')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp2')
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', true))
+    expect(submitBound(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
     // fresh A2 with an A-fail (non-C component) → blocked (adjudication fires only when ALL gate components are in)
     rollback(store, id, 'A2-claim')
     startStep(store, id, 'A2-claim')
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c3')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp3')
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', false)) // A-fail, C missing → in_progress (no adjudication yet)
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // all in, A-fail non-C → blocked
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', false)) // A-fail, C missing → in_progress (no adjudication yet)
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // all in, A-fail non-C → blocked
   })
   it('completeStep throws on a non-empty-gate step (INV-COMPLETESTEP-EMPTY)', () => {
     const store = freshStore()
@@ -285,9 +279,8 @@ describe('INV-WRITE-ISOLATION — caller values are deep-cloned at write time (H
     const store = freshStore()
     const id = seedRun(store)
     startStep(store, id, 'A1-landscape')
-    recordArtifact(store, id, 'A1-landscape', 'landscape-map', 'm')
-    recordArtifact(store, id, 'A1-landscape', 'gap-list', 'g')
-    const v = verdict('B', true)
+    commitAll(store, id, 'A1-landscape')
+    const v = bindTo(store, id, 'A1-landscape', verdict('B', true))
     submitGateVerdict(store, id, 'A1-landscape', v)
     ;(v as unknown as { passed: boolean }).passed = false
     const current = getAuditHistory(store, id, 'A1-landscape').at(-1) as { gateResults: Record<string, { passed: boolean }> }
@@ -371,10 +364,9 @@ describe('INV-CASCADE — rollback transitively invalidates downstream (P1-7)', 
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     startStep(store, id, 'A2-claim') // gate ['A','C'], falsifiable non-null
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp')
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', true))
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', true))
+    expect(submitBound(store, id, 'A2-claim', verdict('C', false))).toBe('failed')
     rollback(store, id, 'A2-claim')
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('pending')
     expect(canStart(store, id, 'A2-claim')).toBe(true)
@@ -400,7 +392,7 @@ describe('INV-AUDIT-APPEND / INV-EVENTS-IMMUTABLE (C-1, HOLE-3, H7)', () => {
     passStep(store, id, 'A1-landscape')
     rollback(store, id, 'A1-landscape')
     const kinds = getRunSnapshot(store, id).events.map(e => e.kind)
-    for (const k of ['run-created', 'input-seeded', 'step-started', 'artifact-recorded', 'gate-verdict', 'step-completed', 'rollback']) {
+    for (const k of ['run-created', 'input-seeded', 'step-started', 'step-committed', 'gate-verdict', 'step-completed', 'rollback']) {
       expect(kinds).toContain(k)
     }
   })
@@ -504,8 +496,7 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape') // A1 passed (gate B) → unlocks A2 inputs
     startStep(store, id, 'A2-claim')
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c1')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp1')
+    commitAll(store, id, 'A2-claim')
     return id
   }
 
@@ -513,7 +504,7 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     const store = freshStore()
     const id = setupA2(store)
     // Honest A=false verdict (adjudication waits for C). gateResults = { A: { passed: false } }.
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
+    expect(submitBound(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
     // TRICK: a verdict whose `component` getter returns 'A' on read#1 (gate indexOf), 'C' on
     // read#2 (immutability `in`-check — 'C' not in {A} → no DSH_VERDICT_ALREADY_SET throw), then
     // 'A' on read#3 (storage key → OVERWRITES gateResults['A'] to passed=true). Pre-RC-F the
@@ -521,16 +512,24 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     // adjudication blocked→passed. Post-RC-F `component` is read ONCE into a local; the
     // immutability check sees the SAME 'A' that is already in gateResults → throws
     // DSH_VERDICT_ALREADY_SET — the overwrite is blocked (INV-VERDICT-IMMUTABLE).
+    // The binding fields are added as plain properties beside the live getter: a spread would
+    // evaluate `component` here and consume the very sequence this test exists to exercise.
+    const targets = receiptOf(store, id, 'A2-claim')
     const makeTrick = () => {
       let n = 0
-      return { get component() { n++; return n === 2 ? 'C' : 'A' }, outcome: 'passed', passed: true, evidence: 'e', rationale: 'r', timestamp: 1 } as unknown as ReturnType<typeof verdict>
+      return {
+        get component() { n++; return n === 2 ? 'C' : 'A' },
+        outcome: 'passed', passed: true, evidence: 'e', rationale: 'r', timestamp: 1,
+        targetRefs: targets.artifacts.map(a => a.ref),
+        inputDigest: targets.inputDigest,
+      } as unknown as ReturnType<typeof verdict>
     }
     expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(ResearchError)
     expect(() => submitGateVerdict(store, id, 'A2-claim', makeTrick())).toThrow(/VERDICT_ALREADY_SET/)
     // The trick did NOT overwrite A (A2 still in_progress, not adjudicated to 'passed').
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('in_progress')
     // Honest C=true → adjudicate: A=false (anyFail; A is not C → not cFailOnFalsifiable) → 'blocked'.
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked')
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('blocked')
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('blocked')
   })
 
@@ -538,22 +537,21 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     const store = freshStore()
     const id = setupA2(store)
     // Submit A=true (in_progress; C still missing).
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toBe('in_progress')
+    expect(submitBound(store, id, 'A2-claim', verdict('A', true))).toBe('in_progress')
     // Re-submitting the SAME component in the SAME attempt is rejected (immutable — cannot
     // mutate A=true to A=false to flip adjudication).
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toThrow(ResearchError)
-    expect(() => submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toThrow(/VERDICT_ALREADY_SET/)
+    expect(() => submitBound(store, id, 'A2-claim', verdict('A', false))).toThrow(ResearchError)
+    expect(() => submitBound(store, id, 'A2-claim', verdict('A', false))).toThrow(/VERDICT_ALREADY_SET/)
     // Submit C → adjudicate (A=true, C=true → noFail → 'passed', non-humanGate).
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('passed')
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('passed')
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('passed')
     // A NEW attempt re-opens adjudication: rollback resets gateResults (resetStep), restart advances the attempt.
     rollback(store, id, 'A2-claim') // → pending (attempts preserved; gateResults reset)
     startStep(store, id, 'A2-claim') // attempt 2 → in_progress
-    recordArtifact(store, id, 'A2-claim', 'claim', 'c2')
-    recordArtifact(store, id, 'A2-claim', 'falsifiable-prediction', 'fp2')
+    commitAll(store, id, 'A2-claim')
     // Re-submitting A is now allowed (fresh attempt — gateResults is empty).
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // A=false → blocked
+    expect(submitBound(store, id, 'A2-claim', verdict('A', false))).toBe('in_progress')
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('blocked') // A=false → blocked
   })
 
   it('RC-F (#snapshot): a polymorphic-getter verdict cannot desync the storage key from the stored object\'s internal component (single-snapshot)', () => {
@@ -565,11 +563,14 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     // and the audit event carried component='A' for a C-valued object. Single-snapshot clones
     // FIRST (getter read#1 → 'A' stored as a data property), then reads snapshot.component for
     // the key, the stored object, AND the audit — all 'A' → consistent (INV-VERDICT-SNAPSHOT).
+    const targets2 = receiptOf(store, id, 'A2-claim')
     const makeTrick = () => {
       let n = 0
       return {
         get component() { n++; return n === 2 ? 'C' : 'A' },
         outcome: 'passed', passed: true, evidence: 'e', rationale: 'r', timestamp: 1,
+        targetRefs: targets2.artifacts.map(a => a.ref),
+        inputDigest: targets2.inputDigest,
       } as unknown as ReturnType<typeof verdict>
     }
     // A is NOT yet in gateResults (first submission), so this proceeds to storage (unlike #8,
@@ -580,13 +581,13 @@ describe('RC-E / RC-F — adversarial-verify re-verify fixes (getter-proof verdi
     expect(Object.keys(current.gateResults)).toEqual(['A'])
     expect(current.gateResults['A']?.component).toBe('A')
     // Honest C=true → adjudicate (A=true no fail, C=true no fail → 'passed', non-humanGate).
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('C', true))).toBe('passed')
+    expect(submitBound(store, id, 'A2-claim', verdict('C', true))).toBe('passed')
   })
 
   it('RC-F (#key-value): the gateResults storage key, the stored verdict\'s internal component, and the audit event component are all the same single value', () => {
     const store = freshStore()
     const id = setupA2(store) // A2-claim gate ['A','C']
-    expect(submitGateVerdict(store, id, 'A2-claim', verdict('A', true))).toBe('in_progress')
+    expect(submitBound(store, id, 'A2-claim', verdict('A', true))).toBe('in_progress')
     // Single-snapshot: storage key === stored object.component === audit event detail.component.
     const snap = getRunSnapshot(store, id)
     const a2 = snap.steps['A2-claim'] as { gateResults: Record<string, { component: string; passed: boolean }> }

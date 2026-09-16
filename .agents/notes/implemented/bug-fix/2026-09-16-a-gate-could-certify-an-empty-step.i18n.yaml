@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-a-gate-could-certify-an-empty-step.md
-2026-09-16-a-gate-could-certify-an-empty-step.md: ff243ee3c314324133294bec52c8c4d1c21d9a0d
-2026-09-16-a-gate-could-certify-an-empty-step.zh.md: 2d94e73c9615b80b426e6ecb92707370231cbbec
+2026-09-16-a-gate-could-certify-an-empty-step.md: 661a6bf27eff2fdcfa23e6e7c886f9abf2035b46
+2026-09-16-a-gate-could-certify-an-empty-step.zh.md: d43105688a4a03db29632b5c2a2eb4268a79cbcd

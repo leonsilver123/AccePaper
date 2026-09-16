@@ -230,9 +230,20 @@ export async function driveStep(
   const verdicts: Record<string, GateOutcome> = {}
   if (stepDef.gate.length > 0) {
     const comps = opts.abstainComponents?.(stepId) ?? []
+    // The receipt this attempt's commit produced. Its absence is not tolerated here: a step whose
+    // gate is non-empty was executed through `runStep`, which commits, and a missing receipt means
+    // the execute phase did not do what this driver believes it did.
+    const receipt = getRunSnapshot(store, runId).steps[stepId]?.commit
+    if (receipt === undefined) {
+      throw new Error(
+        `T19B drive: step '${stepId}' reached its gate with no commit receipt — its verdicts would`
+          + ' judge nothing',
+      )
+    }
     const vctx: VerdictBuildCtx = {
       step: stepDef,
       attemptId,
+      commit: receipt,
       runCtx: opts.runCtx,
       abstain: new Set(comps),
       // Resolved once, here, so every channel is built under the run's declared profile. The
@@ -363,7 +374,7 @@ export async function runT19B(
     if (opts.stopBefore !== undefined && step.id === opts.stopBefore) break
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
-    await checkpoint(store, opts, outcome, checkpointErrors)
+    await checkpoint(runId, opts, outcome, checkpointErrors)
     // STOP AT THE FIRST STEP THAT DID NOT PASS. Driving on would make the NEXT
     // step's `canStart` guard throw "dependency order violated", which reports the
     // consequence and hides the cause: a real run stopped at A1 because its retrieval
@@ -408,14 +419,20 @@ function planSourceOf(opts: DriveOptions): 'caller' | 'default' {
 /**
  * Hand one finished step to the caller's checkpoint, collecting a failure rather than raising it.
  *
- * @param store - the run store, so a hook that wants to persist can reach the run.
+ * `runId` is passed in, not looked up. An earlier version read the store's first key, which is
+ * the run the hook is for only while a store holds exactly one — and a store holding two is a
+ * shape this runner already produces in recovery tests. The hook was then told the WRONG run id
+ * while the callback's name promised the right one, so a checkpoint could persist one run's state
+ * under another's name.
+ *
+ * @param runId - the run being driven, which is what the hook may persist.
  * @param opts - the driver options carrying the hook.
  * @param outcome - the step that just finished.
  * @param errors - the accumulator the failure is recorded in.
  * @returns nothing; the run continues either way.
  */
 async function checkpoint(
-  store: ResearchRunStore,
+  runId: string,
   opts: DriveOptions,
   outcome: StepOutcome,
   errors: string[],
@@ -423,28 +440,12 @@ async function checkpoint(
   const hook = opts.checkpointAfterStep
   if (hook === undefined) return
   try {
-    await hook(runIdOf(store), outcome)
+    await hook(runId, outcome)
   } catch (error) {
     // Reported, not raised. The step has already committed; stopping the run here would throw
     // away work that exists in order to complain that a copy of it does not.
     errors.push(`checkpoint after '${outcome.stepId}' (attempt ${String(outcome.attemptId)}) failed: ${error instanceof Error ? error.message : String(error)}`)
   }
-}
-
-/**
- * The id of the run a store holds.
- *
- * The driver's checkpoint hook is handed the run id because the hook is installed before the run
- * exists: `runT19B` mints the id, so a caller cannot close over it. A store driving more than one
- * run would make this ambiguous, which the driver never does — every entry point here receives a
- * store it owns.
- *
- * @param store - the run store.
- * @returns the first run id, or an empty string when the store holds none.
- */
-function runIdOf(store: ResearchRunStore): string {
-  for (const id of store.keys()) return id
-  return ''
 }
 
 /**
@@ -496,7 +497,7 @@ export async function driveRemaining(
     }
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
-    await checkpoint(store, opts, outcome, checkpointErrors)
+    await checkpoint(runId, opts, outcome, checkpointErrors)
     // Same rule as runT19B, including the human-gate distinction: stop at the first step that did
     // not pass, and continue through `gated` only when it is the human gate rather than a hold.
     if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break

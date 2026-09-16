@@ -18,7 +18,7 @@ import {
   isEvidenceProfile,
   isSourceAccess,
   isSourceClass,
-  submittabilityOf,
+  evidenceEligibilityOf,
 } from '../../src/domain/provenance.ts'
 
 describe('the declared vocabulary is closed', () => {
@@ -127,9 +127,9 @@ describe('evaluation runs everything and submits nothing', () => {
     expect(admission.reason).toContain('not submittable')
     // The permission to run and the permission to publish are separate: the profile that admits
     // synthetic evidence is exactly the profile whose output may not be submitted.
-    expect(submittabilityOf('evaluation').submittable).toBe(false)
-    expect(submittabilityOf('production').submittable).toBe(true)
-    expect(submittabilityOf('evaluation').reason).toContain('synthetic evidence')
+    expect(evidenceEligibilityOf('evaluation').eligible).toBe(false)
+    expect(evidenceEligibilityOf('production').eligible).toBe(true)
+    expect(evidenceEligibilityOf('evaluation').reason).toContain('synthetic evidence')
   })
 
   it('admits every declared class under evaluation', () => {
@@ -144,7 +144,7 @@ describe('evaluation runs everything and submits nothing', () => {
     // The permissive default must not become a published claim, so `production` is reachable only
     // by stating it.
     expect(DEFAULT_EVIDENCE_PROFILE).toBe('evaluation')
-    expect(submittabilityOf(DEFAULT_EVIDENCE_PROFILE).submittable).toBe(false)
+    expect(evidenceEligibilityOf(DEFAULT_EVIDENCE_PROFILE).eligible).toBe(false)
     expect(EVIDENCE_PROFILES).toEqual(['production', 'evaluation'])
   })
 })

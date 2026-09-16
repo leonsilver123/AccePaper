@@ -68,6 +68,7 @@ import {
   proposalInstruction,
 } from './runner/direction-proposals.ts'
 import { MEASURED_METRIC } from './runner/platoon-sim.ts'
+import { readinessOfRun } from './runner/submission-readiness.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -94,7 +95,6 @@ import {
   getRunSnapshot,
   getStepDefinitions,
   rollback,
-  submittabilityOf,
 } from '@deepseek-ai/dsh-research-core'
 import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
 import type { RunPersistence } from '@deepseek-ai/dsh-research-core'
@@ -237,7 +237,7 @@ function snapshotOf(
   runPersistence: ResearchRunPersistence | null = null,
 ): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, run.runId)
-  const submittability = submittabilityOf(evidenceProfile)
+  const readiness = readinessOfRun(store, run.runId, evidenceProfile)
   const catalog: ReadonlyArray<ResearchStepCatalogEntry> = getStepDefinitions().map(step => ({
     id: step.id,
     index: step.index,
@@ -288,8 +288,9 @@ function snapshotOf(
     artifacts,
     steps,
     evidenceProfile,
-    submittable: submittability.submittable,
-    submittabilityNote: submittability.reason,
+    profileEligible: readiness.profileEligible,
+    submissionReady: readiness.ready,
+    readinessNote: readiness.reason,
     packageExport,
     runPersistence,
   }

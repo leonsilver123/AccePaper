@@ -6,6 +6,7 @@
 // driver's output and the report's input.
 
 import type {
+  CommitReceipt,
   EvidenceProfile,
   GateOutcome,
   RunStepStatus,
@@ -155,6 +156,15 @@ export interface DriveStepOptions {
 export interface VerdictBuildCtx {
   readonly step: StepDefinition
   readonly attemptId: number
+  /**
+   * What this attempt committed, which is what its verdicts are built AGAINST.
+   *
+   * The verdicts are stamped with the receipt's artifact revisions and input digest as they are
+   * built, so the gate can refuse a verdict whose targets are not the revisions the attempt
+   * wrote. Handing the gate a verdict without them is refused (`DSH_GATE_UNBOUND_VERDICT`), and
+   * stamping them at submit time instead is exactly the defect this carries the receipt to avoid.
+   */
+  readonly commit: CommitReceipt
   readonly runCtx: RunContext
   /** Components that should be injected as `abstained` (recovery scenario). */
   readonly abstain: ReadonlySet<TrinityComponent>

@@ -33,7 +33,7 @@ import type {
   GateVerdict,
   VerificationResult,
 } from '@deepseek-ai/dsh-research-core'
-import { adjudicate, admitAsEvidence } from '@deepseek-ai/dsh-research-core'
+import { adjudicate, admitAsEvidence, bindVerdict } from '@deepseek-ai/dsh-research-core'
 
 import type { ResearchRebuttal } from '../types.ts'
 import { sessionId } from '../types.ts'
@@ -277,13 +277,22 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
   }
 }
 
-/** Build the genuine gate verdicts for every component of one step's gate. */
+/**
+ * Build the genuine gate verdicts for every component of one step's gate.
+ *
+ * Each verdict is BOUND to the attempt's commit receipt as it is built ({@link bindVerdict}), so
+ * it carries the artifact revisions and the input digest it was decided about. The binding happens
+ * here, once, for every channel, and never at submit time.
+ */
 export async function buildStepVerdicts(ctx: VerdictBuildCtx): Promise<ReadonlyArray<GateVerdict>> {
   const out: GateVerdict[] = []
   for (const comp of ctx.step.gate) {
-    if (comp === 'A') out.push(verdictA(ctx))
-    else if (comp === 'B') out.push(await verdictB(ctx))
-    else out.push(verdictC(ctx))
+    const built = comp === 'A'
+      ? verdictA(ctx)
+      : comp === 'B'
+        ? await verdictB(ctx)
+        : verdictC(ctx)
+    out.push(bindVerdict(built, ctx.commit))
   }
   return out
 }

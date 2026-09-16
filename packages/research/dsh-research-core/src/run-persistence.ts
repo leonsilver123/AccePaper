@@ -468,6 +468,16 @@ function parseGateResults(
       GATE_OUTCOMES,
       `${what}.${key}.outcome`,
     )
+    // The verdict's TARGETS are carried, not recomputed. A restored verdict that lost them would
+    // be refused by the gate on restart (`DSH_GATE_UNBOUND_VERDICT`) — a run that had adjudicated
+    // a step before the restart would come back unable to say what that adjudication was about.
+    const targetRefs = v.targetRefs === undefined
+      ? undefined
+      : asArray(v.targetRefs, `${what}.${key}.targetRefs`).map((entry, i) =>
+        parseLooseArtifactRef(entry, `${what}.${key}.targetRefs[${i}]`))
+    const inputDigest: string | undefined = v.inputDigest === undefined
+      ? undefined
+      : asString(v.inputDigest, `${what}.${key}.inputDigest`)
     result[component as TrinityComponent] = {
       component: component as TrinityComponent,
       outcome: outcome as GateVerdict['outcome'],
@@ -475,6 +485,8 @@ function parseGateResults(
       evidence: asString(v.evidence, `${what}.${key}.evidence`),
       rationale: asString(v.rationale, `${what}.${key}.rationale`),
       timestamp: asNumber(v.timestamp, `${what}.${key}.timestamp`),
+      ...(targetRefs === undefined ? {} : { targetRefs }),
+      ...(inputDigest === undefined ? {} : { inputDigest: inputDigest as GateVerdict['inputDigest'] }),
     }
   }
   return result
@@ -621,6 +633,32 @@ function parseCommitReceipt(raw: unknown, what: string): CommitReceipt {
  * @returns the reference.
  * @throws {SnapshotInvalidError} when the reference is absent or malformed.
  */
+/**
+ * Read an artifact reference that is not a registry key.
+ *
+ * {@link parseArtifactRef} checks the reference against the key it was stored under, which is what
+ * makes a registry entry self-consistent. A verdict's target has no such key — it names some other
+ * artifact's revision — so it is read for well-formedness only.
+ *
+ * @param raw - the reference as stored.
+ * @param what - the field path, for the refusal message.
+ * @returns the reference.
+ * @throws {SnapshotInvalidError} when the reference is malformed.
+ */
+function parseLooseArtifactRef(raw: unknown, what: string): ArtifactRecord['ref'] {
+  const rec = asRecord(raw, what)
+  const artifactId = asString(rec.artifactId, `${what}.artifactId`)
+  const contentHash = asString(rec.contentHash, `${what}.contentHash`)
+  if (!/^[0-9a-f]{64}$/u.test(contentHash)) {
+    throw new SnapshotInvalidError(`${what}.contentHash is not a 64-character lower-case hex digest.`)
+  }
+  return {
+    artifactId: artifactId as ArtifactRecord['ref']['artifactId'],
+    version: asCount(rec.version, `${what}.version`) as ArtifactRecord['ref']['version'],
+    contentHash: contentHash as ArtifactRecord['ref']['contentHash'],
+  }
+}
+
 function parseArtifactRef(raw: unknown, what: string, slug: string): ArtifactRecord['ref'] {
   const rec = asRecord(raw, what)
   const artifactId = asString(rec.artifactId, `${what}.artifactId`)

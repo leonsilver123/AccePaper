@@ -23,6 +23,7 @@ import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import { evaluatePrediction } from '../src/runner/prediction-gate.ts'
 import { MEASURED_METRIC, experimentStudy, measureStudy } from '../src/runner/platoon-sim.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
+import { receiptFor } from './support/receipt.ts'
 
 const C2: StepDefinition | undefined = getStepDefinitionById('C2-trinity-loop')
 
@@ -45,7 +46,14 @@ function ctxWith(
     bound: 'at-least',
     thresholdPct: 20,
   }
-  return { step: C2, attemptId: 1, runCtx, abstain: new Set(), evidenceProfile: DEFAULT_EVIDENCE_PROFILE }
+  return {
+    step: C2,
+    attemptId: 1,
+    commit: receiptFor('C2-trinity-loop', C2.outputs ?? []),
+    runCtx,
+    abstain: new Set(),
+    evidenceProfile: DEFAULT_EVIDENCE_PROFILE,
+  }
 }
 
 /** The shipped study with the AV's headway raised until its fast reaction pays off. */

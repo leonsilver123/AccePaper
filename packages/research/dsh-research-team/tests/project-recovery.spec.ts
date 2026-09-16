@@ -91,7 +91,7 @@ describe('a run records the configuration it was driven with', () => {
   it('refuses to change the record once the run has started', async () => {
     const { store } = await persistenceDir()
     const run = await runT19B(store, { stopBefore: 'A2-claim' })
-    expect(() => setRunSpec(store, run.runId, { studyPlan: CUSTOM_PLAN })).toThrow(/DSH_INPUT_FROZEN/)
+    expect(() =>{  setRunSpec(store, run.runId, { studyPlan: CUSTOM_PLAN }) }).toThrow(/DSH_INPUT_FROZEN/)
   })
 
   it('records the direction it seeded, so the literature and the measurement agree', async () => {
@@ -162,6 +162,39 @@ describe('a run checkpoints as it goes, and says so when a checkpoint fails', ()
   })
 })
 
+describe('F03 — a checkpoint is told the run it belongs to', () => {
+  it('routes each run its own id when one store drives two of them', async () => {
+    const { store } = await persistenceDir()
+    const first = await runT19B(store, { stopBefore: 'A2-claim' })
+    const firstSeen: string[] = []
+    const secondSeen: string[] = []
+    const second = await runT19B(store, {
+      stopBefore: 'A2-claim',
+      checkpointAfterStep: (runId) => { secondSeen.push(runId) },
+    })
+    void firstSeen
+    // Both runs live in one store, which is a shape this runner already produces in recovery.
+    expect(store.size).toBe(2)
+    expect(first.runId).not.toBe(second.runId)
+    // The callback used to be handed the store's FIRST key, which is the other run as soon as a
+    // second one exists — so a checkpoint persisted one run's state under another's name.
+    expect(secondSeen.length).toBeGreaterThan(0)
+    expect(secondSeen.every(id => id === second.runId)).toBe(true)
+    expect(secondSeen.some(id => id === first.runId)).toBe(false)
+  })
+
+  it('re-running the first run again still routes to it, not to the newest', async () => {
+    const { store } = await persistenceDir()
+    await runT19B(store, { stopBefore: 'A2-claim' })
+    const thirdSeen: string[] = []
+    const third = await runT19B(store, {
+      stopBefore: 'A2-claim',
+      checkpointAfterStep: (runId) => { thirdSeen.push(runId) },
+    })
+    expect(thirdSeen.every(id => id === third.runId)).toBe(true)
+  })
+})
+
 describe('the run spec is the run’s, not the deployment’s', () => {
   it('keeps the first run’s record when a second run is driven under a different plan', async () => {
     const { store } = await persistenceDir()
@@ -177,6 +210,6 @@ describe('the run spec is the run’s, not the deployment’s', () => {
     const { store } = await persistenceDir()
     const run = await runT19B(store, { stopBefore: 'A2-claim' })
     startStep(store, run.runId, 'A2-claim')
-    expect(() => setRunSpec(store, run.runId, { planSource: 'caller' })).toThrow(/DSH_INPUT_FROZEN/)
+    expect(() =>{  setRunSpec(store, run.runId, { planSource: 'caller' }) }).toThrow(/DSH_INPUT_FROZEN/)
   })
 })

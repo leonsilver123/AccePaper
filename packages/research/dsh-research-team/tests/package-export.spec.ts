@@ -102,6 +102,40 @@ describe('sanitizeForExport', () => {
   })
 })
 
+describe('F04 — eligibility is not readiness', () => {
+  it('reports a production run blocked at A1 as eligible and NOT ready', async () => {
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { evidenceProfile: 'production' })
+    const plan = planRunPackage(store, run, 'production')
+    // The run stopped at A1: no manuscript, most steps pending. The deployment's profile is still
+    // `production`, so the output is ELIGIBLE — and nothing about it is ready to submit.
+    expect(plan.manifest.profileEligible).toBe(true)
+    expect(plan.manifest.submissionReady).toBe(false)
+    // The reason names the most immediate missing thing. For a run stopped at its first step that
+    // is the manuscript; the unfinished-step branch is pinned in `submission-readiness.spec.ts`.
+    expect(plan.manifest.readinessNote).toMatch(/no formatted manuscript/)
+  })
+
+  it('reports an evaluation run that finished every step as eligible-and-not-ready too', async () => {
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store)
+    const plan = planRunPackage(store, run, 'evaluation')
+    // The evaluation profile is never eligible, whatever the run achieved.
+    expect(plan.manifest.profileEligible).toBe(false)
+    expect(plan.manifest.submissionReady).toBe(false)
+    expect(plan.manifest.readinessNote).toMatch(/evaluation profile/)
+  })
+
+  it('still writes the run summary, and it says both facts', async () => {
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { evidenceProfile: 'production' })
+    const plan = planRunPackage(store, run, 'production')
+    const summary = plan.files.find(file => file.path === 'run-summary.md')
+    expect(summary?.content).toMatch(/- evidence eligible: yes/)
+    expect(summary?.content).toMatch(/- submission ready: \*\*NO\*\*/)
+  })
+})
+
 describe('writeRunPackage', () => {
   it('writes every declared file, names it in the manifest with its digest, and nothing is empty', async () => {
     const dir = join(tempDir(), 'pkg')

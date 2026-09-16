@@ -5,15 +5,13 @@ import {
   getAuditHistory,
   getRunSnapshot,
   isComplete,
-  recordArtifact,
   rollback,
   startStep,
   submitGateVerdict,
 } from '../src/engine/state-machine.ts'
-import { lookupStep } from '../src/engine/steps.ts'
 import { _resetApprovalChannelForTests, createHostApprovalChannel } from '../src/host.ts'
 import type { HostApprovalChannel } from '../src/host.ts'
-import { abstainVerdict, freshStore, passStep, seedRun, verdict } from './helpers.ts'
+import { abstainVerdict, commitAll, freshStore, passStep, seedRun, submitBound, verdict } from './helpers.ts'
 
 /**
  * T19 — hold_abstained freeze semantics (batch2-t19-hold-abstained-design.md).
@@ -32,10 +30,9 @@ function driveAbstained(store: ReturnType<typeof freshStore>, stepId = 'A2-claim
   // passed and the other abstained → hold. The outputs come first because a gate now certifies
   // the work the step actually produced, and A2 declares two.
   startStep(store, id, stepId)
-  const claim = lookupStep(stepId)
-  for (const out of claim?.outputs ?? []) recordArtifact(store, id, stepId, out, `val:${out}`)
-  submitGateVerdict(store, id, stepId, verdict('A', true))
-  submitGateVerdict(store, id, stepId, abstainVerdict(abstainComp === 'A' ? 'A' : 'C'))
+  commitAll(store, id, stepId)
+  submitBound(store, id, stepId, verdict('A', true))
+  submitBound(store, id, stepId, abstainVerdict(abstainComp === 'A' ? 'A' : 'C'))
   return id
 }
 
@@ -94,8 +91,8 @@ describe('T19 invariant 5 — same-attempt re-submission of an abstained compone
   it('re-submitting the same component after abstention throws DSH_VERDICT_ALREADY_SET and keeps the verdict', () => {
     const store = freshStore()
     const id = driveAbstained(store) // A passed, C abstained
-    expect(() => submitGateVerdict(store, id, 'A2-claim', abstainVerdict('C'))).toThrow(ResearchError)
-    expect(() => submitGateVerdict(store, id, 'A2-claim', abstainVerdict('C'))).toThrow(/VERDICT_ALREADY_SET/)
+    expect(() => submitBound(store, id, 'A2-claim', abstainVerdict('C'))).toThrow(ResearchError)
+    expect(() => submitBound(store, id, 'A2-claim', abstainVerdict('C'))).toThrow(/VERDICT_ALREADY_SET/)
     const current = getAuditHistory(store, id, 'A2-claim').at(-1) as { gateResults: Record<string, { outcome: string }> }
     expect(current.gateResults['C']?.outcome).toBe('abstained') // unchanged
   })
@@ -136,9 +133,9 @@ describe('T19 — abstained preempts any terminal (no default pass / no auto ter
     const id = seedRun(store)
     passStep(store, id, 'A1-landscape')
     startStep(store, id, 'A2-claim')
-    for (const out of lookupStep('A2-claim')?.outputs ?? []) recordArtifact(store, id, 'A2-claim', out, `val:${out}`)
-    submitGateVerdict(store, id, 'A2-claim', verdict('A', false)) // fail
-    submitGateVerdict(store, id, 'A2-claim', abstainVerdict('C')) // abstain → hold wins
+    commitAll(store, id, 'A2-claim')
+    submitBound(store, id, 'A2-claim', verdict('A', false)) // fail
+    submitBound(store, id, 'A2-claim', abstainVerdict('C')) // abstain → hold wins
     expect(getRunSnapshot(store, id).steps['A2-claim']?.status).toBe('gated')
     expect(getRunSnapshot(store, id).steps['A2-claim']?.holdReason).toBe('gate_abstained')
   })

@@ -37,17 +37,15 @@ import {
   completeStep,
   getArtifact,
   getRunSnapshot,
-  recordArtifact,
   rollback,
   setRunSpec,
   startStep,
-  submitGateVerdict,
 } from '../src/engine/state-machine.ts'
 import { commitStepOutputs } from '../src/engine/commit.ts'
 import { runStep } from '../src/engine/pipeline.ts'
 import type { ResearchRunStore } from '../src/engine/types.ts'
 import { _resetApprovalChannelForTests, createHostApprovalChannel } from '../src/host.ts'
-import { abstainVerdict, freshStore, passStep, runFullPipeline, seedRun, verdict } from './helpers.ts'
+import { abstainVerdict, commitAll, freshStore, passStep, runFullPipeline, seedRun, submitBound, verdict } from './helpers.ts'
 
 const RUN_ID = 'run-p5-fixture'
 
@@ -219,8 +217,8 @@ describe('run-persistence: capture and restore', () => {
       { stepId: 'A2-claim', attemptId: 1, executed: true, resumeVia: 'continue_gate' },
     ])
     // The resumed run continues through the gate only — the attempt is not re-executed.
-    submitGateVerdict(restored.store, runId, 'A2-claim', verdict('A', true))
-    expect(submitGateVerdict(restored.store, runId, 'A2-claim', verdict('C', true))).toBe('passed')
+    submitBound(restored.store, runId, 'A2-claim', verdict('A', true))
+    expect(submitBound(restored.store, runId, 'A2-claim', verdict('C', true))).toBe('passed')
     expect(getArtifact(restored.store, runId, 'claim')).toBe('fixture-claim')
   })
 
@@ -228,9 +226,8 @@ describe('run-persistence: capture and restore', () => {
     const store = freshStore()
     const runId = seedRun(store, RUN_ID)
     startStep(store, runId, 'A1-landscape')
-    recordArtifact(store, runId, 'A1-landscape', 'landscape-map', 'fixture-landscape-map')
-    recordArtifact(store, runId, 'A1-landscape', 'gap-list', 'fixture-gap-list')
-    expect(submitGateVerdict(store, runId, 'A1-landscape', abstainVerdict('B'))).toBe('gated')
+    commitAll(store, runId, 'A1-landscape', { 'landscape-map': 'fixture-landscape-map', 'gap-list': 'fixture-gap-list' })
+    expect(submitBound(store, runId, 'A1-landscape', abstainVerdict('B'))).toBe('gated')
     await persistence.save(store, runId, { baseRevision: 0 })
 
     const restored = await createRunPersistence({ dir }).load(freshCapability())
@@ -240,7 +237,7 @@ describe('run-persistence: capture and restore', () => {
     expect(step?.gateResults['B']?.outcome).toBe('abstained')
     expect(restored.interrupted).toEqual([])
     // The restored hold is still a hold: the gate refuses a second verdict for the component.
-    expect(thrownBy(() => submitGateVerdict(restored.store, runId, 'A1-landscape', verdict('B', true))))
+    expect(thrownBy(() => submitBound(restored.store, runId, 'A1-landscape', verdict('B', true))))
       .toMatchObject({ code: 'DSH_VERDICT_ALREADY_SET' })
   })
 
@@ -723,9 +720,8 @@ describe('run-persistence: approval replay protection survives restore', () => {
     const store = freshStore()
     const runId = seedRun(store, RUN_ID)
     startStep(store, runId, 'A1-landscape')
-    recordArtifact(store, runId, 'A1-landscape', 'landscape-map', 'm')
-    recordArtifact(store, runId, 'A1-landscape', 'gap-list', 'g')
-    submitGateVerdict(store, runId, 'A1-landscape', abstainVerdict('B'))
+    commitAll(store, runId, 'A1-landscape', { 'landscape-map': 'm', 'gap-list': 'g' })
+    submitBound(store, runId, 'A1-landscape', abstainVerdict('B'))
     await persistence.save(store, runId, { baseRevision: 0 })
 
     const restored = await createRunPersistence({ dir }).load(freshCapability())

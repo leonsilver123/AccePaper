@@ -39,6 +39,8 @@ import {
   startStep,
   submitGateVerdict,
 } from '../../../../../research/dsh-research-core/src/engine/state-machine.ts'
+import { bindVerdict } from '../../../../../research/dsh-research-core/src/engine/commit.ts'
+export { bindVerdict }
 export {
   appendAuditEvent,
   canStart,

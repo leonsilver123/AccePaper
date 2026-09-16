@@ -24,6 +24,7 @@ import { EMPTY_CLAIM_MATERIAL, reviewClaim } from '../src/runner/redteam-review.
 import type { ClaimMaterial } from '../src/runner/redteam-review.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
+import { receiptFor } from './support/receipt.ts'
 
 /** C2-trinity-loop is the only step whose gate carries all three components. */
 const C2: StepDefinition | undefined = getStepDefinitionById('C2-trinity-loop')
@@ -78,7 +79,14 @@ function ctxFor(material: ClaimMaterial): VerdictBuildCtx {
   runCtx.metricKey = material.metricKey
   runCtx.claimMaterial = material
   runCtx.study = experimentStudy()
-  return { step: C2, attemptId: 1, runCtx, abstain: new Set(), evidenceProfile: DEFAULT_EVIDENCE_PROFILE }
+  return {
+    step: C2,
+    attemptId: 1,
+    commit: receiptFor('C2-trinity-loop', C2.outputs ?? []),
+    runCtx,
+    abstain: new Set(),
+    evidenceProfile: DEFAULT_EVIDENCE_PROFILE,
+  }
 }
 
 describe('A channel — the verdict follows the material', () => {
