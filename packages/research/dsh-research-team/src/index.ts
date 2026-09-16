@@ -143,9 +143,11 @@ import {
   type ApprovalConnectionHost,
 } from './approval.ts'
 import {
-  buildCandidate, createRevisionRequest, readRevision, reviewCandidate, revisionStoreOf,
-  sectionsOf, writeCandidate, writeReview, writeRevisionRequest, writeSection,
+  buildCandidate, candidateHashOf, createRevisionRequest, readRevision, reviewCandidate,
+  revisionStoreOf, sectionsOf, writeAcceptance, writeCandidate, writeReview, writeRevisionRequest,
+  writeSection,
 } from './manuscript-revision.ts'
+import { acceptManuscriptCandidate } from '@deepseek-ai/dsh-research-core'
 import type {
   RevisionCandidateRecord, RevisionReviewMaterial, RevisionStore,
 } from './manuscript-revision.ts'
@@ -1605,6 +1607,9 @@ export class ResearchTeamService extends TypertRemoteService {
       runId: request.runId,
       stepId: request.stepId,
       projectRevision: getRunSnapshot(active.store, request.runId).revision,
+      // RECORDED HERE, AT THE MOMENT THE PERSON READ IT: an acceptance later compares against this,
+      // not against whatever version the manuscript happens to be at when someone presses accept.
+      manuscriptVersion: this.manuscriptVersionOf(request.runId),
       instruction: request.instruction,
       operator: OPERATOR_PRINCIPAL_ID,
       sections,
@@ -1685,6 +1690,135 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /**
+   * Publish a reviewed candidate as the run's official manuscript.
+   *
+   * THE LOOP'S LAST STEP, and the only one that changes the study: everything before it — the
+   * request, the candidate, the diff, the review — describes work that has not been adopted. This
+   * assembles the candidate's text over the manuscript the run holds, hands it to core's acceptance
+   * with the versions it was written against, and writes the run so the acceptance survives a
+   * restart.
+   *
+   * @param request - the run, the request and the candidate to accept.
+   * @returns the revision as it stands after the acceptance, so the page renders backend truth.
+   * @throws {Error} when this process holds no such run, when the request or candidate is unknown,
+   *   or when core refuses — a manuscript that moved, a review that failed, no review at all.
+   */
+  @Remote('acceptCandidate')
+  async acceptCandidate(request: ResearchCandidateRequest): Promise<ResearchRevisionView> {
+    const active = this.heldRun(request.runId)
+    const store = this.revisionStoreOrThrow()
+    const read = await readRevision(store, request.requestId)
+    const candidate = read.candidates.find(entry => entry.candidateId === request.candidateId)
+    if (candidate === undefined) {
+      throw new Error(`[revision-unknown] this deployment holds no candidate '${request.candidateId}'`)
+    }
+    const review = read.reviews.find(entry => entry.candidateId === candidate.candidateId)
+    const current = getRunSnapshot(active.store, request.runId).registry['formatted-manuscript']
+    if (current === undefined) {
+      throw new Error(`[revision-no-manuscript] run '${request.runId}' has no manuscript to accept over`)
+    }
+    if (request.expectedRevision === undefined || request.expectedManuscriptVersion === undefined) {
+      throw new Error(
+        '[revision-no-expectations] an acceptance must state the run revision and the manuscript '
+        + 'version the person read — without them it is a publication over whatever is there now',
+      )
+    }
+    // THE VALUE IS ASSEMBLED HERE, from the candidate's sections over the manuscript the run holds:
+    // a caller that handed over its own manuscript would be publishing whatever it liked, and the
+    // version check below would be checking it against itself.
+    const manuscriptValue = getArtifact(active.store, request.runId, 'formatted-manuscript')
+    const assembled = this.assembledManuscript(manuscriptValue, candidate)
+    const receipt = acceptManuscriptCandidate(active.store, {
+      runId: request.runId,
+      // THE CALLER'S EXPECTATIONS, NOT THIS PROCESS'S: a page that read revision 12 and pressed
+      // accept after the study moved to 14 is accepting a manuscript it never saw, and reading the
+      // current values here would make that check pass by construction.
+      expectedRevision: request.expectedRevision,
+      expectedManuscriptVersion: request.expectedManuscriptVersion,
+      value: assembled,
+      candidateHash: candidateHashOf(candidate.sections),
+      operator: OPERATOR_PRINCIPAL_ID,
+      requestId: request.requestId,
+      candidateId: candidate.candidateId,
+    }, {
+      reviewed: review !== undefined,
+      passed: review?.passed ?? false,
+      candidateHash: review?.candidateHash ?? '',
+    })
+    // WRITTEN BEFORE IT IS REPORTED. An acceptance held only in this process is one a restart loses:
+    // the run would come back showing the manuscript E1 wrote, with no record that a person accepted
+    // another one. It goes through the SAME serialized writer every other write uses, so it cannot
+    // interleave with a checkpoint. A failure here does NOT un-accept — the store holds it — so it is
+    // reported beside the receipt rather than turned into a refusal that would misdescribe what
+    // happened.
+    await writeAcceptance(store, request.requestId, {
+      requestId: request.requestId,
+      candidateId: candidate.candidateId,
+      operator: receipt.operator,
+      revision: receipt.revision,
+      manuscriptVersion: receipt.ref.version,
+      acceptedAt: receipt.acceptedAt,
+      // FILLED IN BELOW, once the write it describes has happened: the record is written first so a
+      // crash between the two leaves an acceptance the run can still be reconciled against, and its
+      // persistence fields say what that write did.
+      persisted: false,
+    })
+    const saved = await this.serialized(
+      () => this.persistRun(active.store, request.runId, getRunSnapshot(active.store, request.runId).revision),
+    ).catch((error: unknown) => ({
+      runId: request.runId, revision: null, interrupted: [],
+      error: error instanceof Error ? error.message : String(error),
+    })) ?? null
+    this.noteSave(active, saved)
+    const acceptance = {
+      requestId: request.requestId,
+      candidateId: candidate.candidateId,
+      operator: receipt.operator,
+      revision: receipt.revision,
+      manuscriptVersion: receipt.ref.version,
+      acceptedAt: receipt.acceptedAt,
+      // A WRITE THAT ANSWERED NULL is a deployment with no snapshot root: the acceptance is in the
+      // store and nowhere else, which is the same fact `noteSave` recorded against the run.
+      persisted: saved !== null && saved.revision !== null,
+      ...(saved?.error === undefined ? {} : { persistenceError: saved.error }),
+    }
+    await writeAcceptance(store, request.requestId, acceptance)
+    return {
+      ...(await this.revisionViewOf(request.runId, request.requestId)),
+      acceptance,
+    }
+  }
+
+  /**
+   * The manuscript a candidate produces, assembled over the value the run holds.
+   *
+   * Every key of the E1 artifact is kept and only the manuscript text is rebuilt, so the accepted
+   * version still describes the same study: a value rebuilt from the candidate alone would drop the
+   * counts, the float roster and the package files, and the run's own readers would find the fields
+   * they depend on missing.
+   */
+  private assembledManuscript(value: unknown, candidate: RevisionCandidateRecord): unknown {
+    const record = typeof value === 'object' && value !== null ? { ...(value as Record<string, unknown>) } : {}
+    const original = typeof record['manuscript'] === 'string' ? record['manuscript'] : ''
+    // THE PART BEFORE THE FIRST SECTION IS KEPT. A manuscript opens with its title and any preamble,
+    // and `sectionsOf` splits on `## ` headings — rebuilding from the sections alone would publish a
+    // document that had lost its title, which is a change nobody asked for and nobody reviewed.
+    const firstHeading = original.indexOf('\n## ')
+    const preamble = firstHeading === -1 ? '' : original.slice(0, firstHeading)
+    const sections = candidate.sections.map(section => [
+      `## ${section.heading}`,
+      '',
+      section.bodyText,
+      '',
+    ].join('\n')).join('\n')
+    return {
+      ...record,
+      manuscript: `${preamble === '' ? '' : `${preamble}\n\n`}${sections}`,
+      acceptedCandidateId: candidate.candidateId,
+    }
+  }
+
+  /**
    * The revisions this process holds for one run.
    *
    * @param request - the run to read.
@@ -1735,6 +1869,9 @@ export class ResearchTeamService extends TypertRemoteService {
       stepId: receipt.stepId,
       projectRevision: receipt.snapshot?.projectRevision ?? getRunSnapshot(
         this.heldRun(receipt.runId).store, receipt.runId).revision,
+      // THE VERSION THE DECISION WAS MADE AGAINST: the run's manuscript as it stands when the person
+      // asked, which is what an acceptance will later be checked against.
+      manuscriptVersion: this.manuscriptVersionOf(receipt.runId),
       instruction: receipt.request,
       operator: receipt.operator,
       sections,
@@ -1762,6 +1899,12 @@ export class ResearchTeamService extends TypertRemoteService {
   private revisionStoreOfDeployment(): RevisionStore | undefined {
     const research = this.ctx.get('research') as { snapshotDirectory?: string } | undefined
     return revisionStoreOf({ snapshotDirectory: research?.snapshotDirectory })
+  }
+
+  /** The version the run's manuscript artifact is at, or 0 when the run has none. */
+  private manuscriptVersionOf(runId: string): number {
+    const active = this.heldRun(runId)
+    return getRunSnapshot(active.store, runId).registry['formatted-manuscript']?.ref.version ?? 0
   }
 
   /** The official manuscript's markdown, as the run's own artifact holds it. */
@@ -1815,6 +1958,7 @@ export class ResearchTeamService extends TypertRemoteService {
       instruction: read.request.instruction,
       operator: read.request.operator,
       projectRevision: read.request.projectRevision,
+      manuscriptVersion: read.request.manuscriptVersion,
       requestedAt: read.request.requestedAt,
       sections: read.request.sections.map(section => ({ ...section })),
       targets: [...read.request.targets],
@@ -1835,6 +1979,9 @@ export class ResearchTeamService extends TypertRemoteService {
         passed: review.passed,
         findings: review.findings.map(finding => ({ ...finding })),
       })),
+      // AN ACCEPTANCE IS READ BACK, not remembered by whichever tab made it: this is what lets a page
+      // that reloaded say the candidate became the manuscript.
+      ...(read.acceptance === null ? {} : { acceptance: { ...read.acceptance } }),
     }
   }
 

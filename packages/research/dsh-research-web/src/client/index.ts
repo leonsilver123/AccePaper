@@ -149,6 +149,23 @@ interface ResearchRemoteNamespace {
   >
 
   /**
+   * Publish a reviewed candidate as the run's official manuscript.
+   *
+   * The one operation in the loop that changes the study, and the one that needs a review: the
+   * backend refuses a candidate nobody checked, or one whose checks failed.
+   */
+  acceptCandidate(request: {
+    readonly runId: string
+    readonly requestId: string
+    readonly candidateId: string
+    readonly expectedRevision?: number
+    readonly expectedManuscriptVersion?: number
+  }): Promise<
+    { readonly ok: true; readonly value: WireRevisionView }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
    * Judge one candidate on what a pipeline can check without reading its prose.
    */
   reviewCandidate(request: {
@@ -435,12 +452,21 @@ export function apply(ctx: Context): void {
     readonly runId: string
     readonly requestId: string
     readonly candidateId: string
-    readonly operation: 'generate' | 'review'
+    readonly operation: 'generate' | 'review' | 'accept'
+    readonly expectedRevision?: number
+    readonly expectedManuscriptVersion?: number
   }): Promise<WireRevisionView> => {
-    const request = { runId: call.runId, requestId: call.requestId, candidateId: call.candidateId }
+    const request = {
+      runId: call.runId, requestId: call.requestId, candidateId: call.candidateId,
+      ...(call.expectedRevision === undefined ? {} : { expectedRevision: call.expectedRevision }),
+      ...(call.expectedManuscriptVersion === undefined
+        ? {} : { expectedManuscriptVersion: call.expectedManuscriptVersion }),
+    }
     const answered = call.operation === 'generate'
       ? await namespace().generateCandidate(request)
-      : await namespace().reviewCandidate(request)
+      : call.operation === 'review'
+        ? await namespace().reviewCandidate(request)
+        : await namespace().acceptCandidate(request)
     if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
     return answered.value
   }

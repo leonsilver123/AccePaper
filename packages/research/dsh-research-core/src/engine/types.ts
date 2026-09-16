@@ -171,6 +171,8 @@ export type AuditEventKind =
   | 'gate-abstention'
   | 'step-executed'
   | 'step-committed'
+  /** A reviewed manuscript candidate was published as the run's official manuscript. */
+  | 'manuscript-accepted'
   | 'rollback'
 
 /**

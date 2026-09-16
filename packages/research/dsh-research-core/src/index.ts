@@ -73,6 +73,23 @@ export {
 } from './engine/state-machine.ts'
 export { ResearchError, ResearchValueError, ResearchRunError } from './engine/state-machine.ts'
 
+// Manuscript acceptance: publishing a REVIEWED candidate as the run's official manuscript. It is not
+// a step commit — E1-format committed long before anyone read the paper — so it carries its own
+// guards, its own audit record, and a producer that names a person rather than an executor.
+export {
+  ACCEPTANCE_PRODUCER,
+  ACCEPTED_MANUSCRIPT_SLUG,
+  AcceptanceRefusal,
+  acceptManuscriptCandidate,
+  canAcceptManuscriptCandidate,
+  checkAcceptance,
+} from './engine/acceptance.ts'
+export type {
+  CandidateReviewFacts,
+  ManuscriptAcceptanceReceipt,
+  ManuscriptAcceptanceRequest,
+} from './engine/acceptance.ts'
+
 // ── Batch-2 modules (T07 L0 / T08 citation / T09 gates) ───────────────────────
 // Pure-logic sibling modules, wired into the package entry by the main Agent.
 // Each module owns a subpath index; the symbols below are its STABLE public

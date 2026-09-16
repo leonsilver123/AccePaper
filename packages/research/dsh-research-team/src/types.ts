@@ -706,12 +706,20 @@ export interface ResearchRevisionRequest {
   readonly instruction: string
 }
 
-/** One operation on an existing request: write a candidate, or judge one. */
+/** One operation on an existing request: write a candidate, judge one, or accept one. */
 export interface ResearchCandidateRequest {
   readonly runId: string
   readonly requestId: string
   /** The candidate to act on; ignored when writing one, which mints its own. */
   readonly candidateId: string
+  /**
+   * The run revision and manuscript version the person READ, for an acceptance.
+   *
+   * Required by the acceptance operation and ignored by the other two: without them it would be a
+   * publication over whatever the run happens to hold when the button is pressed.
+   */
+  readonly expectedRevision?: number
+  readonly expectedManuscriptVersion?: number
 }
 
 /** One candidate section, as the page renders it. */
@@ -763,12 +771,34 @@ export interface ResearchRevisionView {
   /** The project revision the person was reading when they asked. */
   readonly projectRevision: number
   readonly requestedAt: number
+  /** The manuscript version the request read; an acceptance is checked against this. */
+  readonly manuscriptVersion: number
   /** The sections the request read, with the body hash each one had. */
   readonly sections: ReadonlyArray<{ readonly sectionId: string; readonly heading: string; readonly basisHash: string }>
   /** The sections the instruction is about; the rest of the manuscript is carried unchanged. */
   readonly targets: ReadonlyArray<string>
   readonly candidates: ReadonlyArray<ResearchCandidateView>
   readonly reviews: ReadonlyArray<ResearchReviewView>
+  /**
+   * What an acceptance produced, when one has happened.
+   *
+   * ABSENT UNTIL A CANDIDATE IS ACCEPTED, which is not the same as a failed acceptance: the page
+   * renders the difference, and a view that defaulted this would show an acceptance nobody made.
+   */
+  readonly acceptance?: ResearchAcceptanceView
+}
+
+/** One accepted candidate, as the page renders it. */
+export interface ResearchAcceptanceView {
+  /** The run revision the acceptance published. */
+  readonly revision: number
+  /** The manuscript version the accepted text became. */
+  readonly manuscriptVersion: number
+  readonly operator: string
+  readonly acceptedAt: number
+  /** Whether it reached the run's durable snapshot; a restart keeps what the disk has. */
+  readonly persisted: boolean
+  readonly persistenceError?: string
 }
 
 /** What `ResearchTeamService.runPipeline` returns, and what the Remote `run` sends. */

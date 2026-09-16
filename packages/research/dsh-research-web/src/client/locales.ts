@@ -216,7 +216,11 @@ export const zh = {
   'revision.check.sections': '章节结构',
   'revision.checkPassed': '通过',
   'revision.checkFailed': '未通过',
-  'revision.acceptNotImplemented': '这一版还不能被接受为正式稿:把候选稿变成正式稿需要一次版本比对与原子写入的接受事务,目前没有实现。面板不提供这个按钮,也不把候选稿显示成已被接受。',
+  'revision.accept': '接受为正式稿',
+  'revision.accepting': '正在接受…',
+  'revision.accepted': '已接受:候选 {candidate} 成为稿件版本 {version}(运行版本 {revision},{operator})',
+  'revision.acceptNotPersisted': '——但这次运行的写入没有落盘,重启后它可能不在了。',
+  'revision.acceptNote': '接受会把这一版变成这项运行的正式稿件(写入登记表、推进项目版本、留下审计记录)。只有复核通过的候选稿才会被后端接受。',
 
   // --- Session recovery panel (会话恢复) ---
   'recovery.title': '会话恢复',
@@ -523,7 +527,11 @@ export const en: Record<ResearchKey, string> = {
   'revision.check.sections': 'Section structure',
   'revision.checkPassed': 'passed',
   'revision.checkFailed': 'failed',
-  'revision.acceptNotImplemented': 'This candidate cannot be accepted as the official manuscript yet: turning a candidate into the official manuscript needs an accepting transaction (version comparison and an atomic write) that does not exist. The panel offers no such button and never renders a candidate as accepted.',
+  'revision.acceptNote': 'Accepting makes this candidate the run’s official manuscript: it writes the registry, moves the project revision and records who did it. The backend accepts only a candidate whose review passed.',
+  'revision.accept': 'Accept as the manuscript',
+  'revision.accepting': 'Accepting…',
+  'revision.accepted': 'Accepted: candidate {candidate} became manuscript version {version} (run revision {revision}, {operator})',
+  'revision.acceptNotPersisted': '— but the run write did not land, so a restart may not keep it.',
   // --- Connection state (this page's link, not the run's state) ---
   'connection.phase.idle': 'Not connected yet',
   'connection.phase.connecting': 'Connecting to the deployment…',

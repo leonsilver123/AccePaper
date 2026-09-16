@@ -64,6 +64,7 @@ function makeRequest(requestId = 'req-1') {
     projectRevision: 7,
     instruction: 'tighten the claim in the results',
     operator: 'operator',
+    manuscriptVersion: 3,
     sections: sectionsOf(MANUSCRIPT),
     // The instruction is about the results; the request says so, and the candidate that answers it
     // leaves the other sections exactly as they were.

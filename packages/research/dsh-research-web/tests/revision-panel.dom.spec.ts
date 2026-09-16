@@ -107,15 +107,38 @@ describe('the revision panel reads the loop from the host', () => {
     expect(screen.getByRole('button', { name: en['revision.generate'] })).toBeTruthy()
   })
 
-  it('does not offer an accept, and says why', async () => {
+  it('offers no accept while no candidate has passed a review', async () => {
     const source = sourceOf([revision()])
     render(createElement(RevisionPanel, { summary: toRunSummary(SUMMARY), t, revisions: source }))
     await screen.findByText('tighten the claim in the results')
 
-    // A CONTROL THAT COULD NOT WORK IS NOT OFFERED: the accepting transaction does not exist, so the
-    // panel offers no button and states the gap where a person would look for one.
-    expect(screen.queryByRole('button', { name: /accept/i })).toBeNull()
-    expect(screen.getByText(en['revision.acceptNotImplemented'])).toBeTruthy()
+    // THE ACCEPT IS OFFERED ONLY AFTER A REVIEW PASSED. Before any candidate exists there is
+    // nothing to accept, and the panel shows no control that would be refused.
+    expect(document.querySelector('[data-research-accept]')).toBeNull()
+    expect(screen.getByText(en['revision.acceptNote'])).toBeTruthy()
+  })
+
+  it('offers the accept once a review passed, and states the result from the run', async () => {
+    const accepted = {
+      requestId: 'req-1', candidateId: 'cand-1', operator: 'authenticated-browser-operator',
+      revision: 8, manuscriptVersion: 4, acceptedAt: 3, persisted: true,
+    }
+    const source = sourceOf([revision({
+      candidates: [candidate()],
+      reviews: [{ candidateId: 'cand-1', passed: true, findings: [] }],
+      acceptance: accepted,
+    })])
+    render(createElement(RevisionPanel, { summary: toRunSummary(SUMMARY), t, revisions: source }))
+
+    // The receipt is rendered from the RUN's record, so a page that reloaded says the same thing as
+    // the one that accepted.
+    const stated = await screen.findByText(new RegExp(en['revision.accepted'].split('{')[0]))
+    expect(stated.getAttribute('data-research-accepted')).toBe('cand-1')
+    expect(stated.textContent).toContain('4')
+
+    // And the control is still offered for the NEXT candidate: an acceptance publishes one version,
+    // it does not end the loop.
+    expect(document.querySelector('[data-research-accept]')).not.toBeNull()
   })
 
   it('renders both sides of every changed section, and no diff for the others', async () => {

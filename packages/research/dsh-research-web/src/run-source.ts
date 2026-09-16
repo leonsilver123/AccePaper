@@ -243,6 +243,8 @@ export interface WireRevisionView {
   readonly instruction: string
   readonly operator: string
   readonly projectRevision: number
+  /** The manuscript version the request read; an acceptance is checked against this. */
+  readonly manuscriptVersion: number
   readonly requestedAt: number
   readonly sections: ReadonlyArray<{ readonly sectionId: string; readonly heading: string; readonly basisHash: string }>
   /** The sections the instruction is about; the rest of the manuscript is carried unchanged. */
@@ -265,6 +267,17 @@ export interface WireRevisionView {
     readonly passed: boolean
     readonly findings: ReadonlyArray<{ readonly check: string; readonly passed: boolean; readonly detail: string }>
   }>
+  /** What an acceptance produced, when one has happened. Absent until then. */
+  readonly acceptance?: {
+    readonly requestId: string
+    readonly candidateId: string
+    readonly operator: string
+    readonly revision: number
+    readonly manuscriptVersion: number
+    readonly acceptedAt: number
+    readonly persisted: boolean
+    readonly persistenceError?: string
+  }
 }
 
 /**

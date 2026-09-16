@@ -48,6 +48,15 @@ export interface RevisionRequestRecord {
   readonly stepId: string
   /** The project revision the person was reading. */
   readonly projectRevision: number
+  /**
+   * The manuscript artifact VERSION the person was reading.
+   *
+   * The section hashes say the text did not change; this says which version of the artifact it was.
+   * An acceptance checks both, and the one it must check against is the one the REQUEST read — a
+   * service that read the current version at accept time would accept over a manuscript the person
+   * never saw.
+   */
+  readonly manuscriptVersion: number
   /** What to change, in the person's own words. */
   readonly instruction: string
   readonly operator: string
@@ -196,6 +205,8 @@ export function createRevisionRequest(input: {
   readonly instruction: string
   readonly operator: string
   readonly sections: ReadonlyArray<ManuscriptSectionParts>
+  /** The manuscript artifact version the caller read. */
+  readonly manuscriptVersion: number
   /** The sections the instruction is about; empty means all of them. */
   readonly targets?: ReadonlyArray<string>
 }): RevisionRequestRecord {
@@ -204,6 +215,7 @@ export function createRevisionRequest(input: {
     runId: input.runId,
     stepId: input.stepId,
     projectRevision: input.projectRevision,
+    manuscriptVersion: input.manuscriptVersion,
     instruction: input.instruction,
     operator: input.operator,
     sections: input.sections.map(section => ({
@@ -398,6 +410,28 @@ export async function writeSection(
   return { text: result.text, provider: result.provider, model: result.model }
 }
 
+/**
+ * What an acceptance left behind, as the deployment records it.
+ *
+ * IT IS WRITTEN BECAUSE THE ACCEPTANCE IS DURABLE STATE, not only a response: a page that reloads —
+ * or opens tomorrow — has to be able to say that a candidate became the manuscript, which one, and
+ * who accepted it. Without this record the only trace would be the run's own audit event, which
+ * names a candidate id and nothing a page can render beside the request it answered.
+ */
+export interface RevisionAcceptanceRecord {
+  readonly requestId: string
+  readonly candidateId: string
+  readonly operator: string
+  /** The run revision the acceptance published. */
+  readonly revision: number
+  /** The manuscript version the accepted text became. */
+  readonly manuscriptVersion: number
+  readonly acceptedAt: number
+  /** Whether the run's own write of it landed; a restart keeps what the disk has. */
+  readonly persisted: boolean
+  readonly persistenceError?: string
+}
+
 /** Where one deployment's revision records live. */
 export interface RevisionStore {
   readonly directory: string
@@ -456,6 +490,7 @@ export async function readRevision(
   readonly request: RevisionRequestRecord | null
   readonly candidates: ReadonlyArray<RevisionCandidateRecord>
   readonly reviews: ReadonlyArray<RevisionReviewRecord>
+  readonly acceptance: RevisionAcceptanceRecord | null
 }> {
   const directory = requestDirectory(store, requestId)
   const names = await readdir(directory).catch(() => [] as string[])
@@ -470,6 +505,7 @@ export async function readRevision(
     }
   }
   const request = await read<RevisionRequestRecord>('request.json')
+  const acceptance = await read<RevisionAcceptanceRecord>('acceptance.json')
   const candidates: RevisionCandidateRecord[] = []
   const reviews: RevisionReviewRecord[] = []
   for (const name of names.filter(entry => entry.startsWith('candidate-') && entry.endsWith('.json'))) {
@@ -480,7 +516,7 @@ export async function readRevision(
     const review = await read<RevisionReviewRecord>(name)
     if (review !== null) reviews.push(review)
   }
-  return { request, candidates, reviews }
+  return { request, candidates, reviews, acceptance }
 }
 
 /**
@@ -513,6 +549,22 @@ export async function writeCandidate(
     `candidate-${candidate.candidateId}.json`,
     candidate,
   )
+}
+
+/**
+ * Write one acceptance, under the request it answers.
+ *
+ * @param store - the deployment's revision store.
+ * @param requestId - the request that was answered.
+ * @param acceptance - what the acceptance produced.
+ * @returns the file written.
+ */
+export async function writeAcceptance(
+  store: RevisionStore,
+  requestId: string,
+  acceptance: RevisionAcceptanceRecord,
+): Promise<string> {
+  return await writeRevisionRecord(requestDirectory(store, requestId), 'acceptance.json', acceptance)
 }
 
 /**

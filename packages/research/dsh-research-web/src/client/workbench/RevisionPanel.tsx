@@ -31,7 +31,10 @@ export interface RevisionSource {
     readonly runId: string
     readonly requestId: string
     readonly candidateId: string
-    readonly operation: 'generate' | 'review'
+    readonly operation: 'generate' | 'review' | 'accept'
+    /** The run revision and manuscript version on screen, for an acceptance to be checked against. */
+    readonly expectedRevision?: number
+    readonly expectedManuscriptVersion?: number
   }) => Promise<WireRevisionView>
 }
 
@@ -95,6 +98,25 @@ export function RevisionPanel({ summary, t, revisions, writesAllowed = true }: R
       runId: summary.runId, requestId, candidateId: '', operation: 'generate',
     }))
   }, [revisions, run, summary.runId, writesAllowed])
+
+  /**
+   * Publish a reviewed candidate as the run's official manuscript.
+   *
+   * @param requestId - the request the candidate answers.
+   * @param candidateId - the candidate to accept.
+   */
+  const accept = useCallback((requestId: string, candidateId: string): void => {
+    if (revisions === undefined || !writesAllowed) return
+    const request = held.find(entry => entry.requestId === requestId)
+    run(candidateId, () => revisions.step({
+      runId: summary.runId, requestId, candidateId, operation: 'accept',
+      // WHAT THIS PAGE IS SHOWING. The backend refuses an acceptance naming another revision or
+      // another manuscript version, which is what stops a stale page from publishing something the
+      // person never read.
+      ...(summary.projectRevision === null ? {} : { expectedRevision: summary.projectRevision }),
+      ...(request === undefined ? {} : { expectedManuscriptVersion: request.manuscriptVersion }),
+    }))
+  }, [revisions, run, summary.runId, writesAllowed, held])
 
   /**
    * Judge one candidate.
@@ -194,6 +216,20 @@ export function RevisionPanel({ summary, t, revisions, writesAllowed = true }: R
                               </li>
                             ))}
                           </ul>
+                          {/* THE ACCEPT IS OFFERED ONLY AFTER A REVIEW PASSED, and the backend is
+                              the authority on both: a candidate that failed its checks, or that
+                              nobody judged, is refused there even if a page offered the control. */}
+                          {recorded.passed && (
+                            <button
+                              type="button"
+                              className={css.tab}
+                              data-research-accept={candidate.candidateId}
+                              disabled={revisions === undefined || !writesAllowed || busy !== undefined}
+                              onClick={() => { accept(revision.requestId, candidate.candidateId) }}
+                            >
+                              {busy === candidate.candidateId ? t('revision.accepting') : t('revision.accept')}
+                            </button>
+                          )}
                         </div>
                       )}
                   </div>
@@ -201,8 +237,27 @@ export function RevisionPanel({ summary, t, revisions, writesAllowed = true }: R
               })}
           </div>
         ))}
-      {/* WHAT THIS PANEL DOES NOT DO, said where a person would look for it. */}
-      <p className={css.mockNote} data-research-accept-absent="">{t('revision.acceptNotImplemented')}</p>
+      {/* WHAT ACCEPTING DOES, where a person about to press it looks: it publishes a manuscript
+          version, moves the run's revision and records who did it — and only a reviewed candidate is
+          accepted, which is the backend's rule rather than this panel's. */}
+      <p className={css.mockNote} data-research-accept-note="">{t('revision.acceptNote')}</p>
+
+      {/* ONCE ACCEPTED, THE REQUEST SAYS SO — from the run's own record, so a page that reloaded
+          shows the same thing as the one that accepted. */}
+      {held.filter(revision => revision.acceptance !== undefined).map(revision => (
+        <p
+          key={`accepted-${revision.requestId}`}
+          className={css.tag}
+          data-research-accepted={revision.acceptance?.candidateId ?? ''}
+        >
+          {t('revision.accepted')
+            .replace('{candidate}', revision.acceptance?.candidateId ?? '')
+            .replace('{version}', String(revision.acceptance?.manuscriptVersion ?? ''))
+            .replace('{revision}', String(revision.acceptance?.revision ?? ''))
+            .replace('{operator}', revision.acceptance?.operator ?? '')}
+          {revision.acceptance?.persisted === false ? ` ${t('revision.acceptNotPersisted')}` : ''}
+        </p>
+      ))}
     </section>
   )
 }
