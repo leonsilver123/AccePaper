@@ -71,18 +71,28 @@ export interface ManuscriptReviewInput {
 }
 
 /**
- * Prose with its parenthetical citations removed.
+ * Prose with its citations and identifiers removed.
  *
- * A citation's year is a four-digit number nothing measured, and a naive scan reads `(Treiber,
- * Hennecke & Helbing 2000)` as a measurement of 2000. The rule is narrow and stateable: a
- * parenthetical containing a year is a citation. A number the prose states as a result is not
- * written inside one.
+ * Every rule here is narrow, and every one was added because a real manuscript tripped it:
+ *
+ *  - `(Treiber, Hennecke & Helbing 2000)` is a citation, and a naive scan reads its year as a
+ *    measurement of 2000;
+ *  - `10.1016/j.trb.2025.103352`, `https://…`, `arXiv:2406.11508` and `[12]` are IDENTIFIERS. A
+ *    references section is made of them, and the first browser run of this check refused a correct
+ *    manuscript for citing 47 DOIs, `802.11` and `18051527` among the "unmeasured numbers".
+ *
+ * A number a section states as a result is not an identifier and is not written inside a citation.
  *
  * @param text - a section body.
- * @returns the body with its citations blanked out.
+ * @returns the body with its citations and identifiers blanked out.
  */
 function withoutCitations(text: string): string {
-  return text.replace(/\([^()]*(?:1[89]|20)\d{2}[^()]*\)/gu, ' ')
+  return text
+    .replace(/\([^()]*(?:1[89]|20)\d{2}[^()]*\)/gu, ' ')
+    .replace(/10\.\d{4,9}\/[^\s,;)]+/gu, ' ')
+    .replace(/https?:\/\/\S+/gu, ' ')
+    .replace(/arXiv:\s*\d{4}\.\d{4,5}/giu, ' ')
+    .replace(/\[[0-9,\s–-]+\]/gu, ' ')
 }
 
 /**
@@ -249,6 +259,13 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
   const accountable = accountableNumbers(input, record)
   const untraceable: string[] = []
   for (const section of input.sections) {
+    // THE REFERENCES SECTION IS NOT PROSE. Its content is a list of identifiers, and the first
+    // browser run of this check refused a correct manuscript for citing 47 DOIs — then for a bare
+    // catalogue id, an IEEE standard number, a frequency and a year. Each exclusion added to the
+    // stripper was a new scheme away from the next false refusal, so the rule is the narrower one:
+    // this check reads the sections that state results, and the check that matters for a reference
+    // list is `red-citation`, which compares what the prose cites against what the list holds.
+    if (section.id === 'references') continue
     for (const [index, value] of numbersIn(withoutCitations(section.bodyText)).entries()) {
       if (accountable.has(value)) continue
       // The findings name the section and the value, so a reader can find the sentence. The

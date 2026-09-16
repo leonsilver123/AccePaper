@@ -101,6 +101,50 @@ describe('a clean manuscript passes every check', () => {
     })
     expect(positionOf(input, 'red-stat')).toBe('support')
   })
+
+  it('does not read a references section’s identifiers as measurements', () => {
+    // THE FIRST BROWSER RUN OF THIS CHECK REFUSED A CORRECT MANUSCRIPT. A model-written References
+    // section is a list of identifiers, and the scan read `10.1016/j.trb.2025.103352`, `18051527`
+    // and `802.11` as numbers the run never measured — 47 of them — and blocked the step. Every
+    // string below is one the real run produced.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'references',
+          heading: 'References',
+          bodyText: [
+            '[1] A. Author. A platoon study. doi:10.1016/j.trb.2025.103352',
+            '[2] B. Author. String stability. https://doi.org/10.1109/TITS.2020.2966412',
+            '[3] C. Author. Field tests. arXiv:2406.11508 and 18051527',
+            '[4] D. Author. Communication. IEEE 802.11p at 5.9 GHz, 2019.',
+          ].join('\n'),
+        },
+      ],
+      referenceCount: 4,
+    })
+    // The rule is not "strip every identifier scheme" — that is a new scheme away from the next
+    // false refusal. It is that this check reads the sections that state results, and a reference
+    // list is not one of them.
+    expect(positionOf(input, 'red-stat')).toBe('support')
+    // What DOES read it is the citation check, and it still does.
+    expect(positionOf(input, 'red-citation')).toBe('support')
+  })
+
+  it('still refuses a measurement in a prose section beside an identifier', () => {
+    // The exclusion has to be narrow, or it becomes a way to smuggle a number past the check.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'results',
+          heading: 'Results',
+          bodyText: 'Following doi:10.1016/j.trb.2025.103352, the effect was 47.3%.',
+        },
+      ],
+      declaredNumbers: [],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('refute')
+    expect(findingsOf(input, 'red-stat')).toContain('47.3')
+  })
 })
 
 describe('an injected number is found', () => {
