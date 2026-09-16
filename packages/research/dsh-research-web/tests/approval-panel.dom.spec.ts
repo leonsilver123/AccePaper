@@ -104,7 +104,7 @@ describe('the approval panel decides nothing by itself', () => {
   it('asks the submitter for exactly this run, step and attempt', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,
-      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved' },
+      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved', approvalEventId: 'evt-1', decidedAt: 1, persisted: true },
       summary: toRunSummary({ ...gatedInput(), steps: [] }),
     })
     openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
@@ -120,7 +120,7 @@ describe('the approval panel decides nothing by itself', () => {
   it('renders the receipt the backend returned, naming the operator it attested', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,
-      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved' },
+      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved', approvalEventId: 'evt-1', decidedAt: 1, persisted: true },
       summary: toRunSummary(gatedInput()),
     })
     openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
@@ -137,7 +137,7 @@ describe('the approval panel decides nothing by itself', () => {
   it('replaces what is on screen only with the summary the backend returned', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,
-      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved' },
+      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed', operator: 'authenticated-browser-operator', decision: 'approved', approvalEventId: 'evt-1', decidedAt: 1, persisted: true },
       summary: toRunSummary({ ...gatedInput(), steps: [] }),
     })
     openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
@@ -172,7 +172,7 @@ describe('the approval panel decides nothing by itself', () => {
   it('shows a rejected decision as rejected, never as approved', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,
-      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'blocked', operator: 'authenticated-browser-operator', decision: 'rejected' },
+      receipt: { runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'blocked', operator: 'authenticated-browser-operator', decision: 'rejected', approvalEventId: 'evt-1', decidedAt: 1, persisted: true },
       summary: toRunSummary(gatedInput()),
     })
     openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
@@ -185,6 +185,61 @@ describe('the approval panel decides nothing by itself', () => {
       .replace('{attempt}', '2')
       .replace('{decision}', en['approval.decided.rejected'])
       .replace('{operator}', 'authenticated-browser-operator'))).toBeTruthy()
+  })
+
+  it('says a decision stands and was NOT saved, instead of showing it as refused', async () => {
+    // The backend distinguishes "applied" from "saved" and returns both. The panel used to drop the
+    // second, so an operator whose approval existed only in the server's memory read exactly like
+    // one that reached disk — and would close the page. The receipt stays; the warning joins it.
+    const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
+      ok: true,
+      receipt: {
+        runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed',
+        operator: 'authenticated-browser-operator', decision: 'approved',
+        approvalEventId: 'evt-1', decidedAt: 1, persisted: false,
+        persistenceError: 'no snapshot directory is configured for this deployment',
+      },
+      summary: toRunSummary(gatedInput()),
+    })
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
+
+    expect(screen.getByText(en['approval.notPersisted']
+      .replace('{detail}', 'no snapshot directory is configured for this deployment'))).toBeTruthy()
+    // And it is NOT reported as a refusal: the decision is the backend's, and it happened.
+    expect(screen.queryByText(en['approval.failure.transport'].replace('{detail}', ''))).toBeNull()
+    expect(screen.getByText(en['approval.decided.approved'])).toBeTruthy()
+  })
+
+  it('keeps the receipt when the refreshed run could not be read', async () => {
+    // A projection failure is not a decision failure. The backend applied and saved the decision;
+    // this client could not build a summary from what came back. Saying "the approval failed" would
+    // send the operator to press the button again, which at best answers `not-pending`.
+    const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
+      ok: true,
+      receipt: {
+        runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'passed',
+        operator: 'authenticated-browser-operator', decision: 'approved',
+        approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+      },
+      summaryUnavailable: true,
+      summaryFailure: 'the refreshed run could not be read: snapshot.steps is not an object',
+    })
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
+
+    expect(screen.getByText(en['approval.summaryUnavailable']
+      .replace('{detail}', 'the refreshed run could not be read: snapshot.steps is not an object'))).toBeTruthy()
+    // The receipt is still on screen: the decision is what the operator came for.
+    expect(screen.getByText(en['approval.receipt']
+      .replace('{stepId}', 'E2-submit')
+      .replace('{attempt}', '2')
+      .replace('{decision}', en['approval.decided.approved'])
+      .replace('{operator}', 'authenticated-browser-operator'))).toBeTruthy()
+    // And nothing claims it was not saved.
+    expect(screen.queryByText(en['approval.notPersisted'].replace('{detail}', ''))).toBeNull()
   })
 
   it('reports a transport failure instead of a decision', async () => {
@@ -225,7 +280,7 @@ describe('the approval request carries exactly the decidable fields', () => {
       ok: true,
       value: {
         runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed',
-        operator: 'authenticated-browser-operator', decidedAt: 1,
+        operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
         snapshot: passedSnapshot('run_1'),
       },
     })
@@ -241,7 +296,9 @@ describe('the approval request carries exactly the decidable fields', () => {
     expect(Object.keys(connection.calls[0]?.payload as object).sort())
       .toEqual(['attempt', 'decision', 'runId', 'stepId'])
     expect(outcome.ok).toBe(true)
-    if (outcome.ok) {
+    // `summary` is on ONE of the two applied-and-ok outcomes: the other carries `summaryUnavailable`
+    // instead, because a decision whose refresh failed is still a decision.
+    if (outcome.ok && 'summary' in outcome) {
       expect(outcome.receipt.operator).toBe('authenticated-browser-operator')
       expect(outcome.receipt.decision).toBe('approved')
       expect(outcome.summary.runId).toBe('run_1')
@@ -253,7 +310,7 @@ describe('the approval request carries exactly the decidable fields', () => {
       ok: true,
       value: {
         runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'blocked',
-        operator: 'authenticated-browser-operator', decidedAt: 1,
+        operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
         snapshot: passedSnapshot('run_1'),
       },
     })
@@ -261,6 +318,26 @@ describe('the approval request carries exactly the decidable fields', () => {
 
     // A `blocked` status is a rejection however the request was phrased.
     expect(outcome.ok && outcome.receipt.decision).toBe('rejected')
+  })
+
+  it('refuses a receipt that does not say whether the decision was saved', async () => {
+    // The signature of a host built before the field existed. Defaulting it would invent the one
+    // fact this channel exists to carry, and the operator would decide whether to close the page
+    // on a guess.
+    const connection = connectionDouble({
+      ok: true,
+      value: {
+        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed',
+        operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1,
+        snapshot: passedSnapshot('run_1'),
+      },
+    })
+
+    const outcome = await buildApprovalSubmitter(() => connection.service)(request)
+
+    expect(outcome.ok).toBe(false)
+    expect(outcome.ok ? undefined : outcome.code).toBe('malformed')
+    expect(outcome.ok ? undefined : outcome.detail).toContain('the host and this client are not the same build')
   })
 
   it('reports the backend refusal with its own message', async () => {

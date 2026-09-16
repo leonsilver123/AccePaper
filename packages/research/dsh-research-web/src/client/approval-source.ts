@@ -47,17 +47,43 @@ export interface ApprovalReceipt {
   /** The host-attested operator the backend recorded the decision under. */
   readonly operator: string
   readonly decision: 'approved' | 'rejected'
+  /** Identity of the decision itself, so a later query can find it rather than re-decide. */
+  readonly approvalEventId: string
+  readonly decidedAt: number
+  /**
+   * Whether the decision reached disk.
+   *
+   * FALSE means it exists in this process only: the gate is decided, the run says so, and a restart
+   * loses it. That is a fact the operator has to see, because it decides whether they can close the
+   * page — and it is NOT a refusal, which is what the panel used to show it as by dropping it.
+   */
+  readonly persisted: boolean
+  /** Why the decision is not on disk, when it is not. */
+  readonly persistenceError?: string | undefined
+  /** Why the backend could not re-project the run, when it could not. */
+  readonly projectionError?: string | undefined
 }
 
 /** How an approval attempt ended. */
 export type ApprovalOutcome =
   | { readonly ok: true; readonly receipt: ApprovalReceipt; readonly summary: RunSummary }
   /**
-   * The decision was applied and is durable, but the backend could not re-project the run, so
-   * there is no refreshed workbench to render. Distinct from a refusal on purpose: the operator's
-   * approval stands, and telling them it failed would be the same confusion one layer up.
+   * The decision was APPLIED and this is the receipt for it; only the refreshed workbench is
+   * missing. `summaryFailure` says which of two independent things went wrong, because they have
+   * different remedies and the operator should be told which one they have:
+   *
+   *   - the backend could not re-project the run (`projectionError`), so no summary was sent;
+   *   - the backend sent one and this client could not read it.
+   *
+   * Neither is a refusal. Reporting either as one would tell the operator their approval failed
+   * while the run says it passed.
    */
-  | { readonly ok: true; readonly receipt: ApprovalReceipt; readonly summaryUnavailable: true }
+  | {
+    readonly ok: true
+    readonly receipt: ApprovalReceipt
+    readonly summaryUnavailable: true
+    readonly summaryFailure: string
+  }
   | { readonly ok: false; readonly code: ApprovalFailure; readonly detail: string }
 
 /**
@@ -120,16 +146,46 @@ function readDecision(value: unknown):
   }
   const decision = value['value']
   if (!isRecord(decision)) return { ok: false, code: 'malformed', detail: 'the decision is not an object' }
-  const { runId, stepId, attempt, status, operator, snapshot } = decision
+  const { runId, stepId, attempt, status, operator, approvalEventId, decidedAt, persisted,
+    persistenceError, projectionError, snapshot } = decision
   if (typeof runId !== 'string' || typeof stepId !== 'string' || typeof status !== 'string'
     || typeof operator !== 'string' || typeof attempt !== 'number') {
     return { ok: false, code: 'malformed', detail: 'the decision is missing runId, stepId, attempt, status or operator' }
+  }
+  // The receipt fields are REQUIRED, and a backend that omits one is reported rather than
+  // tolerated. They are what tells the operator whether their decision survives a restart and
+  // whether the page in front of them is the run the backend has; defaulting them would invent
+  // exactly the two facts this channel exists to carry. A missing `persisted` in particular is the
+  // signature of a host built before the field existed.
+  if (typeof approvalEventId !== 'string' || typeof decidedAt !== 'number' || typeof persisted !== 'boolean') {
+    return {
+      ok: false,
+      code: 'malformed',
+      detail: 'the decision is missing approvalEventId, decidedAt or persisted — the host and this '
+        + 'client are not the same build',
+    }
   }
   // The decision the backend recorded is read back from the step it changed rather than
   // taken from a field: the status IS the decision's outcome, and deriving it keeps the
   // panel from rendering a decision the backend did not make.
   const decisionValue = status === 'passed' ? 'approved' : 'rejected'
-  return { ok: true, receipt: { runId, stepId, attempt, status, operator, decision: decisionValue }, snapshot }
+  return {
+    ok: true,
+    receipt: {
+      runId,
+      stepId,
+      attempt,
+      status,
+      operator,
+      decision: decisionValue,
+      approvalEventId,
+      decidedAt,
+      persisted,
+      ...(typeof persistenceError === 'string' ? { persistenceError } : {}),
+      ...(typeof projectionError === 'string' ? { projectionError } : {}),
+    },
+    snapshot,
+  }
 }
 
 /**
@@ -161,12 +217,18 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
     }
     const decision = readDecision(result)
     if (!decision.ok) return decision
+    // THE RECEIPT IS WHAT THE OPERATOR GETS, AND A FAILED REFRESH DOES NOT TAKE IT AWAY. Both
+    // failures below were previously reported as `ok: false, code: 'malformed'`, which told the
+    // operator the approval failed while the run said it passed — and invited them to press the
+    // button again, which comes back `not-pending` at best and a second decision at worst.
     if (decision.snapshot === undefined) {
-      // The backend applied the decision and could not re-project the run. Reporting this as a
-      // refusal would tell the operator their approval failed while the run says it passed — the
-      // same confusion the host side was just fixed for, one layer out. The receipt stands; only
-      // the refreshed workbench is missing, and that is what the note says.
-      return { ok: true, receipt: decision.receipt, summaryUnavailable: true }
+      return {
+        ok: true,
+        receipt: decision.receipt,
+        summaryUnavailable: true,
+        summaryFailure: decision.receipt.projectionError
+          ?? 'the backend applied the decision and did not send a refreshed run',
+      }
     }
     try {
       return {
@@ -176,9 +238,10 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
       }
     } catch (cause) {
       return {
-        ok: false,
-        code: 'malformed',
-        detail: cause instanceof Error ? cause.message : String(cause),
+        ok: true,
+        receipt: decision.receipt,
+        summaryUnavailable: true,
+        summaryFailure: `the refreshed run could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
       }
     }
   }

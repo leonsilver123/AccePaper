@@ -33,7 +33,12 @@ type RowState =
 
 /** The outcome the panel states above the queue, once one decision has landed. */
 type Outcome =
-  | { readonly kind: 'decided'; readonly receipt: ApprovalReceipt }
+  | {
+    readonly kind: 'decided'
+    readonly receipt: ApprovalReceipt
+    /** Why no refreshed run is on screen, when there is none. The decision still stands. */
+    readonly summaryFailure?: string | undefined
+  }
   | { readonly kind: 'refused'; readonly code: ApprovalFailure; readonly detail: string }
 
 /**
@@ -55,11 +60,19 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
     void onSubmit({ runId, stepId, attempt, decision }).then(
       (result) => {
         if (result.ok) {
-          settle(stepId, { kind: 'decided', receipt: result.receipt }, { kind: 'decided', receipt: result.receipt })
+          // THE DECISION STANDS WHATEVER ELSE FAILED. A summary that could not be built and a
+          // decision that did not reach disk are two different facts about a decision that WAS
+          // made, and each is stated beside it rather than instead of it.
+          const summaryFailure = 'summaryUnavailable' in result ? result.summaryFailure : undefined
+          const stated: Outcome = {
+            kind: 'decided',
+            receipt: result.receipt,
+            ...(summaryFailure === undefined ? {} : { summaryFailure }),
+          }
+          settle(stepId, { kind: 'decided', receipt: result.receipt }, stated)
           // The refreshed summary replaces the one on screen, so every other tab shows the
-          // status the backend recorded rather than the one the reader was looking at. The
-          // backend applied the decision but could not re-project the run, so there is nothing
-          // refreshed to show — the decision itself stands and the panel keeps its receipt.
+          // status the backend recorded rather than the one the reader was looking at. When
+          // there is nothing refreshed to show, the panel keeps its receipt.
           if ('summary' in result) onDecided?.(result.summary)
           return
         }
@@ -84,13 +97,28 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
           backend's refreshed summary arrives, so this is where "who decided what" survives.
           A refusal stays on its row, where the buttons that produced it are. */}
       {outcome?.kind === 'decided' && (
-        <p className={css.tag}>
-          {t('approval.receipt')
-            .replace('{stepId}', outcome.receipt.stepId)
-            .replace('{attempt}', String(outcome.receipt.attempt))
-            .replace('{decision}', t(outcome.receipt.decision === 'approved' ? 'approval.decided.approved' : 'approval.decided.rejected'))
-            .replace('{operator}', outcome.receipt.operator)}
-        </p>
+        <>
+          <p className={css.tag}>
+            {t('approval.receipt')
+              .replace('{stepId}', outcome.receipt.stepId)
+              .replace('{attempt}', String(outcome.receipt.attempt))
+              .replace('{decision}', t(outcome.receipt.decision === 'approved' ? 'approval.decided.approved' : 'approval.decided.rejected'))
+              .replace('{operator}', outcome.receipt.operator)}
+          </p>
+          {/* A DECISION THIS PROCESS HOLDS AND THE DISK DOES NOT. The operator is told they can not
+              rely on it surviving a restart, which is the fact that decides whether they may close
+              the page — and it is stated as what it is, not as a failed approval. */}
+          {!outcome.receipt.persisted && (
+            <p className={css.refusal}>
+              {t('approval.notPersisted').replace('{detail}', outcome.receipt.persistenceError ?? '')}
+            </p>
+          )}
+          {outcome.summaryFailure !== undefined && (
+            <p className={css.note}>
+              {t('approval.summaryUnavailable').replace('{detail}', outcome.summaryFailure)}
+            </p>
+          )}
+        </>
       )}
 
       {summary.humanPending.length === 0

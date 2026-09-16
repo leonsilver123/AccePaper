@@ -141,6 +141,8 @@ export const zh = {
   'approval.failure.transport': '审批请求失败:{detail}',
   'approval.failure.malformed': '审批响应无法解析:{detail}',
   'approval.failure.refused': '后端拒绝该审批:{detail}',
+  'approval.notPersisted': '决定已生效,但保存失败 —— 重启后它会丢失,请不要据此关闭页面。{detail}',
+  'approval.summaryUnavailable': '决定已生效,但页面状态未能刷新:{detail}。可以重新查询,不要重复提交决定。',
 
   // --- Session recovery panel (会话恢复) ---
   'recovery.title': '会话恢复',
@@ -317,6 +319,8 @@ export const en: Record<ResearchKey, string> = {
   'approval.failure.transport': 'The approval request failed: {detail}',
   'approval.failure.malformed': 'The approval response could not be read: {detail}',
   'approval.failure.refused': 'The backend refused the approval: {detail}',
+  'approval.notPersisted': 'The decision stands and was NOT saved — a restart loses it, so do not rely on it surviving one. {detail}',
+  'approval.summaryUnavailable': 'The decision stands, and the page could not be refreshed: {detail}. Re-read the run rather than deciding again.',
 
   'recovery.title': 'Session recovery',
   'recovery.note': 'This deployment exposes no restore entry point: this page reports the run currently on screen and nothing else.',

@@ -106,6 +106,14 @@
   margin: 0 0 8px;
 }
 
+/* A decision the backend applied and this process holds without the disk holding it. Stated in the
+   failure colour because it is one — but the receipt above it stays, because the decision stands. */
+.refusal {
+  color: #c2410c;
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
 .empty {
   color: #8a93a0;
   font-style: italic;
