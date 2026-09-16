@@ -65,33 +65,45 @@ export function SummaryPanel({ summary, t }: PanelProps) {
           })}
         </p>
         <ul className={css.stepList}>
-          {summary.steps.map(step => (
-            <li key={step.stepId} className={css.stepRow}>
-              <span className={css.stepIndex}>{step.index}</span>
-              <span className={css.stepName}>
-                {step.name}
-                <small>{step.stepId} · {t('step.attempt', { n: step.attempt })}{step.humanGate ? ` · ${t('step.humanGate')}` : ''}</small>
-              </span>
-              <span className={css.stepMeta}>
-                {step.holdReason !== undefined && (
-                  <span className={css.holdReason}>
-                    {t(`step.holdReason.${step.holdReason}`)}
-                  </span>
-                )}
-                <span className={`${css.tag} ${css[`s-${step.status}`]}`}>
-                  {t(`status.${step.status}`)}
+          {summary.steps.map((step) => {
+            // WHY A STEP DID NOT PASS. A blocked step is where the reader has to act, and until now
+            // the list said only `blocked` — the reason lived behind another tab, in a gate record
+            // they had to know to look for. It is the aggregate's own sentence, so a step held
+            // because a required check never ran says exactly that.
+            const gate = summary.gates.find(entry => entry.stepId === step.stepId && !entry.passed)
+            return (
+              <li key={step.stepId} className={css.stepRow}>
+                <span className={css.stepIndex}>{step.index}</span>
+                <span className={css.stepName}>
+                  {step.name}
+                  <small>{step.stepId} · {t('step.attempt', { n: step.attempt })}{step.humanGate ? ` · ${t('step.humanGate')}` : ''}</small>
                 </span>
-                {/* A step that failed mid-execution stays `in_progress` in the engine — it is
-                    rollback-able — while its outcome records the error. Showing only the status
-                    told a person the run was still working, and named no cause. */}
-                {step.executeError !== undefined && (
-                  <span className={`${css.tag} ${css['s-failed']}`}>
-                    {t('step.executeError', { message: step.executeError })}
+                <span className={css.stepMeta}>
+                  {step.holdReason !== undefined && (
+                    <span className={css.holdReason}>
+                      {t(`step.holdReason.${step.holdReason}`)}
+                    </span>
+                  )}
+                  <span className={`${css.tag} ${css[`s-${step.status}`]}`}>
+                    {t(`status.${step.status}`)}
+                  </span>
+                  {/* A step that failed mid-execution stays `in_progress` in the engine — it is
+                      rollback-able — while its outcome records the error. Showing only the status
+                      told a person the run was still working, and named no cause. */}
+                  {step.executeError !== undefined && (
+                    <span className={`${css.tag} ${css['s-failed']}`}>
+                      {t('step.executeError', { message: step.executeError })}
+                    </span>
+                  )}
+                </span>
+                {gate !== undefined && (
+                  <span className={css.note} data-research-step-reason="">
+                    {t('step.gateReason', { component: gate.component, reason: gate.rationale })}
                   </span>
                 )}
-              </span>
-            </li>
-          ))}
+              </li>
+            )
+          })}
         </ul>
       </section>
 

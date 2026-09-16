@@ -63,6 +63,9 @@ about what a system does has to be what it does.
   `profileEligible`, `submissionReady`, `readinessNote` — and states the mode and the readiness in
   the workbench header. The twin had not declared them, so the browser received all four and could
   name none.
-- **What this does not do**: the QUALITY state (a required check that never ran) is still not
-  surfaced as its own fact, and neither is the APPROVAL state. Execution, mode and readiness are now
-  distinct; those two are not.
+- A step that did not pass now carries its failing gate's rationale in the overview list, so the
+  reader does not have to know which tab holds the reason. The reason is the aggregate's sentence:
+  a step held because a required check never ran says exactly that.
+- **What this does not do**: the APPROVAL state is still not surfaced as its own fact, and neither
+  is a missing CONNECTION. Execution, mode, readiness and quality are now distinct; those two are
+  not.

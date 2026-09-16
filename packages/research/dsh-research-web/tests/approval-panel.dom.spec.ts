@@ -286,6 +286,37 @@ describe('the approval panel decides nothing by itself', () => {
     expect(screen.queryByText(en['approval.notPersisted'].replace('{detail}', ''))).toBeNull()
   })
 
+  it('says WHY a step did not pass, on the step itself', () => {
+    // A blocked step is where the reader has to act. The list said only `blocked`; the reason lived
+    // behind another tab in a gate record they had to know to look for. It is the aggregate's own
+    // sentence, so a step held because a required check never ran says exactly that.
+    // The step list lives on the overview tab, so this opens that one.
+    render(createElement(ResearchWorkbench, {
+      t,
+      summary: toRunSummary({
+        ...gatedInput(),
+        steps: [
+          ...gatedInput().steps,
+          {
+            stepId: 'D3-writing', index: 13, phase: 'D', name: 'Writing', status: 'blocked',
+            attempt: 1, humanGate: false, gateOutcomes: [],
+          },
+        ],
+        gates: [{
+          stepId: 'D3-writing', component: 'A', outcome: 'blocked', passed: false, timestamp: 1,
+          evidence: 'e',
+          rationale: 'required check(s) reported not_evaluated: red-stat — a check that did not run has found nothing',
+        }],
+      }),
+    }))
+    fireEvent.click(screen.getByRole('button', { name: en['tab.summary'] }))
+
+    expect(screen.getByText(en['step.gateReason']
+      .replace('{component}', 'A')
+      .replace('{reason}', 'required check(s) reported not_evaluated: red-stat — a check that did not run has found nothing')))
+      .toBeTruthy()
+  })
+
   it('offers no buttons at all when the page cannot name a revision', async () => {
     // A decision is about a REVISION. A page that cannot say which one it is showing cannot promise
     // the reader decided about what they read, so it does not offer the button and says why.
