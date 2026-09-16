@@ -619,7 +619,10 @@ describe('research workbench run control', () => {
     await act(async () => {
       fireEvent.click(within(row as HTMLElement).getByRole('button', { name: en['projects.open'] }))
     })
-    expect(onOpenRun).toHaveBeenCalledWith('run-held-7', expect.any(Function))
+    // The third argument is the phase channel: the page's link state, which the follow loop reports.
+    // Asserted by shape rather than ignored, because a caller that stopped threading it would leave
+    // the page unable to say what its link is doing.
+    expect(onOpenRun).toHaveBeenCalledWith('run-held-7', expect.any(Function), expect.any(Function))
     // AND THE STUDY IT ANSWERED WITH IS WHAT THE PAGE SHOWS.
     expect(document.querySelector('[data-research-run-id]')?.textContent).toContain('run-held-7')
   })
@@ -937,5 +940,85 @@ describe('a late read of another study', () => {
     })
     expect(shown()).toContain('run-second')
     expect(shown()).not.toContain('run-first')
+  })
+})
+
+// ===========================================================================
+// S5: what the page says about its own link, and what it stops offering.
+//
+// A page that stopped receiving updates and a study that stopped producing them look the same in the
+// DOM. These cases drive the phase channel the follow loop reports and assert both halves of the
+// answer: the page says what its link is doing, and it stops offering a decision that would be taken
+// against a revision it cannot confirm.
+// ===========================================================================
+describe('the page reports what its link is doing', () => {
+  /** The gate summary, injected so the panel renders without a follow of its own. */
+  const gated = (): RunSummaryInput => ({
+    runId: 'run_link_1',
+    source: 'live',
+    projectRevision: 4,
+    status: 'awaiting-approval',
+    steps: [{
+      stepId: 'E2-submit', index: 16, phase: 'E', name: 'Submission', status: 'gated',
+      attempt: 1, humanGate: true, holdReason: 'human_gate', gateOutcomes: [],
+    }],
+    artifacts: [], gates: [], abstentions: [], degradations: [], deliverables: [],
+  })
+
+  /** Mount a workbench whose resume reports the phases the case drives. */
+  function mounted(phases: ReadonlyArray<'open-requested' | 'frame' | 'reconnect' | 'resync' | 'offline'>) {
+    const submitter = vi.fn(() => Promise.resolve({ ok: true as const, receipt: {
+      runId: 'run_link_1', stepId: 'E2-submit', attempt: 1, status: 'passed', operator: 'operator',
+      decision: 'approved' as const, approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+    } }))
+    const onResume = vi.fn(async (onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+      onPhase?: (state: ConnectionState) => void) => {
+      onUpdate(buildSummary(gated()))
+      for (const phase of phases) {
+        if (phase === 'open-requested') onPhase?.({ phase: 'connecting', attempts: 0 })
+        if (phase === 'frame') onPhase?.({ phase: 'live', attempts: 0 })
+        if (phase === 'reconnect') onPhase?.({ phase: 'reconnecting', attempts: 1, reason: 'socket closed' })
+        if (phase === 'resync') onPhase?.({ phase: 'resyncing', attempts: 1 })
+        if (phase === 'offline') onPhase?.({ phase: 'offline', attempts: 3, reason: 'budget spent' })
+      }
+    })
+    renderComp(createElement(ResearchWorkbench, {
+      t, onResume, onApprove: submitter,
+    }))
+    return submitter
+  }
+
+  it('says it is connected when frames are arriving', async () => {
+    mounted(['open-requested', 'frame'])
+    const line = await screen.findByText(en['connection.phase.live'])
+    expect(line.getAttribute('data-research-connection')).toBe('live')
+    // The stale note belongs to a link that has given up, not to a live one.
+    expect(screen.queryByText(new RegExp(en['connection.stale']))).toBeNull()
+  })
+
+  it('keeps the last state and says it may not be current once the budget is spent', async () => {
+    mounted(['open-requested', 'frame', 'reconnect', 'offline'])
+    const line = await screen.findByText(new RegExp(en['connection.phase.offline']))
+    expect(line.getAttribute('data-research-connection')).toBe('offline')
+    // THE TWO FACTS ARE SEPARATE: what the link is doing, and that what is on screen may be behind.
+    expect(line.textContent).toContain(en['connection.stale'])
+    expect(line.textContent).toContain('budget spent')
+  })
+
+  it('closes a decision while the link is out of step, and reopens it when it is live', async () => {
+    mounted(['open-requested', 'reconnect'])
+    fireEvent.click(screen.getByRole('button', { name: en['tab.approval'] }))
+    const approve = await screen.findByRole('button', { name: en['approval.approve'] })
+    // RECONNECTING IS NOT LIVE ENOUGH: a decision is about a revision, and this page cannot confirm
+    // the run is still at the one it is showing.
+    expect((approve as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(en['approval.offline'])).toBeTruthy()
+  })
+
+  it('renders no link line for a page that has no run', () => {
+    renderComp(createElement(ResearchWorkbench, { t }))
+    // A PAGE WITH NO RUN HAS NO LINK: an idle line over an empty screen would report a connection the
+    // page never needed.
+    expect(document.querySelector('[data-research-connection]')).toBeNull()
   })
 })

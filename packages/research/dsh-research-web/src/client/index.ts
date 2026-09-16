@@ -18,6 +18,7 @@ import { buildSummary } from '../loader.ts'
 import { summaryInputFrom } from '../run-source.ts'
 import type { WireRunSnapshot } from '../run-source.ts'
 import { buildApprovalSubmitter } from './approval-source.ts'
+import type { ConnectionState } from '../connection-state.ts'
 import { followToRest } from './follow-source.ts'
 import { en, NS, zh } from './locales.ts'
 import { researchViewWith } from './ResearchEntry.tsx'
@@ -287,6 +288,7 @@ export function apply(ctx: Context): void {
   const run = async (
     plan: WirePlan | undefined,
     onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+    onPhase?: (state: ConnectionState) => void,
   ): Promise<void> => {
     const remote = namespace()
     const started = await remote.startRun({
@@ -298,7 +300,7 @@ export function apply(ctx: Context): void {
     if (!started.ok) throw new Error(`${started.error.code}: ${started.error.message}`)
     const runId = started.value.runId
     rememberRunId(runId)
-    await followToRest(remote, runId, null, onUpdate)
+    await followToRest(remote, runId, null, onUpdate, onPhase)
   }
   /**
    * List the studies this deployment holds.
@@ -328,9 +330,10 @@ export function apply(ctx: Context): void {
   const openRun = async (
     runId: string,
     onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+    onPhase?: (state: ConnectionState) => void,
   ): Promise<void> => {
     rememberRunId(runId)
-    await followToRest(namespace(), runId, null, onUpdate)
+    await followToRest(namespace(), runId, null, onUpdate, onPhase)
   }
 
   /**
@@ -375,10 +378,13 @@ export function apply(ctx: Context): void {
    * @param onUpdate - called with each snapshot, starting with the one read on arrival.
    * @returns when the resumed run has stopped, or immediately when there is nothing to resume.
    */
-  const resume = async (onUpdate: (summary: ReturnType<typeof buildSummary>) => void): Promise<void> => {
+  const resume = async (
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ): Promise<void> => {
     const remembered = rememberedRunId()
     if (remembered === null) return
-    await followToRest(namespace(), remembered, null, onUpdate).catch((cause: unknown) => {
+    await followToRest(namespace(), remembered, null, onUpdate, onPhase).catch((cause: unknown) => {
       // A run this deployment no longer holds is not an error on a page that simply came back: the
       // handle was this browser's, so it is this browser's to drop.
       rememberRunId(null)

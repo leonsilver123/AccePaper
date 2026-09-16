@@ -181,6 +181,17 @@ export const zh = {
   'approval.notPersisted': '决定已生效,但保存失败 —— 重启后它会丢失,请不要据此关闭页面。{detail}',
   'approval.summaryUnavailable': '决定已生效,但页面状态未能刷新:{detail}。可以重新查询,不要重复提交决定。',
 
+  // --- 连接状态(页面自己的链路,不是运行的状态) ---
+  'connection.phase.idle': '尚未连接',
+  'connection.phase.connecting': '正在连接部署…',
+  'connection.phase.live': '已连接:下面显示的是后端当前的状态',
+  'connection.phase.reconnecting': '连接中断,正在重连…',
+  'connection.phase.resyncing': '位置被拒绝,正在重新读取…',
+  'connection.phase.offline': '已离线:重连次数用尽',
+  'connection.phase.disposed': '已断开:这项运行不再有更新',
+  'connection.stale': '下面显示的状态可能不是最新的。',
+  'approval.offline': '离线期间不提供裁决:决定是针对某个版本的,而这一页现在无法确认运行仍在那个版本上。',
+
   // --- 修订闭环(请求、候选、差异、复核;接受未实现,面板直说) ---
   'revision.title': '修改与复核',
   'revision.note': '这里显示这项运行上记录过的修改请求、回答它的候选稿,以及对该候选稿的检查结果。全部读自后端记录,刷新后仍在。',
@@ -513,6 +524,16 @@ export const en: Record<ResearchKey, string> = {
   'revision.checkPassed': 'passed',
   'revision.checkFailed': 'failed',
   'revision.acceptNotImplemented': 'This candidate cannot be accepted as the official manuscript yet: turning a candidate into the official manuscript needs an accepting transaction (version comparison and an atomic write) that does not exist. The panel offers no such button and never renders a candidate as accepted.',
+  // --- Connection state (this page's link, not the run's state) ---
+  'connection.phase.idle': 'Not connected yet',
+  'connection.phase.connecting': 'Connecting to the deployment…',
+  'connection.phase.live': 'Connected: what you see is the backend state',
+  'connection.phase.reconnecting': 'The link broke; reconnecting…',
+  'connection.phase.resyncing': 'The position was refused; re-reading…',
+  'connection.phase.offline': 'Offline: the re-open budget is spent',
+  'connection.phase.disposed': 'Disconnected: this run has no more updates',
+  'connection.stale': 'What is on screen may not be current.',
+  'approval.offline': 'Decisions are not offered while offline: a decision is about a revision, and this page cannot confirm the run is still at the one it is showing.',
   // --- Six stages (the workbench grouped by the researcher's task; the grouping is a view) ---
   'progress.steps': 'Steps passed',
   'progress.awaitingHuman': 'Waiting on you',

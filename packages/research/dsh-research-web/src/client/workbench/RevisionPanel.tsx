@@ -39,10 +39,18 @@ export interface RevisionSource {
 export interface RevisionPanelProps extends PanelProps {
   /** Omitted by a host that cannot record or read revisions, which then shows no loop. */
   readonly revisions?: RevisionSource
+  /**
+   * Whether the page's link is live enough to move the loop along.
+   *
+   * Writing a candidate and reviewing one both change the run's records, and a page that cannot reach
+   * the deployment cannot know they still describe what it is showing. Defaults to true for callers
+   * with no link to report.
+   */
+  readonly writesAllowed?: boolean
 }
 
 /** Render the revision loop for the run on screen. */
-export function RevisionPanel({ summary, t, revisions }: RevisionPanelProps) {
+export function RevisionPanel({ summary, t, revisions, writesAllowed = true }: RevisionPanelProps) {
   const [held, setHeld] = useState<ReadonlyArray<WireRevisionView>>([])
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState<string | undefined>(undefined)
@@ -82,11 +90,11 @@ export function RevisionPanel({ summary, t, revisions }: RevisionPanelProps) {
    * @param requestId - the request to answer.
    */
   const generate = useCallback((requestId: string): void => {
-    if (revisions === undefined) return
+    if (revisions === undefined || !writesAllowed) return
     run(requestId, () => revisions.step({
       runId: summary.runId, requestId, candidateId: '', operation: 'generate',
     }))
-  }, [revisions, run, summary.runId])
+  }, [revisions, run, summary.runId, writesAllowed])
 
   /**
    * Judge one candidate.
@@ -95,7 +103,7 @@ export function RevisionPanel({ summary, t, revisions }: RevisionPanelProps) {
    * @param candidateId - the candidate to judge.
    */
   const review = useCallback((requestId: string, candidateId: string): void => {
-    if (revisions === undefined) return
+    if (revisions === undefined || !writesAllowed) return
     run(candidateId, () => revisions.step({
       runId: summary.runId, requestId, candidateId, operation: 'review',
     }))
@@ -129,7 +137,7 @@ export function RevisionPanel({ summary, t, revisions }: RevisionPanelProps) {
                   type="button"
                   className={css.tab}
                   data-research-generate={revision.requestId}
-                  disabled={revisions === undefined || busy !== undefined}
+                  disabled={revisions === undefined || !writesAllowed || busy !== undefined}
                   onClick={() => { generate(revision.requestId) }}
                 >
                   {busy === revision.requestId ? t('revision.generating') : t('revision.generate')}
@@ -162,7 +170,7 @@ export function RevisionPanel({ summary, t, revisions }: RevisionPanelProps) {
                           type="button"
                           className={css.tab}
                           data-research-review={candidate.candidateId}
-                          disabled={revisions === undefined || busy !== undefined}
+                          disabled={revisions === undefined || !writesAllowed || busy !== undefined}
                           onClick={() => { review(revision.requestId, candidate.candidateId) }}
                         >
                           {busy === candidate.candidateId ? t('revision.reviewing') : t('revision.review')}

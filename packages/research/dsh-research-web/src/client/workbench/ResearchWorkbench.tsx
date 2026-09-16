@@ -23,6 +23,9 @@ import type { RunListEntryView } from '../../run-source.ts'
 import { DirectionDialog } from './DirectionDialog.tsx'
 import { selectNextAction, type NextActionKind } from '../../panels.ts'
 import { selectProgress, selectStages, type StageId } from '../../stages.ts'
+import {
+  IDLE_CONNECTION, allowsRevisionBoundWrite, isStale, type ConnectionState,
+} from '../../connection-state.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
 import { PipelinePanel } from './PipelinePanel.tsx'
 import { ArtifactsPanel } from './ArtifactsPanel.tsx'
@@ -52,7 +55,11 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * plan is omitted by a caller that has none to state — the run then carries the deployment's
    * default, which is what a host with no proposal seam can offer.
    */
-  readonly onRun?: (plan: WirePlan | undefined, onUpdate: (summary: RunSummary) => void) => Promise<void>
+  readonly onRun?: (
+    plan: WirePlan | undefined,
+    onUpdate: (summary: RunSummary) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ) => Promise<void>
   /**
    * Ask the host for research directions within a field. Omitted by a host that cannot reach a
    * model, in which case the run control starts the default plan directly rather than opening a
@@ -63,7 +70,10 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
    * Pick up the run this browser was following before a reload, reporting snapshots through the
    * callback. Omitted by a host that cannot name a run again, in which case a reload shows none.
    */
-  readonly onResume?: (onUpdate: (summary: RunSummary) => void) => Promise<void>
+  readonly onResume?: (
+    onUpdate: (summary: RunSummary) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ) => Promise<void>
   /**
    * Submit one human-gate decision to the backend. Omitted by a host whose deployment serves no
    * authenticated approval endpoint, in which case the approval panel's buttons stay disabled.
@@ -83,7 +93,11 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
   /**
    * Open one of those studies. Omitted on the same terms as {@link onListRuns}.
    */
-  readonly onOpenRun?: (runId: string, onUpdate: (summary: RunSummary) => void) => Promise<void>
+  readonly onOpenRun?: (
+    runId: string,
+    onUpdate: (summary: RunSummary) => void,
+    onPhase?: (state: ConnectionState) => void,
+  ) => Promise<void>
   /**
    * The revision loop's read and its two operations. Omitted by a host that cannot record
    * revisions, in which case the tab says so rather than offering controls that cannot work.
@@ -147,6 +161,13 @@ export function ResearchWorkbench({
   // picked is kept until they pick another, and a run that moves on does not yank the view away.
   const [pickedStage, setPickedStage] = useState<StageId | undefined>(undefined)
   /**
+   * What this page's link to the deployment is doing.
+   *
+   * REPORTED BY THE FOLLOW LOOP, which is the only thing that knows: it opens, re-opens, resyncs and
+   * gives up, and each of those is a fact a reader needs. The page keeps the last state it was told.
+   */
+  const [connection, setConnection] = useState<ConnectionState>(IDLE_CONNECTION)
+  /**
    * Which read of a study the page is currently showing.
    *
    * A STUDY OPENED SECOND MUST NOT BE OVERWRITTEN BY THE FIRST. Opening one starts a follow that
@@ -200,7 +221,7 @@ export function ResearchWorkbench({
     if (onResume === undefined || injected !== undefined) return
     let cancelled = false
     const mine = currentRead()
-    void onResume((update) => { if (!cancelled) appliedTo(mine, update) }).catch((cause: unknown) => {
+    void onResume((update) => { if (!cancelled) appliedTo(mine, update) }, setConnection).catch((cause: unknown) => {
       if (cancelled) return
       // A resume that was REFUSED is reported. A resume that found nothing is not an error and does
       // not come through here — the page simply still shows no run.
@@ -218,7 +239,7 @@ export function ResearchWorkbench({
     // rendered as it arrives, so a study that takes minutes is visible while it happens; the
     // promise settles when there is nothing left to read.
     const mine = currentRead()
-    void onRun(plan, (update) => { appliedTo(mine, update) }).then(
+    void onRun(plan, (update) => { appliedTo(mine, update) }, setConnection).then(
       () => { setRunning(false) },
       (cause: unknown) => {
         // A run that failed is reported as a failure. Showing anything else would leave a
@@ -237,6 +258,16 @@ export function ResearchWorkbench({
           next action is derived from the summary rather than written here. */}
       {/* The data attributes are the stable hooks the browser probe reads; the copy itself is
           locale-owned and asserted through these. */}
+      {/* WHAT THE LINK IS DOING, said in the page rather than left to be inferred from a silence: a
+          page that stopped receiving updates and a study that stopped producing them look the same
+          without this line. It is stated for a run on screen only — a page with no run has no link. */}
+      {summary !== undefined && connection.phase !== 'idle' && (
+        <p className={css.note} data-research-connection={connection.phase}>
+          {t(`connection.phase.${connection.phase}`)}
+          {connection.reason === undefined ? '' : ` — ${connection.reason}`}
+          {isStale(connection) ? ` ${t('connection.stale')}` : ''}
+        </p>
+      )}
       <section className={css.intro} data-research-intro="">
         <h2 className={css.introTitle}>{t('intro.title')}</h2>
         <p className={css.note}>{t('intro.what')}</p>
@@ -401,7 +432,7 @@ export function ResearchWorkbench({
                   // THE GENERATION IS TAKEN BEFORE THE READ STARTS, so a read already in flight for
                   // another study cannot land on top of this one.
                   const mine = currentRead()
-                  void onOpenRun(entry.runId, (update) => { appliedTo(mine, update) }).catch((cause: unknown) => {
+                  void onOpenRun(entry.runId, (update) => { appliedTo(mine, update) }, setConnection).catch((cause: unknown) => {
                     setError(cause instanceof Error ? cause.message : String(cause))
                   })
                 }}
@@ -491,6 +522,7 @@ export function ResearchWorkbench({
               t={t}
               {...onApprove === undefined ? {} : { onSubmit: onApprove }}
               onDecided={setLive}
+              writesAllowed={allowsRevisionBoundWrite(connection)}
             />
           )}
           {active === 'revision' && (
@@ -498,6 +530,7 @@ export function ResearchWorkbench({
               summary={summary}
               t={t}
               {...revisions === undefined ? {} : { revisions }}
+              writesAllowed={allowsRevisionBoundWrite(connection)}
             />
           )}
           {active === 'recovery' && <RecoveryPanel summary={summary} t={t} />}

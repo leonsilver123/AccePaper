@@ -8,6 +8,7 @@
  */
 import { buildSummary } from '../loader.ts'
 import { summaryInputFrom, type WireRunFrame } from '../run-source.ts'
+import { IDLE_CONNECTION, applyConnectionEvent, type ConnectionState } from '../connection-state.ts'
 
 /**
  * The host's follow, as this module needs it.
@@ -52,12 +53,30 @@ export async function followToRest(
   runId: string,
   cursor: string | null,
   onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+  /**
+   * Called with the link's state every time it changes.
+   *
+   * THE PAGE HAS TO BE ABLE TO SAY WHAT ITS LINK IS DOING. Without this the only fact a reader gets
+   * is that updates stopped, which is also what a study that stopped producing them looks like. The
+   * loop already knows every transition — it is the thing that re-opens, resyncs and gives up — so it
+   * reports them rather than leaving the page to guess from a silence.
+   */
+  onPhase?: (state: ConnectionState) => void,
 ): Promise<void> {
+  let connection: ConnectionState = IDLE_CONNECTION
+  const phase = (event: Parameters<typeof applyConnectionEvent>[1], reason?: string): void => {
+    connection = applyConnectionEvent(connection, event, reason)
+    onPhase?.(connection)
+  }
+  phase('open-requested')
   // THE POSITION OUTLIVES ONE SUBSCRIPTION. It is what a re-open continues from, so resetting it
   // per attempt would make every re-open a fresh start that could not tell whether it had missed
   // anything — the thing the cursor is for.
   let held = cursor
   for (let attempt = 1; ; attempt += 1) {
+    // A RE-OPEN IS ITS OWN EVENT, and the loop is the only thing that knows it is one: the first
+    // pass opened the link, every pass after it is repairing one.
+    if (attempt > 1) phase('reopen-requested')
     let expected: number | null = null
     let repaired = false
     const frames = remote.followRun({ runId, ...(held === null ? {} : { cursor: held }) })
@@ -68,9 +87,11 @@ export async function followToRest(
         // snapshot that comes back is at the current position, so nothing is lost by dropping it.
         held = null
         repaired = true
+        phase('resync-requested', frame.reason)
         break
       }
       if (frame.type === 'snapshot') {
+        phase('frame')
         held = frame.cursor
         expected = sequenceOfCursor(frame.cursor)
         onUpdate(buildSummary(summaryInputFrom(frame.snapshot)))
@@ -82,6 +103,7 @@ export async function followToRest(
         repaired = true
         break
       }
+      phase('frame')
       expected = frame.event.sequence + 1
       // THE POSITION AFTER THE EVENT, not the event's identity. Naming the identity would ask the
       // host for the event just applied — a duplicate delivery — and it carries no log identity, so
@@ -89,8 +111,14 @@ export async function followToRest(
       // never saw.
       held = frame.event.cursor
     }
-    if (!repaired) return
+    if (!repaired) {
+      // THE LINK IS DONE BECAUSE THE RUN IS: nothing left to read is not a broken connection, and a
+      // page that reported it as one would tell a reader to wait for a study that has finished.
+      phase('dispose')
+      return
+    }
     if (attempt >= MAX_FOLLOW_ATTEMPTS) {
+      phase('budget-exhausted', `the host would not serve a position after ${String(MAX_FOLLOW_ATTEMPTS)} attempts`)
       throw new Error(
         `the host would not serve a position in run ${runId} after ${String(MAX_FOLLOW_ATTEMPTS)} attempts`,
       )

@@ -24,6 +24,15 @@ export interface ApprovalPanelProps extends PanelProps {
   readonly onSubmit?: ApprovalSubmitter
   /** Receive the run summary the backend returned after a decision. */
   readonly onDecided?: (summary: RunSummary) => void
+  /**
+   * Whether the page's link is live enough for a decision.
+   *
+   * A decision is about a revision, and a page that cannot reach the deployment cannot know the run is
+   * still at the one it is showing. The backend refuses a stale decision anyway; this is what keeps a
+   * person from spending a click to learn that. Defaults to true for callers that have no link to
+   * report — the specs and any host that mounts the panel alone.
+   */
+  readonly writesAllowed?: boolean
 }
 
 /**
@@ -68,7 +77,7 @@ type Outcome =
  * Render the E2 human-approval queue, wired to the backend's decision endpoint.
  * @param props - the run summary, the `research` translate, and the approval submitter.
  */
-export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanelProps) {
+export function ApprovalPanel({ summary, t, onSubmit, onDecided, writesAllowed = true }: ApprovalPanelProps) {
   const [rows, setRows] = useState<Record<string, RowState>>({})
   const [outcome, setOutcome] = useState<Outcome | undefined>(undefined)
   // WHAT THE PERSON WANTS CHANGED, per step, while they type it. Held here rather than inside the
@@ -146,7 +155,8 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
       <p className={css.note}>
         {onSubmit === undefined
           ? t('approval.disabled')
-          : revision === null ? t('approval.noRevision') : t('approval.note')}
+          : revision === null ? t('approval.noRevision')
+            : writesAllowed ? t('approval.note') : t('approval.offline')}
       </p>
 
       {/* The receipt is stated once, above the queue: a decision drains its own row when the
@@ -231,7 +241,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                           <button
                             type="button"
                             className={css.approveBtn}
-                            disabled={onSubmit === undefined || revision === null || row?.kind === 'deciding'}
+                            disabled={onSubmit === undefined || revision === null || !writesAllowed || row?.kind === 'deciding'}
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'approved') }}
                           >
                             {row?.kind === 'deciding' ? t('approval.submitting') : t('approval.approve')}
@@ -239,7 +249,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                           <button
                             type="button"
                             className={css.rejectBtn}
-                            disabled={onSubmit === undefined || revision === null || row?.kind === 'deciding'}
+                            disabled={onSubmit === undefined || revision === null || !writesAllowed || row?.kind === 'deciding'}
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'rejected') }}
                           >
                             {t('approval.reject')}
@@ -262,7 +272,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                             type="button"
                             className={css.rejectBtn}
                             data-research-request-changes={step.stepId}
-                            disabled={onSubmit === undefined || revision === null
+                            disabled={onSubmit === undefined || revision === null || !writesAllowed
                               || row?.kind === 'deciding' || (requests[step.stepId] ?? '').trim() === ''}
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'request_changes') }}
                           >
