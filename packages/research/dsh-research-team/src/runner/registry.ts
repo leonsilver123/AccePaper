@@ -956,9 +956,16 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // live. A landscape built from no records is a fabricated one, so the step fails
   // instead (NO DEFAULT PASS) — the same posture the tool itself takes.
   if (artifact.outcome === 'unavailable') {
+    // THE ADAPTER'S OWN REASON TRAVELS WITH THE REFUSAL. It did not before, and the cost was a
+    // browser run that failed with "the catalogue is UNAVAILABLE" and nothing a reader could act
+    // on: an HTTP 403, a rate limit, a DNS failure and a refused venue filter all read identically,
+    // and the reproduction from outside the app process succeeded every time. The tool already
+    // distinguishes them; dropping the detail here threw that away at the last step.
+    const detail = (artifact as { detail?: unknown }).detail
     throw new Error(
-      '[A1-landscape] the retrieval adapter reported its catalogue UNAVAILABLE: an outage '
-      + 'is not "no literature found", and a landscape derived from no records would be '
+      '[A1-landscape] the retrieval adapter reported its catalogue UNAVAILABLE'
+      + (typeof detail === 'string' && detail.length > 0 ? `: ${detail}` : '')
+      + '. An outage is not "no literature found", and a landscape derived from no records would be '
       + 'invented (NO DEFAULT PASS)',
     )
   }

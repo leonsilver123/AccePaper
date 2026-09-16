@@ -81,6 +81,14 @@ export interface LiteratureSearchArtifact {
   readonly hits: ReadonlyArray<LiteratureHit>
   /** True when more matches existed than the returned hits (a cap applied). */
   readonly truncated: boolean
+  /**
+   * Why the catalogue was unavailable, when the adapter said.
+   *
+   * Present only for an `unavailable` outcome, and absent when the adapter gave no reason. It is
+   * the adapter's own words: this tool does not classify outages, and an HTTP status is not a
+   * literature judgment.
+   */
+  readonly detail?: string
 }
 
 /** The three valid synthetic venue tiers (runtime guard for hostile input). */
@@ -232,12 +240,20 @@ function buildArtifact(
       producedAt: timestamp,
     }
     // Adapter outage — NEVER an empty 'ok'. hits stays empty, truncated false.
+    //
+    // THE ADAPTER'S OWN REASON TRAVELS WITH IT. The outcome type has carried a `detail` since the
+    // seam was written, and this function dropped it, so every outage reached the caller as the
+    // same four characters: an HTTP 403, a rate limit, a DNS failure and a refused venue filter
+    // were indistinguishable. A step that fails on an outage has to be able to say what the outage
+    // was, or nobody can tell a dead catalogue from a misconfigured one.
+    const detail = (outcome as { detail?: unknown }).detail
     return freezeArtifact({
       meta,
       query,
       outcome: 'unavailable' as const,
       hits: [],
       truncated: false,
+      ...(typeof detail === 'string' && detail.length > 0 ? { detail } : {}),
     })
   }
 
