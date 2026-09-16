@@ -35,7 +35,20 @@ export interface ApprovalRequest {
   readonly stepId: string
   /** The attempt the reader saw pending; the backend refuses any other. */
   readonly attempt: number
-  readonly decision: 'approved' | 'rejected'
+  /**
+   * What the person decided.
+   *
+   * `request_changes` asks for different work and leaves the gate OPEN — it is not a softer
+   * rejection, and the backend records it as its own outcome.
+   */
+  readonly decision: 'approved' | 'rejected' | 'request_changes'
+  /**
+   * What to change, for a `request_changes` decision.
+   *
+   * The backend refuses a request that names nothing, so the panel requires the text before it
+   * offers the action.
+   */
+  readonly request?: string
   /**
    * The identity of this COMMAND. Reuse it when retrying the same intent; mint a new one when the
    * reader changes their mind.
@@ -72,7 +85,9 @@ export interface ApprovalReceipt {
   readonly status: string
   /** The host-attested operator the backend recorded the decision under. */
   readonly operator: string
-  readonly decision: 'approved' | 'rejected'
+  readonly decision: 'approved' | 'rejected' | 'request_changes'
+  /** What a `request_changes` decision asked for, as the backend recorded it. */
+  readonly request?: string | undefined
   /** Identity of the decision itself, so a later query can find it rather than re-decide. */
   readonly approvalEventId: string
   readonly decidedAt: number
@@ -173,7 +188,7 @@ function readDecision(value: unknown):
   const decision = value['value']
   if (!isRecord(decision)) return { ok: false, code: 'malformed', detail: 'the decision is not an object' }
   const { runId, stepId, attempt, status, operator, approvalEventId, decidedAt, persisted,
-    persistenceError, projectionError, snapshot } = decision
+    persistenceError, projectionError, snapshot, decision: decisionRecord, request: requestText } = decision
   if (typeof runId !== 'string' || typeof stepId !== 'string' || typeof status !== 'string'
     || typeof operator !== 'string' || typeof attempt !== 'number') {
     return { ok: false, code: 'malformed', detail: 'the decision is missing runId, stepId, attempt, status or operator' }
@@ -191,10 +206,16 @@ function readDecision(value: unknown):
         + 'client are not the same build',
     }
   }
-  // The decision the backend recorded is read back from the step it changed rather than
-  // taken from a field: the status IS the decision's outcome, and deriving it keeps the
-  // panel from rendering a decision the backend did not make.
-  const decisionValue = status === 'passed' ? 'approved' : 'rejected'
+  // THE DECISION IS READ FROM THE BACKEND, NOT INFERRED FROM THE STATUS. It used to be derived —
+  // `passed` meant approved and anything else meant rejected — and a change request breaks that
+  // reading: its status stays `gated`, so a derived decision would report the operator a rejection
+  // they did not make and hide the instruction they did write.
+  if (decisionRecord !== 'approved' && decisionRecord !== 'rejected' && decisionRecord !== 'request_changes') {
+    return { ok: false, code: 'malformed', detail: 'the decision does not name which decision was recorded' }
+  }
+  if (decisionRecord === 'request_changes' && typeof requestText !== 'string') {
+    return { ok: false, code: 'malformed', detail: 'a change request was recorded without the instruction it carries' }
+  }
   return {
     ok: true,
     receipt: {
@@ -203,7 +224,8 @@ function readDecision(value: unknown):
       attempt,
       status,
       operator,
-      decision: decisionValue,
+      decision: decisionRecord,
+      ...(typeof requestText === 'string' ? { request: requestText } : {}),
       approvalEventId,
       decidedAt,
       persisted,
@@ -239,6 +261,9 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
         decision: request.decision,
         commandId: request.commandId,
         expectedProjectRevision: request.expectedProjectRevision,
+        // Sent only for the decision that has one: the backend refuses a request that names
+        // nothing, and sending an empty field for the other two would invite it to be read.
+        ...(request.request === undefined ? {} : { request: request.request }),
       })
     } catch (cause) {
       return { ok: false, code: 'transport', detail: cause instanceof Error ? cause.message : String(cause) }

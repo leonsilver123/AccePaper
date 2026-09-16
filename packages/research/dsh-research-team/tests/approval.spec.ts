@@ -773,3 +773,71 @@ describe('§8.1 simulated human identity exists only in test assembly', () => {
     expect(OPERATOR_PRINCIPAL_ID).not.toBe('human')
   })
 })
+
+describe('a change request travels the same channel as the other decisions', () => {
+  it('leaves the gate open and answers with the instruction it recorded', async () => {
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const result = await submitApproval({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-1', expectedProjectRevision: revisionNow(drive),
+      request: '  the claim in §3 is stronger than the measurement  ',
+    })
+    if (!result.ok) throw new Error(`a change request was refused: ${result.error.message}`)
+    // THE GATE IS STILL OPEN: the receipt says which decision was taken and what it asked for, and
+    // the run reports the step where it was rather than blocked.
+    expect(result.value.status).toBe('gated')
+    expect(result.value.decision).toBe('request_changes')
+    expect(result.value.request).toBe('the claim in §3 is stronger than the measurement')
+    expect(result.value.operator).toBe(OPERATOR_PRINCIPAL_ID)
+    expect(result.value.approvalEventId).not.toBe('')
+  })
+
+  it('refuses a request that names nothing to change', async () => {
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    // Read at the boundary, before an event id is minted and before the run is touched: a request
+    // nobody can act on is not a decision, and recording it would leave the gate open with an empty
+    // instruction against it.
+    expect(readSubmission({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-2', expectedProjectRevision: revisionNow(drive), request: '   ',
+    })).toBeUndefined()
+    expect(readSubmission({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-3', expectedProjectRevision: revisionNow(drive),
+    })).toBeUndefined()
+  })
+
+  it('is decided against the revision the reader saw, like any other decision', async () => {
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const stale = await submitApproval({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-4', expectedProjectRevision: revisionNow(drive) + 1,
+      request: 'change something',
+    })
+    // A request is as bound to a revision as an approval: the instruction names work on a document,
+    // and a document nobody read is not the one to change.
+    expect(stale.ok).toBe(false)
+    if (stale.ok) throw new Error('a request against another revision was accepted')
+    expect(stale.error.code).toBe(APPROVAL_ERROR_CODES.staleRevision)
+  })
+
+  it('a retry of the same command reads the first answer', async () => {
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const first = await submitApproval({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-5', expectedProjectRevision: revisionNow(drive), request: 'change something',
+    })
+    const again = await submitApproval({
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'request_changes',
+      commandId: 'cmd-request-5', expectedProjectRevision: revisionNow(drive), request: 'change something',
+    })
+    // A page that never read the first response must not send a second request: the gate is open and
+    // the second send would reach core as a fresh decision with the same event id.
+    expect(again).toEqual(first)
+    expect(again.ok).toBe(true)
+  })
+})

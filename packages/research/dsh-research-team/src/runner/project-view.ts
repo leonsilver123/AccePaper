@@ -49,6 +49,32 @@ export interface StepProjection {
   readonly executeStatus?: string
   readonly executeError?: string
   readonly holdReason?: string
+  /**
+   * The last human decision recorded against this step, when one was.
+   *
+   * Read from the run's own approval record rather than from whatever a page happened to see: a
+   * decision is a durable fact about the study, and a page that loads after it must be able to state
+   * who decided, when, and — for a change request — what was asked for.
+   */
+  readonly approval?: StepApprovalProjection
+}
+
+/** One step's recorded human decision, as a reader of the run needs it. */
+export interface StepApprovalProjection {
+  /** `approved`, `rejected`, or `request_changes`, which leaves the gate open. */
+  readonly decision: string
+  readonly operator: string
+  readonly decidedAt: number
+  /** The instruction a change request carries, or a rejection's reason. */
+  readonly rationale?: string
+  /**
+   * The artifact revisions that were in front of the person, frozen when they decided.
+   *
+   * A decision is about a revision, not a step name: these are the refs the run recorded at the
+   * moment of the decision, so a reader can tell whether the thing they are looking at now is the
+   * thing that was decided about.
+   */
+  readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
 /**
@@ -121,6 +147,17 @@ export function stepProjectionsOf(
       ...(ran === undefined ? {} : { executeStatus: ran.status }),
       ...(ran?.errorMessage === undefined ? {} : { executeError: ran.errorMessage }),
       ...(state?.holdReason === undefined ? {} : { holdReason: state.holdReason }),
+      ...(state?.approval === undefined ? {} : {
+        approval: {
+          decision: state.approval.decision,
+          operator: state.approval.principalId,
+          decidedAt: state.approval.timestamp,
+          ...(state.approval.rationale === undefined ? {} : { rationale: state.approval.rationale }),
+          targetRefs: state.approval.targetRefs.map(ref => ({
+            artifactId: ref.artifactId, version: ref.version,
+          })),
+        },
+      }),
     }
   })
 }

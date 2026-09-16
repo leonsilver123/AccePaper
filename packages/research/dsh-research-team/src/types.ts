@@ -667,6 +667,28 @@ export interface ResearchStepStateView {
    * approval, not a recorded reason.
    */
   readonly holdReason: string | null
+  /**
+   * The last human decision recorded against this step, or `null` when none was.
+   *
+   * Carried on the snapshot rather than only in the decision's own response, because a page that
+   * loads AFTER the decision — a reload, another tab, tomorrow — must be able to state who decided,
+   * when, and, for a change request, what was asked for. A receipt that only the deciding tab ever
+   * sees is a fact about that tab, not about the study.
+   */
+  readonly approval: ResearchStepApprovalView | null
+}
+
+/** One step's recorded human decision, as the wire carries it. */
+export interface ResearchStepApprovalView {
+  /** `approved`, `rejected`, or `request_changes`, which leaves the gate open. */
+  readonly decision: string
+  /** The host-attested operator the decision was recorded under. */
+  readonly operator: string
+  readonly decidedAt: number
+  /** The instruction a change request carries, or a rejection's reason. */
+  readonly rationale: string | null
+  /** The artifact revisions that were in front of the person when they decided. */
+  readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
 /** What `ResearchTeamService.runPipeline` returns, and what the Remote `run` sends. */

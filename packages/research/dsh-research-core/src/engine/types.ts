@@ -105,7 +105,15 @@ export interface ApprovalRecord {
   readonly attempt_id: number
   readonly principalId: string
   readonly approval_event_id: string
-  readonly decision: 'approved' | 'rejected'
+  /**
+   * What the person decided.
+   *
+   * `request_changes` is a third outcome, not a softer `rejected`: it leaves the gate OPEN and the
+   * step `gated`, because the person asked for different work rather than reporting that this one
+   * failed. Its {@link rationale} is the instruction, and it is required for that decision.
+   */
+  readonly decision: 'approved' | 'rejected' | 'request_changes'
+  /** The instruction a `request_changes` decision carries, or a rejection's reason. */
   readonly rationale?: string
   readonly timestamp: number
   /**

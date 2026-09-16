@@ -290,6 +290,18 @@ function snapshotOf(
       status: state.status,
       attempt: state.attemptId,
       holdReason: state.holdReason ?? null,
+      // READ FROM THE RUN'S OWN RECORD, so every reader of this snapshot — the tab that decided, a
+      // tab that reloaded, a page opened tomorrow — states the same decision with the same author
+      // and time, and no tab's memory is the source of what the study did.
+      approval: state.approval === undefined ? null : {
+        decision: state.approval.decision,
+        operator: state.approval.principalId,
+        decidedAt: state.approval.timestamp,
+        rationale: state.approval.rationale ?? null,
+        targetRefs: state.approval.targetRefs.map(ref => ({
+          artifactId: ref.artifactId, version: ref.version,
+        })),
+      },
     })
     for (const component of ['A', 'B', 'C'] as const) {
       const verdict = state.gateResults[component]

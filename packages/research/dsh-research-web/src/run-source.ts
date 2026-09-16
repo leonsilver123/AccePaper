@@ -35,6 +35,7 @@ import type {
   Phase,
   RunStatus,
   RunSummaryInput,
+  StepApprovalView,
   StepStatus,
   DeliverableView,
   RunExecution,
@@ -102,6 +103,24 @@ export interface WireStepState {
   readonly status: string
   readonly attempt: number
   readonly holdReason: string | null
+  /**
+   * The last human decision recorded against this step, or null.
+   *
+   * OPTIONAL in the twin because a host built before the field existed does not send it — and the
+   * panel then states no decision rather than inventing one. A host that sends it states what the
+   * RUN recorded, which is what makes a decision visible to a page that was not open when it was
+   * made.
+   */
+  readonly approval?: WireStepApproval | null
+}
+
+/** One step's recorded human decision, as the wire carries it. */
+export interface WireStepApproval {
+  readonly decision: string
+  readonly operator: string
+  readonly decidedAt: number
+  readonly rationale: string | null
+  readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
 /** The complete payload one `run` returns. */
@@ -315,6 +334,20 @@ function asComponent(value: string): TrinityComponent | undefined {
   return COMPONENTS.find(component => component === value)
 }
 
+/** The three decisions this build knows; a state it cannot name is reported as unknown. */
+const DECISIONS: ReadonlyArray<StepApprovalView['decision']> =
+  ['approved', 'rejected', 'request_changes', 'unknown']
+
+/**
+ * Read a recorded decision, keeping one this build cannot name as its own value.
+ *
+ * @param value - the decision as the wire carries it.
+ * @returns the decision, or `unknown` — never folded into one of the three this build knows.
+ */
+function asDecision(value: string): StepApprovalView['decision'] {
+  return DECISIONS.find(decision => decision === value) ?? 'unknown'
+}
+
 /** Which of the two `status` fields the view took its answer from. */
 export type StepStatusSource = 'outcome' | 'state' | 'unreached'
 
@@ -441,6 +474,17 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
       // `fixture_executor` out of it, so a run whose prose came from the deterministic route was
       // shown as a live run with nothing to say about its text.
       ...(outcome?.kind === undefined ? {} : { executionKind: outcome.kind }),
+      // THE LAST DECISION, from the run's own record: a page that reloaded, or opened tomorrow,
+      // states what was decided and by whom without having been there.
+      ...(state?.approval === undefined || state.approval === null ? {} : {
+        approval: {
+          decision: asDecision(state.approval.decision),
+          operator: state.approval.operator,
+          decidedAt: state.approval.decidedAt,
+          ...(state.approval.rationale === null ? {} : { rationale: state.approval.rationale }),
+          targetRefs: state.approval.targetRefs,
+        },
+      }),
       gateOutcomes: (gatesByStep.get(entry.id) ?? [])
         .map(gate => ({ component: asComponent(gate.component), outcome: gate.outcome }))
         .filter((row): row is { component: TrinityComponent; outcome: GateHistoryEntry['outcome'] } =>

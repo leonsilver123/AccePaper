@@ -349,6 +349,10 @@ const HOLD_REASONS: ReadonlySet<string> = new Set<string>([
 const DECISIONS: ReadonlySet<string> = new Set<string>([
   'approved',
   'rejected',
+  // A third outcome, and the reason it is not folded into `rejected`: it leaves the gate OPEN. A
+  // snapshot written by a build that knows it must load here, and a build that does not know it
+  // refuses the file rather than reading an instruction as a rejection.
+  'request_changes',
 ])
 
 /** Trinity components accepted at the load boundary. */

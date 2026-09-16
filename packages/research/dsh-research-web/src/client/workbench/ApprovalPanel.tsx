@@ -33,16 +33,26 @@ export interface ApprovalPanelProps extends PanelProps {
  * looking at a button they already pressed, and pressing it again has to be the same command.
  * Changing the decision mints a new one, because that is a different intent.
  */
+/** What the panel can ask the backend to do. */
+type Decision = 'approved' | 'rejected' | 'request_changes'
+
 type RowState =
-  | { readonly kind: 'deciding'; readonly decision: 'approved' | 'rejected'; readonly commandId: string }
+  | { readonly kind: 'deciding'; readonly decision: Decision; readonly commandId: string }
   | { readonly kind: 'decided'; readonly receipt: ApprovalReceipt }
   | {
     readonly kind: 'refused'
     readonly code: ApprovalFailure
     readonly detail: string
-    readonly decision: 'approved' | 'rejected'
+    readonly decision: Decision
     readonly commandId: string
   }
+
+/** The tag colour for each recorded decision: a request is neither a pass nor a failure. */
+const ROW_TAG_CLASS: Readonly<Record<Decision, string>> = {
+  approved: 's-passed',
+  rejected: 's-failed',
+  request_changes: 's-gated',
+}
 
 /** The outcome the panel states above the queue, once one decision has landed. */
 type Outcome =
@@ -61,6 +71,9 @@ type Outcome =
 export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanelProps) {
   const [rows, setRows] = useState<Record<string, RowState>>({})
   const [outcome, setOutcome] = useState<Outcome | undefined>(undefined)
+  // WHAT THE PERSON WANTS CHANGED, per step, while they type it. Held here rather than inside the
+  // row so the text survives the button being pressed and a refusal coming back.
+  const [requests, setRequests] = useState<Record<string, string>>({})
 
   const settle = useCallback((stepId: string, row: RowState, stated: Outcome) => {
     setRows(current => ({ ...current, [stepId]: row }))
@@ -70,8 +83,13 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
   // A DECISION NEEDS A REVISION TO BE ABOUT. A page that cannot say which one it is showing cannot
   // promise the reader decided about what they read, so the buttons are not offered.
   const revision = summary.projectRevision
-  const decide = useCallback((runId: string, stepId: string, attempt: number, decision: 'approved' | 'rejected') => {
+  const decide = useCallback((runId: string, stepId: string, attempt: number, decision: Decision) => {
     if (onSubmit === undefined || revision === null) return
+    // A CHANGE REQUEST WITHOUT AN INSTRUCTION IS NOT OFFERED. The backend refuses one that names
+    // nothing, and the panel does not send a decision it knows will be refused — the button stays
+    // disabled until the person says what to change.
+    const request = requests[stepId]?.trim()
+    if (decision === 'request_changes' && (request === undefined || request === '')) return
     // Same intent, same command: a retry after a failure must not become a second decision.
     const previous = rows[stepId]
     const commandId = previous !== undefined && previous.kind === 'refused' && previous.decision === decision
@@ -82,6 +100,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
       runId, stepId, attempt, decision, commandId,
       // The revision on screen. The backend refuses a decision about any other.
       expectedProjectRevision: revision,
+      ...(decision === 'request_changes' && request !== undefined ? { request } : {}),
     }).then(
       (result) => {
         if (result.ok) {
@@ -116,7 +135,7 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
         )
       },
     )
-  }, [onSubmit, onDecided, settle, rows, revision])
+  }, [onSubmit, onDecided, settle, rows, revision, requests])
 
   const detailKey = (code: ApprovalFailure) =>
     code === 'unavailable' ? 'approval.unavailable' : `approval.failure.${code}` as const
@@ -139,12 +158,20 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
             {t('approval.receipt')
               .replace('{stepId}', outcome.receipt.stepId)
               .replace('{attempt}', String(outcome.receipt.attempt))
-              .replace('{decision}', t(outcome.receipt.decision === 'approved' ? 'approval.decided.approved' : 'approval.decided.rejected'))
+              .replace('{decision}', t(`approval.decided.${outcome.receipt.decision}`))
               .replace('{operator}', outcome.receipt.operator)}
           </p>
           {/* A DECISION THIS PROCESS HOLDS AND THE DISK DOES NOT. The operator is told they can not
               rely on it surviving a restart, which is the fact that decides whether they may close
               the page — and it is stated as what it is, not as a failed approval. */}
+          {/* WHAT WAS ASKED FOR, as the backend recorded it. It is the whole content of the
+              decision, and a receipt that said only "changes requested" would leave the person
+              who must act on it with nothing. */}
+          {outcome.receipt.request !== undefined && (
+            <p className={css.note} data-research-approval-request="">
+              {t('approval.requestRecorded').replace('{request}', outcome.receipt.request)}
+            </p>
+          )}
           {!outcome.receipt.persisted && (
             <p className={css.refusal}>
               {t('approval.notPersisted').replace('{detail}', outcome.receipt.persistenceError ?? '')}
@@ -169,6 +196,19 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                   <span className={css.name}>
                     {step.name}
                     <small>{step.stepId} · {t('step.humanGate')} · {t('approval.attempt').replace('{attempt}', String(step.attempt))}</small>
+                    {/* WHAT WAS ALREADY DECIDED, for a page that was not there when it was: the
+                        gate is open because a change request left it open, and the person looking
+                        at it now has to be able to read what was asked for without asking anyone. */}
+                    {step.approval !== undefined && row === undefined && (
+                      <small data-research-recorded-decision={step.stepId}>
+                        {t(`approval.decided.${step.approval.decision}`)}
+                        {' · '}
+                        {step.approval.operator}
+                        {step.approval.rationale === undefined
+                          ? ''
+                          : ` · ${t('approval.requestRecorded').replace('{request}', step.approval.rationale)}`}
+                      </small>
+                    )}
                   </span>
                   <span className={css.meta}>
                     {row?.kind === 'refused' && (
@@ -176,8 +216,14 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                     )}
                     {row?.kind === 'decided'
                       ? (
-                        <span className={`${css.tag} ${css[row.receipt.decision === 'approved' ? 's-passed' : 's-failed']}`}>
-                          {t(row.receipt.decision === 'approved' ? 'approval.decided.approved' : 'approval.decided.rejected')}
+                        // The recorded decision, in all three of its values: a change request that
+                        // rendered as "rejected" would report a stopped study where the gate is in
+                        // fact still open and waiting for the work it asked for.
+                        <span
+                          className={`${css.tag} ${css[ROW_TAG_CLASS[row.receipt.decision]]}`}
+                          data-research-decision={row.receipt.decision}
+                        >
+                          {t(`approval.decided.${row.receipt.decision}`)}
                         </span>
                       )
                       : (
@@ -197,6 +243,30 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
                             onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'rejected') }}
                           >
                             {t('approval.reject')}
+                          </button>
+                          {/* THE ACTION BETWEEN THE TWO. Approving passes work the person may not
+                              accept and rejecting stops a study they want continued; asking for a
+                              change is what they actually mean, and it leaves the gate open. */}
+                          <input
+                            type="text"
+                            className={css.requestInput}
+                            aria-label={t('approval.requestLabel')}
+                            placeholder={t('approval.requestPlaceholder')}
+                            value={requests[step.stepId] ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              setRequests(current => ({ ...current, [step.stepId]: value }))
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className={css.rejectBtn}
+                            data-research-request-changes={step.stepId}
+                            disabled={onSubmit === undefined || revision === null
+                              || row?.kind === 'deciding' || (requests[step.stepId] ?? '').trim() === ''}
+                            onClick={() => { decide(summary.runId, step.stepId, step.attempt, 'request_changes') }}
+                          >
+                            {t('approval.requestChanges')}
                           </button>
                         </>
                       )}

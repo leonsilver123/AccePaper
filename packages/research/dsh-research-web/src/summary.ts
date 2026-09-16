@@ -63,6 +63,23 @@ export type RunStatus =
 export type HoldReason = 'human_gate' | 'gate_abstained'
 
 /** One step's flattened presentation row. */
+/**
+ * One step's recorded human decision, as the view renders it.
+ *
+ * A decision is a durable fact about the study, so it is carried by the run's own snapshot rather
+ * than only by the receipt of the tab that made it.
+ */
+export interface StepApprovalView {
+  /** One of the three decisions this build knows, or `unknown` for one it cannot name. */
+  readonly decision: 'approved' | 'rejected' | 'request_changes' | 'unknown'
+  readonly operator: string
+  readonly decidedAt: number
+  /** The instruction a change request carries, or a rejection's reason. */
+  readonly rationale?: string
+  /** The artifact revisions that were in front of the person when they decided. */
+  readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
+}
+
 export interface StepView {
   readonly stepId: string
   readonly index: number
@@ -76,6 +93,8 @@ export interface StepView {
   readonly humanGate: boolean
   /** Present only when `status === 'gated'`. */
   readonly holdReason?: HoldReason
+  /** The last decision recorded against this step, when the host reports one. */
+  readonly approval?: StepApprovalView
   /**
    * The step's execution outcome, and the reason when it did not succeed.
    *

@@ -1044,9 +1044,10 @@ export function _applyHumanApproval(
   store: ResearchRunStore,
   runId: string,
   stepId: string,
-  decision: 'approved' | 'rejected',
+  decision: 'approved' | 'rejected' | 'request_changes',
   principalId: string,
   approvalEventId: string,
+  rationale?: string,
 ): StepStatus {
   const run = ensureRun(store, runId)
   const step = lookupStep(stepId)
@@ -1065,6 +1066,13 @@ export function _applyHumanApproval(
   if (run.consumedApprovals.has(approvalEventId)) {
     throw new ResearchError('DSH_APPROVAL_REPLAY', `_applyHumanApproval: approvalEventId '${approvalEventId}' already consumed — INV-REPLAY (single-use per run)`)
   }
+  // A CHANGE REQUEST NAMES WHAT TO CHANGE. It is the difference between a decision and a gesture: a
+  // request with no text leaves the reader who must act on it with nothing, so it is refused here
+  // rather than recorded as an empty instruction.
+  const request = decision === 'request_changes' ? rationale?.trim() : undefined
+  if (decision === 'request_changes' && (request === undefined || request.length === 0)) {
+    throw new ResearchError('DSH_APPROVAL_REQUEST_EMPTY', `_applyHumanApproval: a request_changes decision must name what to change (step '${stepId}')`)
+  }
   const approval: ApprovalRecord = {
     run_id: runId,
     step_id: stepId,
@@ -1072,6 +1080,7 @@ export function _applyHumanApproval(
     principalId,
     approval_event_id: approvalEventId,
     decision,
+    ...(request === undefined ? {} : { rationale: request }),
     timestamp: Date.now(),
     // Frozen HERE, from the run's own registry, so the record says which revision was in front of
     // the person. A caller cannot supply them, and `approvalStalenessOf` compares them later.
@@ -1082,8 +1091,17 @@ export function _applyHumanApproval(
   }
   state.approval = approval
   run.consumedApprovals.add(approvalEventId)
-  const to: StepStatus = decision === 'approved' ? 'passed' : 'blocked'
-  _apply(state, step, to)
-  pushEvent(run, 'human-approval', stepId, state.attempt_id, { principalId, approvalEventId, decision })
+  // A REQUEST FOR CHANGES DOES NOT CLOSE THE GATE. The person has said what to change, not that the
+  // step failed: the step stays `gated`, the gate stays open, and the request is what the next round
+  // of work answers. Treating it as a rejection would report the study as blocked on a decision that
+  // was in fact an instruction, and it would lose the gate the request is about.
+  if (decision !== 'request_changes') {
+    const to: StepStatus = decision === 'approved' ? 'passed' : 'blocked'
+    _apply(state, step, to)
+  }
+  pushEvent(run, 'human-approval', stepId, state.attempt_id, {
+    principalId, approvalEventId, decision,
+    ...(request === undefined ? {} : { rationale: request }),
+  })
   return state.status
 }

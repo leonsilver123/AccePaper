@@ -16,7 +16,7 @@
 
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { toRunSummary, type RunSummaryInput } from '../src/summary.ts'
 import { en } from '../src/client/locales.ts'
 import {
@@ -398,7 +398,7 @@ describe('the approval request carries exactly the decidable fields', () => {
     const connection = connectionDouble({
       ok: true,
       value: {
-        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed',
+        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed', decision: 'approved',
         operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
         snapshot: passedSnapshot('run_1'),
       },
@@ -424,8 +424,24 @@ describe('the approval request carries exactly the decidable fields', () => {
     }
   })
 
-  it('reads the decision from the recorded status, not from a field the payload could set', async () => {
-    const connection = connectionDouble({
+  it('reads the decision the backend recorded, and refuses a receipt that names none', async () => {
+    // WHAT CHANGED, AND WHY. The decision used to be derived from the status (`passed` meant
+    // approved, anything else rejected). A change request breaks that reading: its status stays
+    // `gated`, so a derived decision reports a rejection the operator did not make and hides the
+    // instruction they did write. The decision is now read from the backend's own field, and a host
+    // that does not send one is reported as a different build rather than guessed at.
+    const recorded = connectionDouble({
+      ok: true,
+      value: {
+        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'blocked', decision: 'rejected',
+        operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+        snapshot: passedSnapshot('run_1'),
+      },
+    })
+    const rejected = await buildApprovalSubmitter(() => recorded.service)(request)
+    expect(rejected.ok && rejected.receipt.decision).toBe('rejected')
+
+    const silent = connectionDouble({
       ok: true,
       value: {
         runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'blocked',
@@ -433,10 +449,8 @@ describe('the approval request carries exactly the decidable fields', () => {
         snapshot: passedSnapshot('run_1'),
       },
     })
-    const outcome = await buildApprovalSubmitter(() => connection.service)(request)
-
-    // A `blocked` status is a rejection however the request was phrased.
-    expect(outcome.ok && outcome.receipt.decision).toBe('rejected')
+    const unnamed = await buildApprovalSubmitter(() => silent.service)(request)
+    expect(unnamed.ok).toBe(false)
   })
 
   it('refuses a receipt that does not say whether the decision was saved', async () => {
@@ -446,7 +460,7 @@ describe('the approval request carries exactly the decidable fields', () => {
     const connection = connectionDouble({
       ok: true,
       value: {
-        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed',
+        runId: 'run_1', stepId: 'E2-submit', attempt: 3, status: 'passed', decision: 'approved',
         operator: 'authenticated-browser-operator', approvalEventId: 'evt-1', decidedAt: 1,
         snapshot: passedSnapshot('run_1'),
       },
@@ -493,5 +507,126 @@ describe('the approval request carries exactly the decidable fields', () => {
       const outcome = await buildApprovalSubmitter(() => candidate)(request)
       expect(outcome.ok ? '' : outcome.code).toBe('unavailable')
     }
+  })
+})
+
+// ===========================================================================
+// S6: the change request, from the panel to the receipt.
+//
+// The gate had two outcomes and the person had three intents: approving passed work they may not
+// accept, rejecting stopped a study they wanted continued, and "change this and show me again" had
+// nowhere to go. These cases are about the third one — that it cannot be sent empty, that it leaves
+// the gate open, and that the receipt carries the instruction back.
+// ===========================================================================
+describe('a change request at the gate', () => {
+  it('cannot be sent without saying what to change', () => {
+    const onSubmit = vi.fn(() => Promise.resolve({
+      ok: true as const,
+      receipt: {
+        runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'gated',
+        operator: 'operator', decision: 'request_changes' as const, request: 'x',
+        approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+      },
+    }))
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+
+    const button = screen.getByRole('button', { name: en['approval.requestChanges'] })
+    // BEFORE THE FIELD IS FILLED the action is not offered: the backend refuses a request that names
+    // nothing, and a button that would send one teaches the person a refusal they cannot fix.
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(en['approval.requestLabel']), { target: { value: '   ' } })
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(en['approval.requestLabel']), { target: { value: 'tighten §3' } })
+    expect((button as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(button)
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      decision: 'request_changes', request: 'tighten §3',
+    })
+  })
+
+  it('shows the instruction the backend recorded, when the decision landed', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({
+      ok: true as const,
+      receipt: {
+        runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'gated',
+        operator: 'operator', decision: 'request_changes' as const, request: 'tighten §3',
+        approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+      },
+    }))
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+    fireEvent.change(screen.getByLabelText(en['approval.requestLabel']), { target: { value: 'tighten §3' } })
+    fireEvent.click(screen.getByRole('button', { name: en['approval.requestChanges'] }))
+
+    // THE RECEIPT SAYS WHAT WAS ASKED FOR, not only that something was: the instruction is the whole
+    // content of the decision, and whoever acts on it has to be able to read it back.
+    const recorded = await screen.findByText(new RegExp(en['approval.requestRecorded'].split('{')[0] as string))
+    expect(recorded.textContent).toContain('tighten §3')
+    // And it is stated as a request, never as an approval or a rejection.
+    expect(screen.getAllByText(en['approval.decided.request_changes']).length).toBeGreaterThan(0)
+  })
+
+  it('leaves the decision with the person when the backend refuses it', () => {
+    const onSubmit = vi.fn(() => Promise.resolve({
+      ok: false as const, code: 'staleRevision' as const, detail: 'the run moved',
+    }))
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+    fireEvent.change(screen.getByLabelText(en['approval.requestLabel']), { target: { value: 'tighten §3' } })
+    fireEvent.click(screen.getByRole('button', { name: en['approval.requestChanges'] }))
+
+    // The text the person wrote is still in the field: a refusal they must act on (re-read, then ask
+    // again) should not also cost them what they typed.
+    return waitFor(() => {
+      expect((screen.getByLabelText(en['approval.requestLabel']) as HTMLInputElement).value).toBe('tighten §3')
+    })
+  })
+})
+
+describe('a decision a page did not make', () => {
+  it('is stated on the step, from the run’s own record', () => {
+    // A page that reloaded — or was never open — must still be able to read what was decided and
+    // what was asked for. The gate is open because a change request left it open, and the row says
+    // so rather than showing a decision-free gate that invites the same request twice.
+    openApprovalTab({
+      onApprove: vi.fn(() => Promise.resolve({
+        ok: true as const,
+        receipt: {
+          runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'gated',
+          operator: 'operator', decision: 'request_changes' as const, request: 'tighten §3',
+          approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+        },
+      })),
+      summary: toRunSummary({
+        ...gatedInput(),
+        steps: [{
+          stepId: 'E2-submit', index: 16, phase: 'E', name: 'Submission', status: 'gated',
+          attempt: 2, humanGate: true, holdReason: 'human_gate', gateOutcomes: [],
+          approval: {
+            decision: 'request_changes' as const,
+            operator: 'authenticated-browser-operator',
+            decidedAt: 1,
+            rationale: 'tighten §3',
+            targetRefs: [{ artifactId: 'manuscript', version: 3 }],
+          },
+        }],
+      }),
+    })
+
+    const stated = document.querySelector('[data-research-recorded-decision="E2-submit"]')
+    expect(stated?.textContent).toContain(en['approval.decided.request_changes'])
+    expect(stated?.textContent).toContain('tighten §3')
+    // The instruction is still readable AND the decision is still the reader's to make or change.
+    expect((screen.getAllByRole('button', { name: en['approval.approve'] })[0] as HTMLButtonElement).disabled)
+      .toBe(false)
+  })
+
+  it('renders no decision at all when the host reports none', () => {
+    openApprovalTab({ summary: toRunSummary(gatedInput()) })
+    // Not "decided nothing": a host that reports no decision has said nothing, and the row shows
+    // nothing rather than an empty verdict.
+    expect(document.querySelector('[data-research-recorded-decision]')).toBeNull()
   })
 })

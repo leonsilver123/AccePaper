@@ -123,7 +123,7 @@ export interface HostApprovalChannel {
    *  channel (object identity — RC-E E1) bound to (runId, stepId) whose principalId is in this
    *  channel's registry. Verifies identity + channel + runId + stepId + decision + the current
    *  pending-approval step (status gated), not just type/string fields. Returns the status. */
-  submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected', principal: TrustedHumanPrincipal): StepStatus
+  submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected' | 'request_changes', principal: TrustedHumanPrincipal, rationale?: string): StepStatus
 }
 
 let activeChannel: HostApprovalChannel | undefined
@@ -180,7 +180,7 @@ export function createHostApprovalChannel(hostSecret: string): HostApprovalChann
       principals.add(principal)
       return principal
     },
-    submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected', principal: TrustedHumanPrincipal): StepStatus {
+    submit(runs: ResearchRunStore, runId: string, stepId: string, decision: 'approved' | 'rejected' | 'request_changes', principal: TrustedHumanPrincipal, rationale?: string): StepStatus {
       // Single-snapshot (INV-PRINCIPAL-SNAPSHOT): read each principal field ONCE into locals.
       // The principal is frozen at mint time (Object.freeze), so these are immutable — but
       // reading once also defeats a getter-bearing principal that returns a different value per
@@ -222,7 +222,10 @@ export function createHostApprovalChannel(hostSecret: string): HostApprovalChann
       }
       // _applyHumanApproval re-checks status==='gated' (the current pending-approval step —
       // INV-APPROVAL-STATE) + step.humanGate + approvalEventId single-use (INV-REPLAY).
-      return _applyHumanApproval(runs, runId, stepId, decision, pPrincipalId, pApprovalEventId)
+      // A change request keeps the gate open, so a caller that asks for changes and then approves
+      // sends a NEW approvalEventId for the second decision: the first one is consumed either way,
+      // and reuse would be a replay of a decision that was already made.
+      return _applyHumanApproval(runs, runId, stepId, decision, pPrincipalId, pApprovalEventId, rationale)
     },
   }
   activeChannel = channel

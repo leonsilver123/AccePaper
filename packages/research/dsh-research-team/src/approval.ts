@@ -93,7 +93,23 @@ export interface ApprovalSubmission {
   readonly stepId: string
   /** The attempt the caller saw pending. A decision for any other attempt is refused. */
   readonly attempt: number
-  readonly decision: 'approved' | 'rejected'
+  /**
+   * What the person decided.
+   *
+   * `request_changes` is a third outcome and not a softer `rejected`: the gate STAYS OPEN and the
+   * step stays `gated`, because the person asked for different work rather than reporting that this
+   * one failed. Its {@link request} is the instruction, and it is required for that decision — a
+   * request that names nothing leaves whoever must act on it with nothing.
+   */
+  readonly decision: 'approved' | 'rejected' | 'request_changes'
+  /**
+   * What to change, for a `request_changes` decision.
+   *
+   * Read from the caller and carried into the run's own approval record, so the instruction is a
+   * durable fact about this run rather than a message in whatever chat asked for it. Ignored for the
+   * other two decisions, which have nothing to instruct.
+   */
+  readonly request?: string
   /**
    * The identity of the COMMAND, not of the decision.
    *
@@ -123,8 +139,15 @@ export interface ApprovalDecision {
   readonly runId: string
   readonly stepId: string
   readonly attempt: number
-  /** The status core moved the step to: `passed` for an approval, `blocked` for a rejection. */
+  /**
+   * The status the step is in after the decision.
+   *
+   * `passed` for an approval, `blocked` for a rejection, and `gated` for a change request — which
+   * leaves the gate where it was, open, with the instruction recorded against it.
+   */
   readonly status: StepStatus
+  /** Which decision was recorded. A caller renders the receipt from this, not from its own intent. */
+  readonly decision: 'approved' | 'rejected' | 'request_changes'
   /** The host-attested principal that decided. */
   readonly operator: string
   /** The single-use event id the decision was recorded under. */
@@ -339,7 +362,13 @@ export function readSubmission(payload: unknown): ApprovalSubmission | undefined
   if (typeof runId !== 'string' || runId === '') return undefined
   if (typeof stepId !== 'string' || stepId === '') return undefined
   if (typeof attempt !== 'number' || !Number.isSafeInteger(attempt) || attempt < 0) return undefined
-  if (decision !== 'approved' && decision !== 'rejected') return undefined
+  if (decision !== 'approved' && decision !== 'rejected' && decision !== 'request_changes') return undefined
+  // A REQUEST MUST SAY WHAT TO CHANGE. Validated here rather than inside core so a caller learns it
+  // before an event id is minted and a run is touched; core refuses it too, because a rule enforced
+  // only at one boundary is a rule the next caller does not have.
+  const request = record['request']
+  if (decision === 'request_changes' && (typeof request !== 'string' || request.trim() === '')) return undefined
+  if (request !== undefined && typeof request !== 'string') return undefined
   // REQUIRED. A command with no identity cannot be retried safely, and defaulting one here would
   // make every retry a fresh decision — the failure this field exists to prevent.
   if (typeof commandId !== 'string' || commandId === '') return undefined
@@ -350,7 +379,10 @@ export function readSubmission(payload: unknown): ApprovalSubmission | undefined
   if (typeof expectedProjectRevision !== 'number' || !Number.isSafeInteger(expectedProjectRevision) || expectedProjectRevision < 0) {
     return undefined
   }
-  return { runId, stepId, attempt, decision, commandId, expectedProjectRevision }
+  return {
+    runId, stepId, attempt, decision, commandId, expectedProjectRevision,
+    ...(typeof request === 'string' ? { request } : {}),
+  }
 }
 
 /**
@@ -440,7 +472,10 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
   const approvalEventId = randomUUID()
   try {
     const principal = channel.mintPrincipal(runId, stepId, OPERATOR_PRINCIPAL_ID, approvalEventId)
-    const status = channel.submit(run.store, runId, stepId, decision, principal)
+    const status = channel.submit(
+      run.store, runId, stepId, decision, principal,
+      decision === 'request_changes' ? submission.request : undefined,
+    )
     // PERSIST AFTER the decision, never before: the store now holds the state the decision
     // produced, and saving first would write the pre-decision state under a revision the
     // decision then invalidates. A failure here does NOT un-decide anything — the run has the
@@ -483,6 +518,8 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
         stepId,
         attempt,
         status,
+        decision,
+        ...(decision === 'request_changes' ? { request: submission.request?.trim() } : {}),
         operator: OPERATOR_PRINCIPAL_ID,
         approvalEventId,
         decidedAt: Date.now(),
