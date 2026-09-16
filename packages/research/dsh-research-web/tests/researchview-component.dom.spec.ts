@@ -197,7 +197,12 @@ describe('research workbench DOM', () => {
     for (const key of tabLabels) {
       expect(screen.getByRole('button', { name: en[key] })).toBeTruthy()
     }
-    expect(screen.getAllByRole('button')).toHaveLength(9)
+    // THE NINE TABS ARE THE TAB STRIP, so the count is taken from the strip rather than from the
+    // whole page: the workbench also carries the stage navigation (six buttons) and the study list,
+    // and a page-wide count made every one of those a failure of this test.
+    const strip = screen.getByRole('button', { name: en['tab.summary'] }).closest('nav')
+    expect(strip).not.toBeNull()
+    expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(9)
 
     // Default view is the Summary panel.
     expect(screen.getByText(/Step progress/)).toBeTruthy()
@@ -755,5 +760,182 @@ describe('research workbench tab coverage', () => {
     } finally {
       errorSpy.mockRestore()
     }
+  })
+})
+
+// ===========================================================================
+// S5: the six stages, and what each one reports.
+//
+// The stage view is a VIEW: every state below is asserted to come from the run's own step outcomes,
+// so a collapse or a click can never change whether a study advances.
+// ===========================================================================
+describe('research workbench stages', () => {
+  const REAL_STEPS: ReadonlyArray<{ id: string; index: number; phase: StepView['phase'] }> = [
+    { id: 'A1-landscape', index: 1, phase: 'A' },
+    { id: 'A2-claim', index: 2, phase: 'A' },
+    { id: 'A3-agenda', index: 3, phase: 'A' },
+    { id: 'A4-venue', index: 4, phase: 'A' },
+    { id: 'B1-method', index: 5, phase: 'B' },
+    { id: 'B2-data', index: 6, phase: 'B' },
+    { id: 'B3-baseline', index: 7, phase: 'B' },
+    { id: 'C1-mvp', index: 8, phase: 'C' },
+    { id: 'C2-trinity-loop', index: 9, phase: 'C' },
+    { id: 'C3-boundary', index: 10, phase: 'C' },
+    { id: 'D1-figure-map', index: 11, phase: 'D' },
+    { id: 'D2-framework', index: 12, phase: 'D' },
+    { id: 'D3-writing', index: 13, phase: 'D' },
+    { id: 'D4-rebuttal', index: 14, phase: 'D' },
+    { id: 'E1-format', index: 15, phase: 'E' },
+    { id: 'E2-submit', index: 16, phase: 'E' },
+  ]
+
+  /** A run carrying the engine's real steps, with the statuses given. */
+  function realRun(
+    overrides: Readonly<Record<string, StepView['status']>>,
+    detail?: { readonly stepId: string; readonly extra: Partial<StepView> },
+  ): RunSummaryInput {
+    return emptyRun('run_stages_dom', 'running', REAL_STEPS.map(definition => ({
+      stepId: definition.id, index: definition.index, phase: definition.phase, name: definition.id,
+      status: overrides[definition.id] ?? 'pending',
+      attempt: overrides[definition.id] === undefined ? 0 : 1,
+      humanGate: definition.id === 'E2-submit',
+      gateOutcomes: [],
+      ...(detail?.stepId === definition.id ? detail.extra : {}),
+    })))
+  }
+
+  /** Mount the workbench over a summary and return the stage strip. */
+  function mountStages(input: RunSummaryInput) {
+    renderComp(createElement(ResearchWorkbench, { t, summary: buildSummary(input) }))
+    return screen.getByRole('navigation', { name: en['stages.title'] })
+  }
+
+  it('renders the six stages in order, with the run own counts', () => {
+    const strip = mountStages(realRun({ 'A1-landscape': 'passed', 'A2-claim': 'passed' }))
+    const buttons = within(strip).getAllByRole('button')
+    expect(buttons.map(button => button.getAttribute('data-research-stage'))).toEqual([
+      'intake', 'literature', 'method', 'results', 'writing', 'delivery',
+    ])
+    // The strip states each stage's own count; the numbers are what a reader checks, and they come
+    // from the run rather than from the strip.
+    expect(within(strip).getByRole('button', { name: new RegExp(en['stages.literature']) })
+      .textContent).toContain('2 of 4')
+  })
+
+  it('opens on the stage the study is actually in', () => {
+    // A1 and A2 passed, A3 in flight: the literature stage is where the work is, and a page that
+    // just loaded must not open on the intake group.
+    mountStages(realRun({ 'A1-landscape': 'passed', 'A2-claim': 'passed', 'A3-agenda': 'in_progress' }))
+    expect(screen.getByRole('button', { name: new RegExp(en['stages.literature']) })
+      .getAttribute('aria-current')).toBe('step')
+  })
+
+  it('keeps a decision waiting on a person apart from progress', () => {
+    const strip = mountStages(realRun({
+      'A1-landscape': 'passed', 'A2-claim': 'passed', 'A3-agenda': 'passed', 'A4-venue': 'passed',
+      'B1-method': 'passed', 'B2-data': 'passed', 'B3-baseline': 'passed',
+      'C1-mvp': 'passed', 'C2-trinity-loop': 'passed', 'C3-boundary': 'passed', 'D1-figure-map': 'passed',
+      'D2-framework': 'passed', 'D3-writing': 'passed', 'D4-rebuttal': 'passed', 'E1-format': 'passed',
+      'E2-submit': 'gated',
+    }))
+    expect(within(strip).getByRole('button', { name: new RegExp(en['stages.delivery']) })
+      .getAttribute('data-research-stage-state')).toBe('awaiting-human')
+    // The decision is counted as a to-do, never as progress towards completion.
+    expect(screen.getByText(en['progress.awaitingHuman']).parentElement?.textContent).toContain('1')
+  })
+
+  it('names the cause of a failure on the stage that failed', () => {
+    renderComp(createElement(ResearchWorkbench, {
+      t,
+      summary: buildSummary(realRun({ 'C1-mvp': 'failed' }, {
+        stepId: 'C1-mvp', extra: { executeError: 'the experiment runner exited 1' },
+      })),
+    }))
+    const strip = screen.getByRole('navigation', { name: en['stages.title'] })
+    fireEvent.click(within(strip).getByRole('button', { name: new RegExp(en['stages.results']) }))
+    // Scoped to the stage workspace: the same failure also appears in the summary panel, and the
+    // claim here is that THIS stage names it.
+    const workspace = document.querySelector('[data-research-stage-workspace="results"]') as HTMLElement
+    expect(within(workspace).getByText('the experiment runner exited 1')).toBeTruthy()
+  })
+
+  it('says what a later stage is waiting for instead of offering it', () => {
+    const strip = mountStages(realRun({ 'A1-landscape': 'in_progress' }))
+    fireEvent.click(within(strip).getByRole('button', { name: new RegExp(en['stages.delivery']) }))
+    expect(screen.getByText(en['stages.explain.not-started'])).toBeTruthy()
+  })
+
+  it('does not render an empty panel for the group the person supplies', () => {
+    const strip = mountStages(realRun({}))
+    fireEvent.click(within(strip).getByRole('button', { name: new RegExp(en['stages.intake']) }))
+    expect(screen.getByText(en['stages.intakeNote'])).toBeTruthy()
+  })
+
+  it('reports a projection this build cannot place instead of calling it the person own', () => {
+    // The synthetic fixture carries ids this build does not know: every stage must say so rather
+    // than rendering the intake note over steps that exist on the host.
+    mountStages(fixtureInput())
+    const prefix = en['stages.missingSteps'].split('{')[0] as string
+    expect(screen.getAllByText(new RegExp(prefix)).length).toBeGreaterThan(0)
+    // And the intake group is NOT what it says: the run's steps exist, this build just cannot place
+    // them, so the person's own material is not claimed to be the thing on screen.
+    expect(screen.queryByText(en['stages.intakeNote'])).toBeNull()
+  })
+
+  it('shows counts rather than a percentage', () => {
+    renderComp(createElement(ResearchWorkbench, {
+      t,
+      summary: buildSummary(realRun({ 'A1-landscape': 'passed', 'A2-claim': 'passed' })),
+    }))
+    const line = screen.getByText(en['progress.steps']).parentElement
+    expect(line?.textContent).toContain('2 / 16')
+    expect(line?.textContent).not.toMatch(/%/)
+  })
+})
+
+// ===========================================================================
+// A study opened second is not overwritten by the first.
+// ===========================================================================
+describe('a late read of another study', () => {
+  it('cannot replace the study the person moved to', async () => {
+    const studies = [
+      { runId: 'run-first', execution: 'stopped', projectRevision: 3, stepsPassed: 1, stepsTotal: 16, submissionReady: false, saveFailure: null, executionError: null, interrupted: [] },
+      { runId: 'run-second', execution: 'stopped', projectRevision: 9, stepsPassed: 7, stepsTotal: 16, submissionReady: false, saveFailure: null, executionError: null, interrupted: [] },
+    ]
+    const callbacks: Array<(summary: ReturnType<typeof buildSummary>) => void> = []
+    const onOpenRun = vi.fn((_runId: string, onUpdate: (summary: ReturnType<typeof buildSummary>) => void) => {
+      callbacks.push(onUpdate)
+      return Promise.resolve()
+    })
+    renderComp(createElement(ResearchWorkbench, {
+      t,
+      onListRuns: () => Promise.resolve(studies),
+      onOpenRun,
+    }))
+    await screen.findByText('run-first')
+    const buttons = screen.getAllByRole('button', { name: en['projects.open'] })
+    fireEvent.click(buttons[0] as HTMLElement)
+    await waitFor(() => { expect(onOpenRun).toHaveBeenCalledTimes(1) })
+    fireEvent.click(buttons[1] as HTMLElement)
+    await waitFor(() => { expect(onOpenRun).toHaveBeenCalledTimes(2) })
+
+    // The study the person moved to arrives, and the page shows it.
+    await act(async () => {
+      callbacks[1]?.(buildSummary(emptyRun('run-second', 'stopped', [
+        { stepId: 'A1-landscape', index: 1, phase: 'A', name: 'A1', status: 'passed', attempt: 1, humanGate: false, gateOutcomes: [] },
+      ])))
+    })
+    const shown = () => document.querySelector('[data-research-run-id]')?.textContent ?? ''
+    expect(shown()).toContain('run-second')
+
+    // The FIRST study's follow answers late. Its numbers describe another study, and the page must
+    // stay on the one the person picked.
+    await act(async () => {
+      callbacks[0]?.(buildSummary(emptyRun('run-first', 'stopped', [
+        { stepId: 'A1-landscape', index: 1, phase: 'A', name: 'A1', status: 'pending', attempt: 0, humanGate: false, gateOutcomes: [] },
+      ])))
+    })
+    expect(shown()).toContain('run-second')
+    expect(shown()).not.toContain('run-first')
   })
 })

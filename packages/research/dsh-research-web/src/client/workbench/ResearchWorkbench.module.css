@@ -369,3 +369,72 @@
 .proposalTitle {
   font-weight: 600;
 }
+
+/* ── Six stages (S5): the researcher's own view of the run ────────────────────
+   A stage button carries its own state as a tag, so the strip answers "where is
+   this study" without a click. The layout wraps at narrow widths rather than
+   scrolling sideways: the strip is navigation, and a hidden stage is a stage the
+   reader cannot reach by keyboard. */
+.stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  flex: 1 1 150px;
+  padding: 8px 10px;
+  border: 1px solid #d8dee7;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.stage:hover { border-color: #9aa7b8; }
+
+.stage:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+
+.stageActive {
+  border-color: #1f6feb;
+  box-shadow: inset 0 0 0 1px #1f6feb;
+}
+
+.stageName {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.stageMeta {
+  font-size: 11px;
+  color: #5b6470;
+}
+
+/* A stage's own state, in the same visual language as a step's. */
+.stage-empty { background: #eef0f3; color: #5b6470; }
+.stage-not-started { background: #eef0f3; color: #5b6470; }
+.stage-working { background: #e6f0ff; color: #1f6feb; }
+.stage-awaiting-human { background: #fff4e5; color: #b25e00; }
+.stage-blocked { background: #fdeef0; color: #c2410c; }
+.stage-failed { background: #fdeef0; color: #c2410c; }
+.stage-done { background: #e7f7ec; color: #1a7f37; }
+
+.progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #384250;
+}
+
+.progressValue { font-weight: 600; }

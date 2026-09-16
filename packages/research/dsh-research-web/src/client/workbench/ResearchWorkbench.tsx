@@ -10,7 +10,7 @@
  * though they were a result. It now says that nothing has been run, and renders no panel: there is
  * nothing to report until a run produces something to report.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConvViewProps,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -22,6 +22,7 @@ import type { WirePlan, WireProposalAnswer } from '../direction-source.ts'
 import type { RunListEntryView } from '../../run-source.ts'
 import { DirectionDialog } from './DirectionDialog.tsx'
 import { selectNextAction, type NextActionKind } from '../../panels.ts'
+import { selectProgress, selectStages, type StageId } from '../../stages.ts'
 import { SummaryPanel } from './SummaryPanel.tsx'
 import { PipelinePanel } from './PipelinePanel.tsx'
 import { ArtifactsPanel } from './ArtifactsPanel.tsx'
@@ -30,6 +31,8 @@ import { GatePanel } from './GatePanel.tsx'
 import { AdversarialPanel } from './AdversarialPanel.tsx'
 import { ApprovalPanel } from './ApprovalPanel.tsx'
 import { RecoveryPanel } from './RecoveryPanel.tsx'
+import { StageNavigation } from './StageNavigation.tsx'
+import { StageWorkspace } from './StageWorkspace.tsx'
 import css from './ResearchWorkbench.module.css'
 
 /**
@@ -130,8 +133,38 @@ export function ResearchWorkbench({
   const [error, setError] = useState<string | undefined>(undefined)
   const summary = useMemo(() => live ?? injected, [live, injected])
   const [active, setActive] = useState<WorkbenchTab>('summary')
+  // WHERE THE STUDY IS, not where the reader last looked: the stage strip opens on the first stage
+  // that is not done, so a page that just loaded shows the work in front of it. A stage the person
+  // picked is kept until they pick another, and a run that moves on does not yank the view away.
+  const [pickedStage, setPickedStage] = useState<StageId | undefined>(undefined)
+  /**
+   * Which read of a study the page is currently showing.
+   *
+   * A STUDY OPENED SECOND MUST NOT BE OVERWRITTEN BY THE FIRST. Opening one starts a follow that
+   * reports every snapshot it reads; opening another while the first is still reporting leaves two
+   * live callbacks writing the same state, and whichever answers last wins — so a page that moved to
+   * the study a person picked would flip back to the one before it, showing numbers as the current
+   * study's that belong to another. Each read takes a generation, and a callback from an older one
+   * is dropped rather than rendered.
+   */
+  const viewGeneration = useRef(0)
+  const currentRead = useCallback((): number => {
+    viewGeneration.current += 1
+    return viewGeneration.current
+  }, [])
+  const appliedTo = useCallback((generation: number, update: RunSummary): void => {
+    if (viewGeneration.current === generation) setLive(update)
+  }, [])
   // No run means the next action is the one that starts a run, so there is nothing to derive.
   const nextAction = summary === undefined ? undefined : selectNextAction(summary)
+  const stages = useMemo(() => (summary === undefined ? [] : selectStages(summary)), [summary])
+  const progress = summary === undefined ? undefined : selectProgress(summary)
+  // The default is the first stage still to do, and it is chosen by what the stage DECLARES rather
+  // than by what this run's projection carried: a projection this build cannot place would otherwise
+  // fall through to the intake group and answer "this is yours to supply" about a host's own steps.
+  const currentStage = stages.find(stage => stage.id === pickedStage)
+    ?? stages.find(stage => stage.declared > 0 && stage.state !== 'done')
+    ?? stages[0]
   // THE STUDIES THIS DEPLOYMENT HOLDS. Read once on arrival, and again after a study is opened, so
   // the list is the host's answer rather than a copy of what this tab happened to start.
   const [offered, setOffered] = useState<ReadonlyArray<RunListEntryView>>([])
@@ -157,14 +190,15 @@ export function ResearchWorkbench({
   useEffect(() => {
     if (onResume === undefined || injected !== undefined) return
     let cancelled = false
-    void onResume((update) => { if (!cancelled) setLive(update) }).catch((cause: unknown) => {
+    const mine = currentRead()
+    void onResume((update) => { if (!cancelled) appliedTo(mine, update) }).catch((cause: unknown) => {
       if (cancelled) return
       // A resume that was REFUSED is reported. A resume that found nothing is not an error and does
       // not come through here — the page simply still shows no run.
       setError(cause instanceof Error ? cause.message : String(cause))
     })
     return () => { cancelled = true }
-  }, [onResume, injected])
+  }, [onResume, injected, currentRead, appliedTo])
 
   const start = useCallback((plan?: WirePlan) => {
     if (onRun === undefined) return
@@ -174,7 +208,8 @@ export function ResearchWorkbench({
     // THE PAGE FOLLOWS THE RUN RATHER THAN WAITING FOR IT. Every snapshot the run source reads is
     // rendered as it arrives, so a study that takes minutes is visible while it happens; the
     // promise settles when there is nothing left to read.
-    void onRun(plan, (update) => { setLive(update) }).then(
+    const mine = currentRead()
+    void onRun(plan, (update) => { appliedTo(mine, update) }).then(
       () => { setRunning(false) },
       (cause: unknown) => {
         // A run that failed is reported as a failure. Showing anything else would leave a
@@ -183,7 +218,7 @@ export function ResearchWorkbench({
         setRunning(false)
       },
     )
-  }, [onRun])
+  }, [onRun, currentRead, appliedTo])
 
   return (
     <div className={css.workbench}>
@@ -354,7 +389,10 @@ export function ResearchWorkbench({
                 className={css.tab}
                 onClick={() => {
                   setError(undefined)
-                  void onOpenRun(entry.runId, (update) => { setLive(update) }).catch((cause: unknown) => {
+                  // THE GENERATION IS TAKEN BEFORE THE READ STARTS, so a read already in flight for
+                  // another study cannot land on top of this one.
+                  const mine = currentRead()
+                  void onOpenRun(entry.runId, (update) => { appliedTo(mine, update) }).catch((cause: unknown) => {
                     setError(cause instanceof Error ? cause.message : String(cause))
                   })
                 }}
@@ -368,6 +406,56 @@ export function ResearchWorkbench({
 
       {summary !== undefined && (
         <>
+          {/* WHAT THIS STUDY HAS DONE, IN COUNTS A READER CAN TRACE TO A STEP. No percentage and no
+              estimate: the steps differ by orders of magnitude in cost, so a fraction of them is not
+              a fraction of the work, and a completion time would be a promise nothing here can keep.
+              A decision waiting on a person is listed apart from progress, because it is a to-do. */}
+          {progress !== undefined && (
+            <p className={css.progress} data-research-progress="">
+              <span>
+                {t('progress.steps')}
+                {' '}
+                <span className={css.progressValue} data-research-progress-steps="">
+                  {progress.stepsPassed} / {progress.stepsTotal}
+                </span>
+              </span>
+              <span>
+                {t('progress.awaitingHuman')}
+                {' '}
+                <span className={css.progressValue} data-research-progress-human="">
+                  {progress.awaitingHuman}
+                </span>
+              </span>
+              {progress.failed > 0 && (
+                <span>
+                  {t('progress.failed')}
+                  {' '}
+                  <span className={css.progressValue} data-research-progress-failed="">
+                    {progress.failed}
+                  </span>
+                </span>
+              )}
+              {progress.unknown > 0 && (
+                <span>
+                  {t('progress.unknown')}
+                  {' '}
+                  <span className={css.progressValue} data-research-progress-unknown="">
+                    {progress.unknown}
+                  </span>
+                </span>
+              )}
+            </p>
+          )}
+          <StageNavigation
+            stages={stages}
+            selected={currentStage?.id ?? 'intake'}
+            onSelect={setPickedStage}
+            t={t}
+          />
+          {currentStage !== undefined && (
+            <StageWorkspace summary={summary} stage={currentStage} stages={stages} t={t} />
+          )}
+
           <nav className={css.tabs}>
             {TABS.map(tab => (
               <button
