@@ -127,6 +127,15 @@ export interface RoleReview {
   /** One line naming every finding, so the verdict's rationale is not a constant. */
   readonly rationale: string
   readonly findings: ReadonlyArray<ReviewFinding>
+  /**
+   * Whether this check actually ran. Absent means it did.
+   *
+   * FALSE is for a check that could not run at all — a required input did not exist, so it verified
+   * nothing. That is a different fact from `abstain`, which is a check that READ the material and
+   * reported that the material does not settle the question: one produced a finding, the other
+   * produced silence. Core's `aggregateDisposition` blocks on the second and not the first.
+   */
+  readonly evaluated?: boolean
 }
 
 /** Collapse a role's findings into its vote: any contradiction refutes, any gap abstains. */
@@ -136,14 +145,26 @@ export function positionOf(findings: ReadonlyArray<ReviewFinding>): ResearchRebu
   return 'support'
 }
 
-/** Build a role's review from its findings, deriving the rationale from them. */
-export function review(role: string, findings: ReadonlyArray<ReviewFinding>): RoleReview {
+/**
+ * Build a role's review from its findings, deriving the rationale from them.
+ *
+ * @param role - the check's role name.
+ * @param findings - what it found.
+ * @param evaluated - false when the check could not run at all; see {@link RoleReview.evaluated}.
+ * @returns the review.
+ */
+export function review(
+  role: string,
+  findings: ReadonlyArray<ReviewFinding>,
+  evaluated = true,
+): RoleReview {
   const position = positionOf(findings)
   return {
     role,
     position,
     rationale: `${position}: ` + findings.map(f => `${f.check} -> ${f.found}`).join('; '),
     findings,
+    ...(evaluated ? {} : { evaluated: false }),
   }
 }
 

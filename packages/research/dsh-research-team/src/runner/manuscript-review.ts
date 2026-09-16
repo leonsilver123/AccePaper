@@ -310,7 +310,9 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
       found: 'the run holds no result record, so no number in the prose can be traced to one',
       position: 'abstain',
     })
-    return review('red-stat', findings)
+    // NOT EVALUATED, not abstained: this check verified nothing, because there was no record to
+    // verify against. An abstention is a check that read the material and found it inconclusive.
+    return review('red-stat', findings, false)
   }
   const accountable = accountableNumbers(input, record)
   const untraceable: string[] = []
@@ -427,7 +429,8 @@ function reviewManuscriptConclusion(
       found: 'the run holds no result record, so nothing measures what the conclusion may claim',
       position: 'abstain',
     })
-    return review('red-claim', findings)
+    // Same distinction as `red-stat` above: nothing was compared, so nothing was evaluated.
+    return review('red-claim', findings, false)
   }
   const prose = input.sections.map(section => section.bodyText).join('\n')
   const clause = findingClauseOf(prose, input.metricPhrases)

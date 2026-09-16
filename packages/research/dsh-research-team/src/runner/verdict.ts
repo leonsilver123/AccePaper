@@ -33,7 +33,9 @@ import type {
   GateVerdict,
   VerificationResult,
 } from '@deepseek-ai/dsh-research-core'
-import { adjudicate, admitAsEvidence, bindVerdict } from '@deepseek-ai/dsh-research-core'
+import { adjudicate, admitAsEvidence, aggregateDisposition, bindVerdict } from '@deepseek-ai/dsh-research-core'
+import type { CheckDisposition } from '@deepseek-ai/dsh-research-core'
+import type { RoleReview } from './redteam-review.ts'
 
 import type { ResearchRebuttal } from '../types.ts'
 import { sessionId } from '../types.ts'
@@ -169,6 +171,24 @@ function sectionsOfManuscript(value: unknown): ReadonlyArray<{ id: string; headi
  * `./redteam-review.ts` and `./manuscript-review.ts` for what each role checks and for the limit
  * that these are rulebooks rather than model reviewers.
  */
+/**
+ * How one A-channel review reads as a gate check.
+ *
+ * ONLY A REFUTATION IS A FAILED CHECK. A review that ABSTAINED ran: it read the material and
+ * reported that the material does not settle the question — a finding, stated with its own reason.
+ * `not_evaluated` is for a check that did NOT run at all, and mapping an abstention onto it would
+ * make this channel block every claim whose evidence is merely incomplete, which `judgeRound`'s
+ * `minValidVotes` deliberately decides instead. Reading a refutation as a pass is the other half:
+ * that is the failure the aggregate exists for.
+ *
+ * @param review - one review the channel produced.
+ * @returns its disposition among the gate's checks.
+ */
+export function checkDispositionOf(review: RoleReview): CheckDisposition {
+  if (review.evaluated === false) return 'not_evaluated'
+  return review.position === 'refute' ? 'failed' : 'passed'
+}
+
 function verdictA(ctx: VerdictBuildCtx): GateVerdict {
   const useAbstain = ctx.abstain.has('A')
   const roundId = `t19b-round-${ctx.step.id}`
@@ -200,16 +220,32 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
     // is what core's correlation detector keys on, and writing one here would claim a
     // heterogeneity these votes do not have. The gate evidence states that limit instead.
   }))
+  // WHAT THE CHANNEL WAS SUPPOSED TO RUN, declared per path rather than taken from the reviews: a
+  // review that silently dropped a role would otherwise produce a round that satisfies its own
+  // expectation.
+  const requiredChecks = manuscript === undefined ? A_CHANNEL_ROLES : MANUSCRIPT_REVIEW_ROLES
   const round: RebuttalRound = {
     roundId,
     claimRef,
     gate: ctx.step.id,
-    // Declared per path rather than taken from the reviews: a review that silently dropped a role
-    // would otherwise produce a round that satisfies its own expectation.
-    expectedRoles: manuscript === undefined ? A_CHANNEL_ROLES : MANUSCRIPT_REVIEW_ROLES,
+    expectedRoles: requiredChecks,
     status: 'completed',
     votes,
   }
+  // A CHECK THAT DID NOT RUN IS NOT A CHECK THAT PASSED, and nothing in this channel said so until
+  // now. `judgeRound` abstains when a declared role is missing — a different verdict that names no
+  // check — and it has no reading at all for a check that REPORTED that it did not run. Core's
+  // `aggregateDisposition` decides both, over the same required list this round declares, and its
+  // reason names what was missing. It never escalates: an `allow` leaves the round's own verdict
+  // standing, which is why this can only ever add a block.
+  const aggregate = aggregateDisposition(
+    reviews.map(review => ({
+      checkId: review.role,
+      disposition: checkDispositionOf(review),
+      ...(review.evaluated === false || review.position === 'refute' ? { detail: review.rationale } : {}),
+    })),
+    requiredChecks,
+  )
   // An uncalibrated config makes core abstain (NO DEFAULT PASS) — used to drive
   // the recovery `gate_abstained` hold faithfully through the real adjudicator.
   // `sameFamilyDownweight` is absent from the calibrated config because no vote declares a
@@ -232,19 +268,26 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
     ? {}
     : { minValidVotes: 2, passThreshold: 1 }
   const rv = judgeRound(round, config, ctx.runCtx.timestamp)
+  // The stricter of the two decisions. An injected abstention still abstains (its reviews all ran,
+  // so the aggregate allows), and a material contradiction still fails through `judgeRound`; what
+  // this adds is the case neither of them covered — a required check that never reported.
+  const outcome = aggregate.disposition === 'block' && rv.outcome === 'passed' ? 'blocked' : rv.outcome
   const tally = reviews.map(review => `${review.role}=${review.position}`).join(', ')
   return {
     component: 'A',
-    outcome: rv.outcome,
-    passed: rv.outcome === 'passed',
+    outcome,
+    passed: outcome === 'passed',
     evidence:
       `team:judgeRound → core adjudicate('A') outcome=${rv.outcome}; `
       + `rule-based offline review of ${reviewed} by ${String(reviews.length)} declared checklists `
       + `(${tally}); `
       + 'one deterministic implementation, NO model called, so these votes are not '
       + 'independent review opinions and a pass here is not three reviewers agreeing'
-      + (useAbstain ? ' (injected abstention: uncalibrated config → abstain)' : ''),
-    rationale: rv.summary,
+      + (useAbstain ? ' (injected abstention: uncalibrated config → abstain)' : '')
+      + `; required-check aggregate: ${aggregate.disposition} — ${aggregate.reason}`,
+    rationale: aggregate.disposition === 'block' && rv.outcome === 'passed'
+      ? `${rv.summary}; ${aggregate.reason}`
+      : rv.summary,
     timestamp: ctx.runCtx.timestamp,
   }
 }

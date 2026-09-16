@@ -21,7 +21,8 @@ import { aggregateDisposition } from '@deepseek-ai/dsh-research-core'
 import type { GateCheck } from '@deepseek-ai/dsh-research-core'
 
 import { runT19B } from '../src/runner/drive.ts'
-import { reviewManuscript } from '../src/runner/manuscript-review.ts'
+import { MANUSCRIPT_REVIEW_ROLES, reviewManuscript } from '../src/runner/manuscript-review.ts'
+import { checkDispositionOf } from '../src/runner/verdict.ts'
 import type { ManuscriptReviewInput } from '../src/runner/manuscript-review.ts'
 import { resolveImplementation } from '../src/runner/implementations.ts'
 import { resultVersionOf } from '../src/runner/result-version.ts'
@@ -407,6 +408,28 @@ describe('a required check that did not run blocks the gate', () => {
     expect(aggregate.reason).toContain('red-stat')
     // And a check that never ran at all is the same finding, named the same way.
     expect(aggregateDisposition([{ checkId: 'red-method', disposition: 'passed' }], required).disposition).toBe('block')
+  })
+
+  it('turns a check that could not run into a block, through the mapping the gate uses', () => {
+    // THE WHOLE CHAIN, not the aggregate alone. A check whose required input does not exist says so
+    // with `evaluated: false`; the gate reads that through `checkDispositionOf`; the aggregate
+    // blocks. Before this the check reported `abstain` — the disposition for a check that READ the
+    // material and found it inconclusive — so "nothing was verified" and "the material does not
+    // settle it" were the same value, and the gate had no way to refuse the first.
+    const withoutRecord = reviewManuscript({ ...cleanInput(), result: undefined })
+    const checks: ReadonlyArray<GateCheck> = withoutRecord.map(entry => ({
+      checkId: entry.role,
+      disposition: checkDispositionOf(entry),
+    }))
+
+    expect(withoutRecord.filter(entry => entry.evaluated === false).map(entry => entry.role))
+      .toEqual(['red-stat', 'red-claim'])
+    const aggregate = aggregateDisposition(checks, MANUSCRIPT_REVIEW_ROLES)
+    expect(aggregate.disposition).toBe('block')
+    expect(aggregate.reason).toContain('not_evaluated')
+
+    // And the two checks that DID read the manuscript are unaffected: they still pass.
+    expect(checks.find(check => check.checkId === 'red-method')?.disposition).toBe('passed')
   })
 
   it('reports the same four roles the review produces', () => {
