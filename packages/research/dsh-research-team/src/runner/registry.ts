@@ -182,6 +182,7 @@ import {
 import type { MeasuredOutcome, ResultSource } from './result-version.ts'
 import { sectionEvidenceFor } from './section-evidence.ts'
 import { applyRevision, bodyHashOf } from './issue-patch.ts'
+import { assertWellFormed, parseReply, type DiscardedExchange } from './issue-parse.ts'
 import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
@@ -2678,78 +2679,6 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 /** D4-rebuttal: fixture that reads the D3 draft, produces an adversarial rebuttal
  *  record and a revised draft (same sections, revision markers). */
 
-/**
- * One issue per CONCERN/SECTION/RESPONSE triple, with an optional PATCH.
- *
- * WHAT CHANGED, AND WHY. This used to read only CONCERN and RESPONSE and set
- * `requiresRevision: true` on every pair, which is where `D4`'s defect started: every exchange
- * demanded a revision, and the executor marked every section revised for a set of exchanges that
- * proposed no change to any of them. The reply now names the SECTION an exchange is about and may
- * carry a PATCH — the replacement body — so whether a text change is required follows from whether
- * one was offered rather than from a constant.
- *
- * An exchange missing its SECTION line is not parsable into an issue, and the caller fails the step
- * rather than guessing which section the author meant.
- *
- * @param text - the model's reply.
- * @returns one issue per complete exchange, without the basis hash the executor supplies.
- */
-function parseIssues(text: string): ReadonlyArray<Omit<RevisionIssue, 'basisHash'>> {
-  const issues: Array<Omit<RevisionIssue, 'basisHash'>> = []
-  let concern: string | undefined
-  let sectionId: string | undefined
-  let response: string | undefined
-  let patch: string | undefined
-  const flush = (): void => {
-    if (concern === undefined || sectionId === undefined || response === undefined) return
-    issues.push({
-      issueId: `d4-issue-${String(issues.length + 1)}`,
-      sectionId,
-      concern,
-      response,
-      requiresTextChange: patch !== undefined,
-      ...(patch === undefined ? {} : { patch }),
-    })
-  }
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim()
-    const labeled = (label: string): string | undefined => {
-      const match = new RegExp(`^${label}\\s*[:=]\\s*(.+)$`, 'i').exec(line)
-      return match === null ? undefined : (match[1]?.trim() ?? '')
-    }
-    const nextConcern = labeled('CONCERN')
-    if (nextConcern !== undefined) {
-      // A new CONCERN closes whatever was open, so a reply that omits a RESPONSE yields fewer
-      // issues rather than a mispaired one.
-      flush()
-      concern = nextConcern
-      sectionId = undefined
-      response = undefined
-      patch = undefined
-      continue
-    }
-    const nextSection = labeled('SECTION')
-    if (nextSection !== undefined && concern !== undefined) {
-      sectionId = nextSection
-      continue
-    }
-    const nextResponse = labeled('RESPONSE')
-    if (nextResponse !== undefined && concern !== undefined) {
-      response = nextResponse
-      continue
-    }
-    const nextPatch = labeled('PATCH')
-    if (nextPatch !== undefined && concern !== undefined) {
-      // `NONE` is how a reply states that the answer changes no text: the author accepts the
-      // concern as an explanation. Written as a word rather than as an absent line so the two are
-      // distinguishable — a reply that forgot its patch is a malformed reply, not an acceptance.
-      patch = /^none$/iu.test(nextPatch) ? undefined : nextPatch
-      continue
-    }
-  }
-  flush()
-  return issues
-}
 
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
@@ -2774,6 +2703,9 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // no longer exists.
   const bodiesShown = new Map(sections.map(section => [section.id, section.bodyText]))
   let issues: ReadonlyArray<Omit<RevisionIssue, 'basisHash'>> = []
+  // The exchanges a reply opened and did not complete. Non-empty only for the fixture path here —
+  // the model path refuses instead — and reported on the artifact either way.
+  let discardedExchanges: ReadonlyArray<DiscardedExchange> = []
   let points: ReadonlyArray<RebuttalPoint>
   let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
@@ -2835,18 +2767,27 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
-    const parsed = parseIssues(analysis.text)
-    if (parsed.length === 0) {
-      throw new Error(
-        '[D4-rebuttal] the model response carried no CONCERN/SECTION/RESPONSE exchange '
-        + '(a rebuttal with no exchange answers nothing — NO DEFAULT PASS)',
-      )
-    }
-    issues = parsed
+    // A MALFORMED REPLY IS REFUSED, not partially read. `assertWellFormed` names the exchanges the
+    // reply did not state completely; before this, they were dropped on the floor and the step
+    // passed with an empty `openIssues`, which is the difference between "the author accepted three
+    // concerns" and "the model answered one of them".
+    const reply = parseReply(analysis.text)
+    const parsed = assertWellFormed(reply, 'D4-rebuttal')
+    discardedExchanges = reply.discarded
+    issues = parsed.map(issue => ({
+      issueId: issue.issueId,
+      sectionId: issue.sectionId,
+      concern: issue.concern,
+      response: issue.response,
+      // `declared-none` is a conclusion: the author accepts the concern without changing the text.
+      // `missing` never reaches here — `assertWellFormed` refuses it.
+      requiresTextChange: issue.patchState === 'replacement',
+      ...(issue.patch === undefined ? {} : { patch: issue.patch }),
+    }))
     points = parsed.map(issue => ({
       concern: issue.concern,
       response: issue.response,
-      requiresRevision: issue.requiresTextChange,
+      requiresRevision: issue.patchState === 'replacement',
     }))
     rebuttalSource = proseLabelling(writer).source
     rebuttalRoute = proseRouteOf(analysis)
@@ -2880,6 +2821,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // `patchedSections` rather than with a flag nothing supports.
         issues: applied.outcomes,
         changes: applied.changes,
+        discardedExchanges,
         patchedSections: applied.patchedSections,
         openIssues: applied.openIssues,
         note: rebuttalSource === 'fixture'
