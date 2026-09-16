@@ -83,7 +83,11 @@ export async function followToRest(
         break
       }
       expected = frame.event.sequence + 1
-      held = frame.event.eventId
+      // THE POSITION AFTER THE EVENT, not the event's identity. Naming the identity would ask the
+      // host for the event just applied — a duplicate delivery — and it carries no log identity, so
+      // a page that reconnected after a rebuild would be continued from a position whose contents it
+      // never saw.
+      held = frame.event.cursor
     }
     if (!repaired) return
     if (attempt >= MAX_FOLLOW_ATTEMPTS) {
@@ -96,10 +100,16 @@ export async function followToRest(
 
 /**
  * The position a cursor names.
+ *
+ * A cursor is `<runId>#<consumed>#<digest>`: the count of events the host has delivered to this
+ * reader, not the index of the last one — so this reads the middle segment, through the same shape
+ * the host writes rather than by trusting the last one.
+ *
  * @param cursor - a cursor as the host produced it.
  * @returns its sequence, or null when it names none.
  */
 export function sequenceOfCursor(cursor: string): number | null {
-  const tail = cursor.slice(cursor.lastIndexOf('#') + 1)
-  return /^\d+$/u.test(tail) ? Number(tail) : null
+  const parts = cursor.split('#')
+  const sequence = parts.length === 3 ? parts[1] : undefined
+  return sequence !== undefined && /^\d+$/u.test(sequence) ? Number(sequence) : null
 }

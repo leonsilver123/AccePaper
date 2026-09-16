@@ -12,16 +12,18 @@
  * consumed until it ends, so every assertion is about a state the run was put in.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { LiteratureSearchAdapter, LiteratureSearchOutcome } from '@deepseek-ai/dsh-research-tools'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import type { AuditEvent } from '@deepseek-ai/dsh-research-core'
+
 import ResearchTeamService from '../src/index.ts'
-import type { ResearchRunFrame } from '../src/types.ts'
-import { readRunCursor, runCursorOf } from '../src/runner/run-events.ts'
+import type { ResearchRunFrame, ResearchRunSnapshot } from '../src/types.ts'
+import { chainDigest, EMPTY_LOG, partsOfCursor, readRunCursor, runCursorOf } from '../src/runner/run-events.ts'
 
 /** One adapter that blocks the run inside its first retrieval until the test releases it. */
 function barrier(): {
@@ -50,18 +52,63 @@ function barrier(): {
 async function boot(options: {
   readonly snapshotDirectory?: string
   readonly literatureAdapter?: LiteratureSearchAdapter
-}): Promise<{ readonly service: ResearchTeamService; dispose(): Promise<void> }> {
+  /**
+   * The per-step budget this deployment configures.
+   *
+   * A test that HOLDS a run inside a step for longer than the registry's own budget would otherwise
+   * be testing the step's timeout rather than the thing it opened the follow for.
+   */
+  readonly stepTimeoutMs?: number
+}): Promise<{
+  readonly service: ResearchTeamService
+  /** Point the deployment's saves at another directory, as a reconfiguration would. */
+  setSnapshotDirectory(directory: string): void
+  dispose(): Promise<void>
+}> {
   const ctx = new Context()
   for (const name of ['agents', 'sessions', 'sessionPersistence']) ctx.provide(name, {})
   ctx.provide('sessionProjections', { register: () => () => {} })
   ctx.provide('subagents', {})
   ctx.provide('tools', { guard: () => () => {} })
-  ctx.provide('research', {
+  const engine: {
+    snapshotDirectory?: string
+    toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
+    stepTimeoutMs?: number
+  } = {
     ...(options.snapshotDirectory === undefined ? {} : { snapshotDirectory: options.snapshotDirectory }),
     ...(options.literatureAdapter === undefined ? {} : { toolDeps: { literatureAdapter: options.literatureAdapter } }),
-  })
+    ...(options.stepTimeoutMs === undefined ? {} : { stepTimeoutMs: options.stepTimeoutMs }),
+  }
+  ctx.provide('research', engine)
   const fiber = await ctx.plugin(ResearchTeamService, {})
-  return { service: ctx.agentTeams as unknown as ResearchTeamService, dispose: async () => { await fiber.dispose() } }
+  return {
+    service: ctx.agentTeams as unknown as ResearchTeamService,
+    setSnapshotDirectory: (directory: string) => { engine.snapshotDirectory = directory },
+    dispose: async () => { await fiber.dispose() },
+  }
+}
+
+/**
+ * One follow's frames, pulled one at a time.
+ *
+ * Typed at the boundary rather than at the call site: a spec that pulls a stream frame by frame needs
+ * the frame type on every pull, and the Remote-decorated method's own type is not carried through the
+ * decorator.
+ *
+ * @param service - the service holding the run.
+ * @param runId - the run to follow.
+ * @param signal - cancellation for the subscription.
+ * @returns the stream's iterator.
+ */
+function follower(
+  service: ResearchTeamService,
+  runId: string,
+  signal: AbortSignal,
+): AsyncIterator<ResearchRunFrame, undefined> {
+  const frames: AsyncIterable<ResearchRunFrame> = service.followRun({ runId }, signal)
+  // The stream's own iterator type leaves its return value unstated, which makes every `value` on
+  // every pull `any`. Naming it here is what lets the assertions below be typed.
+  return frames[Symbol.asyncIterator]() as AsyncIterator<ResearchRunFrame, undefined>
 }
 
 /** Collect every frame a follow yields, consuming it to its end. */
@@ -85,17 +132,33 @@ afterEach(() => {
   }
 })
 
-describe('a run cursor names one position in one run', () => {
+/** A log of `count` distinguishable events for one run. */
+function logOf(count: number, runId = 'run-a'): ReadonlyArray<AuditEvent> {
+  return Array.from({ length: count }, (_, index) => ({
+    kind: 'step-started' as const,
+    runId,
+    stepId: `step-${String(index)}`,
+    ts: 1_000 + index,
+  }))
+}
+
+/** The cursor for a position in one log, built the way the follow builds it. */
+function cursorAt(events: ReadonlyArray<AuditEvent>, consumed: number, runId = 'run-a'): string {
+  return runCursorOf(runId, consumed, chainDigest(events, EMPTY_LOG, consumed).digest)
+}
+
+describe('a run cursor names one position in one history of one run', () => {
   it('reads back the position it was written for', () => {
-    const cursor = runCursorOf('run-a', 7)
-    expect(readRunCursor('run-a', cursor, 10)).toEqual({ ok: true, sequence: 7 })
+    const events = logOf(10)
+    expect(readRunCursor('run-a', cursorAt(events, 7), events)).toEqual({ ok: true, sequence: 7 })
   })
 
   it('refuses a cursor that belongs to another run, naming both', () => {
     // THE CROSS-RUN CASE. The cursor carries its run, so a mix-up is detectable rather than read as
     // a position in the run that was asked for.
-    const foreign = runCursorOf('run-b', 3)
-    const read = readRunCursor('run-a', foreign, 10)
+    const events = logOf(10)
+    const foreign = runCursorOf('run-b', 3, chainDigest(events, EMPTY_LOG, 3).digest)
+    const read = readRunCursor('run-a', foreign, events)
     expect(read.ok).toBe(false)
     expect(read.ok ? '' : read.reason).toContain('run-b')
     expect(read.ok ? '' : read.reason).toContain('run-a')
@@ -103,20 +166,120 @@ describe('a run cursor names one position in one run', () => {
 
   it('refuses a position the run has never reached', () => {
     // The log only grows, so a position past its end did not come from this run's history.
-    const read = readRunCursor('run-a', runCursorOf('run-a', 11), 10)
+    const events = logOf(10)
+    const read = readRunCursor('run-a', cursorAt(events, 10).replace('#10#', '#11#'), events)
     expect(read.ok).toBe(false)
     expect(read.ok ? '' : read.reason).toContain('11')
     expect(read.ok ? '' : read.reason).toContain('10')
   })
 
+  it('refuses the same position when it names a DIFFERENT history of that run', () => {
+    // THE RESTART CASE, and the reason a position is not enough. A run restored from a checkpoint
+    // keeps the events that checkpoint saved and appends new ones at the indices the lost tail
+    // occupied, so a position a reader consumed can hold different events here. Serving the new
+    // events from that position would continue a reader that never saw what replaced what it held.
+    const asRead = logOf(6)
+    const rebuilt = [...logOf(3), ...logOf(3).map(event => ({ ...event, stepId: `${event.stepId ?? ''}-other` }))]
+    const held = cursorAt(asRead, 6)
+    // Same run, same position, same count — and not the same log.
+    expect(readRunCursor('run-a', cursorAt(rebuilt, 6), rebuilt)).toEqual({ ok: true, sequence: 6 })
+    const read = readRunCursor('run-a', held, rebuilt)
+    expect(read.ok).toBe(false)
+    expect(read.ok ? '' : read.reason).toContain('different history')
+  })
+
   it('refuses a cursor that names no position at all', () => {
-    for (const malformed of ['', 'run-a', 'run-a#', 'run-a#seven', 'run-a#-1']) {
-      expect(readRunCursor('run-a', malformed, 10).ok).toBe(false)
+    const events = logOf(10)
+    for (const malformed of ['', 'run-a', 'run-a#', 'run-a#seven', 'run-a#-1', 'run-a#3', 'run-a#3#nothex', 'run-a#3#ab#cd']) {
+      expect(readRunCursor('run-a', malformed, events).ok).toBe(false)
     }
+    // A well-formed cursor with a digest of the wrong length is not one this host ever wrote.
+    expect(readRunCursor('run-a', `run-a#3#${'a'.repeat(63)}`, events).ok).toBe(false)
+  })
+
+  it('names the position AFTER an event, and the digest of exactly what was consumed', () => {
+    // THE POSITION SEMANTICS. A reader that has applied event N continues at N+1: naming N would ask
+    // for the event it already holds, which is how a client that reconnects mid-batch is sent a
+    // duplicate. The digest covers exactly the events below that position.
+    const events = logOf(4)
+    const parts = partsOfCursor(cursorAt(events, 3))
+    expect(parts).toBeDefined()
+    expect(parts?.sequence).toBe(3)
+    expect(parts?.digest).toBe(chainDigest(events, EMPTY_LOG, 3).digest)
+    // The chain is order-sensitive: the same events in another order are another history.
+    expect(chainDigest([...events].reverse(), EMPTY_LOG, 3).digest)
+      .not.toBe(chainDigest(events, EMPTY_LOG, 3).digest)
   })
 })
 
 describe('following a run', () => {
+  it('reports a run whose SAVE changed without an event being appended', async () => {
+    // SAVE HEALTH IS NOT AN EVENT. A run can fall out of step with the disk while its log does not
+    // grow at all — here, a write retried against an unusable directory — and a reader watching for
+    // exactly that would be told nothing by a stream that only reported appended events.
+    const held = barrier()
+    const host = await boot({
+      literatureAdapter: held.adapter,
+      snapshotDirectory: snapshotRoot(),
+      // THE STEP BUDGET OUTLASTS THIS TEST, so what delivers the frame under test is the control
+      // update rather than the run's own step timing out.
+      stepTimeoutMs: 60_000,
+    })
+    const abort = new AbortController()
+    try {
+      const started = await host.service.startRun({ commandId: 'follow-control' })
+      // The run is INSIDE its first step and stays there: while the adapter holds it, no step can
+      // commit, so no event can be appended and no closing frame is due.
+      await held.entered
+      const frames = follower(host.service, started.runId, abort.signal)
+
+      const opening: IteratorResult<ResearchRunFrame, undefined> = await frames.next()
+      const firstFrame: ResearchRunFrame | undefined = opening.value
+      expect(firstFrame?.type).toBe('snapshot')
+      const atOpen: ResearchRunSnapshot | undefined = firstFrame?.type === 'snapshot' ? firstFrame.snapshot : undefined
+      expect(atOpen?.execution).toBe('running')
+
+      // THE DEPLOYMENT'S WRITE FAILS, with the run exactly where it was: the projection's durability
+      // record moves and nothing else does.
+      const unwritable = join(snapshotRoot(), 'not-a-directory')
+      writeFileSync(unwritable, 'not a directory')
+      host.setSnapshotDirectory(unwritable)
+      const retried = await host.service.retryRunSave({ runId: started.runId })
+      expect(retried.persisted).toBe(false)
+
+      // The frames are pulled until one reports the failure. The stream has nothing else to send: the
+      // run is held inside its step, so there are no events and no closing frame — a snapshot that
+      // says the save failed can only arrive as the control update this test is about.
+      // Pulled with a DEADLINE rather than a frame count: a quiet stream yields nothing at all, so
+      // counting pulls would wait forever on the very failure this test is here to catch.
+      const deadline = Date.now() + 10_000
+      let reported: ResearchRunSnapshot | undefined
+      while (reported === undefined && Date.now() < deadline) {
+        const raced: IteratorResult<ResearchRunFrame, undefined> | 'quiet' = await Promise.race([
+          frames.next(),
+          new Promise<'quiet'>((resolve) => { setTimeout(() => { resolve('quiet') }, 250) }),
+        ])
+        if (raced === 'quiet') continue
+        const frame: ResearchRunFrame | undefined = raced.value
+        if (frame?.type === 'snapshot' && frame.snapshot.runPersistence?.error !== undefined) {
+          reported = frame.snapshot
+        }
+      }
+      if (reported === undefined) throw new Error('no frame reported the failing save within 10s — the stream only sends events and closing frames')
+      expect(reported.runPersistence?.error ?? '').toMatch(/not a directory|ENOTDIR/iu)
+      // WHILE THE RUN IS STILL GOING, and at the same position: nothing was carried out and nothing
+      // happened, so the frame is a state rather than a step in the log.
+      expect(reported.execution).toBe('running')
+      expect(reported.projectRevision).toBe(atOpen?.projectRevision)
+
+      abort.abort()
+      await frames.next().catch(() => undefined)
+    } finally {
+      held.release()
+      await host.dispose()
+    }
+  }, 60_000)
+
   it('opens on a consistent point and continues from it without a gap', async () => {
     const held = barrier()
     const host = await boot({ literatureAdapter: held.adapter, snapshotDirectory: snapshotRoot() })
@@ -237,8 +400,20 @@ describe('following a run', () => {
 })
 
 /** The position a cursor names, for comparing against the frames that followed it. */
+/**
+ * The position one cursor names.
+ *
+ * A cursor is `<runId>#<consumed>#<digest>` — the count, not the last index seen — so the position
+ * is the segment between the two separators, read through the module's own parser rather than by
+ * slicing text here.
+ *
+ * @param cursor - a cursor as the host produced it.
+ * @returns the number of events it says the reader has consumed.
+ */
 function readSequence(cursor: string): number {
-  return Number(cursor.slice(cursor.lastIndexOf('#') + 1))
+  const parts = partsOfCursor(cursor)
+  if (parts === undefined) throw new Error(`'${cursor}' is not a cursor`)
+  return parts.sequence
 }
 
 /** Wait until the run reports that nothing is driving it. */

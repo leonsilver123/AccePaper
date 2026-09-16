@@ -87,7 +87,7 @@ import {
 import { MEASURED_METRIC } from './runner/platoon-sim.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
-import { envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
+import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
 import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
@@ -118,7 +118,7 @@ import {
   getStepDefinitions,
   rollback,
 } from '@deepseek-ai/dsh-research-core'
-import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
+import type { AuditEvent, EvidenceProfile } from '@deepseek-ai/dsh-research-core'
 import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
@@ -1091,6 +1091,34 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /**
+   * The facts about a run that can change without its log growing.
+   *
+   * A follow delivers a frame when its EVENTS move; these are what move without them — whether a
+   * driver is on the run here, why it stopped, and whether the run's last write reached the disk.
+   * A reader watching for a study to fall out of step with the disk is watching these, and a stream
+   * that only reported appended events would stay silent through exactly the failure it is for.
+   *
+   * A run this process never drove has none of it to report: nothing here is driving it, so nothing
+   * here changes it, and its durability is whatever its file says — which is where it stays.
+   *
+   * @param active - the run this process holds, when it holds one.
+   * @param found - the restored record, when the run came off the disk.
+   * @returns a value that changes exactly when one of those facts does.
+   */
+  private controlSignatureOf(active: ActiveRun | undefined, found: StoredRun | null): string {
+    if (active === undefined) {
+      return JSON.stringify(['held-on-disk', found?.persistence.revision ?? null])
+    }
+    return JSON.stringify([
+      active.state,
+      active.error ?? '',
+      active.checkpointError ?? '',
+      active.savedRevision,
+      active.persistence?.revision ?? null,
+    ])
+  }
+
+  /**
    * Project one run this process holds, from the state it holds it in.
    *
    * THE RUN'S DURABILITY IS READ ONCE AND USED TWICE: the projection renders the record, and the
@@ -1541,10 +1569,18 @@ export class ResearchTeamService extends TypertRemoteService {
         `[research] this process holds no run '${request.runId}': a save is retried with the state held in memory, and re-running a finished study is not a way to make a write succeed`,
       )
     }
-    const stored = await this.readStoredRun(request.runId)
-    const persistence = await this.serialized(
-      () => this.persistRun(active.store, request.runId, stored?.revision ?? 0),
-    )
+    let persistence: ResearchRunPersistence | null
+    try {
+      // THE RECONCILING READ IS INSIDE THE TRY, because it is part of the write path: a deployment
+      // whose snapshot directory cannot even be reached throws here, and that is a fact about the
+      // save the caller asked for — reported as such rather than as a failure of the CALL.
+      const stored = await this.readStoredRun(request.runId)
+      persistence = await this.serialized(
+        () => this.persistRun(active.store, request.runId, stored?.revision ?? 0),
+      )
+    } catch (error) {
+      persistence = { runId: request.runId, revision: null, interrupted: [], error: errorMessage(error) }
+    }
     this.noteSave(active, persistence)
     const persisted = persistence !== null && persistence.revision !== null
     return {
@@ -1742,21 +1778,38 @@ export class ResearchTeamService extends TypertRemoteService {
     const store = active !== undefined ? active.store : findStoredStore(found)
     const snapshot = this.projectRun(request.runId, active, found)
     const available = liveRunOf(store, request.runId)?.events.length ?? 0
+    // THE LOG'S IDENTITY IS BUILT ONCE PER SUBSCRIPTION and extended as events are appended, so a
+    // reader's position is named with the history it was read from without re-hashing the log on
+    // every frame. Its cost is one pass over the log per subscription, which is what opening one
+    // costs anyway.
+    const eventsNow = (): ReadonlyArray<AuditEvent> => liveRunOf(store, request.runId)?.events ?? []
+    let identity = chainDigest(eventsNow(), EMPTY_LOG, available)
     if (request.cursor !== undefined) {
-      // VALIDATED, not replayed from: a cursor naming another run, or a position this run has not
-      // reached, means the caller's window is not this run's history.
-      const read = readRunCursor(request.runId, request.cursor, available)
+      // VALIDATED, not replayed from: a cursor naming another run, a position this run has not
+      // reached, or a position in a different history of this run.
+      const read = readRunCursor(request.runId, request.cursor, eventsNow())
       if (!read.ok) {
         yield { type: 'resync', reason: read.reason }
         return
       }
     }
-    yield { type: 'snapshot', cursor: runCursorOf(request.runId, available), snapshot }
+    // THE RUN'S CONTROL STATE AS OF THE OPENING FRAME. Save health and execution ownership move
+    // WITHOUT an event being appended — a checkpoint fails, a driver stops — and a reader that only
+    // ever heard about appended events would be told nothing until the next step committed. It is
+    // read HERE, beside the opening frame it describes: a generator's body runs as the consumer
+    // pulls, so an initializer placed after the first `yield` would already be reading the state
+    // that the frame after it is supposed to report.
+    let control = this.controlSignatureOf(active, found)
+    yield {
+      type: 'snapshot',
+      cursor: runCursorOf(request.runId, identity.consumed, identity.digest),
+      snapshot,
+    }
 
     let from = available
     for (;;) {
       signal.throwIfAborted()
-      const events = liveRunOf(store, request.runId)?.events ?? []
+      const events = eventsNow()
       let appended = 0
       for (let index = from; index < events.length; index += 1) {
         const event = events[index]
@@ -1764,18 +1817,50 @@ export class ResearchTeamService extends TypertRemoteService {
         // shrank under the loop would be a different failure entirely, and skipping it silently is
         // the one thing this must not do.
         if (event === undefined) break
-        yield { type: 'event', event: envelopeOf(request.runId, index, event) }
+        // THE POSITION AFTER THIS EVENT, which is what a reader that consumes it names next: the
+        // count of events consumed, carrying the chain digest of exactly those events.
+        identity = chainDigest(events, identity, index + 1)
+        yield {
+          type: 'event',
+          event: envelopeOf(
+            request.runId,
+            index,
+            event,
+            runCursorOf(request.runId, identity.consumed, identity.digest),
+          ),
+        }
         appended += 1
       }
       // THE STATE AFTER THOSE EVENTS, so a reader renders the projection this service owns instead
       // of replaying events into one of its own. The cursor and the projection are read in one
       // synchronous step, which is what makes them the same point in the run's history.
       if (appended > 0) {
-        const at = liveRunOf(store, request.runId)?.events.length ?? 0
-        yield { type: 'snapshot', cursor: runCursorOf(request.runId, at), snapshot: this.projectRun(request.runId, active, found) }
+        const at = eventsNow().length
+        identity = chainDigest(eventsNow(), identity, at)
+        yield {
+          type: 'snapshot',
+          cursor: runCursorOf(request.runId, identity.consumed, identity.digest),
+          snapshot: this.projectRun(request.runId, active, found),
+        }
         from = at
+        control = this.controlSignatureOf(active, found)
       } else {
         from = events.length
+        // A CONTROL UPDATE, DELIVERED AS A FRAME OF ITS OWN. Nothing was appended, and something the
+        // reader watches for has still moved: the run's last save failed, or the driver that was on
+        // it is gone. Both are facts about the run the page states, and the earlier shape of this
+        // loop could only ever report them beside the NEXT event — which, for a run parked at the
+        // human gate, may never come. The projection carries both, so the frame is the same kind as
+        // every other one: no second vocabulary for "the state changed but nothing happened".
+        const now = this.controlSignatureOf(active, found)
+        if (now !== control) {
+          control = now
+          yield {
+            type: 'snapshot',
+            cursor: runCursorOf(request.runId, identity.consumed, identity.digest),
+            snapshot: this.projectRun(request.runId, active, found),
+          }
+        }
       }
       // NOTHING IS DRIVING IT ANY MORE and its tail is delivered: this run has said everything it
       // will say in this process. A later decision appends more, and a caller that wants it opens a
@@ -1788,10 +1873,11 @@ export class ResearchTeamService extends TypertRemoteService {
         // to correct it. A run this process never drove needs no such frame: its opening snapshot
         // was already read at this position and already says `stopped`.
         if (active !== undefined) {
-          const at = liveRunOf(store, request.runId)?.events.length ?? 0
+          const at = eventsNow().length
+          identity = chainDigest(eventsNow(), identity, at)
           yield {
             type: 'snapshot',
-            cursor: runCursorOf(request.runId, at),
+            cursor: runCursorOf(request.runId, identity.consumed, identity.digest),
             snapshot: this.projectRun(request.runId, active, found),
           }
         }

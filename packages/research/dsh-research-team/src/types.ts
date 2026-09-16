@@ -526,10 +526,18 @@ export const RUN_EVENT_ENVELOPE_VERSION = 1
  *     projection beside it. A consumer that needs a specific payload gets a typed field for it.
  */
 export interface RunEventEnvelope {
+  /** The event's identity: `<runId>#<index>`. Not the position to continue from — see `cursor`. */
   readonly eventId: string
   readonly runId: string
   /** The event's index in the run's log. Strictly increasing, never reused. */
   readonly sequence: number
+  /**
+   * The position AFTER this event, for a reader that has consumed it.
+   *
+   * A reader names this to continue, and it carries the log's identity as well as the count, so a
+   * position in a DIFFERENT history of the same run is refused rather than continued from.
+   */
+  readonly cursor: ResearchRunCursor
   readonly schemaVersion: number
   /** The `AuditEventKind` this event was appended as. */
   readonly kind: string

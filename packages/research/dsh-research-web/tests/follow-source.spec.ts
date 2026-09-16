@@ -18,11 +18,19 @@ import { followToRest, sequenceOfCursor, type RunFollowNamespace } from '../src/
 import type { WireRunFrame } from '../src/run-source.ts'
 import type { RunSummary } from '../src/summary.ts'
 
+/**
+ * The log identity the fake host puts in its cursors.
+ *
+ * Opaque to this page — it carries the value through and never computes one — so a fixed string is
+ * what a host that kept its digest stable would send.
+ */
+const DIGEST = 'a'.repeat(64)
+
 /** A summary the fake frames carry: only the run id is read by these assertions. */
 function snapshot(runId: string, execution: string): WireRunFrame {
   return {
     type: 'snapshot',
-    cursor: `${runId}#0`,
+    cursor: `${runId}#0#${DIGEST}`,
     snapshot: {
       run: { runId, steps: [] },
       catalog: [],
@@ -62,8 +70,8 @@ describe('following a run from the page', () => {
       snapshot('run-1', 'running'),
       // A CURSOR IS A COUNT: the position `run-1#0` means no events had been appended, so the next
       // event the host delivers is sequence 0.
-      { type: 'event', event: { eventId: 'run-1#0', runId: 'run-1', sequence: 0, schemaVersion: 1, kind: 'step-started', ts: 1 } },
-      { type: 'snapshot', cursor: 'run-1#1', snapshot: { run: { runId: 'run-1', steps: [] }, catalog: [], gates: [], artifacts: [], steps: [], execution: 'stopped' } },
+      { type: 'event', event: { eventId: 'run-1#0', runId: 'run-1', sequence: 0, cursor: `run-1#1#${DIGEST}`, schemaVersion: 1, kind: 'step-started', ts: 1 } },
+      { type: 'snapshot', cursor: `run-1#1#${DIGEST}`, snapshot: { run: { runId: 'run-1', steps: [] }, catalog: [], gates: [], artifacts: [], steps: [], execution: 'stopped' } },
     ]])
     const seen: string[] = []
     await followToRest(run.remote, 'run-1', null, (summary: RunSummary) => { seen.push(summary.runId) })
@@ -113,7 +121,7 @@ describe('following a run from the page', () => {
     ])
     await followToRest(run.remote, 'run-1', null, () => {})
     expect(run.cursors[0]).toBeUndefined()
-    expect(run.cursors[1]).toBe('run-1#0')
+    expect(run.cursors[1]).toBe(`run-1#0#${DIGEST}`)
   })
 
   it('does not offer a position back after the host has refused it', async () => {
@@ -123,15 +131,16 @@ describe('following a run from the page', () => {
       [snapshot('run-1', 'running'), { type: 'resync', reason: 'the cursor belongs to run run-2' }],
       [snapshot('run-1', 'stopped')],
     ])
-    await followToRest(run.remote, 'run-1', 'run-2#3', () => {})
-    expect(run.cursors[0]).toBe('run-2#3')
+    await followToRest(run.remote, 'run-1', `run-2#3#${DIGEST}`, () => {})
+    expect(run.cursors[0]).toBe(`run-2#3#${DIGEST}`)
     expect(run.cursors[1]).toBeUndefined()
   })
 
   it('reads a position out of a cursor only when one is written there', () => {
-    expect(sequenceOfCursor('run-1#7')).toBe(7)
+    expect(sequenceOfCursor(`run-1#7#${DIGEST}`)).toBe(7)
     expect(sequenceOfCursor('run-1#')).toBeNull()
     expect(sequenceOfCursor('run-1')).toBeNull()
+    expect(sequenceOfCursor('run-1#7')).toBeNull()
     expect(sequenceOfCursor('nonsense')).toBeNull()
   })
 })

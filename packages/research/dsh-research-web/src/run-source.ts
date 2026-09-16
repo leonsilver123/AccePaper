@@ -174,9 +174,17 @@ export type WireRunFrame =
   | {
     readonly type: 'event'
     readonly event: {
+      /** The event's identity. NOT the position to continue from — that is `cursor`. */
       readonly eventId: string
       readonly runId: string
       readonly sequence: number
+      /**
+       * The position AFTER this event, which is what a page that has consumed it names next.
+       *
+       * It carries the log's identity as well as the count, so a page cannot resume a position that
+       * belongs to a different history of the run: the host refuses it and the page re-reads.
+       */
+      readonly cursor: string
       readonly schemaVersion: number
       readonly kind: string
       readonly stepId?: string
