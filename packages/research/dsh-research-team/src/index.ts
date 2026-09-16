@@ -889,14 +889,26 @@ export class ResearchTeamService extends TypertRemoteService {
     try {
       const payload = await persistence.save(store, runId, { baseRevision })
       const directory = this.snapshotDirectoryOf(runId)
-      return {
+      const result = {
         runId,
         revision: payload.revision,
         interrupted: [],
         ...(directory === undefined ? {} : { directory }),
       }
+      // THE WRITE IS NOTED WHERE IT LANDS. Every later write bases itself on what the file holds, and
+      // this method is the one that moves it — a caller that wrote and did not hear about it left the
+      // next write basing on the revision BEFORE this one, which the store refuses as stale. An
+      // approval did exactly that: the decision was applied, written, and then the acceptance that
+      // followed it was refused, "the persisted snapshot is at revision 25 but this write is based on
+      // revision 24", with the manuscript it published never reaching the file.
+      const active = this.activeRuns.get(runId)
+      if (active !== undefined) this.noteSave(active, result)
+      return result
     } catch (error) {
-      return { runId, revision: null, interrupted: [], error: errorMessage(error) }
+      const failure = { runId, revision: null, interrupted: [], error: errorMessage(error) }
+      const active = this.activeRuns.get(runId)
+      if (active !== undefined) this.noteSave(active, failure)
+      return failure
     }
   }
 
@@ -1194,7 +1206,7 @@ export class ResearchTeamService extends TypertRemoteService {
    * @returns the revision to base the next write on, or null when none has landed.
    */
   private savedRevisionOf(active: ActiveRun): number | null {
-    return active.persistence?.revision ?? active.savedRevision
+    return active.savedRevision
   }
 
   /**
@@ -1721,7 +1733,11 @@ export class ResearchTeamService extends TypertRemoteService {
       provenance ??= { channel: writer.channel, provider: result.provider, model: result.model }
     }
     const candidate = buildCandidate({
-      candidateId: request.candidateId,
+      // THE CALLER'S candidateId IS NOT READ HERE. This operation writes a NEW candidate, and the
+      // page has none to name yet — it sends the empty string. Taking that at face value wrote every
+      // candidate of every request under the id `''`: one `candidate-.json` per request, a second
+      // candidate overwriting the first, and `review-''.json` meaning whichever candidate was
+      // reviewed last. The deployment mints the id, which is what the wire type says it does.
       request: read.request,
       current,
       written,
@@ -1827,7 +1843,13 @@ export class ResearchTeamService extends TypertRemoteService {
       persisted: false,
     })
     const saved = await this.serialized(
-      () => this.persistRun(active.store, request.runId, getRunSnapshot(active.store, request.runId).revision),
+      // THE SNAPSHOT REVISION, NOT THE PROJECT ONE. They are two counters: every checkpoint moves
+      // the file's revision without moving the project's, so a write based on the project revision
+      // is refused as stale the moment a checkpoint has run — and on a run this process ADOPTED,
+      // whose two counters start further apart, it was refused outright: the acceptance was recorded
+      // and the manuscript it published never reached the file. `savedRevisionOf` is the number the
+      // snapshot itself reports, and every other write in this service bases on it.
+      () => this.persistRun(active.store, request.runId, this.savedRevisionOf(active) ?? 0),
     ).catch((error: unknown) => ({
       runId: request.runId, revision: null, interrupted: [],
       error: error instanceof Error ? error.message : String(error),

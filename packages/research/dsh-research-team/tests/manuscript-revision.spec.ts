@@ -115,6 +115,20 @@ describe('a candidate is written against the version the request read', () => {
       .toEqual(['results'])
   })
 
+  it('mints an id for a candidate nobody named one for, and never the same one twice', () => {
+    const request = makeRequest()
+    const current = sectionsOf(MANUSCRIPT)
+    const build = (): RevisionCandidateRecord => buildCandidate({
+      request, current, written: new Map([['results', 'The bound holds.']]), writer,
+    })
+    const first = build()
+    const second = build()
+    // A candidate is READ BACK by this id: the record file is named for it, a review is looked up by
+    // it, and an acceptance names it. An empty or repeated id makes two candidates one.
+    expect(first.candidateId).not.toBe('')
+    expect(second.candidateId).not.toBe(first.candidateId)
+  })
+
   it('refuses a manuscript that moved since the request read it', () => {
     const request = makeRequest()
     const moved = sectionsOf(MANUSCRIPT.replace('12.10 s', '9.80 s'))

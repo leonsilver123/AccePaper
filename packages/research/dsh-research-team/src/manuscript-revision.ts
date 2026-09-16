@@ -20,7 +20,7 @@
  * refuse, which is what keeps "the candidate you reviewed" and "the candidate that exists" the same
  * object.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ResearchProseWriter } from './runner/registry.ts'
@@ -235,13 +235,16 @@ export function createRevisionRequest(input: {
  * version.
  *
  * @param input - the request, the sections as they stand NOW, the replacement texts by section id,
- *   and what wrote them.
+ *   what wrote them, and the id to write the candidate under when the caller has one of its own.
+ *   **A candidate with no id of its own gets one**: candidates are read back, reviewed and accepted
+ *   by that id, so two of them sharing one would be one file overwritten and one review standing in
+ *   for another's.
  * @returns the candidate record.
  * @throws {Error} when the request names a section the manuscript no longer has, when a section's
  *   body has changed since the request read it, or when the writer produced no text for one.
  */
 export function buildCandidate(input: {
-  readonly candidateId: string
+  readonly candidateId?: string
   readonly request: RevisionRequestRecord
   readonly current: ReadonlyArray<ManuscriptSectionParts>
   readonly written: ReadonlyMap<string, string>
@@ -295,7 +298,7 @@ export function buildCandidate(input: {
     }
   })
   return {
-    candidateId: input.candidateId,
+    candidateId: input.candidateId ?? randomUUID(),
     requestId: input.request.requestId,
     runId: input.request.runId,
     projectRevision: input.request.projectRevision,
