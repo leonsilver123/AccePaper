@@ -36,6 +36,24 @@ export interface ApprovalRequest {
   /** The attempt the reader saw pending; the backend refuses any other. */
   readonly attempt: number
   readonly decision: 'approved' | 'rejected'
+  /**
+   * The identity of this COMMAND. Reuse it when retrying the same intent; mint a new one when the
+   * reader changes their mind.
+   *
+   * The backend answers a repeated command id with the result the first send produced. Sending a
+   * fresh id after a timeout is a second decision — which the backend refuses as `not-pending`, a
+   * refusal the caller cannot tell apart from "my decision never landed".
+   */
+  readonly commandId: string
+}
+
+/**
+ * Mint one approval command id.
+ *
+ * @returns an id unique to this intent, to be reused for every retry of it.
+ */
+export function newApprovalCommandId(): string {
+  return globalThis.crypto.randomUUID()
 }
 
 /** What the backend recorded, as the wire carries it. */
@@ -211,6 +229,7 @@ export function buildApprovalSubmitter(resolveConnection: () => unknown): Approv
         stepId: request.stepId,
         attempt: request.attempt,
         decision: request.decision,
+        commandId: request.commandId,
       })
     } catch (cause) {
       return { ok: false, code: 'transport', detail: cause instanceof Error ? cause.message : String(cause) }

@@ -92,6 +92,18 @@ export interface ApprovalSubmission {
   /** The attempt the caller saw pending. A decision for any other attempt is refused. */
   readonly attempt: number
   readonly decision: 'approved' | 'rejected'
+  /**
+   * The identity of the COMMAND, not of the decision.
+   *
+   * A caller that sends the same command id twice is retrying — a timeout it could not read, a
+   * reload, a second click on a button that appeared to do nothing — and gets the answer the first
+   * send produced. Without it the second send is a second decision: at best `not-pending`, and a
+   * retry cannot tell that apart from "my decision never landed".
+   *
+   * It is the caller's to choose and the caller's to REUSE. A new id is a new intent, so a reader
+   * who changes their mind and rejects after approving must send a different one.
+   */
+  readonly commandId: string
 }
 
 /** The graded outcome of one accepted approval. */
@@ -263,9 +275,20 @@ export function rememberedRun(runId: string): RememberedRun | undefined {
   return rememberedRuns.get(runId)
 }
 
-/** Drop every remembered run (the owning plugin unloading). */
+/**
+ * The answer a command id already produced, so a retry reads it instead of deciding again.
+ *
+ * In memory, and that is the honest boundary: across a restart the ledger is gone, and a retried
+ * command meets `not-pending` because the step is already decided. That refusal is SAFE — it cannot
+ * decide twice — but it is not idempotent, and the difference is recorded in the README rather than
+ * papered over with a durable table this layer does not own.
+ */
+const decidedCommands = new Map<string, ApprovalWireResult>()
+
+/** Drop every remembered run and command (the owning plugin unloading). */
 export function forgetRuns(): void {
   rememberedRuns.clear()
+  decidedCommands.clear()
 }
 
 /**
@@ -285,11 +308,15 @@ export function readSubmission(payload: unknown): ApprovalSubmission | undefined
   const stepId = record['stepId']
   const attempt = record['attempt']
   const decision = record['decision']
+  const commandId = record['commandId']
   if (typeof runId !== 'string' || runId === '') return undefined
   if (typeof stepId !== 'string' || stepId === '') return undefined
   if (typeof attempt !== 'number' || !Number.isSafeInteger(attempt) || attempt < 0) return undefined
   if (decision !== 'approved' && decision !== 'rejected') return undefined
-  return { runId, stepId, attempt, decision }
+  // REQUIRED. A command with no identity cannot be retried safely, and defaulting one here would
+  // make every retry a fresh decision — the failure this field exists to prevent.
+  if (typeof commandId !== 'string' || commandId === '') return undefined
+  return { runId, stepId, attempt, decision, commandId }
 }
 
 /**
@@ -317,6 +344,12 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
   if (!definition.humanGate) {
     return refuse(APPROVAL_ERROR_CODES.notHumanGate, `step '${stepId}' is not a humanGate step — an ordinary step is never approved by hand`)
   }
+  // A RETRY READS THE FIRST ANSWER. Checked before anything is decided, so a second send cannot
+  // reach the channel at all — which also means it cannot be refused for the state the FIRST send
+  // produced, the `not-pending` that a retrying caller cannot tell apart from "it never landed".
+  const answered = decidedCommands.get(submission.commandId)
+  if (answered !== undefined) return answered
+
   const state = getRunSnapshot(run.store, runId).steps[stepId]
   if (state === undefined) {
     return refuse(APPROVAL_ERROR_CODES.notStarted, `step '${stepId}' has no recorded state in run '${runId}'`)
@@ -380,7 +413,7 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
     // Report BOTH failures when both happened. They have different remedies and neither hides the
     // other: one says the decision is not on disk, the other says the response cannot carry the run.
 
-    return {
+    const result: ApprovalWireResult = {
       ok: true,
       value: {
         runId,
@@ -396,6 +429,10 @@ export async function submitApproval(submission: ApprovalSubmission): Promise<Ap
         ...(projectionError === undefined ? {} : { projectionError }),
       },
     }
+    // REMEMBERED ONLY ON SUCCESS. A refusal says nothing about what the decision was, and caching
+    // one would make a retry of a command that failed for a transient reason permanently refused.
+    decidedCommands.set(submission.commandId, result)
+    return result
   } catch (error) {
     return refuse(
       APPROVAL_ERROR_CODES.refused,

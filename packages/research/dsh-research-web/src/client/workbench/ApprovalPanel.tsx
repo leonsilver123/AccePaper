@@ -13,6 +13,7 @@
  */
 import { useCallback, useState } from 'react'
 import type { RunSummary } from '../../summary.ts'
+import { newApprovalCommandId } from '../approval-source.ts'
 import type { ApprovalFailure, ApprovalReceipt, ApprovalSubmitter } from '../approval-source.ts'
 import type { PanelProps } from './shared.ts'
 import css from './ResearchWorkbench.module.css'
@@ -25,11 +26,23 @@ export interface ApprovalPanelProps extends PanelProps {
   readonly onDecided?: (summary: RunSummary) => void
 }
 
-/** One step's decision in flight, or what came back from the backend. */
+/**
+ * One step's decision in flight, or what came back from the backend.
+ *
+ * `commandId` travels with the intent so a RETRY reuses it: a transport failure leaves the reader
+ * looking at a button they already pressed, and pressing it again has to be the same command.
+ * Changing the decision mints a new one, because that is a different intent.
+ */
 type RowState =
-  | { readonly kind: 'deciding'; readonly decision: 'approved' | 'rejected' }
+  | { readonly kind: 'deciding'; readonly decision: 'approved' | 'rejected'; readonly commandId: string }
   | { readonly kind: 'decided'; readonly receipt: ApprovalReceipt }
-  | { readonly kind: 'refused'; readonly code: ApprovalFailure; readonly detail: string }
+  | {
+    readonly kind: 'refused'
+    readonly code: ApprovalFailure
+    readonly detail: string
+    readonly decision: 'approved' | 'rejected'
+    readonly commandId: string
+  }
 
 /** The outcome the panel states above the queue, once one decision has landed. */
 type Outcome =
@@ -56,8 +69,13 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
 
   const decide = useCallback((runId: string, stepId: string, attempt: number, decision: 'approved' | 'rejected') => {
     if (onSubmit === undefined) return
-    setRows(current => ({ ...current, [stepId]: { kind: 'deciding', decision } }))
-    void onSubmit({ runId, stepId, attempt, decision }).then(
+    // Same intent, same command: a retry after a failure must not become a second decision.
+    const previous = rows[stepId]
+    const commandId = previous !== undefined && previous.kind === 'refused' && previous.decision === decision
+      ? previous.commandId
+      : newApprovalCommandId()
+    setRows(current => ({ ...current, [stepId]: { kind: 'deciding', decision, commandId } }))
+    void onSubmit({ runId, stepId, attempt, decision, commandId }).then(
       (result) => {
         if (result.ok) {
           // THE DECISION STANDS WHATEVER ELSE FAILED. A summary that could not be built and a
@@ -76,14 +94,22 @@ export function ApprovalPanel({ summary, t, onSubmit, onDecided }: ApprovalPanel
           if ('summary' in result) onDecided?.(result.summary)
           return
         }
-        settle(stepId, { kind: 'refused', code: result.code, detail: result.detail }, { kind: 'refused', code: result.code, detail: result.detail })
+        settle(
+          stepId,
+          { kind: 'refused', code: result.code, detail: result.detail, decision, commandId },
+          { kind: 'refused', code: result.code, detail: result.detail },
+        )
       },
       (cause: unknown) => {
         const detail = cause instanceof Error ? cause.message : String(cause)
-        settle(stepId, { kind: 'refused', code: 'transport', detail }, { kind: 'refused', code: 'transport', detail })
+        settle(
+          stepId,
+          { kind: 'refused', code: 'transport', detail, decision, commandId },
+          { kind: 'refused', code: 'transport', detail },
+        )
       },
     )
-  }, [onSubmit, onDecided, settle])
+  }, [onSubmit, onDecided, settle, rows])
 
   const detailKey = (code: ApprovalFailure) =>
     code === 'unavailable' ? 'approval.unavailable' : `approval.failure.${code}` as const

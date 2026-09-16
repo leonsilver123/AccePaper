@@ -151,9 +151,11 @@ describe('the approval panel decides nothing by itself', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
 
     expect(onSubmit).toHaveBeenCalledTimes(1)
-    expect(onSubmit.mock.calls[0]?.[0]).toEqual({
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
       runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, decision: 'approved',
-    } satisfies ApprovalRequest)
+    } satisfies Partial<ApprovalRequest>)
+    // And it carries a command id of its own, which is what makes a retry a retry.
+    expect(onSubmit.mock.calls[0]?.[0]?.commandId).toEqual(expect.any(String))
   })
 
   it('renders the receipt the backend returned, naming the operator it attested', async () => {
@@ -281,6 +283,35 @@ describe('the approval panel decides nothing by itself', () => {
     expect(screen.queryByText(en['approval.notPersisted'].replace('{detail}', ''))).toBeNull()
   })
 
+  it('retries under the SAME command id, and a changed mind under a new one', async () => {
+    // The reader presses Approve, the call times out, and the button is offered again. Pressing it
+    // has to be the same command — otherwise the backend sees a second decision, refuses it as
+    // `not-pending`, and the reader cannot tell that apart from "my approval never landed".
+    const onSubmit = vi.fn<ApprovalSubmitter>()
+      .mockResolvedValueOnce({ ok: false, code: 'transport', detail: 'the request timed out' })
+      .mockResolvedValueOnce({ ok: false, code: 'transport', detail: 'the request timed out again' })
+      .mockResolvedValueOnce({
+        ok: true,
+        receipt: {
+          runId: 'run_approval_001', stepId: 'E2-submit', attempt: 2, status: 'blocked',
+          operator: 'authenticated-browser-operator', decision: 'rejected',
+          approvalEventId: 'evt-1', decidedAt: 1, persisted: true,
+        },
+        summary: toRunSummary(gatedInput()),
+      })
+    openApprovalTab({ summary: toRunSummary(gatedInput()), onApprove: onSubmit })
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.approve'] })) })
+    const first = onSubmit.mock.calls[0]?.[0]?.commandId
+    const retry = onSubmit.mock.calls[1]?.[0]?.commandId
+    expect(first).toBe(retry)
+
+    // Rejecting after an approval failed is a DIFFERENT intent, and gets its own command.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['approval.reject'] })) })
+    expect(onSubmit.mock.calls[2]?.[0]?.commandId).not.toBe(first)
+  })
+
   it('reports a transport failure instead of a decision', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: false,
@@ -314,7 +345,7 @@ describe('the approval request carries exactly the decidable fields', () => {
 
   const request: ApprovalRequest = { runId: 'run_1', stepId: 'E2-submit', attempt: 3, decision: 'approved' }
 
-  it('posts the four fields to the research-approval channel, and nothing else', async () => {
+  it('posts the decidable fields to the research-approval channel, and nothing else', async () => {
     const connection = connectionDouble({
       ok: true,
       value: {
@@ -333,7 +364,7 @@ describe('the approval request carries exactly the decidable fields', () => {
     // The payload is the four fields verbatim: no `actor`, no `status`, no `principalId`.
     expect(connection.calls[0]?.payload).toEqual(request)
     expect(Object.keys(connection.calls[0]?.payload as object).sort())
-      .toEqual(['attempt', 'decision', 'runId', 'stepId'])
+      .toEqual(['attempt', 'commandId', 'decision', 'runId', 'stepId'])
     expect(outcome.ok).toBe(true)
     // `summary` is on ONE of the two applied-and-ok outcomes: the other carries `summaryUnavailable`
     // instead, because a decision whose refresh failed is still a decision.

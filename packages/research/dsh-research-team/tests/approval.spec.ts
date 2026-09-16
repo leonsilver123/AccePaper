@@ -186,7 +186,7 @@ describe('§8.1 an approval produces a backend record', () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
 
-    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-2' })
     if (!result.ok) throw new Error(`expected a decision, got ${result.error.code}: ${result.error.message}`)
 
     expect(result.value.status).toBe('passed')
@@ -220,7 +220,7 @@ describe('§8.1 an approval produces a backend record', () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
 
-    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected' })
+    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected', commandId: 'cmd-3' })
     if (!result.ok) throw new Error(`expected a decision, got ${result.error.code}: ${result.error.message}`)
 
     expect(result.value.status).toBe('blocked')
@@ -233,7 +233,7 @@ describe('§8.1 a re-read of the backend still shows the decision', () => {
   it('re-projects the decided run from its store, not from what the caller had in hand', async () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
-    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-4' })
     expect(result.ok).toBe(true)
 
     // The response carries a projection taken AFTER the decision...
@@ -254,7 +254,7 @@ describe('§8.1 a re-read of the backend still shows the decision', () => {
 
     // A client that lost its state re-asks: the refusal names the recorded status, so the
     // answer is the backend's, not a fresh decision.
-    const again = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const again = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-5' })
     expect(again.ok).toBe(false)
     expect(again.ok ? '' : again.error.message).toContain('passed')
   })
@@ -265,14 +265,14 @@ describe('§8.1 a repeated decision cannot approve twice', () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
 
-    const first = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const first = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-6' })
     expect(first.ok).toBe(true)
 
-    const second = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const second = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-7' })
     expect(second.ok).toBe(false)
     expect(second.ok ? '' : second.error.code).toBe(APPROVAL_ERROR_CODES.notPending)
 
-    const third = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected' })
+    const third = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected', commandId: 'cmd-8' })
     expect(third.ok).toBe(false)
 
     expect(approvalsAt(drive.store, drive.run.runId, attempt)).toHaveLength(1)
@@ -286,14 +286,14 @@ describe('§8.1 a superseded attempt cannot be decided by the old approval', () 
   it('refuses a decision naming an attempt the step has moved past', async () => {
     const drive = await gatedRun()
     const firstAttempt = regate(drive)
-    const approved = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: firstAttempt, decision: 'approved' })
+    const approved = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: firstAttempt, decision: 'approved', commandId: 'cmd-9' })
     expect(approved.ok).toBe(true)
 
     // Roll back the decided attempt and start a new one, exactly as a recovery does.
     const secondAttempt = regate(drive)
     expect(secondAttempt).toBeGreaterThan(firstAttempt)
 
-    const stale = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: firstAttempt, decision: 'approved' })
+    const stale = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: firstAttempt, decision: 'approved', commandId: 'cmd-10' })
     expect(stale.ok).toBe(false)
     expect(stale.ok ? '' : stale.error.code).toBe(APPROVAL_ERROR_CODES.staleAttempt)
     expect(stale.ok ? '' : stale.error.message).toContain(String(secondAttempt))
@@ -303,7 +303,7 @@ describe('§8.1 a superseded attempt cannot be decided by the old approval', () 
     expect(e2(drive.store, drive.run.runId)?.attemptId).toBe(secondAttempt)
     expect(e2(drive.store, drive.run.runId)?.approval).toBeUndefined()
 
-    const current = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: secondAttempt, decision: 'approved' })
+    const current = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt: secondAttempt, decision: 'approved', commandId: 'cmd-11' })
     expect(current.ok).toBe(true)
     expect(e2(drive.store, drive.run.runId)?.approval?.attempt_id).toBe(secondAttempt)
   })
@@ -311,7 +311,7 @@ describe('§8.1 a superseded attempt cannot be decided by the old approval', () 
   it('leaves a rolled-back step inert until it is decided again', async () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
-    expect((await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })).ok).toBe(true)
+    expect((await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-12' })).ok).toBe(true)
     expect(isComplete(drive.store, drive.run.runId, E2)).toBe(true)
 
     rollback(drive.store, drive.run.runId, E2)
@@ -321,7 +321,7 @@ describe('§8.1 a superseded attempt cannot be decided by the old approval', () 
     expect(after?.approval).toBeUndefined()
     expect(isComplete(drive.store, drive.run.runId, E2)).toBe(false)
     // The old audit record is history, not a live approval.
-    const live = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const live = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-13' })
     expect(live.ok).toBe(false)
     expect(live.ok ? '' : live.error.code).toBe(APPROVAL_ERROR_CODES.notPending)
   })
@@ -344,7 +344,7 @@ describe('§8.1 an Agent cannot self-approve through an ordinary call', () => {
   it('refuses a decision for a run this process does not hold', async () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
-    const foreign = await submitApproval({ runId: 'run-this-process-never-started', stepId: E2, attempt, decision: 'approved' })
+    const foreign = await submitApproval({ runId: 'run-this-process-never-started', stepId: E2, attempt, decision: 'approved', commandId: 'cmd-14' })
     expect(foreign.ok).toBe(false)
     expect(foreign.ok ? '' : foreign.error.code).toBe(APPROVAL_ERROR_CODES.runUnknown)
     expect(e2(drive.store, drive.run.runId)?.status).toBe('gated')
@@ -353,11 +353,11 @@ describe('§8.1 an Agent cannot self-approve through an ordinary call', () => {
   it('refuses a step that is not a human gate, and a step with no state', async () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
-    const ordinary = await submitApproval({ runId: drive.run.runId, stepId: 'A1-landscape', attempt, decision: 'approved' })
+    const ordinary = await submitApproval({ runId: drive.run.runId, stepId: 'A1-landscape', attempt, decision: 'approved', commandId: 'cmd-15' })
     expect(ordinary.ok).toBe(false)
     expect(ordinary.ok ? '' : ordinary.error.code).toBe(APPROVAL_ERROR_CODES.notHumanGate)
 
-    const unknown = await submitApproval({ runId: drive.run.runId, stepId: 'Z9-nothing', attempt: 1, decision: 'approved' })
+    const unknown = await submitApproval({ runId: drive.run.runId, stepId: 'Z9-nothing', attempt: 1, decision: 'approved', commandId: 'cmd-16' })
     expect(unknown.ok).toBe(false)
     expect(unknown.ok ? '' : unknown.error.code).toBe(APPROVAL_ERROR_CODES.stepUnknown)
     expect(e2(drive.store, drive.run.runId)?.status).toBe('gated')
@@ -378,20 +378,60 @@ describe('§8.1 an Agent cannot self-approve through an ordinary call', () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
     // Mint the process channel by using it.
-    expect((await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })).ok).toBe(true)
+    expect((await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-17' })).ok).toBe(true)
     // A second mint — the shape a pre-empting caller takes — fails loudly rather than
     // producing a second, independent authority.
     expect(() => createHostApprovalChannel('pre-empting-secret')).toThrow(/DSH_APPROVAL_CHANNEL_EXISTS/)
   })
 
+  it('answers a repeated command with the result its first send produced', async () => {
+    // A RETRY IS NOT A SECOND DECISION. The caller could not read the first answer — a timeout, a
+    // reload, a second click on a button that looked inert — and sends the same command again. The
+    // alternative is what the shipped behaviour was: `not-pending`, because the first send decided
+    // the gate, and a caller cannot tell that refusal apart from "my decision never landed".
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const command = { runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' as const, commandId: 'cmd-retry' }
+
+    const first = await submitApproval(command)
+    const second = await submitApproval(command)
+
+    expect(first.ok).toBe(true)
+    expect(second).toEqual(first)
+    // The second send reached no decision of its own: the step holds ONE approval, under the first
+    // send's event id.
+    const approval = e2(drive.store, drive.run.runId)?.approval
+    expect(approval?.approval_event_id).toBe(first.ok ? first.value.approvalEventId : 'no event')
+
+    // A DIFFERENT command is a different intent, and meets the state the first one produced. The
+    // ledger answers retries; it is not a way around the gate.
+    const other = await submitApproval({ ...command, commandId: 'cmd-other' })
+    expect(other.ok).toBe(false)
+    expect(other.ok ? '' : other.error.code).toBe(APPROVAL_ERROR_CODES.notPending)
+  })
+
+  it('does not remember a refusal, so a retry after a transient failure can still decide', async () => {
+    // Caching a refusal would make a command that failed for a reason outside its control — a
+    // broken channel, a run this process does not hold — permanently refused under that id.
+    const drive = await gatedRun()
+    const attempt = regate(drive)
+    const command = { runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' as const, commandId: 'cmd-transient' }
+
+    const before = await submitApproval({ ...command, runId: 'no-such-run' })
+    expect(before.ok).toBe(false)
+
+    const after = await submitApproval(command)
+    expect(after.ok).toBe(true)
+  })
+
   it('forgets runs when the owning plugin unloads', async () => {
     const drive = await gatedRun()
     const attempt = regate(drive)
-    const before = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const before = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-18' })
     expect(before.ok).toBe(true)
 
     forgetRuns()
-    const after = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const after = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-19' })
     expect(after.ok).toBe(false)
     expect(after.ok ? '' : after.error.code).toBe(APPROVAL_ERROR_CODES.runUnknown)
 
@@ -426,7 +466,7 @@ describe('§8.1 a decision is as durable as the run that produced it', () => {
         return { runId: drive.run.runId, revision: written.revision, interrupted: [] }
       },
     )
-    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' })
+    const result = await submitApproval({ runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-20' })
     expect(result.ok).toBe(true)
     expect(result.ok ? result.value.persisted : undefined).toBe(true)
     expect(result.ok ? result.value.persistenceError : 'no result').toBeUndefined()
@@ -457,6 +497,7 @@ describe('§8.1 a client cannot write `passed`', () => {
       stepId: E2,
       attempt,
       decision: 'rejected',
+      commandId: 'cmd-attacker',
       status: 'passed',
       actor: 'human',
       principal: 'somebody-important',
@@ -464,9 +505,11 @@ describe('§8.1 a client cannot write `passed`', () => {
       humanGate: true,
     }
 
-    // The reader production calls projects it onto the four fields and discards the rest...
+    // The reader production calls projects it onto the DECIDABLE fields and discards the rest. The
+    // command id is among the fields it keeps, and that is not an identity claim: it names the
+    // caller's own retry, and the host never reads it as who the caller is.
     expect(readSubmission(hostile)).toEqual({
-      runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected',
+      runId: drive.run.runId, stepId: E2, attempt, decision: 'rejected', commandId: 'cmd-attacker',
     })
 
     // ...and the whole endpoint, driven with that same body, decides on those four fields alone.
@@ -484,12 +527,12 @@ describe('§8.1 a client cannot write `passed`', () => {
       null,
       'approved',
       [],
-      { stepId: E2, attempt: 1, decision: 'approved' },
-      { runId: 'r', attempt: 1, decision: 'approved' },
-      { runId: 'r', stepId: E2, attempt: '1', decision: 'approved' },
-      { runId: 'r', stepId: E2, attempt: 1.5, decision: 'approved' },
+      { stepId: E2, attempt: 1, decision: 'approved', commandId: 'cmd-21' },
+      { runId: 'r', attempt: 1, decision: 'approved', commandId: 'cmd-22' },
+      { runId: 'r', stepId: E2, attempt: '1', decision: 'approved', commandId: 'cmd-23' },
+      { runId: 'r', stepId: E2, attempt: 1.5, decision: 'approved', commandId: 'cmd-24' },
       { runId: 'r', stepId: E2, attempt: 1, decision: 'yes' },
-      { runId: '', stepId: E2, attempt: 1, decision: 'approved' },
+      { runId: '', stepId: E2, attempt: 1, decision: 'approved', commandId: 'cmd-25' },
     ]) {
       expect(readSubmission(payload), JSON.stringify(payload)).toBeUndefined()
     }
@@ -540,7 +583,7 @@ describe('§8.1 the decision arrives on the host-authenticated channel', () => {
 
     const decided = await handler(
       APPROVAL_DECIDE_ENDPOINT,
-      { runId: drive.run.runId, stepId: E2, attempt, decision: 'approved' },
+      { runId: drive.run.runId, stepId: E2, attempt, decision: 'approved', commandId: 'cmd-26' },
       new AbortController().signal,
     )
     expect(decided.ok).toBe(true)
