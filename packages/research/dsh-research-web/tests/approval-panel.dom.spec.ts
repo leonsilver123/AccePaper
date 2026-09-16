@@ -114,6 +114,32 @@ describe('the approval panel decides nothing by itself', () => {
     expect(screen.queryByText(en['run.revision'].replace('{revision}', '0'))).toBeNull()
   })
 
+  it('says an evaluation run cannot be a submission package', () => {
+    // The one thing a reader must be able to tell from a green screen. It is stated as its own fact
+    // rather than inferred from the status, because a finished demonstration is still finished.
+    openApprovalTab({
+      summary: toRunSummary({
+        ...gatedInput(),
+        evidenceProfile: 'evaluation',
+        profileEligible: false,
+        submissionReady: false,
+        readinessNote: 'the deployment evidence profile is evaluation',
+      }),
+    })
+
+    expect(screen.getByText(en['readiness.profile.evaluation'])).toBeTruthy()
+    expect(screen.getByText(new RegExp(en['readiness.notReady']))).toBeTruthy()
+  })
+
+  it('says readiness is unknown rather than guessing when the host named none', () => {
+    openApprovalTab({ summary: toRunSummary(gatedInput()) })
+
+    expect(screen.getByText(en['readiness.profile.unknown'])).toBeTruthy()
+    expect(screen.getByText(en['readiness.unknown'])).toBeTruthy()
+    // Not the comfortable answer: an unstated readiness is not a ready one.
+    expect(screen.queryByText(en['readiness.ready'])).toBeNull()
+  })
+
   it('asks the submitter for exactly this run, step and attempt', async () => {
     const onSubmit = vi.fn<ApprovalSubmitter>().mockResolvedValue({
       ok: true,

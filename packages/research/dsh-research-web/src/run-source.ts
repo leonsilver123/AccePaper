@@ -130,6 +130,20 @@ export interface WireRunSnapshot {
    */
   readonly packageExport?: WirePackageExport | null
   readonly runPersistence?: WireRunPersistence | null
+  /**
+   * What the deployment's evidence profile allows, and whether THIS run is ready.
+   *
+   * The host has carried these four since the readiness split landed, and the twin did not declare
+   * them — so the browser received them and could name none, which is the same drift `packageExport`
+   * is annotated for. OPTIONAL on the same terms: an older host still satisfies the declaration.
+   *
+   * They are declared here because the workbench could not otherwise say the one thing a reader
+   * needs before trusting a screen: whether this is a demonstration and whether anything is ready.
+   */
+  readonly evidenceProfile?: string
+  readonly profileEligible?: boolean
+  readonly submissionReady?: boolean
+  readonly readinessNote?: string
 }
 
 /** The Host's export result, structurally. */
@@ -367,8 +381,13 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     degradations,
     deliverables: deliverablesOf(snapshot),
     // Absent stays absent: a host that names no revision is reported as naming none, rather than as
-    // revision 0, which is a revision a run genuinely starts at.
+    // revision 0, which is a revision a run genuinely starts at. The readiness facts follow the same
+    // rule — an unstated readiness is not a failed one.
     ...(snapshot.projectRevision === undefined ? {} : { projectRevision: snapshot.projectRevision }),
+    ...(typeof snapshot.evidenceProfile === 'string' ? { evidenceProfile: snapshot.evidenceProfile } : {}),
+    ...(typeof snapshot.profileEligible === 'boolean' ? { profileEligible: snapshot.profileEligible } : {}),
+    ...(typeof snapshot.submissionReady === 'boolean' ? { submissionReady: snapshot.submissionReady } : {}),
+    ...(typeof snapshot.readinessNote === 'string' ? { readinessNote: snapshot.readinessNote } : {}),
   }
 }
 

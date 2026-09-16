@@ -59,6 +59,10 @@ about what a system does has to be what it does.
   `awaiting-approval`, with `humanPending` still naming the gate the reader has to decide.
 - The header, the summary panel and every locale-driven label follow from `RunStatus`, so the new
   value renders through the existing `status.*` lookup in both languages.
-- **What this does not do**: it does not separate the other three dimensions the plan calls for.
-  Execution state is now distinct from completion; the QUALITY state (a required check that never
-  ran) and the APPROVAL state are still not surfaced as their own facts.
+- The same pass declares the four readiness facts on the client twin — `evidenceProfile`,
+  `profileEligible`, `submissionReady`, `readinessNote` — and states the mode and the readiness in
+  the workbench header. The twin had not declared them, so the browser received all four and could
+  name none.
+- **What this does not do**: the QUALITY state (a required check that never ran) is still not
+  surfaced as its own fact, and neither is the APPROVAL state. Execution, mode and readiness are now
+  distinct; those two are not.

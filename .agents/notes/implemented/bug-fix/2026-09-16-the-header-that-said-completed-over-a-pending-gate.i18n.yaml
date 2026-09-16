@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-the-header-that-said-completed-over-a-pending-gate.md
-2026-09-16-the-header-that-said-completed-over-a-pending-gate.md: 71aafde1218e0da6a3a613cdd449ca97f29db95e
-2026-09-16-the-header-that-said-completed-over-a-pending-gate.zh.md: d12a721feafb62b00fce4a954af12d76d306dcc8
+2026-09-16-the-header-that-said-completed-over-a-pending-gate.md: c54450048255d699ed3d5bd6400f40bc7d76be8c
+2026-09-16-the-header-that-said-completed-over-a-pending-gate.zh.md: f25d04058060178e79af3fb431f6f5dc6279fe8b

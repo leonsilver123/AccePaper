@@ -198,6 +198,14 @@ export interface RunSummaryInput {
    * and the download describe the same state of the study.
    */
   readonly projectRevision?: number
+  /** The deployment's evidence profile (`production` / `evaluation`), when the host names one. */
+  readonly evidenceProfile?: string
+  /** Whether that profile may ever carry a submission. A fact about the DEPLOYMENT. */
+  readonly profileEligible?: boolean
+  /** Whether THIS run's material is complete and its gates all closed. A fact about the RUN. */
+  readonly submissionReady?: boolean
+  /** Why the run is not ready, in the host's own words. */
+  readonly readinessNote?: string
   /**
    * Where this summary came from.
    *
@@ -242,6 +250,21 @@ export interface RunSummary {
   readonly runId: string
   /** The project revision this summary describes; null when the host named none. */
   readonly projectRevision: number | null
+  /**
+   * The four readiness facts, kept apart on purpose.
+   *
+   * `evidenceProfile` is which mode the deployment runs in; `profileEligible` is what that mode may
+   * EVER carry; `submissionReady` is what THIS run produced; `readinessNote` is why, when it is not
+   * ready. Collapsing any two of them is how a demonstration reads as a submission — the failure
+   * the readiness split was made for, at the layer where a reader actually sees it.
+   *
+   * `null` means the host named none, which is not `false`: a run whose readiness is unknown must
+   * not be rendered as one that was checked and failed.
+   */
+  readonly evidenceProfile: string | null
+  readonly profileEligible: boolean | null
+  readonly submissionReady: boolean | null
+  readonly readinessNote: string | null
   readonly status: RunStatus
   readonly steps: ReadonlyArray<StepView>
   readonly artifacts: ReadonlyArray<ArtifactView>
@@ -312,6 +335,10 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     runId: input.runId,
     // Absent stays null: a host that named no revision is reported as having named none.
     projectRevision: input.projectRevision ?? null,
+    evidenceProfile: input.evidenceProfile ?? null,
+    profileEligible: input.profileEligible ?? null,
+    submissionReady: input.submissionReady ?? null,
+    readinessNote: input.readinessNote ?? null,
     status: input.status,
     steps: input.steps,
     artifacts: input.artifacts,

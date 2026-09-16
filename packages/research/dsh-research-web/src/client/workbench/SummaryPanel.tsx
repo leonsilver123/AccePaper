@@ -23,6 +23,7 @@ export function SummaryPanel({ summary, t }: PanelProps) {
         </span>
       </header>
 
+
       {summary.humanPending.length > 0 && (
         <section className={`${css.section} ${css.humanPending}`}>
           <h3 className={css.sectionTitle}>{t('section.humanPending')}</h3>

@@ -165,6 +165,30 @@ export function ResearchWorkbench({ t, summary: injected, onRun, onPropose, onAp
           revision, so a reader can tell whether the page and the download describe one state or
           two — a question a timestamp cannot answer. Absent when the host names none: showing a
           zero would name a revision nobody read. */}
+      {/* WHAT THIS RUN IS AND WHETHER ANYTHING IS READY — stated where the source badge is, not
+          behind a tab, because it is true of the whole run. A reader shown a green screen has to be
+          able to tell a demonstration from a submission, and "the pipeline finished" from "this
+          could be submitted": collapsing either pair is the failure the host's readiness split was
+          made for, at the layer where a reader sees it. An unstated readiness says so. */}
+      {summary !== undefined && (
+        <span className={css.mockBadge} data-research-profile="">
+          {summary.evidenceProfile === null
+            ? t('readiness.profile.unknown')
+            : t(summary.evidenceProfile === 'production'
+              ? 'readiness.profile.production'
+              : 'readiness.profile.evaluation')}
+        </span>
+      )}
+      {summary !== undefined && (
+        <span className={css.mockBadge} data-research-readiness="">
+          {summary.submissionReady === null
+            ? t('readiness.unknown')
+            : t(summary.submissionReady ? 'readiness.ready' : 'readiness.notReady')}
+          {summary.readinessNote !== null && summary.readinessNote.length > 0
+            ? ` — ${summary.readinessNote}`
+            : ''}
+        </span>
+      )}
       {summary !== undefined && summary.projectRevision !== null && (
         <span className={css.mockBadge} data-research-revision="">
           {t('run.revision', { revision: String(summary.projectRevision) })}

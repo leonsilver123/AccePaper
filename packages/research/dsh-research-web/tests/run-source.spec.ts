@@ -212,6 +212,30 @@ describe('runStatusOf', () => {
     expect(summary.status).toBe('abstained')
   })
 
+  it('keeps the four readiness facts apart, and reports an unstated one as unstated', () => {
+    // A demonstration and a submission must not render alike, and neither must "checked and not
+    // ready" from "nobody said". Collapsing any two is the failure the host's readiness split was
+    // made for, at the layer where a reader actually sees it.
+    const production = buildSummary(summaryInputFrom({
+      ...snapshot(),
+      evidenceProfile: 'production',
+      profileEligible: true,
+      submissionReady: false,
+      readinessNote: 'the run has not completed: E2-submit (gated)',
+    }))
+    expect(production.evidenceProfile).toBe('production')
+    expect(production.profileEligible).toBe(true)
+    expect(production.submissionReady).toBe(false)
+    expect(production.readinessNote).toContain('E2-submit')
+
+    // A host that names none of them yields nulls, NOT `false` — a run whose readiness is unknown
+    // must not be shown as one that was checked and failed.
+    const unstated = buildSummary(summaryInputFrom(snapshot()))
+    expect(unstated.evidenceProfile).toBeNull()
+    expect(unstated.submissionReady).toBeNull()
+    expect(unstated.readinessNote).toBeNull()
+  })
+
   it('reads a run stopped at the human gate as waiting, not as finished', () => {
     // The whole chain, on the fixture the other tests use: A1 passed, E2 gated. The header used to
     // say `completed` here, which is the sentence "the work is over" shown at the moment the
