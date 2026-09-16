@@ -45,6 +45,18 @@ fixed, the same run was blocked again, by two checks that had never seen a model
   (`at least` / `at most` / `within`, and the future `shall` / `will`), so a sentence reporting
   "lowered it by 38.20 %" is read and a prediction is not.
 
+**2c. The number check's third refusal was for a citation's volume and page.** With the two above
+fixed, the same manuscript was refused again — for `62` and `1805`, the volume and page of
+`Physical Review E 62(2):1805`, cited in running text with no parentheses and no year. Three
+refusals, three attempts at enumerating the shapes an identifier takes. The rule that ended it asks
+the other question: **what does a number stated as a result look like?** It carries a unit or a
+percent sign, or it is a count small enough to be one. A bare integer above that range in prose is a
+citation, an index or a year.
+
+The cost is stated rather than hidden: a fabricated bare integer above the count range, with no
+unit, is no longer checked. A fabricated number with a unit, or any decimal, still is — and those
+are the two forms a Results section actually uses.
+
 Both were the checks being wrong about a correct paper, and both were invisible to the suite
 because every fixture the suite reviews was written by the same author as the checks.
 
