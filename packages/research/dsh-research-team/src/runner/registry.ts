@@ -164,12 +164,15 @@ import {
   ablationStudy,
   boundaryTest,
   comparePlatoons,
+  HOMOGENEOUS_PLATOON_COMPOSITION,
   measureStudy,
+  MIXED_PLATOON_COMPOSITION,
   MODEL_EQUATIONS,
   experimentStudy,
   runPlatoon,
   studyFromPack,
 } from './platoon-sim.ts'
+import { resolveImplementation } from './implementations.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -1473,9 +1476,30 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // The method is how the claim is made testable, so it must derive from the claim
   // when a model is available. With no writer the fixture spec stands, keeping the
   // offline pipeline deterministic.
+  // THE METHOD'S EXECUTABLE HALF IS NOT MODEL-AUTHORED. This used to ask the model for a FAMILY
+  // and write the answer onto `method-spec`, so a response naming a reinforcement-learning policy
+  // became the manuscript's method while `platoon-sim.ts` integrated IDM trajectories — a method
+  // section describing an experiment nobody ran (review J11). The algorithm now comes from the
+  // implementation the plan declares, and the model is asked only for what it can legitimately
+  // contribute: the procedure steps and the metric's direction. `resolveImplementation` is called
+  // at the plan boundary too, so a plan naming an implementation this runner lacks never gets here.
+  const resolved = resolveImplementation(planOf(ctx))
+  if (!resolved.ok || resolved.implementation === undefined) {
+    throw new Error(`[B1-method] ${resolved.reason}`)
+  }
+  const implementation = resolved.implementation
   const writer = ctx.proseWriter
-  let family = 'reinforcement-learning phase-plan policy (synthetic spec)'
-  let steps: ReadonlyArray<string> = ['build both platoons', 'integrate the car-following model', 'read the minimum time-to-collision']
+  // What the MODEL believes the method is, when a model answered. Recorded beside the executed
+  // implementation rather than instead of it: it is worth keeping for audit — a reader can see
+  // that the model said one thing and the code did another — but it cannot become the method the
+  // manuscript reports, because the manuscript's method must be the one that ran.
+  let modelDeclaredFamily: string | undefined
+  const family = `${implementation.algorithm} (${implementation.version})`
+  let steps: ReadonlyArray<string> = [
+    `build the two platoons (${HOMOGENEOUS_PLATOON_COMPOSITION.join('-')} against ${MIXED_PLATOON_COMPOSITION.join('-')})`,
+    `integrate ${implementation.algorithm} at ${String(implementation.parameters['stepSeconds'])} s steps`,
+    `measure ${implementation.metric.label}`,
+  ]
   let metricName: string = planOf(ctx).metric.key
   let metricDirection: string = ablationDirectionOf(planOf(ctx).metric)
   let methodSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
@@ -1521,7 +1545,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     if (parsedStepList.length === 0) {
       throw new Error('[B1-method] the model returned an empty STEPS list (NO DEFAULT PASS)')
     }
-    family = parsedFamily
+    modelDeclaredFamily = parsedFamily
     steps = parsedStepList
     metricName = parsedMetric
     metricDirection = parsedDirection
@@ -1538,15 +1562,29 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         slug: 'method-spec',
         methodId: SCENARIO.variantIdentity,
         family,
+        ...(modelDeclaredFamily === undefined ? {} : { modelDeclaredFamily }),
         claimRef,
         derivedFrom: 'falsifiable-prediction',
         steps,
         metric: { name: metricName, direction: metricDirection },
         methodSource,
         methodRoute,
+        // The method this run EXECUTES, with the parameters and the varied factors read out of the
+        // implementation rather than described: a reader can compare the Method section against
+        // the code without opening it, and a change to the model changes both in one edit.
+        implementation: {
+          id: implementation.id,
+          version: implementation.version,
+          algorithm: implementation.algorithm,
+          citation: implementation.citation,
+          parameters: implementation.parameters,
+          varied: implementation.varied,
+          equations: implementation.equations,
+          outputs: implementation.outputs,
+        },
         note: methodSource === 'fixture'
-          ? 'synthetic method spec — no method-derivation tool exists'
-          : 'method spec derived from the claim and its falsifiable prediction',
+          ? 'method spec — the algorithm, its parameters and its varied factors are the declared implementation; no method-derivation tool exists'
+          : 'method spec — the algorithm comes from the declared implementation; the steps and the metric direction come from the model',
       },
       B1_PRODUCER,
       proseKindOf(methodSource),

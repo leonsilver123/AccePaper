@@ -19,6 +19,7 @@
  */
 
 import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
+import { resolveImplementation } from './implementations.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, commitmentFrom } from './prediction-gate.ts'
 import { MEASURED_METRIC } from './platoon-sim.ts'
@@ -47,6 +48,12 @@ export interface PlanClaim {
 
 /** The research a run carries: what is being studied, and what would settle it. */
 export interface StudyPlan {
+  /**
+   * Which implementation this study runs. The runner refuses a plan naming one it does not have
+   * (`runner/implementations.ts`), because a method section describing an algorithm the
+   * experiment does not run is a defect the pipeline must not be able to reach.
+   */
+  readonly implementationId?: string
   /** The manuscript title. */
   readonly title: string
   /** The domain the study belongs to. */
@@ -83,6 +90,7 @@ export interface StudyPlan {
  * Nothing here is a finding. A deployment states its own plan.
  */
 export const DEFAULT_PLAN: StudyPlan = {
+  implementationId: 'idm-platoon-simulation',
   title: 'Inserting One Autonomous Vehicle Changes a Platoon Minimum Time-to-Collision',
   field: 'road transport safety and traffic flow',
   direction: 'mixed platoon car-following with an autonomous vehicle',
@@ -100,7 +108,15 @@ export const DEFAULT_PLAN: StudyPlan = {
     ref: 'inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision',
     assertion:
       'Inserting one AV into a three-vehicle human platoon raises the platoon minimum time-to-collision.',
-    essentialDifference: 'control policy is adaptive (RL) rather than fixed-time',
+    // WHAT THE STUDY ACTUALLY VARIES. This read 'control policy is adaptive (RL) rather than
+    // fixed-time', which was false twice over: the car-following is IDM in both arms, not a
+    // learned policy, and the baseline is a homogeneous IDM platoon, not a fixed-time signal plan.
+    // The Method section derived its difference from this field, so the manuscript described an
+    // experiment nobody ran. The values below are the ones `DECLARED_VEHICLE_CLASSES` holds and
+    // `implementations.ts` publishes.
+    essentialDifference:
+      'the autonomous vehicle follows with a 0.15 s reaction delay, a 1.2 s desired headway and a'
+      + ' 0.15 s look-ahead horizon, against the human 1.2 s delay, 2.0 s headway and no look-ahead',
     experimentToFalsify:
       'Simulate the homogeneous and the mixed platoon under the same declared disturbance and compare their minimum time-to-collision.',
     prediction:
@@ -162,6 +178,24 @@ function textField(source: Record<string, unknown>, key: string): string | undef
  * @param metric - the quantity this run's study measures.
  * @returns the plan, or a reason it cannot be used.
  */
+/**
+ * Read a plan's declared implementation, requiring one this runner has.
+ *
+ * @param source - the plan record being validated.
+ * @returns the implementation, or the refusal naming what is missing and what is available.
+ */
+function requireImplementation(
+  source: Record<string, unknown>,
+): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
+  const declared = source['implementationId']
+  if (declared === undefined) return { ok: true }
+  if (typeof declared !== 'string' || declared.length === 0) {
+    return { ok: false, reason: "the plan's implementationId is present but is not a non-empty string" }
+  }
+  const resolved = resolveImplementation({ ...DEFAULT_PLAN, implementationId: declared })
+  return resolved.ok ? { ok: true } : { ok: false, reason: resolved.reason }
+}
+
 export function requirePlan(
   value: unknown,
   metric: MeasuredMetric,
@@ -220,6 +254,11 @@ export function requirePlan(
   if (missing.length > 0) {
     return { ok: false, reason: `the plan states no ${missing.join(', ')}` }
   }
+
+  // The implementation is a contract too: a plan naming one this runner does not have describes a
+  // method nobody can execute, and the run would go on to measure something else.
+  const implementation = requireImplementation(source)
+  if (!implementation.ok) return { ok: false, reason: implementation.reason }
 
   // The skeleton is a contract, not a preference: every step from D2 on addresses sections by id.
   const expectedIds = DEFAULT_PLAN.outline.map(section => section.id)
