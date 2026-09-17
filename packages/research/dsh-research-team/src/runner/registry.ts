@@ -186,7 +186,9 @@ import { assertWellFormed, parseReply, type DiscardedExchange } from './issue-pa
 import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
-import { argumentPlanOf, checkArgumentPlan, contractFor } from './argument-plan.ts'
+import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from './argument-plan.ts'
+import { checkPresentationPlan, shippedPresentationPlan } from './presentation-plan.ts'
+import type { PlannedFigure } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
 import {
   bibliographyOf, checkCitationKeys, checkCitationUse, checkManuscriptCitations, citationUsesOf,
@@ -2426,6 +2428,40 @@ function citableFloats(
 /** D1-figure-map: real renders for ALL THREE figure families its canonical
  *  purpose names (数据图/三线表/路线图). figure-plan lists each figure with the
  *  evidence produced by its real tool execution. */
+/**
+ * The run's records a figure's values may be sourced from, keyed by slug.
+ *
+ * THE RECORD THE FIGURE NAMES, not everything the run holds: a check against a merged view would let
+ * a figure claim a key from one record while naming another, and the point of naming a record is that
+ * a reader can go and look at it. The result record travels as the shape it is written in, so the
+ * keys a plan uses are the keys a reader will find.
+ *
+ * @param ctx - the step's context.
+ * @returns the records, by slug, with the result version under its own slug.
+ */
+function d1RecordsOf(
+  ctx: ExecCtx,
+  measured: { readonly baselineSeconds: number; readonly variantSeconds: number },
+): ReadonlyMap<string, Record<string, unknown>> {
+  const result = readInput(ctx, RESULT_VERSION_SLUG)
+  if (result !== undefined) return new Map([[RESULT_VERSION_SLUG, result]])
+  // A STEP DRIVEN ALONE MEASURED THE STUDY ITSELF (see `result-version.ts`), and the figure's values
+  // are that measurement. The plan names `recomputed-measurement` as its source in that case, so the
+  // plan and the reconciliation agree about where the numbers came from instead of the check being
+  // skipped — and the difference is visible on the artifact rather than hidden in the control flow.
+  return new Map([['recomputed-measurement', {
+    measured: {
+      baselineMinTtcSeconds: measured.baselineSeconds,
+      variantMinTtcSeconds: measured.variantSeconds,
+    },
+  }]])
+}
+
+/** The record a figure's values come from, named the way the run can account for them. */
+function d1SourceSlugOf(ctx: ExecCtx): string {
+  return readInput(ctx, RESULT_VERSION_SLUG) === undefined ? 'recomputed-measurement' : RESULT_VERSION_SLUG
+}
+
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
   // The figures plot the SAME measurements the experiment produced, so a chart can
@@ -2434,12 +2470,52 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const outcome = measureOutcomeWithSource(ctx)
   const measuredBaseline = outcome.measured.baselineMinTtcSeconds
   const measuredVariant = outcome.measured.variantMinTtcSeconds
+  // The caption says what the measurement did to the claim, derived the same way the argument plan
+  // derives it — a figure of a refuted claim and a figure of a supported one do not have the same
+  // caption, and the caption is what a reader who skips the text reads.
+  const d1Commitment = ctx.runCtx.commitment
+  const d1Outcome = claimOutcomeOf(
+    outcome.measured.improvementPct,
+    d1Commitment?.direction ?? 'increase',
+    d1Commitment?.thresholdPct,
+  )
+  // THE FIGURE IS PLANNED BEFORE IT IS DRAWN. The plan states the question this figure answers, the
+  // record its values come from, its axes and units, its uncertainty and its size; the renderer is
+  // handed that spec, so the chart and the reason for it are one object. Before this, the size, the
+  // title and the single series were fixed here, and nothing said what the chart was FOR — which is
+  // how the delivered paper came to carry floats no sentence refers to.
+  const presentationPlan = shippedPresentationPlan({
+    sourceSlug: d1SourceSlugOf(ctx),
+    baselineKey: 'measured.baselineMinTtcSeconds',
+    variantKey: 'measured.variantMinTtcSeconds',
+    baselineSeconds: measuredBaseline,
+    variantSeconds: measuredVariant,
+    metricUnit: planOf(ctx).metric.unit,
+    outcome: d1Outcome,
+  })
+  // EVERY VALUE A FIGURE PLOTS IS RECONCILED WITH THE RUN'S OWN RECORDS BEFORE ANYTHING IS DRAWN.
+  // A figure that cannot be sourced from what the study measured is refused here rather than drawn
+  // from a literal.
+  const presentationRefusals = checkPresentationPlan(
+    presentationPlan,
+    d1RecordsOf(ctx, { baselineSeconds: measuredBaseline, variantSeconds: measuredVariant }),
+  )
+  if (presentationRefusals.length > 0) {
+    throw new Error(
+      '[D1-figure-map] the figure plan cannot be answered from this run: '
+      + presentationRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
+    )
+  }
+  const planned = presentationPlan.figures[0] as PlannedFigure
   const figureSpec = {
     kind: 'bar',
-    title: 'Platoon Minimum Time-to-Collision by Composition',
-    width: 320,
-    height: 240,
-    series: [{ name: 'minimum TTC (s)', values: [measuredVariant, measuredBaseline] }],
+    title: planned.caption.length > 0 ? planned.answers : 'Figure',
+    width: planned.size.width,
+    height: planned.size.height,
+    series: planned.series.map(series => ({
+      name: series.name,
+      values: series.points.map(point => point.value),
+    })),
     tokens: { palette: ['#1f77b4'] },
     seed: 7,
   }
@@ -2525,6 +2601,10 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       {
         figures,
         totalFigures: figures.length,
+        // WHAT EACH FIGURE WAS FOR, with the plan's version: a reader of the run can tell what question
+        // a float answered and which record its values came from, rather than reading a chart and
+        // guessing.
+        presentationPlan,
         note: 'figure-plan derived from REAL figure + three-line-table + roadmap tool executions; the rendered svg and mermaid travel with the draft so the assembled manuscript EMBEDS the figures rather than pointing at them',
       },
       D1_PRODUCER,
