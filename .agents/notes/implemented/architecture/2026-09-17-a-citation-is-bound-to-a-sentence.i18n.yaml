@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-citation-is-bound-to-a-sentence.md
+2026-09-17-a-citation-is-bound-to-a-sentence.md: 7c4c546bcf28faab834dddbb577c1831a5040afc
+2026-09-17-a-citation-is-bound-to-a-sentence.zh.md: 80e8a7749facb968b74d64ad40cc485991d6d856

@@ -8,8 +8,7 @@ Status: implemented
 
 流水线早就能报出一个数、并说出它往哪个方向动了。它说不出的是:这个数**是什么意思**,以及产出它的研究是在哪套配置下进行的 —— 而紧接着在它之前写出的论文质量基线,正好从论文这一侧同时发现了这两个缺口。
 
-1. **指标的方向以散文形式活在记录里。** `baseline-results` 带着
-   `metric: { name: <key>, direction: 'higher is better' }`。key 是真的登记表键;direction 是产物生产者写下的英文短语,而它身上唯一的检查是一次子串匹配(`/higher/iu`)。同一个量在它被**测量**的地方也有一个方向(`MEASURED_METRIC.direction`,枚举 `higher-is-better`),于是部署里存在同一条指标的两份声明,却没有任何规则把它们绑在一起 —— 而且没有任何地方说过一条指标的单位,或它究竟属于哪些研究类型。
+1. **指标的方向以散文形式活在记录里。** `baseline-results` 带着 `metric: { name: <key>, direction: 'higher is better' }`。key 是真的登记表键;direction 是产物生产者写下的英文短语,而它身上唯一的检查是一次子串匹配(`/higher/iu`)。同一个量在它被**测量**的地方也有一个方向(`MEASURED_METRIC.direction`,枚举 `higher-is-better`),于是部署里存在同一条指标的两份声明,却没有任何规则把它们绑在一起 —— 而且没有任何地方说过一条指标的单位,或它究竟属于哪些研究类型。
 
 2. **没有任何东西陈述这项研究是什么。** 只有一项出货研究时这不可见;一旦存在第二种研究类型,它就是配置的全部。一次运行可以是仿真研究,也可以是已发表工作的综述;可以写给这家期刊,也可以写给另一家;`min-ttc-seconds` 可以被要求,也可以根本不属于它 —— 而这些既不是一个字段,也不是一条记录,更不是一条拒绝。可达的失效是:研究在一套配置下进行、却在另一套配置下被评判 —— 这与「冻结的计划」早已为研究主题挡下的,是同一个缺陷。
 
@@ -41,11 +40,5 @@ Status: implemented
 
 ## 文件
 
-- `packages/research/dsh-research-team/src/runner/metrics.ts`(新增)、
-  `runner/research-profile.ts`(新增)、`runner/drive.ts`(`runSpecOf` 冻结画像)、
-  `runner/types.ts`(`DriveOptions.researchProfile`)、`index.ts`(`hostResearchProfile`、
-  `driveOptions` 承载画像与指标检查、`runPipeline` 改读共享解析而不是自己再列一遍)、
-  `runner/package-export.ts`(`declaredMetrics`)。
-- 测试:`tests/metrics.spec.ts`、`tests/research-profile.spec.ts`、`tests/start-run.spec.ts`
-  (冻结的画像、它的拒绝、以及移不动它的重新配置)、`tests/package-export.spec.ts`
-  (包声明的指标、两种类型、以及没有画像时说没有)。
+- `packages/research/dsh-research-team/src/runner/metrics.ts`(新增)、 `runner/research-profile.ts`(新增)、`runner/drive.ts`(`runSpecOf` 冻结画像)、 `runner/types.ts`(`DriveOptions.researchProfile`)、`index.ts`(`hostResearchProfile`、 `driveOptions` 承载画像与指标检查、`runPipeline` 改读共享解析而不是自己再列一遍)、 `runner/package-export.ts`(`declaredMetrics`)。
+- 测试:`tests/metrics.spec.ts`、`tests/research-profile.spec.ts`、`tests/start-run.spec.ts` (冻结的画像、它的拒绝、以及移不动它的重新配置)、`tests/package-export.spec.ts` (包声明的指标、两种类型、以及没有画像时说没有)。

@@ -385,7 +385,15 @@ export function planRunPackage(
       // file said so. An export that has to be read with the producer's source in hand is not an
       // export.
       ledger: landscape?.hits ?? null,
-      note: 'Retrieved records as they appear on the A1 artifact. Each record carries its own source field.',
+      // THE CITATIONS, BESIDE THE LIBRARY. The ledger above is what the retrieval returned and this is
+      // what the paper rests on: per cite key, the statement it was made for, the passage that was read
+      // and where, and the reviewed judgement about what that passage establishes. Both belong in the
+      // file, because the difference between them is the difference between a search log and a
+      // bibliography — and a reader who has only the ledger cannot tell which entries the manuscript
+      // actually cites.
+      citations: draftArtifact?.citations ?? null,
+      note: 'Retrieved records as they appear on the A1 artifact. `citations` is what the manuscript cites,'
+        + ' and a key in it names the passage the judgement was made on.',
     }),
   })
   files.push({

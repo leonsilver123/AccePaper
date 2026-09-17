@@ -83,8 +83,21 @@ function d3Section(request: ResearchProseRequest): string {
         + ` ${String(Math.abs(Number(CHANGE)))}% under the declared disturbance.`
     case 'experiments':
       return 'Both platoons were run for 240 s after a 120 s warm-up under one declared disturbance.'
+    case 'introduction': {
+      // THE WRITER'S CONTRACT INCLUDES CITING, and this reply follows it the way a model following the
+      // instruction would: every reviewed source the request lists is named by its key. The keys come
+      // out of the REQUEST, not out of this test, so the reply cites what the run actually bound.
+      const citations = Array.isArray(request.context['citations'])
+        ? (request.context['citations'] as ReadonlyArray<{ citeKey?: unknown }>)
+        : []
+      const markers = citations
+        .flatMap(entry => (typeof entry.citeKey === 'string' ? [`[@${entry.citeKey}]`] : []))
+        .join(' ')
+      return 'Prior work on this quantity is not unanimous, and the reviewed sources disagree about'
+        + ` the sign of the effect ${markers}.`
+    }
     case 'references':
-      return 'The records the landscape scan retrieved, listed below.'
+      return 'The reviewed sources this paper cites, listed below.'
     default:
       return 'This section states what the run measured and nothing the run did not.'
   }

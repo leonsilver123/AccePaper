@@ -186,6 +186,11 @@ import { assertWellFormed, parseReply, type DiscardedExchange } from './issue-pa
 import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
+import {
+  bibliographyOf, checkCitationKeys, checkCitationUse, checkManuscriptCitations, citationUsesOf,
+  citeKeyOf, renderCitationMarkers, reviewedSources,
+} from './citation-bindings.ts'
+import type { CitationUse } from './citation-bindings.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -567,6 +572,16 @@ const C3_PRODUCER = `${ABLATION_TOOL_ID}@${ABLATION_TOOL_VERSION}`
 const D1_PRODUCER = `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`
 const D2_PRODUCER = 'fixture:framework'
 const D3_PRODUCER = 'fixture:writing'
+
+/**
+ * The statement the reviewed sources are cited for.
+ *
+ * A CITATION IS FOR A SENTENCE, NOT FOR A PAPER. The reviewed corpus binds each judgement to the
+ * claim it was assessed against, and the sentence that states where this work sits in the literature
+ * is the one those judgements answer — so every binding made here names that statement, and a later
+ * revision of it is a different statement whose citations have to be re-made.
+ */
+const STATEMENT_LITERATURE_POSITION = 'introduction:prior-work'
 const D4_PRODUCER = 'fixture:rebuttal'
 const E1_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`
 
@@ -695,45 +710,63 @@ function thresholdLabel(commitment: PredictionCommitment | undefined): string {
 }
 
 /**
- * The reference list D3 is supposed to produce, built from the retrieved records.
+ * The sentence that states where this work sits in the literature, from the bindings the run holds.
  *
- * D3's canonical purpose is "draft the sections AND add references", and the draft
- * used to carry only a COUNT of the landscape hits with an empty reference list — so
- * the assembled manuscript announced references it did not have. Each entry here
- * keeps the identifier the corpus gave it (`doi:...` / `arxiv:...`) or says `null`,
- * and a record with no title is skipped rather than emitted half-formed.
+ * WRITTEN FROM THE REVIEWED JUDGEMENTS, NOT FROM THE RETRIEVAL. Each clause is one reviewed source
+ * with the marker its citation carries, and the clause says what the reviewer found — including the
+ * sources that do NOT support the claim, because a literature position that omits them is a position
+ * the reader cannot check. A run with no reviewed source says so rather than asserting a position.
  *
- * @param rawHits - the `hits` array off the landscape-map artifact.
- * @returns one entry per usable record, in retrieval order.
+ * @param citations - the bindings this run holds.
+ * @returns the sentence, with one citation marker per source.
  */
-function buildReferences(rawHits: unknown): ReadonlyArray<Record<string, unknown>> {
-  if (!Array.isArray(rawHits)) return []
-  const out: Array<Record<string, unknown>> = []
-  for (const raw of rawHits) {
-    if (raw === null || typeof raw !== 'object') continue
-    const hit = raw as {
-      title?: unknown
-      venue?: unknown
-      year?: unknown
-      ref?: { kind?: unknown; id?: unknown; authors?: unknown }
-    }
-    if (typeof hit.title !== 'string' || hit.title.trim() === '') continue
-    const kind = typeof hit.ref?.kind === 'string' ? hit.ref.kind : undefined
-    const identifier = typeof hit.ref?.id === 'string' ? hit.ref.id : undefined
-    out.push({
-      title: hit.title,
-      venue: typeof hit.venue === 'string' ? hit.venue : 'unknown venue',
-      identifier: kind !== undefined && identifier !== undefined ? `${kind}:${identifier}` : null,
-      authors: Array.isArray(hit.ref?.authors)
-        ? (hit.ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string')
-        : [],
-      // Carried so the reference a reader sees can be placed in time. E1 already reads `year` off
-      // each entry and `formatReference` already renders it; nothing upstream produced it, so every
-      // exported reference named a venue, authors and a DOI and no year.
-      year: typeof hit.year === 'number' && Number.isInteger(hit.year) ? hit.year : null,
-    })
+function priorWorkSentence(citations: ReadonlyArray<CitationUse>): string {
+  if (citations.length === 0) {
+    return 'No reviewed source bears on the condition this study varies, so this work is not placed'
+      + ' against prior findings.'
   }
-  return out
+  const clauses = citations.map((citation) => {
+    const marker = `[@${citation.citeKey}]`
+    return citation.support === 'contradicted'
+      ? `a reviewed source reports the opposite of the claim under test ${marker}`
+      : `a reviewed source reports the mechanism this study varies ${marker}`
+  })
+  return `Prior work on this quantity does not point one way: ${clauses.join(', and ')}.`
+}
+
+/**
+ * The reference list D3 puts in the draft: the sources the paper's statements cite.
+ *
+ * IT IS DERIVED FROM CITATIONS, NOT FROM THE RETRIEVAL. This function used to be `buildReferences`,
+ * which turned every record the landscape scan returned into an entry — so the delivered paper's
+ * reference list was the search log, twenty-five works with no sentence citing any of them, and the
+ * three works the run had actually read and judged were not necessarily in it at all. The retrieval
+ * stays where it belongs, as the library a study draws from; an entry appears here because a binding
+ * puts it in the manuscript.
+ *
+ * @param citations - the bindings this manuscript's statements rest on.
+ * @returns one entry per cited source, in cite-key order, each carrying the key it is cited under.
+ */
+function referenceEntriesFor(
+  citations: ReadonlyArray<CitationUse>,
+): ReadonlyArray<Record<string, unknown>> {
+  const { entries, unresolvable } = bibliographyOf(citations, reviewedSources())
+  if (unresolvable.length > 0) {
+    // A CITED SOURCE THE DEPLOYMENT HAS NO RECORD OF cannot be printed. Reaching here means a binding
+    // names something the reviewed corpus does not hold, which the binding check refuses earlier; the
+    // throw is here so a bug upstream cannot become a reference list with a hole in it.
+    throw new Error(
+      `[D3-writing] ${unresolvable.join(', ')} are cited but not held by the reviewed corpus`,
+    )
+  }
+  return entries.map(source => ({
+    citeKey: citeKeyOf(source),
+    title: source.title,
+    venue: source.venue ?? null,
+    identifier: `${source.ref.kind}:${source.ref.id}`,
+    authors: source.authors,
+    year: source.year ?? null,
+  }))
 }
 
 /**
@@ -897,7 +930,7 @@ function bodyTextFor(
   id: string,
   plan: StudyPlan,
   measured: ReturnType<typeof measureOutcome>,
-  referenceCount: number,
+  citations: ReadonlyArray<CitationUse>,
 ): string {
   const study = experimentStudy()
   const hv = study.variant.vehicleClasses.HV
@@ -908,7 +941,10 @@ function bodyTextFor(
     case 'abstract':
       return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency.'
     case 'introduction':
-      return `This work targets the claim: ${plan.claim.ref}. The falsifiable prediction is: ${plan.claim.prediction}.`
+      // THE LITERATURE POSITION IS A SENTENCE, NOT A REFERENCE LIST. This section used to state the
+      // claim and the prediction and say nothing about what is already known — the quality baseline
+      // reported exactly that, on this paper, as `no-literature-position`.
+      return `This work targets the claim: ${plan.claim.ref}. The falsifiable prediction is: ${plan.claim.prediction}. ${priorWorkSentence(citations)}`
     case 'method':
       return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
     case 'experiments':
@@ -918,27 +954,34 @@ function bodyTextFor(
     case 'conclusion':
       return `Under the declared configuration the autonomous vehicle ${direction} the platoon's minimum time-to-collision by ${Math.abs(measured.improvementPct).toFixed(2)}%, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
     case 'references':
-      // The body states what the draft actually carries. It used to assert that
-      // references were drawn from the landscape scan above an empty list.
-      return referenceCount === 0
-        ? 'No reference entries were derived: no record the landscape scan returned carried a title.'
-        : `The ${String(referenceCount)} record(s) the landscape scan retrieved, listed below.`
+      // The body states what the draft actually carries. It used to describe the LANDSCAPE SCAN's
+      // record count, which is what the reference list used to be; the list is now the sources the
+      // paper cites, and the sentence says that.
+      return citations.length === 0
+        ? 'No source is cited: this run holds no reviewed judgement binding one to its statements.'
+        : `The ${String(citations.length)} reviewed source(s) this paper cites, listed below.`
     default:
       return 'This section carries no generated content in this wave.'
   }
 }
 
-/** Deterministic fallback body for every outline section id. */
+/**
+ * Deterministic fallback body for every outline section id.
+ *
+ * The bindings default to none, and a caller that has them passes them: the fallback exists for the
+ * paths that build sections without a draft (D4's revised draft reading a stored one), where a
+ * citation roster would be invented rather than read.
+ */
 function defaultBodySections(
   plan: StudyPlan,
   ctx: ExecCtx,
-  referenceCount = 0,
+  citations: ReadonlyArray<CitationUse> = [],
 ): ReadonlyArray<ManuscriptSection> {
   const measured = measureOutcome(ctx)
   return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
-    bodyText: bodyTextFor(s.id, plan, measured, referenceCount),
+    bodyText: bodyTextFor(s.id, plan, measured, citations),
   }))
 }
 
@@ -2549,9 +2592,26 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const renderedFigures = Array.isArray(figurePlan?.figures)
     ? (figurePlan.figures as ReadonlyArray<FigurePlanEntry>)
     : []
-  // D3's canonical purpose includes adding the references, so the draft builds them
-  // from the records A1 actually retrieved rather than reporting a count of them.
-  const references = buildReferences(landscape?.hits)
+  // D3's canonical purpose includes adding the references — and a reference is now what the paper's
+  // statements cite, not what the search returned. The bindings below are this claim version's
+  // reviewed sources with the passage that was read; the reference list and the citation roster the
+  // writer is handed both come from them, so the two cannot name different sources.
+  const citations = citationUsesOf({ claimRef, statementId: STATEMENT_LITERATURE_POSITION })
+  // A BINDING IS CHECKED WHERE IT IS MADE, before any of it reaches the draft: an empty passage, a
+  // judgement stronger than what was read, or a source the retrieval does not hold is refused here.
+  for (const citation of citations) {
+    const refusals = checkCitationUse(citation, reviewedSources().get(citation.literatureRef))
+    if (refusals.length > 0) {
+      throw new Error(
+        `[D3-writing] ${refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; ')}`,
+      )
+    }
+  }
+  const duplicateKeys = checkCitationKeys(citations)
+  if (duplicateKeys.length > 0) {
+    throw new Error(`[D3-writing] ${duplicateKeys.map(refusal => refusal.detail).join('; ')}`)
+  }
+  const references = referenceEntriesFor(citations)
   const headings: ReadonlyArray<{ id: string; heading: string }> = ids.map((id, index) => {
     const heading =
       Array.isArray(rawOutline) && typeof (rawOutline[index] as { heading?: unknown } | undefined)?.heading === 'string'
@@ -2603,7 +2663,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       const evidence = evidenceFor(h.id)
       return evidence.missing.length > 0
         ? { ...h, bodyText: '' }
-        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, references.length) }
+        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations) }
     })
     proseSource = 'fixture'
   } else {
@@ -2616,15 +2676,22 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
         return writer.write({
           stepId: 'D3-writing',
-          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain.`,
+          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`,
           // The evidence travels as DATA, not as prose the model has to parse. `citable` is the
-          // float roster; `evidence` is the run's own material for THIS section.
+          // float roster; `citations` is what the paper may cite and what each source establishes;
+          // `evidence` is the run's own material for THIS section.
           context: {
             ...planContextOf(planOf(ctx)),
             sectionId: h.id,
             claimRef,
             figureCount: figures ?? 0,
             citable,
+            citations: citations.map(citation => ({
+              citeKey: citation.citeKey,
+              establishes: citation.support,
+              readScope: citation.readScope,
+              source: citation.location,
+            })),
             evidence: evidence.supplied,
             requiredEvidence: evidence.required,
           },
@@ -2676,6 +2743,10 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         resultRef: d3Outcome.contentHash,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
+        // WHAT THIS PAPER CITES, with the passage each citation was read from. The reference list
+        // below is derived from these, so a reader of the draft can check that every entry rests on a
+        // sentence and every sentence on a passage somebody read.
+        citations,
         references,
         renderedFigures,
         note: proseSource === 'fixture'
@@ -2726,6 +2797,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // made the assembled manuscript report zero references while its own references
   // section described the landscape scan it was built from.
   const references = Array.isArray(draft?.references) ? draft.references : []
+  // A REVISION KEEPS ITS CITATIONS, and this is not bookkeeping: E1 refuses a manuscript that cites a
+  // source the run holds no reviewed judgement about, so a revision that dropped the bindings would
+  // turn every correct citation into an unreviewed one and stop the run at the assembly.
+  const citations = Array.isArray(draft?.citations) ? draft.citations : []
   // Same reasoning as the references: a revision keeps the figures it is revising.
   const renderedFigures = Array.isArray(draft?.renderedFigures) ? draft.renderedFigures : []
   const d4Outcome = measureOutcomeWithSource(ctx)
@@ -2963,6 +3038,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // section a patch changed from one it did not.
         patchedSections: applied.patchedSections,
         openIssues: applied.openIssues,
+        citations,
         references,
         renderedFigures,
         resultSource: d4Outcome.source,
@@ -3040,19 +3116,66 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // omitted an absent field silently: a record with no authors began with its title, which reads as
   // a complete citation, and a record with no venue ran two sentences together. `formatReference`
   // states what is missing instead, and `numberedReferences` at the assembler gives each entry the
-  // number an in-text marker would use.
+  // number an in-text marker uses — the SAME number, because the key mapping below is built from the
+  // same array in the same order.
   const referenceEntries = rawRefs.map((raw) => {
-    const ref = raw as { title?: unknown; venue?: unknown; identifier?: unknown; authors?: unknown; year?: unknown }
-    return formatReference({
-      ...(Array.isArray(ref.authors)
-        ? { authors: (ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string') }
-        : {}),
-      ...(typeof ref.title === 'string' ? { title: ref.title } : {}),
-      ...(typeof ref.venue === 'string' ? { venue: ref.venue } : {}),
-      ...(typeof ref.year === 'number' || typeof ref.year === 'string' ? { year: ref.year } : {}),
-      ...(typeof ref.identifier === 'string' ? { identifier: ref.identifier } : {}),
-    })
+    const ref = raw as {
+      citeKey?: unknown
+      title?: unknown
+      venue?: unknown
+      identifier?: unknown
+      authors?: unknown
+      year?: unknown
+    }
+    return {
+      citeKey: typeof ref.citeKey === 'string' ? ref.citeKey : undefined,
+      formatted: formatReference({
+        ...(Array.isArray(ref.authors)
+          ? { authors: (ref.authors as ReadonlyArray<unknown>).filter((a): a is string => typeof a === 'string') }
+          : {}),
+        ...(typeof ref.title === 'string' ? { title: ref.title } : {}),
+        ...(typeof ref.venue === 'string' ? { venue: ref.venue } : {}),
+        ...(typeof ref.year === 'number' || typeof ref.year === 'string' ? { year: ref.year } : {}),
+        ...(typeof ref.identifier === 'string' ? { identifier: ref.identifier } : {}),
+      }),
+    }
   })
+  // WHAT THE PAPER CITES AND WHAT IT PRINTS MUST BE THE SAME SET, and this is the last place both
+  // are in hand before the manuscript is published as an artifact. A sentence citing a key the list
+  // does not carry cannot be resolved by a reader; an entry nothing cites is a search result wearing
+  // the clothes of a reference list; a cited source with no reviewed judgement is a work that was
+  // retrieved and never read. All three are REFUSED here rather than reported, because the assembled
+  // manuscript is what every later step, the package and a referee read.
+  const reviewedKeys = (Array.isArray(revised?.citations) ? revised.citations : [])
+    .flatMap((raw) => {
+      const key = (raw as { citeKey?: unknown }).citeKey
+      return typeof key === 'string' ? [key] : []
+    })
+  const citationRefusals = checkManuscriptCitations({
+    bodyText: sections.map(section => section.bodyText).join('\n\n'),
+    entries: referenceEntries.flatMap(entry =>
+      entry.citeKey === undefined ? [] : [{ citeKey: entry.citeKey }]),
+    reviewedKeys,
+  })
+  if (citationRefusals.length > 0) {
+    throw new Error(
+      '[E1-format] the manuscript\'s citations and its reference list disagree: '
+      + citationRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
+    )
+  }
+  const numberByKey = new Map<string, number>()
+  referenceEntries.forEach((entry, index) => {
+    if (entry.citeKey !== undefined) numberByKey.set(entry.citeKey, index + 1)
+  })
+  // THE READER SEES A NUMBER AND THE PAPER CARRIES A KEY. A cite key is this manuscript's internal
+  // name for a source and means nothing outside it, so the bodies are rendered with the numbers the
+  // reference list assigns — the same array, the same order, so the two cannot drift. A marker with
+  // no entry keeps its key rather than being dropped, and the check above has already refused the
+  // manuscript for it.
+  const citedSections = sections.map(section => ({
+    ...section,
+    bodyText: renderCitationMarkers(section.bodyText, numberByKey),
+  }))
   // Assembly is a real step of its own now: the module refuses a titleless or
   // section-less manuscript, so an empty shell cannot be assembled here.
   // The assembler renders its own `## References` block from these entries, and the
@@ -3064,7 +3187,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // are the module's own computation (see MODEL_EQUATIONS), not decoration, and the section is
   // extended rather than replaced so the prose the draft wrote stays where it is.
   const equations = equationBlock(MODEL_EQUATIONS)
-  const withEquations = sections.map(section =>
+  const withEquations = citedSections.map(section =>
     section.id === 'method' && equations.length > 0
       ? { ...section, bodyText: `${section.bodyText}\n\n${equations}` }
       : section)
@@ -3176,7 +3299,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     title,
     sections: sectionsForAssembly,
     figures: figureBlocks,
-    references: numberedReferences(referenceEntries),
+    references: numberedReferences(referenceEntries.map(entry => entry.formatted)),
   })
   // WHICH NUMBERED ITEMS THE PROSE ACTUALLY NAMES. The captions are rendered by this step, so a
   // manuscript can carry Table 1 and never refer to it — a fact about the draft, which this records
