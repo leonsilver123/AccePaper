@@ -32,6 +32,9 @@ import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 
 /** The crash fixture, spawned as a child process the way the process-boundary suite requires. */
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+const ACCEPT_FIXTURE = join(
+  repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'accept-restart', 'accept-and-exit.ts',
+)
 const CRASH_FIXTURE = join(
   repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'start-crash', 'start-and-die.ts',
 )
@@ -951,6 +954,72 @@ describe('the final package is exported by asking for one', () => {
         .rejects.toThrow(/holds no run/)
     } finally {
       await second.dispose()
+    }
+  })
+})
+
+describe('what a process accepted, the next process reads off the disk', () => {
+  it('loads the run a person published a manuscript in, and lists it, after the accepting process is gone', async () => {
+    // THE CLASS OF DEFECT THIS EXISTS FOR. Everything about an acceptance can pass in the process that
+    // made it and mean nothing afterwards: the registry is replaced in memory, the record is written,
+    // the receipt says `persisted: true` — and the NEXT process refuses to load the run, because the
+    // snapshot writer recorded a producer the snapshot READER did not know. That is exactly what
+    // happened: `human-acceptance` is not a step of the pipeline, the reader rejected it, `listRuns`
+    // threw with it, and a study that had been accepted became unreadable at the first restart.
+    //
+    // The accepting half runs in its OWN PROCESS (the fixture), so nothing this spec holds can stand
+    // in for the disk. What it asserts is what a new deployment finds: the run lists, it loads, the
+    // manuscript is the accepted one, and the record on disk names the same candidate.
+    const root = snapshotRoot()
+    const accepted = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', ACCEPT_FIXTURE, '--dir', root],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )
+    // A NON-ZERO EXIT IS A FAILURE HERE, unlike the crash fixture: this process is supposed to finish
+    // its work and end, so anything else means the acceptance never happened.
+    expect(accepted.stderr).not.toMatch(/accept-and-exit: /)
+    expect(accepted.status).toBe(0)
+    // The fixture prints one JSON line; anything before it is startup output.
+    const lines = accepted.stdout.trim().split(/\r?\n/u)
+    const reported = JSON.parse(lines[lines.length - 1] ?? '{}') as {
+      runId: string
+      candidateId: string
+      acceptance: { manuscriptVersion: number; persisted: boolean } | null
+    }
+    expect(reported.acceptance?.persisted).toBe(true)
+    expect(reported.acceptance?.manuscriptVersion).toBeGreaterThan(1)
+
+    const next = await boot({ snapshotDirectory: root })
+    try {
+      // LISTED: this is the call that threw when the parser refused the producer, and a page asking
+      // for the studies a deployment holds got nothing back.
+      const listed = await next.service.listRuns()
+      expect(listed.map(entry => entry.runId)).toContain(reported.runId)
+      expect(listed.find(entry => entry.runId === reported.runId)?.execution).toBe('stopped')
+
+      // LOADED, with the manuscript a person published: the version moved past the one E1 wrote, and
+      // the producer names the person rather than a step.
+      const snapshot = await next.service.runSnapshot({ runId: reported.runId })
+      // THE MANUSCRIPT A PERSON PUBLISHED, named by the producer rather than by a step: E1 wrote the
+      // first one, and this one is not its.
+      const manuscript = snapshot?.artifacts.find(artifact => artifact.slug === 'formatted-manuscript')
+      expect(manuscript?.producerStepId).toBe('human-acceptance')
+
+      // THE RECORD ON DISK AGREES, and the text it published is the text in the manuscript.
+      const record = JSON.parse(
+        readFileSync(join(root, 'revisions', 'request-accept-and-exit', 'acceptance.json'), 'utf8'),
+      ) as { candidateId: string; manuscriptVersion: number; persisted: boolean }
+      expect(record.candidateId).toBe(reported.candidateId)
+      expect(record.manuscriptVersion).toBe(reported.acceptance?.manuscriptVersion)
+      expect(record.persisted).toBe(true)
+      const onDisk = JSON.parse(readFileSync(join(root, reported.runId, 'research-run-snapshot.json'), 'utf8')) as {
+        registry: Record<string, { producerStepId: string; ref: { version: number } }>
+      }
+      expect(onDisk.registry['formatted-manuscript']?.producerStepId).toBe('human-acceptance')
+      expect(onDisk.registry['formatted-manuscript']?.ref.version).toBe(reported.acceptance?.manuscriptVersion)
+    } finally {
+      await next.dispose()
     }
   })
 })
