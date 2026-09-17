@@ -132,7 +132,9 @@ import type { AuditEvent, EvidenceProfile } from '@deepseek-ai/dsh-research-core
 import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
-import { packageRunFactsOf, planRunPackage, writeRunPackage } from './runner/package-export.ts'
+import {
+  packageRunFactsOf, planRunPackage, previousArtifactRefsOf, writeRunPackage,
+} from './runner/package-export.ts'
 import { finalPackageRefusalOf } from './runner/final-package.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
@@ -1386,11 +1388,19 @@ export class ResearchTeamService extends TypertRemoteService {
     }
     const directory = join(root, request.runId)
     const saveError = this.hostSaveErrorOf(request.runId)
+    // A RE-EXPORT OVER A MOVED RUN SAYS SO. The manifest already on disk names the artifact versions
+    // it was read from, and handing them back is what lets the checks report which of them the run
+    // has moved past instead of describing the current state as though nothing had.
+    const previousArtifactRefs = previousArtifactRefsOf(directory)
     const plan = planRunPackage(
       active.store,
       packageRunFactsOf(active.store, request.runId),
       this.hostEvidenceProfile(),
-      { mode: request.mode, ...(saveError === undefined ? {} : { saveError }) },
+      {
+        mode: request.mode,
+        ...(saveError === undefined ? {} : { saveError }),
+        ...(previousArtifactRefs.length === 0 ? {} : { previousArtifactRefs }),
+      },
     )
     // REFUSED BEFORE ANYTHING IS WRITTEN. A refusal that had already emptied the directory would
     // destroy the draft a reader still has.

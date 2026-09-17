@@ -32,6 +32,7 @@ export type FinalPackageCheckCode =
   | 'approval-recorded'
   | 'approval-current'
   | 'required-files-present'
+  | 'artifacts-current'
   | 'run-saved'
 
 /** One condition a final package must meet, with what the run recorded about it. */
@@ -72,6 +73,17 @@ export interface FinalPackageFacts {
   /** Files the run's own manuscript declares, and which of them the package will carry. */
   readonly declaredFiles: ReadonlyArray<string>
   readonly packagedFiles: ReadonlyArray<string>
+  /**
+   * The artifact versions this package was read from, and which of them the run has moved past.
+   *
+   * AN EXPORT IS A READING OF ONE STATE. A later step, a revision, a re-run or a hand edit moves an
+   * artifact the package was built from, and a package that still called itself final would be
+   * attesting to a document the run no longer holds. `moved` is empty when every ref still stands.
+   */
+  readonly artifactRefs: {
+    readonly read: ReadonlyArray<string>
+    readonly moved: ReadonlyArray<string>
+  }
   /** The run's last write to its snapshot, when it failed. */
   readonly saveError: string | undefined
 }
@@ -153,6 +165,20 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
           : `these declared files are not in the package: ${missingFiles.join(', ')}`,
     },
     {
+      // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
+      // package describes: a later step, a revision, a re-run or a hand edit replaces an artifact the
+      // package was built from, and the manifest still carries the older one's digest. The check
+      // names which artifact moved, so a reader knows whether to re-export or to look at what changed.
+      code: 'artifacts-current',
+      passed: facts.artifactRefs.moved.length === 0,
+      detail: facts.artifactRefs.read.length === 0
+        ? 'this package names no artifact versions, so nothing can be said about whether they stand'
+        : facts.artifactRefs.moved.length === 0
+          ? `every artifact this package was read from still stands (${facts.artifactRefs.read.length})`
+          : `these artifacts moved after this package was read: ${facts.artifactRefs.moved.join(', ')}`
+            + ' — re-export to describe the run as it stands',
+    },
+    {
       code: 'run-saved',
       passed: facts.saveError === undefined,
       detail: facts.saveError === undefined
@@ -218,6 +244,7 @@ export function finalPackageFactsOf(
   profile: EvidenceProfile,
   packagedFiles: ReadonlyArray<string>,
   saveError: string | undefined,
+  artifactRefs: { readonly read: ReadonlyArray<string>; readonly moved: ReadonlyArray<string> },
 ): FinalPackageFacts {
   const snapshot = getRunSnapshot(store, runId)
   const definitions = getStepDefinitions()
@@ -238,6 +265,7 @@ export function finalPackageFactsOf(
       .find(reason => reason !== undefined),
     declaredFiles: declared,
     packagedFiles,
+    artifactRefs,
     saveError,
   }
 }

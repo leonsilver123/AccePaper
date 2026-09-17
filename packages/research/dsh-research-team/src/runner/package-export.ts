@@ -141,6 +141,15 @@ export interface RunPackageManifest {
    */
   readonly qualityFindings: ReadonlyArray<PaperQualityFinding>
   /**
+   * The artifact versions this package is a reading of.
+   *
+   * A package describes one state of a run, and a state moves: a later step, a revision, a re-run or a
+   * hand edit replaces an artifact. Recording the versions is what lets a reader — or a later export —
+   * tell whether the package still describes the run, and `checks` carries the verdict when a
+   * previous reading is handed in.
+   */
+  readonly artifactRefs: ReadonlyArray<{ readonly slug: string; readonly version: number }>
+  /**
    * What the metrics in this package mean, and which of them the run's own type required.
    *
    * The registry is the deployment's declaration of each metric — its unit, which way is better, and
@@ -288,6 +297,40 @@ function declaredMetricsOf(
   return declared.length === 0 ? undefined : declared
 }
 
+/**
+ * The artifacts a package is built from, as the run's registry holds them now.
+ *
+ * THE SLUGS ARE THE ONES THE EXPORT READS, listed rather than discovered: a package that recorded
+ * every artifact the run holds would report a move in something it never used, and a reader chasing
+ * that would be looking at a step the package does not describe.
+ */
+const PACKAGED_SLUGS: ReadonlyArray<string> = [
+  'claim', 'landscape-map', 'method-spec', 'mvp-results', 'baseline-results',
+  'figure-plan', 'draft', 'revised-draft', 'result-version', 'formatted-manuscript',
+]
+
+/**
+ * The artifact refs one package is read from, with the version each is at.
+ *
+ * @param store - the run store.
+ * @param runId - the run.
+ * @param slugs - the slugs the package reads.
+ * @returns one entry per artifact the run holds, in the order given.
+ */
+function artifactRefsOf(
+  store: ResearchRunStore,
+  runId: string,
+  slugs: ReadonlyArray<string>,
+): ReadonlyArray<{ readonly slug: string; readonly ref: { readonly version: number; readonly contentHash: string } }> {
+  const registry = getRunSnapshot(store, runId).registry
+  return slugs.flatMap((slug) => {
+    const record = registry[slug]
+    return record === undefined
+      ? []
+      : [{ slug, ref: { version: record.ref.version, contentHash: String(record.ref.contentHash) } }]
+  })
+}
+
 /** A JSON file body: sanitized, pretty-printed, newline-terminated. */
 function jsonFile(value: unknown): string {
   return `${JSON.stringify(sanitizeForExport(value), null, 2)}\n`
@@ -343,6 +386,15 @@ export function planRunPackage(
      * before the study existed.
      */
     readonly generatedAt?: string
+    /**
+     * The artifact versions a PREVIOUS reading was taken from, when one is being compared.
+     *
+     * The export that wrote the package on disk knows what it read; this is how a later export says
+     * which of those artifacts the run has moved past. Absent means nothing to compare against, and
+     * the `artifacts-current` check then reports what the package was read from rather than a verdict
+     * it cannot support.
+     */
+    readonly previousArtifactRefs?: ReadonlyArray<{ readonly slug: string; readonly version: number }>
   } = { mode: 'draft' },
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
@@ -422,11 +474,22 @@ export function planRunPackage(
   })
 
   const written = new Set(files.map(file => file.path))
+  // THE ARTIFACT VERSIONS THIS PACKAGE IS A READING OF. Recorded from the run's registry at plan
+  // time, so a reader — and the `artifacts-current` check below — can tell whether the run has moved
+  // past the state this package describes.
+  const artifactRefs = artifactRefsOf(store, runId, PACKAGED_SLUGS)
+  // WHAT MOVED SINCE THE PREVIOUS READING. A slug the previous package named whose version is not
+  // the version the run holds now has changed under that package's feet.
+  const movedSince = (options.previousArtifactRefs ?? []).flatMap((previous) => {
+    const current = artifactRefs.find(entry => entry.slug === previous.slug)
+    return current === undefined || current.ref.version !== previous.version ? [previous.slug] : []
+  })
   // The paths this package WILL carry: the files written so far plus the summary, which is built
   // below because its text states the state these checks decide.
   const facts = finalPackageFactsOf(
     store, runId, evidenceProfile, [...written, 'run-summary.md'],
     options.saveError,
+    { read: artifactRefs.map(entry => `${entry.slug}@${entry.ref.version}`), moved: movedSince },
   )
   const checks = checkFinalPackage(facts)
   const state = finalPackageStateOf(checks)
@@ -503,6 +566,7 @@ export function planRunPackage(
     checks,
     ...(approval === undefined ? {} : { approval }),
     qualityFindings,
+    artifactRefs: artifactRefs.map(entry => ({ slug: entry.slug, version: entry.ref.version })),
     ...(declaredMetrics === undefined ? {} : { declaredMetrics }),
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
@@ -511,6 +575,41 @@ export function planRunPackage(
   }
 
   return { runId, files, manifest }
+}
+
+/**
+ * The artifact versions the package already on disk was read from, when there is one.
+ *
+ * A RE-EXPORT OVER A MOVED RUN IS THE CASE THIS EXISTS FOR: an operator asks for the final package,
+ * the run has moved since the last export, and the manifest that lands should say which artifacts
+ * moved rather than describing the current state as though nothing had. A directory with no manifest
+ * — or one written by another tool — yields nothing, and the check then reports what this package was
+ * read from rather than a comparison it cannot make.
+ *
+ * @param directory - the directory the package is written to.
+ * @returns the previous reading's refs, or an empty list.
+ */
+export function previousArtifactRefsOf(
+  directory: string,
+): ReadonlyArray<{ readonly slug: string; readonly version: number }> {
+  const manifestPath = join(directory, 'run-manifest.json')
+  if (!existsSync(manifestPath)) return []
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { artifactRefs?: unknown }
+    const refs = parsed.artifactRefs
+    if (!Array.isArray(refs)) return []
+    return refs.flatMap((entry) => {
+      const value = entry as { slug?: unknown; version?: unknown }
+      return typeof value.slug === 'string' && typeof value.version === 'number'
+        ? [{ slug: value.slug, version: value.version }]
+        : []
+    })
+  } catch {
+    // A manifest this reader cannot parse is not a comparison it can make: the export proceeds and
+    // the check reports what this package was read from. The alternative — refusing to export
+    // because an older file is damaged — would take away the remedy.
+    return []
+  }
 }
 
 /**

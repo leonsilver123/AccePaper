@@ -383,3 +383,36 @@ describe('writeRunPackage', () => {
     expect(serialized).not.toContain('sk-live-123')
   })
 })
+
+describe('a package that says which state it describes', () => {
+  it('records the artifact versions it was read from', async () => {
+    // AN EXPORT IS A READING OF ONE STATE. The manifest names the versions, so a reader comparing two
+    // packages — or a package with a screen — can tell whether they describe the same run.
+    const { store, run } = await realRun()
+    const manifest = planRunPackage(store, run, 'evaluation').manifest
+    expect(manifest.artifactRefs.map(entry => entry.slug))
+      .toContain('formatted-manuscript')
+    for (const entry of manifest.artifactRefs) expect(entry.version).toBeGreaterThan(0)
+    expect(manifest.checks.find(check => check.code === 'artifacts-current')?.passed).toBe(true)
+  })
+
+  it('refuses to call itself current when the run has moved past what it read', async () => {
+    // THE LATE-WRITE CASE: the package on disk names version N of the manuscript and the run holds
+    // N+1 — a later step, a revision, a re-run or a hand edit. The check names what moved instead of
+    // attesting to a state the run no longer holds.
+    const { store, run } = await realRun()
+    const first = planRunPackage(store, run, 'evaluation').manifest
+    const stale = first.artifactRefs.map(entry => ({ slug: entry.slug, version: entry.version - 1 }))
+    const second = planRunPackage(store, run, 'evaluation', {
+      mode: 'final',
+      previousArtifactRefs: stale,
+    }).manifest
+
+    const check = second.checks.find(entry => entry.code === 'artifacts-current')
+    expect(check?.passed).toBe(false)
+    expect(check?.detail).toContain('formatted-manuscript')
+    // AND THE PACKAGE IS NOT FINAL, whatever else holds: a reading of a state the run has left is not
+    // the package to hand anyone.
+    expect(second.state).toBe('draft')
+  })
+})

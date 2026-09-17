@@ -27,6 +27,7 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     staleApproval: undefined,
     declaredFiles: ['manuscript.md', 'experiment-tables.md'],
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
+    artifactRefs: { read: ['formatted-manuscript@1'], moved: [] },
     saveError: undefined,
     ...overrides,
   }
