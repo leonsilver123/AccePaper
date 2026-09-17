@@ -130,26 +130,40 @@ function implementationNamedIn(body: string, names: ReadonlyArray<string>): stri
 /**
  * The numbers a piece of prose states as QUANTITIES, in order.
  *
+ * WHAT A QUANTITY LOOKS LIKE. A number a section states as a result carries a decimal point, a
+ * percent sign, or one of the units THIS RUN measured in — "19.58 s", "−38.20 %", "47 s" — or it is a
+ * count small enough for a section to declare ("three vehicles", "the two arms"). Anything else is a
+ * citation, an index, a date or a version: the real run that produced this rule was refused for 47
+ * DOIs, then for `62` and `1805` (the volume and page of `Physical Review E 62(2):1805`), and then
+ * again for the case pack's own experiment id, `20260909`.
+ *
+ * THE UNIT IS THE RUN'S OWN, and that is the whole of the rule. "A number followed by whitespace" was
+ * the previous test for a unit and it was not one: every integer in running prose is followed by a
+ * space, so the count-range rule below it never applied — measured on this build, `1805` and
+ * `20260909` were both collected. Naming the units the record declares is exact where a shape is not;
+ * `47 vehicles` is not a unit and neither is `1805 in the appendix`.
+ *
+ * The cost is stated rather than hidden: a fabricated number in a unit the run did not measure in —
+ * "180 km/h" in a study whose record is in milliseconds — is not checked, and neither is a fabricated
+ * bare integer above the count range. A fabricated decimal, percent or same-unit number still is.
+ *
  * @param text - a section body with its citations already blanked out.
+ * @param units - the units the run's own record declares, lowercased.
  * @returns each quantity the prose states.
  */
-function quantitiesIn(text: string): ReadonlyArray<number> {
+function quantitiesIn(text: string, units: ReadonlySet<string>): ReadonlyArray<number> {
   const found: number[] = []
-  for (const match of text.matchAll(/\d+(?:\.\d+)?\s*%?/gu)) {
+  for (const match of text.matchAll(/\d+(?:\.\d+)?/gu)) {
     const raw = match[0]
-    const value = Number(raw.replace(/\s*%$/u, ''))
+    const value = Number(raw)
     if (!Number.isFinite(value)) continue
-    // WHAT A QUANTITY LOOKS LIKE. A number a section states as a result carries a unit or a
-    // percent sign, or is a small count it can declare — "19.58 s", "−38.20 %", "three vehicles".
-    // A bare integer above that range in running prose is a citation: the real run that produced
-    // this rule was refused twice, first for 47 DOIs and then for `62` and `1805`, which are the
-    // volume and page of `Physical Review E 62(2):1805`. Enumerating the shapes identifiers take is
-    // the losing game; saying what a measurement looks like is the winning one.
-    //
-    // The cost is stated rather than hidden: a fabricated bare integer above the count range —
-    // "the platoon held 47 s", with no unit — is not checked. A fabricated number that carries its
-    // unit, or any decimal, still is.
-    const hasMarker = /%$/u.test(raw) || /\d\.\d/u.test(raw) || /\s/u.test(raw)
+    const rest = text.slice(match.index + raw.length)
+    // The token after the number, when one follows a space: a unit is a short word, and the set
+    // decides whether this run ever measured in it.
+    const followedBy = /^\s+([A-Za-z][A-Za-z0-9/·^°-]*)/u.exec(rest)?.[1]
+    const hasMarker = /\d\.\d/u.test(raw)
+      || /^\s*%/u.test(rest)
+      || (followedBy !== undefined && units.has(followedBy.toLowerCase()))
     if (!hasMarker && value > DECLARED_COUNT_RANGE) continue
     found.push(value)
   }
@@ -324,6 +338,9 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
     return review('red-stat', findings, false)
   }
   const accountable = accountableNumbers(input, record)
+  // WHAT THIS RUN MEASURED IN. The record's own unit, and the percent the change is stated as — the
+  // units a section may state a result in without the number's shape having to give it away.
+  const units = new Set<string>([record.unit.toLowerCase(), '%'])
   const untraceable: string[] = []
   for (const section of input.sections) {
     // THE REFERENCES SECTION IS NOT PROSE. Its content is a list of identifiers, and the first
@@ -333,7 +350,7 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
     // this check reads the sections that state results, and the check that matters for a reference
     // list is `red-citation`, which compares what the prose cites against what the list holds.
     if (section.id === 'references') continue
-    for (const [index, value] of quantitiesIn(withoutCitations(section.bodyText)).entries()) {
+    for (const [index, value] of quantitiesIn(withoutCitations(section.bodyText), units).entries()) {
       if (accountable.has(value)) continue
       // The findings name the section and the value, so a reader can find the sentence. The
       // ordinal is not a quotation: quoting the sentence would put the manuscript's own text into
@@ -519,8 +536,12 @@ function reviewManuscriptConclusion(
   // arithmetic, and it is checkable without reading anything.
   if (input.commitment !== undefined) {
     const bound = anchorBoundIn(input.predictionText)
-    for (const value of quantitiesIn(clause)) {
-      if (!/%/u.test(String(value))) continue
+    // THE PERCENTAGES THE CLAUSE STATES, read as percentages rather than screened out of a list of
+    // numbers: this read `quantitiesIn(clause)` and then `/%/.test(String(value))`, which is false for
+    // every number — so the overstatement below could not fire, and a manuscript claiming far more
+    // than it measured was passed by a check that exists to refuse it.
+    for (const match of clause.matchAll(/(\d+(?:\.\d+)?)\s*%/gu)) {
+      const value = Number(match[1])
       if (bound === 'at-least' && value > Math.abs(record.improvementPct) && value !== input.commitment.thresholdPct) {
         findings.push({
           check: 'does the manuscript claim a change larger than the one it measured?',

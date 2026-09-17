@@ -162,6 +162,27 @@ describe('a clean manuscript passes every check', () => {
     expect(positionOf(input, 'red-stat')).toBe('support')
   })
 
+  it('does not read an experiment id, a page or a volume as a measurement', () => {
+    // THE THIRD THING A REAL RUN TAUGHT THIS CHECK, and the one that cost a model run: a run died at
+    // D3 because the case pack's experiment id (`20260909`) reached the draft, and the check read it
+    // as a number the run never measured. The rule it was supposed to apply — a bare integer above
+    // the declared count range is not a quantity — could not apply: "a number followed by whitespace"
+    // stood in for "a number with a unit", and in running prose every number is followed by a space.
+    // Measured before the fix: `1805` and `20260909` were both collected.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'method',
+          heading: 'Method',
+          bodyText:
+            'The scenario of experiment 20260909 was integrated with the standard model (Treiber,'
+            + ' Physical Review E 62(2):1805, 2000) at a fixed 0.02 s step.',
+        },
+      ],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('support')
+  })
+
   it('still counts a quantity that carries its unit', () => {
     // The cost of that rule, stated: a bare integer above the count range is not checked. A number
     // with a unit still is, which is what the shipped study's sections state.
@@ -172,6 +193,31 @@ describe('a clean manuscript passes every check', () => {
       declaredNumbers: [],
     })
     expect(positionOf(input, 'red-stat')).toBe('refute')
+  })
+
+  it('refuses a claim of a bigger change than the record measured, and passes the one it committed to', () => {
+    // A CHECK THAT COULD NOT FIRE. It read the percentages out of `quantitiesIn` and then screened them
+    // with `/%/.test(String(value))` — false for every number — so a manuscript claiming the platoon
+    // raised minimum time-to-collision by 95 % where the run measured a change of the record's own
+    // size was passed by the check that exists to refuse it.
+    // THE SENTENCE STATES THE DIRECTION THE RECORD FOUND (a fall, in this study) and a magnitude far
+    // larger than the 38.20 % it measured, so the only check it can trip is the overstatement one.
+    const overstated = cleanInput({
+      sections: [
+        { id: 'results', heading: 'Results', bodyText: 'The mixed platoon reduced the minimum time-to-collision by 95% against the baseline, see Figure 1 and Table 1.' },
+      ],
+    })
+    expect(positionOf(overstated, 'red-claim')).toBe('refute')
+    expect(findingsOf(overstated, 'red-claim')).toContain('95')
+
+    // THE OTHER DIRECTION, so the rule is "above what it measured" and not "any percentage at all":
+    // 30 % is smaller than the 38.20 % the record measured, so it claims nothing the run did not find.
+    const within = cleanInput({
+      sections: [
+        { id: 'results', heading: 'Results', bodyText: 'The mixed platoon reduced the minimum time-to-collision by 30% against the baseline, see Figure 1 and Table 1.' },
+      ],
+    })
+    expect(positionOf(within, 'red-claim')).not.toBe('refute')
   })
 
   it('still refuses a measurement in a prose section beside an identifier', () => {
