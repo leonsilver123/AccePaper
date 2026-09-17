@@ -10,7 +10,10 @@
 // host channel behind it is created on first use and carries this deployment's registered operator,
 // so the fixture does not build one: a second creation is refused, which is the channel's own rule.
 //
-// argv: `--dir <snapshot root>`; prints one JSON line describing the decision, or exits non-zero.
+// argv: `--dir <snapshot root> [--profile production|evaluation]`; prints one JSON line describing the
+// decision, or exits non-zero. The profile is the DEPLOYMENT's, so it is stated here the way a
+// `cordis.yml` states it: a run approved under the production profile is one whose material may be
+// published, which is the difference between a draft and the package a journal receives.
 
 import { randomUUID } from 'node:crypto'
 
@@ -28,12 +31,19 @@ function argument(args: ReadonlyArray<string>, name: string): string {
 }
 
 const root = argument(process.argv.slice(2), '--dir')
+/** The evidence profile this deployment runs under; absent means the shipped default. */
+const profile = process.argv.includes('--profile')
+  ? argument(process.argv.slice(2), '--profile')
+  : undefined
 
 const ctx = new Context()
 for (const name of ['agents', 'sessions', 'sessionPersistence', 'subagents']) ctx.provide(name, {})
 ctx.provide('sessionProjections', { register: () => () => {} })
 ctx.provide('tools', { guard: () => () => {} })
-ctx.provide('research', { snapshotDirectory: root })
+ctx.provide('research', {
+  snapshotDirectory: root,
+  ...(profile === undefined ? {} : { evidenceProfile: profile }),
+})
 
 await ctx.plugin(ResearchTeamService, {})
 const service = ctx.agentTeams as unknown as {

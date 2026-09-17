@@ -101,6 +101,14 @@ async function boot(options: {
     }
     /** The research type this deployment is configured as. */
     researchType?: string
+    /**
+     * What this deployment's evidence is allowed to be.
+     *
+     * THE EXPORT READS IT FROM THE DEPLOYMENT, not from the run: a `final` package is written only
+     * where the deployment says its material may be published, so a case that wants one states the
+     * profile on the process that exports — as `cordis.yml` does.
+     */
+    evidenceProfile?: string
     /** The journal profile this deployment is configured with, when it states one. */
     journal?: {
       readonly id: string
@@ -141,6 +149,7 @@ async function boot(options: {
       write(request: unknown): Promise<{ text: string; provider: string; model: string }>
     }
     researchType?: string
+    evidenceProfile?: string
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   } = {}
   if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
@@ -1199,6 +1208,61 @@ describe('a decision a person made survives the process that took it', () => {
       expect(moved.get('approval-current')).toBe(false)
       const stale = (second.checks ?? []).find(check => check.code === 'approval-current')
       expect(stale?.detail).toContain('another version')
+    } finally {
+      await next.dispose()
+    }
+  })
+})
+
+describe('a run the production profile published', () => {
+  it('exports the FINAL package once a person has approved it', async () => {
+    // THE SUCCESS PATH THE WHOLE SYSTEM EXISTS FOR, and the one that had no reading: a run conducted
+    // under the production profile, whose manuscript a person approved, exported as the package a
+    // journal is handed. Every other case here asserts a REFUSAL, and a set of refusals that all hold
+    // is also what a pipeline that can never succeed looks like — the two are told apart only by
+    // running this one.
+    //
+    // The decision is taken in its OWN PROCESS (the fixture), so nothing this spec holds stands in
+    // for the disk, and the profile is stated there the way a `cordis.yml` states it.
+    const root = snapshotRoot()
+    const packages = mkdtempSync(join(tmpdir(), 'dsh-final-packages-'))
+    roots.push(packages)
+    const decided = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production'],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )
+    expect(decided.stderr).not.toMatch(/approve-and-exit: /)
+    expect(decided.status).toBe(0)
+    const lines = decided.stdout.trim().split(/\r?\n/u)
+    const receipt = JSON.parse(lines[lines.length - 1] ?? '{}') as { runId: string; decision: string }
+    expect(receipt.decision).toBe('approved')
+
+    const next = await boot({ snapshotDirectory: root })
+    next.engine.packageDirectory = packages
+    try {
+      // A PACKAGE IS WRITTEN FROM THE STATE IN MEMORY, so the deployment takes the study back first.
+      // THE PROFILE IS THE DEPLOYMENT'S, READ WHERE THE EXPORT HAPPENS: the process that approved
+      // the run stated `production`, and this process must state the same or it refuses its own
+      // package as material that may not be published — which is the check doing its job.
+      next.engine.evidenceProfile = 'production'
+      await next.service.openStoredRun({ runId: receipt.runId })
+      const written = await next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'final' })
+      // EVERY CONDITION, not the state alone: a `final` package whose checks did not all pass would be
+      // the state field claiming something the conditions do not support.
+      expect((written.checks ?? []).filter(check => !check.passed).map(check => check.code)).toEqual([])
+      expect(written.state).toBe('final')
+      // AND IT IS ON DISK, as the state — and the readiness — the reader of a manifest sees, rather
+      // than only as a result this process computed.
+      const manifestPath = join(packages, `${receipt.runId}/run-manifest.json`)
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        state: string
+        submissionReady: boolean
+        approval?: { decision: string }
+      }
+      expect(manifest.state).toBe('final')
+      expect(manifest.submissionReady).toBe(true)
+      expect(manifest.approval?.decision).toBe('approved')
     } finally {
       await next.dispose()
     }
