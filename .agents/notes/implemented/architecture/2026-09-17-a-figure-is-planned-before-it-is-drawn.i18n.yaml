@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-figure-is-planned-before-it-is-drawn.md
+2026-09-17-a-figure-is-planned-before-it-is-drawn.md: 9e623cdb07c8cac2d78c5d2d9c545f6158583e36
+2026-09-17-a-figure-is-planned-before-it-is-drawn.zh.md: e7ed871a5c4b0e49557c0f42769e220ef019ad66
