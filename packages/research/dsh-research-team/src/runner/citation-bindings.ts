@@ -27,6 +27,7 @@
 import { createHash } from 'node:crypto'
 
 import { EVIDENCE_CORPUS, assessmentsFor, corpusSource } from './evidence-corpus.ts'
+import type { StatementAssessment } from './statement-support.ts'
 
 /** How one source stands in relation to the statement it is cited for. */
 export type CitationSupport =
@@ -441,11 +442,19 @@ export function judgementsFor(claimRef: string): ReadonlyArray<SourceJudgement> 
 export function bindJudgements(
   judgements: ReadonlyArray<SourceJudgement>,
   statements: ReadonlyArray<Statement>,
+  // THE SENTENCE'S OWN VERDICT, when the deployment read one. Passed in rather than derived: what a
+  // passage establishes about a CLAIM is not what it establishes about the sentence citing it, and
+  // `statement-support.ts` is where that second reading is recorded. A deployment that assessed
+  // nothing passes none, and the binding then carries the claim's verdict — which
+  // `checkStatementSupport` refuses as `statement-unassessed` wherever an assessor is configured.
+  assessments: ReadonlyArray<StatementAssessment> = [],
 ): {
   readonly uses: ReadonlyArray<CitationUse>
   readonly uncited: ReadonlyArray<SourceJudgement>
 } {
   const byCiteKey = new Map(judgements.map(judgement => [judgement.citeKey, judgement]))
+  const assessmentOf = new Map(assessments.map(assessment =>
+    [`${assessment.statementId} ${assessment.citeKey}`, assessment]))
   const uses: CitationUse[] = []
   // ONE BINDING PER SENTENCE THAT CITES, not one per source. The set below used to be keyed by cite
   // key ALONE, so a source cited in two sentences produced a binding for the first and none for the
@@ -459,6 +468,7 @@ export function bindJudgements(
       const judgement = byCiteKey.get(key)
       if (judgement === undefined) continue
       cited.add(key)
+      const assessed = assessmentOf.get(`${statement.statementId} ${key}`)
       uses.push({
         statementId: statement.statementId,
         statementSha256: statement.textSha256,
@@ -467,8 +477,10 @@ export function bindJudgements(
         location: judgement.location,
         quote: judgement.quote,
         quoteSha256: judgement.quoteSha256,
-        support: judgement.support,
-        readScope: judgement.readScope,
+        // THE SENTENCE'S VERDICT WHEN THERE IS ONE, the claim's otherwise. The passage and its version
+        // are the source's either way — what changes is whether anybody read it against THIS sentence.
+        support: assessed?.support ?? judgement.support,
+        readScope: assessed?.readScope ?? judgement.readScope,
         access: judgement.access,
         judgedBy: judgement.judgedBy,
       })

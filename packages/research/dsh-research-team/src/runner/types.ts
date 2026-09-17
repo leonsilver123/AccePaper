@@ -21,6 +21,7 @@ import type { ResearchProfile } from './research-profile.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 import type { DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
+import type { StatementSupportAssessor } from './statement-support.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -132,6 +133,15 @@ export interface DriveOptions {
    */
   readonly figureProvider?: FigureProvider
   /**
+   * The deployment's ability to judge a citing SENTENCE against the passage read for it.
+   *
+   * A CAPABILITY LIKE THE OTHERS, and absent for the same reason: whether a machine can read a passage
+   * and decide what it establishes about a particular sentence is a property of the deployment's
+   * reviewer. A deployment that names none inherits no verdict from the claim — the draft records that
+   * no sentence-level reading was made, which is a fact a reader can act on rather than a silence.
+   */
+  readonly statementAssessor?: StatementSupportAssessor
+  /**
    * Tool dependencies for capability steps; assembled by the Cordis adapter from
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
@@ -191,6 +201,8 @@ export interface DriveStepOptions {
   readonly documentCompiler?: DocumentCompiler
   /** The drawing capability; see {@link DriveOptions.figureProvider}. */
   readonly figureProvider?: FigureProvider
+  /** The sentence-level reviewer; see {@link DriveOptions.statementAssessor}. */
+  readonly statementAssessor?: StatementSupportAssessor
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
   /**

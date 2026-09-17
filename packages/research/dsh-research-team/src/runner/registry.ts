@@ -169,6 +169,9 @@ import { assessmentsFor } from './evidence-corpus.ts'
 import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from './argument-plan.ts'
 import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
+import { assessStatements, checkStatementSupport } from './statement-support.ts'
+import type { StatementSupportAssessor } from './statement-support.ts'
+import type { StatementAssessment } from './statement-support.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentBlock, DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
@@ -436,6 +439,14 @@ export interface ExecCtx {
    * deployment named none still draws its floats rather than failing.
    */
   readonly figureProvider?: FigureProvider
+  /**
+   * The deployment's ability to judge a citing sentence against the passage read for it, when it has one.
+   *
+   * Absent means no sentence-level reading is made — and NOT that every sentence inherits the claim's
+   * verdict, which is the inheritance this field exists to end. The draft records which of the two
+   * happened.
+   */
+  readonly statementAssessor?: StatementSupportAssessor
 
   readonly runId: string
   readonly stepId: string
@@ -2853,7 +2864,34 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // revision that rewrites the sentence leaves a judgement about text nobody has read — which
   // `checkStatementBindings` refuses at E1 rather than letting the citation transfer silently.
   const statements = locateStatements(sections)
-  const bound = bindJudgements(judgements, statements)
+  // THE SENTENCE'S OWN READING, when the deployment has a reviewer that can make one. A claim-level
+  // verdict is evidence about the claim and not about the sentence citing the source, and the
+  // difference is not academic: a sentence that states more than the claim did, or states it about a
+  // different system, inherits a `supported` it never earned. Where an assessor is configured, every
+  // citing sentence is assessed against its own text and the refusals below are fatal; where none is,
+  // nothing is inherited either — the bindings carry the claim's verdict and the draft records that no
+  // sentence-level reading was made, which is what `checkStatementSupport` reports.
+  const assessor = ctx.statementAssessor
+  const assessments = assessor === undefined
+    ? []
+    : await assessStatements(assessor, statements, judgements)
+  // THE REFUSAL APPLIES WHERE A READING WAS POSSIBLE. A deployment with an assessor made one reading
+  // per citing sentence, so a sentence it did not cover — or covered at a version that has since been
+  // rewritten — is a sentence nothing verified, and that is fatal. A deployment with NO assessor is a
+  // different fact and is recorded as itself (`statementAssessments: []` below): it cannot read a
+  // passage against a sentence, so refusing its runs would be refusing the deployment rather than the
+  // manuscript. What it must not do is the thing this unit removes — claim a sentence-level verdict
+  // it never made — which is why the empty list is on the artifact rather than left to inference.
+  const supportRefusals = assessor === undefined
+    ? []
+    : checkStatementSupport(assessments, statements, judgements)
+  if (supportRefusals.length > 0) {
+    throw new Error(
+      `[D3-writing] [${supportRefusals[0]?.code ?? 'statement-unassessed'}] `
+      + supportRefusals.map(refusal => refusal.detail).join('; '),
+    )
+  }
+  const bound = bindJudgements(judgements, statements, assessments)
   // A REVIEWED SOURCE NO SENTENCE CITES IS REFUSED, not dropped from the reference list. The two ways
   // to reach it are a manuscript that never stated a position its own evidence supports and a source
   // that does not bear on this paper — and the second is a judgement that should not have been made,
@@ -2883,6 +2921,12 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sections,
         proseSource,
         proseRoute,
+        // WHAT WAS READ ABOUT EACH SENTENCE — PRESENT ONLY WHEN SOMETHING COULD READ THEM. A
+        // deployment with no assessor cannot judge a passage against a sentence, and the honest record
+        // of that is the absence of this field rather than an empty list: an empty list would say the
+        // readings were made and found nothing, which is the reading this unit exists to stop a
+        // consumer from making. E1 refuses an unassessed sentence exactly when this field is present.
+        ...(assessor === undefined ? {} : { statementAssessments: assessments }),
         // WHAT EACH SECTION WAS ASKED FOR, with the evidence and the versions behind it. The record
         // is what makes "which request produced the sentence whose judgement was refused" answerable
         // from the run rather than from a log nobody kept.
@@ -3343,6 +3387,29 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     throw new Error(
       '[E1-format] a citation no longer holds against what the manuscript says: '
       + statementRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
+    )
+  }
+  // AND WHETHER WHAT EACH SENTENCE RESTS ON STILL HOLDS. The bindings above cover the SOURCE and the
+  // sentence's version; this covers the reading that was made about the sentence — a D4 revision that
+  // rewrote a sentence leaves its assessment about text nobody read, and a run under a deployment that
+  // reads sentences (which is the only case this fires in) has to re-read before the manuscript is
+  // published. Checked HERE rather than only where the assessment was made, because the manuscript
+  // assembled at this step is the revised one.
+  const supportRefusals = !Array.isArray(revised?.statementAssessments)
+    // NO READINGS WERE MADE, because the deployment has no reviewer for sentences. Nothing is refused:
+    // the absence is the record, and `checkStatementSupport` with an empty list would refuse every
+    // citation of every run under such a deployment — a fact about the deployment, reported as a
+    // defect of the manuscript.
+    ? []
+    : checkStatementSupport(
+      revised.statementAssessments as ReadonlyArray<StatementAssessment>,
+      locateStatements(sections.map(section => ({ id: section.id, bodyText: section.bodyText }))),
+      judgementsFor(claimRef),
+    )
+  if (supportRefusals.length > 0) {
+    throw new Error(
+      '[E1-format] a sentence cites a source the deployment never read it against: '
+      + supportRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
     )
   }
   // AND WHAT EACH SECTION OWED ITS READER. A section that reports the measurement without saying what
