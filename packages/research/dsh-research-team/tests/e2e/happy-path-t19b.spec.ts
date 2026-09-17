@@ -195,8 +195,10 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('min-ttc-seconds')
     // The reference row is MEASURED by simulating the homogeneous platoon, so it is a positive
     // number this study produced.
-    expect((res.measured as { baselineMinTtcSeconds?: unknown }).baselineMinTtcSeconds)
-      .toBeGreaterThan(0)
+    // THE RECORD'S OWN SHAPE: the artifact names the metric it measured and the two arms' values.
+    const measured = res.measured as { metricKey?: unknown; baseline?: unknown }
+    expect(measured.metricKey).toBe('min-ttc-seconds')
+    expect(measured.baseline as number).toBeGreaterThan(0)
     // Regression: ablation measurement belongs to C3, never to B3.
     expect(res.aggregate).toBeUndefined()
     expect(res.ranRuns).toBeUndefined()
@@ -213,8 +215,8 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     const observed = mvp.observed as {
       improvementPct?: unknown
       thresholdPct?: unknown
-      baselineMinTtcSeconds?: unknown
-      variantMinTtcSeconds?: unknown
+      baseline?: unknown
+      variant?: unknown
     }
     expect(observed.thresholdPct).toBe(20)
     expect(typeof observed.improvementPct).toBe('number')
@@ -227,8 +229,8 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect((mvp.outcome as { decisive?: unknown }).decisive).toBe(true)
     expect((mvp.outcome as { verdict?: unknown }).verdict).toBe('refuted')
     // Both platoons were actually simulated, so both numbers are present.
-    expect(observed.baselineMinTtcSeconds as number).toBeGreaterThan(0)
-    expect(observed.variantMinTtcSeconds as number).toBeGreaterThan(0)
+    expect(observed.baseline as number).toBeGreaterThan(0)
+    expect(observed.variant as number).toBeGreaterThan(0)
     expect(String((mvp.outcome as { detail?: unknown }).detail)).toContain('%')
   })
 

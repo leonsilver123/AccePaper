@@ -65,10 +65,11 @@ describe('a measurement that contradicts the claim', () => {
 
   it('keeps the measured numbers as numbers, so a reader is not left with the prose', async () => {
     const { store, runId } = await shippedRun()
-    const observed = artifact(store, runId, 'mvp-results').observed as Record<string, number>
+    const observed = artifact(store, runId, 'mvp-results').observed as Record<string, unknown>
 
-    expect(observed.baselineMinTtcSeconds).toBeCloseTo(19.58, 1)
-    expect(observed.variantMinTtcSeconds).toBeCloseTo(12.1, 1)
+    expect(observed.metricKey).toBe('min-ttc-seconds')
+    expect(observed.baseline).toBeCloseTo(19.58, 1)
+    expect(observed.variant).toBeCloseTo(12.1, 1)
     expect(observed.improvementPct).toBeCloseTo(-38.2, 1)
     // The metric's direction is the claim's own: for minimum time-to-collision, higher is better, so
     // a negative improvement is the wrong direction and the numbers say so without the prose.

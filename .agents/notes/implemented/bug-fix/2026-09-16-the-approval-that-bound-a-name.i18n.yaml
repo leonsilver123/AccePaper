@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-the-approval-that-bound-a-name.md
-2026-09-16-the-approval-that-bound-a-name.md: 8feff7113d5790fe90599315f340ce8b4ef8644f
-2026-09-16-the-approval-that-bound-a-name.zh.md: a7c7dab1b5becaec4bb176ce36adaf5f0c340fa3
+2026-09-16-the-approval-that-bound-a-name.md: cd18cf05ddd3972c3ae305e2c260c0de99d88b0a
+2026-09-16-the-approval-that-bound-a-name.zh.md: 18ed2e1e10506b834ba7b2684ce3f76532f270b7

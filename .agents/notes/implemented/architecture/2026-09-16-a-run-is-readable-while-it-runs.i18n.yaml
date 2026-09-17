@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-run-is-readable-while-it-runs.md
-2026-09-16-a-run-is-readable-while-it-runs.md: 4bedc984a31c32ba9d950e62dadfd1bc715b6a21
-2026-09-16-a-run-is-readable-while-it-runs.zh.md: ece05f1b5f45effd5d40731c1466295b353c10b1
+2026-09-16-a-run-is-readable-while-it-runs.md: 307003d3494a725d9200baaa98910c6fbcde6acb
+2026-09-16-a-run-is-readable-while-it-runs.zh.md: 28cf80a065310e20f1871d5aa9b5e4fa3f686514

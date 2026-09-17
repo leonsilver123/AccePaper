@@ -101,6 +101,7 @@ import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursor
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
 import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
+import { requireStudyAdapter } from './runner/study-adapter.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -1060,6 +1061,10 @@ export class ResearchTeamService extends TypertRemoteService {
         : { metric: { ...runCtx.studyPlan.metric, key: runCtx.metricKey } }),
       ...(runCtx.commitment === undefined ? {} : { commitment: runCtx.commitment }),
     }
+    // THE ADAPTER IS REBUILT LAST, over the plan and the study the two blocks above just resolved.
+    // Reading it from the deployment's current configuration instead would present a resumed run's
+    // figures and prose as whichever study this process happens to be configured for now.
+    runCtx.adapter = requireStudyAdapter(runCtx.studyPlan, runCtx.study)
 
     // The first step that is not terminal is where the resumed run picks up: everything before
     // it is in a terminal state, so re-driving it would either be refused by the engine or, worse,

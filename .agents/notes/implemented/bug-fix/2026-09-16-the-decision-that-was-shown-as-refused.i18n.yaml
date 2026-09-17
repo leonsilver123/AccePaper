@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-the-decision-that-was-shown-as-refused.md
-2026-09-16-the-decision-that-was-shown-as-refused.md: 18a837a7edcc0a58d35b2f8ced4b91d46a7f5aa6
-2026-09-16-the-decision-that-was-shown-as-refused.zh.md: 97fff6f8812df01159f125839f833dd35d3083b7
+2026-09-16-the-decision-that-was-shown-as-refused.md: f003fef48d80badbac74d6efc3628c6af8334098
+2026-09-16-the-decision-that-was-shown-as-refused.zh.md: ee033135795c1a8fbaaa3bb2e8684d1c70d158c8

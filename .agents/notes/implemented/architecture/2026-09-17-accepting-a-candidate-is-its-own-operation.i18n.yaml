@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-accepting-a-candidate-is-its-own-operation.md
-2026-09-17-accepting-a-candidate-is-its-own-operation.md: d6a757286798fa7344d466817a74d4a0d6c538f3
-2026-09-17-accepting-a-candidate-is-its-own-operation.zh.md: 993ba79ef5c10d718284fadc7c5a4da25c6a6f00
+2026-09-17-accepting-a-candidate-is-its-own-operation.md: 62941344fd4d6a77f5aa6fae5e56a25e2ffeaabb
+2026-09-17-accepting-a-candidate-is-its-own-operation.zh.md: e6667fd6f260e881f271c1884d7ae743e43b44fb

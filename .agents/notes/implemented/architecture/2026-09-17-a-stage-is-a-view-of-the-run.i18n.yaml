@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-stage-is-a-view-of-the-run.md
-2026-09-17-a-stage-is-a-view-of-the-run.md: 63246fa6ef52c2afcdb074d69652d48927aa725d
-2026-09-17-a-stage-is-a-view-of-the-run.zh.md: b97f048ad8185aca54668de942a05879b552a41a
+2026-09-17-a-stage-is-a-view-of-the-run.md: d56de4dd931e880d91a8ede1ace70e97b2a4a20c
+2026-09-17-a-stage-is-a-view-of-the-run.zh.md: 50a0749858da25f4f931e91f920b34f36bfebf25

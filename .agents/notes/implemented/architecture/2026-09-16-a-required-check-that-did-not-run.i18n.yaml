@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-required-check-that-did-not-run.md
-2026-09-16-a-required-check-that-did-not-run.md: 07394a9dac022fa301be0c725c61760a5ac5c98b
-2026-09-16-a-required-check-that-did-not-run.zh.md: 7c990ebbdf59d13e25469d3608425d45c53f2cb3
+2026-09-16-a-required-check-that-did-not-run.md: 1e0051447d5a9df9a3f9834a0339f17f5343dabd
+2026-09-16-a-required-check-that-did-not-run.zh.md: 49047a3f5de8dd8bea1da216b61703d39acd8566

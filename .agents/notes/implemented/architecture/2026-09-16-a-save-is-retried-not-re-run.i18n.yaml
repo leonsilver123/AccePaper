@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-save-is-retried-not-re-run.md
-2026-09-16-a-save-is-retried-not-re-run.md: ac433efec47af13ebf32291bfb5a596ab5b18e57
+2026-09-16-a-save-is-retried-not-re-run.md: 53c51347fe43c2f8e67f590832be16817d6fddb3
 2026-09-16-a-save-is-retried-not-re-run.zh.md: 33823dc2cfdaf6a0ba3fd4cb1c13ff3bb62631e3

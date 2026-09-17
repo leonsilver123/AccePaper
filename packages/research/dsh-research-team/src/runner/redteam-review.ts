@@ -41,9 +41,24 @@
 
 import type { ResearchRebuttalPosition } from '../types.ts'
 
-import type { PredictionCommitment } from './prediction-gate.ts'
+import { SUPPORTED_IMPLEMENTATIONS } from './implementations.ts'
+import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { anchorBoundIn, carriesNegation, measuringClause, percentagesIn, phrasingsFor, requirementDirectionIn } from './prediction-gate.ts'
-import { MEASURED_METRIC } from './platoon-sim.ts'
+
+/**
+ * The quantity one study measures, as the material names that study's metric key.
+ *
+ * A KEY RESOLVES TO A DEFINITION, and an unknown key resolves to nothing rather than to some
+ * default: the wording checks then abstain, which is the fail-closed direction. What must not happen
+ * is what this function replaces — reading every claim against {@link MEASURED_METRIC}, under which
+ * a claim about any other quantity had no phrasings at all and every check abstained.
+ *
+ * @param key - the metric key the material states the study measures.
+ * @returns the metric that study declares, or undefined when no registered study measures it.
+ */
+function measuredMetricOf(key: string): MeasuredMetric | undefined {
+  return SUPPORTED_IMPLEMENTATIONS.find(candidate => candidate.metric.key === key)?.metric
+}
 
 /**
  * The truthfulness levels this field can legitimately carry.
@@ -233,7 +248,14 @@ function reviewStatistics(material: ClaimMaterial): RoleReview {
   // and the C verdict grades it, so a number the prose attached elsewhere no longer reaches the
   // verdict; what is left here is whether the claim's own words agree with its declaration. See
   // `measuringClause` for what the scoping does and does not establish.
-  const clause = measuringClause(prediction, phrasingsFor(material.metricKey, MEASURED_METRIC))
+  // RESOLVED FROM THE MATERIAL, NOT ASSUMED. This read every claim against the platoon study's
+  // quantity, so a claim about any other measured quantity had no phrasings, all three wording
+  // checks abstained, and the A channel held a run whose claim was perfectly well stated.
+  const studyMetric = measuredMetricOf(material.measuredMetricKey)
+  const clause = measuringClause(
+    prediction,
+    studyMetric === undefined ? undefined : phrasingsFor(material.metricKey, studyMetric),
+  )
   const statedAnchor = clause === undefined ? undefined : anchorBoundIn(clause)
   const statedDirection = clause === undefined ? undefined : requirementDirectionIn(clause)
   const statedPercentages = clause === undefined ? [] : percentagesIn(clause)

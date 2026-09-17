@@ -104,7 +104,21 @@ interface Arrival {
  * @returns the trace, in arrival order.
  */
 export function declaredTrace(): ReadonlyArray<Arrival> {
-  const intervalMs = 1000 / LATENCY_INPUTS.arrivalRatePerSecond
+  return traceAt(LATENCY_INPUTS.arrivalRatePerSecond)
+}
+
+/**
+ * The same declared trace at a different arrival rate.
+ *
+ * THE BOUNDARY PROBE RE-RUNS THE STUDY ABOVE THE SERVER'S CAPACITY, and it has to do it over the same
+ * declared spread rather than over a second, separately-invented trace: two traces would make the
+ * comparison between the regimes a comparison between two datasets.
+ *
+ * @param arrivalRatePerSecond - how many requests arrive per second.
+ * @returns the trace, in arrival order.
+ */
+export function traceAt(arrivalRatePerSecond: number): ReadonlyArray<Arrival> {
+  const intervalMs = 1000 / arrivalRatePerSecond
   return Array.from({ length: LATENCY_INPUTS.requestCount }, (_, index) => ({
     index,
     atMs: index * intervalMs,
@@ -112,6 +126,11 @@ export function declaredTrace(): ReadonlyArray<Arrival> {
       ? LATENCY_INPUTS.meanServiceMs * LATENCY_INPUTS.slowFactorMs
       : LATENCY_INPUTS.meanServiceMs,
   }))
+}
+
+/** The arrival rate at which the declared single server can no longer keep up. */
+export function capacityPerSecond(): number {
+  return 1000 / LATENCY_INPUTS.meanServiceMs
 }
 
 /** What one arm of the study produced: every request's latency, and the trace's own totals. */
@@ -163,6 +182,27 @@ export function serveIndividually(trace: ReadonlyArray<Arrival>): LatencyRun {
  * @returns the latencies and the server's own totals.
  */
 export function serveCoalesced(trace: ReadonlyArray<Arrival>): LatencyRun {
+  return serveCoalescedWith(trace, LATENCY_INPUTS.coalescingWindowMs, LATENCY_INPUTS.maxBatch)
+}
+
+/**
+ * Serve the trace with coalescing under an EXPLICIT window and batch bound.
+ *
+ * THE ABLATION'S SEAM. The boundary probe removes one mechanism at a time — the window, then the
+ * bound — and re-measures, and it must do so with everything else held at the declared values. A
+ * second copy of this loop with the constants edited would be a second implementation, and the
+ * ablation's whole claim is that it removed one thing from the arm the claim is about.
+ *
+ * @param trace - the declared arrivals.
+ * @param coalescingWindowMs - arrivals inside this window of a batch's first request share a service.
+ * @param maxBatch - how many requests one coalesced service may cover.
+ * @returns the latencies and the server's own totals.
+ */
+export function serveCoalescedWith(
+  trace: ReadonlyArray<Arrival>,
+  coalescingWindowMs: number,
+  maxBatch: number,
+): LatencyRun {
   let freeAtMs = 0
   let busyMs = 0
   const latenciesMs: number[] = []
@@ -174,8 +214,8 @@ export function serveCoalesced(trace: ReadonlyArray<Arrival>): LatencyRun {
     let next = index + 1
     while (
       next < trace.length
-      && batch.length < LATENCY_INPUTS.maxBatch
-      && (trace[next] as Arrival).atMs - first.atMs <= LATENCY_INPUTS.coalescingWindowMs
+      && batch.length < maxBatch
+      && (trace[next] as Arrival).atMs - first.atMs <= coalescingWindowMs
     ) {
       batch.push(trace[next] as Arrival)
       next += 1
@@ -291,6 +331,115 @@ export function latencyHashOf(comparison: LatencyComparison): string {
     ...comparison.series.variant,
   ].join('|')
   return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/** One mechanism the coalescing arm has, and what that arm measures without it. */
+export interface LatencyModuleAblation {
+  /** The declared parameter this row removes, by the name the study's constants use. */
+  readonly moduleRemoved: string
+  /** What it was set to when removed. */
+  readonly removedValue: number
+  readonly p95Ms: number
+  /** Against the full coalesced arm, ms. A rise means the mechanism was holding the tail down. */
+  readonly changeVsFullVariantMs: number
+  readonly busyMs: number
+}
+
+/**
+ * What removing each of the coalescing arm's two mechanisms is worth, one at a time.
+ *
+ * EACH ROW REMOVES EXACTLY ONE DECLARED PARAMETER and re-serves the same trace, so the difference
+ * against the full coalesced arm is attributable to that parameter. The baseline arm is untouched by
+ * an ablation — a row that moved both arms would measure a different study.
+ *
+ * @returns one row per mechanism, plus the full coalesced arm for comparison.
+ */
+export function latencyModuleAblations(): {
+  readonly fullVariantP95Ms: number
+  readonly rows: ReadonlyArray<LatencyModuleAblation>
+  readonly note: string
+} {
+  const trace = declaredTrace()
+  const full = percentileMs(serveCoalesced(trace).latenciesMs, LATENCY_INPUTS.percentile)
+  const mechanisms: ReadonlyArray<{ readonly field: string; readonly removedValue: number }> = [
+    // REMOVED MEANS NEUTRALIZED, not "set to something smaller": a zero window admits one request at
+    // a time and a bound of one caps every batch at a single request, so each row leaves a coalescing
+    // arm that no longer coalesces along that dimension and nothing else changed.
+    { field: 'coalescingWindowMs', removedValue: 0 },
+    { field: 'maxBatch', removedValue: 1 },
+  ]
+  const rows = mechanisms.map(({ field, removedValue }) => {
+    const run = field === 'coalescingWindowMs'
+      ? serveCoalescedWith(trace, removedValue, LATENCY_INPUTS.maxBatch)
+      : serveCoalescedWith(trace, LATENCY_INPUTS.coalescingWindowMs, removedValue)
+    const p95Ms = percentileMs(run.latenciesMs, LATENCY_INPUTS.percentile)
+    return {
+      moduleRemoved: field,
+      removedValue,
+      p95Ms,
+      changeVsFullVariantMs: round2(p95Ms - full),
+      busyMs: run.busyMs,
+    }
+  })
+  return {
+    fullVariantP95Ms: full,
+    rows,
+    note: 'each row neutralizes ONE declared parameter of the coalesced arm and re-serves the same trace; the baseline arm and the other parameter are untouched',
+  }
+}
+
+/** The queue's behaviour in the two regimes the boundary probe compares. */
+export interface LatencyRegime {
+  readonly arrivalRatePerSecond: number
+  /** Arrival rate as a fraction of the server's capacity. At or above one the queue cannot settle. */
+  readonly utilization: number
+  readonly baselineP95Ms: number
+  readonly variantP95Ms: number
+}
+
+/** What the study's declared scope does and does not carry, measured rather than quoted. */
+export interface LatencyBoundary {
+  readonly settled: LatencyRegime
+  readonly overloaded: LatencyRegime
+  readonly scopeLimited: boolean
+  readonly rule: string
+  readonly note: string
+}
+
+/**
+ * The scope test: the same study re-run above the server's capacity.
+ *
+ * THE CLAIM IS ABOUT A QUEUE THAT SETTLES. Above capacity the baseline arm's latency grows with the
+ * trace length rather than converging, so a percentage measured there describes an overload and not
+ * the mechanism. Both regimes are measured with the declared spread held fixed — only the arrival
+ * rate moves — so the comparison between them is a comparison of regimes and not of two datasets.
+ *
+ * @returns both regimes, and whether the boundary rule binds.
+ */
+export function boundaryLatency(): LatencyBoundary {
+  const capacity = capacityPerSecond()
+  const regime = (arrivalRatePerSecond: number): LatencyRegime => {
+    const trace = traceAt(arrivalRatePerSecond)
+    return {
+      arrivalRatePerSecond,
+      utilization: round2(arrivalRatePerSecond / capacity),
+      baselineP95Ms: percentileMs(serveIndividually(trace).latenciesMs, LATENCY_INPUTS.percentile),
+      variantP95Ms: percentileMs(serveCoalesced(trace).latenciesMs, LATENCY_INPUTS.percentile),
+    }
+  }
+  const settled = regime(LATENCY_INPUTS.arrivalRatePerSecond)
+  // ABOVE CAPACITY BY A DECLARED MARGIN rather than by an epsilon: at exactly capacity the queue is
+  // critical and its behaviour over a finite trace says nothing either way.
+  const overloaded = regime(round2(capacity * 1.25))
+  return {
+    settled,
+    overloaded,
+    scopeLimited: overloaded.utilization >= 1,
+    rule: 'the claim is limited to a queue below its capacity: at or above it the baseline arm does'
+      + ' not settle, so the measured change there describes an overload rather than the mechanism',
+    note: 'both regimes are MEASURED by the same simulator over the same declared spread; only the'
+      + ' arrival rate differs, and neither number is quoted from anywhere',
+  }
 }
 
 /**

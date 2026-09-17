@@ -15,6 +15,7 @@ import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
 import { fileURLToPath } from 'node:url'
 import { experimentStudy } from '../src/runner/platoon-sim.ts'
 import { PRESENTATION_PLAN_VERSION } from '../src/runner/presentation-plan.ts'
+import { platoonAdapter } from '../src/runner/study-adapter.ts'
 import type { PresentationPlan } from '../src/runner/presentation-plan.ts'
 
 /** A SECOND TASK: the same study, a claim that commits to a decrease. Synthetic, test-owned. */
@@ -40,6 +41,9 @@ function execCtxWith(inputs: Readonly<Record<string, unknown>>): ExecCtx {
     studyPlan: DEFAULT_PLAN,
     planSource: 'default',
     timestamp: FIXED_TS,
+    // THE STUDY THE RUN IS CONDUCTED AS, resolved as `createRunContext` resolves it for a driven
+    // run: a context without one cannot execute a step that reports the study.
+    adapter: platoonAdapter(experimentStudy()),
   } as unknown as RunContext
   return {
     runId: 'presentation-plan-spec',

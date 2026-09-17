@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-package-says-which-one-it-is.md
-2026-09-17-a-package-says-which-one-it-is.md: 609eb9366075a5e8d659ad06fd22ab5fc4a9bd3a
-2026-09-17-a-package-says-which-one-it-is.zh.md: 82dd2ac3071861599479887cd97b283dc8ee23ca
+2026-09-17-a-package-says-which-one-it-is.md: f035bee374d370c30b4c5f7f50457e928ba13d67
+2026-09-17-a-package-says-which-one-it-is.zh.md: bb20a2e22f7a1f6950e9baa19bbf1948b4f05b66

@@ -46,6 +46,25 @@ export interface MeasuredOutcome {
   readonly values: Readonly<Record<string, number>>
 }
 
+/**
+ * The observations behind a record, when the study's measurement is a sequence.
+ *
+ * A CATEGORY COMPARISON NEEDS ONLY THE TWO ARMS. A study whose quantity is measured across an ordered
+ * sequence — a latency profile over an arrival trace, a growth curve across a boundary — has a figure
+ * whose x axis is that order, and a figure may only plot what the run recorded. So the sequence
+ * travels WITH the record rather than being recomputed by whoever draws the chart: the plot and the
+ * number the claim is graded on are then one measurement, which is the whole reason this record exists.
+ */
+export interface StudySeries {
+  /** What one position on the sequence axis is, e.g. `request index`. */
+  readonly axisLabel: string
+  readonly unit: string
+  /** Where each observation sits on the axis, in the study's own units. */
+  readonly bucket: ReadonlyArray<number>
+  /** One array per arm, each as long as `bucket`, keyed the way the record keys its arms. */
+  readonly arms: Readonly<Record<string, ReadonlyArray<number>>>
+}
+
 /** Where a number came from. `result-version` is the run's record; `recomputed` is a fresh run. */
 export type ResultSource = 'result-version' | 'recomputed'
 
@@ -59,6 +78,8 @@ export interface ResultVersion {
   readonly metricKey: string
   readonly source: 'simulation'
   readonly measured: MeasuredOutcome
+  /** The sequence the measurement ran over, when it ran over one. Absent for a two-arm comparison. */
+  readonly series?: StudySeries
 }
 
 /** The artifact slug the record lives under. */
@@ -93,8 +114,8 @@ export function measuredFromComparison(comparison: PlatoonComparison): MeasuredO
   }
 }
 
-/** SHA-256 over a measured outcome and the rule version that produced it. */
-function hashOf(measured: MeasuredOutcome, ruleVersion: string): string {
+/** SHA-256 over a measured outcome, the sequence behind it, and the rule version that produced it. */
+function hashOf(measured: MeasuredOutcome, ruleVersion: string, series?: StudySeries): string {
   // SORTED, so the hash depends on the values rather than on the order an implementation happened to
   // write them — two records of the same measurement must hash the same however they were built.
   const text = [
@@ -106,6 +127,17 @@ function hashOf(measured: MeasuredOutcome, ruleVersion: string): string {
     measured.variant,
     measured.improvementPct,
     ...Object.keys(measured.values).sort().map(key => `${key}=${String(measured.values[key])}`),
+    // THE SEQUENCE IS PART OF WHAT WAS MEASURED, so it is part of what the record identifies. Two
+    // records whose arms agree and whose observations differ are two different measurements, and a
+    // hash that ignored the second would call them the same one.
+    ...(series === undefined
+      ? []
+      : [
+        series.axisLabel,
+        series.unit,
+        series.bucket.join(','),
+        ...Object.keys(series.arms).sort().map(arm => `${arm}=${(series.arms[arm] ?? []).join(',')}`),
+      ]),
   ].join('|')
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
@@ -117,6 +149,7 @@ function hashOf(measured: MeasuredOutcome, ruleVersion: string): string {
  * @param metricKey - the quantity the study measures, which the claim binds to.
  * @param version - this record's version, one past whatever the run already holds.
  * @param ruleVersion - the implementation version that produced the numbers.
+ * @param series - the sequence the measurement ran over, when it ran over one.
  * @returns the record.
  */
 export function resultVersionOf(
@@ -124,16 +157,42 @@ export function resultVersionOf(
   metricKey: string,
   version = 1,
   ruleVersion = EXPERIMENT_RULE_VERSION,
+  series?: StudySeries,
 ): ResultVersion {
-  const measured = measuredFromComparison(comparison)
+  return resultVersionFrom(measuredFromComparison(comparison), metricKey, ruleVersion, version, series)
+}
+
+/**
+ * Build the record of one measurement, from the measurement rather than from a particular study.
+ *
+ * THE ENTRY EVERY STUDY USES. `resultVersionOf` reads a platoon comparison because that is the study
+ * this module was written for; a second study has no platoon comparison to hand it, and a record
+ * built by a second code path would be a second definition of what a result record IS. Both go
+ * through here, so the hash, the id and the required fields cannot differ between studies.
+ *
+ * @param measured - what the study measured, in the metric's own terms.
+ * @param metricKey - the quantity the claim binds to.
+ * @param ruleVersion - the implementation version that produced the numbers.
+ * @param version - this record's version, one past whatever the run already holds.
+ * @param series - the sequence the measurement ran over, when it ran over one.
+ * @returns the record.
+ */
+export function resultVersionFrom(
+  measured: MeasuredOutcome,
+  metricKey: string,
+  ruleVersion: string,
+  version = 1,
+  series?: StudySeries,
+): ResultVersion {
   return {
     resultId: `result:${metricKey}`,
     version,
-    contentHash: hashOf(measured, ruleVersion),
+    contentHash: hashOf(measured, ruleVersion, series),
     ruleVersion,
     metricKey,
     source: 'simulation',
     measured,
+    ...(series === undefined ? {} : { series }),
   }
 }
 
@@ -169,6 +228,12 @@ export function readResultVersion(value: unknown): ResultVersion | undefined {
     return undefined
   }
   if (typeof record['contentHash'] !== 'string' || typeof record['ruleVersion'] !== 'string') return undefined
+  // A SEQUENCE THE READER CANNOT ADD UP IS NOT THIS RECORD'S. A record carrying a malformed series is
+  // refused rather than read with the series dropped: the figure that plots it would then draw from
+  // keys this reader silently discarded, and a chart of a sequence nobody can reconstruct is worse
+  // than no chart.
+  const series = readSeries(record['series'])
+  if (record['series'] !== undefined && series === undefined) return undefined
   return {
     resultId: typeof record['resultId'] === 'string' ? record['resultId'] : 'result:unknown',
     version: typeof record['version'] === 'number' ? record['version'] : 1,
@@ -185,7 +250,40 @@ export function readResultVersion(value: unknown): ResultVersion | undefined {
       improvementPct: numbers['improvementPct'] as number,
       values,
     },
+    ...(series === undefined ? {} : { series }),
   }
+}
+
+/** One record's `series` field, or undefined when the value is absent or not a sequence. */
+function readSeries(value: unknown): StudySeries | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const series = value as Record<string, unknown>
+  const axisLabel = series['axisLabel']
+  const unit = series['unit']
+  const bucket = numberArray(series['bucket'])
+  if (typeof axisLabel !== 'string' || typeof unit !== 'string' || bucket === undefined) return undefined
+  const rawArms = series['arms']
+  if (rawArms === null || typeof rawArms !== 'object' || Array.isArray(rawArms)) return undefined
+  const arms: Record<string, ReadonlyArray<number>> = {}
+  for (const [arm, values] of Object.entries(rawArms as Record<string, unknown>)) {
+    const parsed = numberArray(values)
+    // EVERY ARM IS AS LONG AS THE AXIS. A series whose arms disagree with its own axis plots positions
+    // that have no observation, which is the shape a mis-sliced sequence takes.
+    if (parsed === undefined || parsed.length !== bucket.length) return undefined
+    arms[arm] = parsed
+  }
+  return Object.keys(arms).length === 0 ? undefined : { axisLabel, unit, bucket, arms }
+}
+
+/** An array of finite numbers, or undefined when the value is not one. */
+function numberArray(value: unknown): ReadonlyArray<number> | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: number[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) return undefined
+    out.push(entry)
+  }
+  return out
 }
 
 /** The metric key the run's record carries, or undefined when there is no record. */

@@ -16,6 +16,7 @@ import type { ExecCtx, ResearchProseRequest, ResearchProseWriter } from '../src/
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 import { experimentStudy } from '../src/runner/platoon-sim.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
+import { platoonAdapter } from '../src/runner/study-adapter.ts'
 
 interface AgendaShape {
   readonly phases: ReadonlyArray<string>
@@ -72,6 +73,9 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
       studyPlan: DEFAULT_PLAN,
       planSource: 'default',
       timestamp: 1_700_000_000_000,
+      // THE STUDY THE RUN IS CONDUCTED AS: a context built by hand resolves it here, exactly as
+      // `createRunContext` does for a driven run, because every step reports the study through it.
+      adapter: platoonAdapter(experimentStudy()),
     },
     ...(writer !== undefined ? { proseWriter: writer } : {}),
   }

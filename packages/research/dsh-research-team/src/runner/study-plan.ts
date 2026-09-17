@@ -24,6 +24,7 @@ import type { MethodImplementation } from './implementations.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, commitmentFrom } from './prediction-gate.ts'
 import { MEASURED_METRIC } from './platoon-sim.ts'
+import { LATENCY_METRIC } from './service-latency-sim.ts'
 
 /** One section of the paper's skeleton, in the order it is written. */
 export interface PlanSection {
@@ -140,6 +141,55 @@ export const DEFAULT_PLAN: StudyPlan = {
  */
 export function planForDirection(direction: string): StudyPlan {
   return { ...DEFAULT_PLAN, direction }
+}
+
+/**
+ * The second study this repository ships: request coalescing against tail latency.
+ *
+ * A SECOND PLAN RATHER THAN A SECOND DIRECTION, because it is a different study and not a variation
+ * of the first: another field, another measured quantity in another unit with the OPPOSITE direction,
+ * another mechanism, and a claim whose prediction says the quantity FALLS. A deployment states its
+ * own; this one exists so a run can be conducted as something other than the platoon study, which is
+ * the only way to tell whether the pipeline is a capability or that study's program.
+ *
+ * ITS CLAIM IS GRADEABLE BY THE SAME GATE as the first one's, which is the property that makes it a
+ * test of the pipeline rather than a bypass: the prediction names the measured quantity with a
+ * declared phrasing, states `shall lower` for a `decrease` declaration, anchors the threshold with
+ * `at least`, and states its 30% exactly once.
+ */
+export const LATENCY_PLAN: StudyPlan = {
+  implementationId: 'service-latency-coalescing',
+  title: 'Coalescing Requests Lowers the Tail Latency of a Single-Server Service',
+  field: 'computer systems performance',
+  direction: 'request coalescing and tail latency in a single-server service',
+  outline: [
+    { id: 'abstract', heading: 'Abstract' },
+    { id: 'introduction', heading: 'Introduction' },
+    { id: 'method', heading: 'Method' },
+    { id: 'experiments', heading: 'Experiments' },
+    { id: 'results', heading: 'Results' },
+    { id: 'conclusion', heading: 'Conclusion' },
+    { id: 'references', heading: 'References' },
+  ],
+  claim: {
+    id: 'claim-coalescing-tail-latency',
+    ref: 'coalescing arrivals within a declared window lowers the 95th-percentile request latency of a single-server service',
+    assertion:
+      'Coalescing arrivals within a declared window lowers the 95th-percentile request latency of a single-server service.',
+    essentialDifference:
+      'the coalesced arm batches every arrival within 40 ms of a batch\'s first request, up to 8'
+      + ' requests, and serves the batch for as long as its slowest member, against serving each'
+      + ' request as it arrives',
+    experimentToFalsify:
+      'Serve the same declared arrival trace with and without coalescing and compare the'
+      + ' 95th-percentile request latency.',
+    prediction:
+      'the coalesced service shall lower the 95th-percentile latency by at least 30%',
+  },
+  metric: LATENCY_METRIC,
+  // Matching the sentence above, which says the quantity FALLS. A declared commitment that disagreed
+  // with the claim's own words would be worse than none at all — the C gate refuses that pair.
+  commitment: { direction: 'decrease', bound: 'at-least', thresholdPct: 30 },
 }
 
 /** Read a nested object field, or an empty record when it is absent or not an object. */

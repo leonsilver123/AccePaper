@@ -50,6 +50,7 @@ import {
 import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
 import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
 import { experimentStudy } from './platoon-sim.ts'
+import { requireStudyAdapter } from './study-adapter.ts'
 import { DEFAULT_PLAN, planForDirection, requirePlan } from './study-plan.ts'
 import type { StudyPlan } from './study-plan.ts'
 import type {
@@ -541,13 +542,18 @@ export function createRunContext(
   // treats an empty key as unbindable rather than assuming a quantity. `claimMaterial` starts
   // empty for the same reason: A2 fills it, and until then the A channel reviews an empty claim
   // and reports every check as unmet rather than inventing material.
+  const study = experimentStudy()
   return {
     predictionText: '',
     claimId: '',
     claimRef: '',
     metricKey: '',
     claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
-    study: experimentStudy(),
+    study,
+    // RESOLVED WITH THE CONTEXT, so a plan this process cannot present is refused before the first
+    // step rather than four steps in, by the step that first needed a figure. `A2-claim` re-resolves
+    // it after the Case Pack, because the pack is what supplies the platoon study's own scenarios.
+    adapter: requireStudyAdapter(plan, study),
     studyPlan: plan,
     planSource,
     timestamp,

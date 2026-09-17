@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-the-artifact-names-the-revision-that-produced-it.md
-2026-09-16-the-artifact-names-the-revision-that-produced-it.md: d5d5acb288476e9b44c9494559714e6d2ca3df82
-2026-09-16-the-artifact-names-the-revision-that-produced-it.zh.md: 21df0e7972106c93d5ebe11b07ee14e7ba24465d
+2026-09-16-the-artifact-names-the-revision-that-produced-it.md: 31c35f592ef32e445bc5b033ff8f6f076c9795a8
+2026-09-16-the-artifact-names-the-revision-that-produced-it.zh.md: 031d5c97c528a37058b11282f8f8e239ec717af6

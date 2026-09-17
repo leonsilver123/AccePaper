@@ -79,12 +79,13 @@ import { commitmentFrom } from './prediction-gate.ts'
 import type { ClaimMaterial } from './redteam-review.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import type { PlatoonStudy } from './platoon-sim.ts'
+import type { StudyAdapter, StudyProse } from './study-adapter.ts'
+import { platoonAdapter, requireStudyAdapter } from './study-adapter.ts'
 import { DEFAULT_PLAN } from './study-plan.ts'
 import type { PlanSection, StudyPlan } from './study-plan.ts'
 
 import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
-import type { AblationDefinition, RoadmapGraph } from '@deepseek-ai/dsh-research-tools'
 import { DirectResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
 import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
@@ -149,35 +150,16 @@ import type { ChannelVerdict } from './convergence.ts'
 import { buildRevisionRecord } from './rebuttal.ts'
 import type { RebuttalPoint } from './rebuttal.ts'
 import {
-  ABLATION_VARIANT_KINDS,
-  ablationRunKey,
-} from '@deepseek-ai/dsh-research-tools'
-import type {
-  AblationExecutor,
-  AblationRunRequest,
-  AblationRunResult,
-} from '@deepseek-ai/dsh-research-tools'
-import {
-  ABLATION_MODULES,
-  EXPERIMENT_RULE_VERSION,
-  SIMULATION_INPUTS,
-  ablationStudy,
-  boundaryTest,
-  comparePlatoons,
   HOMOGENEOUS_PLATOON_COMPOSITION,
-  measureStudy,
   MIXED_PLATOON_COMPOSITION,
-  MODEL_EQUATIONS,
   experimentStudy,
-  runPlatoon,
   studyFromPack,
 } from './platoon-sim.ts'
 import { resolveImplementation } from './implementations.ts'
 import {
   RESULT_VERSION_SLUG,
-  measuredFromComparison,
   readResultVersion,
-  resultVersionOf,
+  resultVersionFrom,
 } from './result-version.ts'
 import type { MeasuredOutcome, ResultSource } from './result-version.ts'
 import { sectionEvidenceFor } from './section-evidence.ts'
@@ -187,8 +169,7 @@ import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
 import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from './argument-plan.ts'
-import { checkPresentationPlan, shippedPresentationPlan } from './presentation-plan.ts'
-import type { PlannedFigure } from './presentation-plan.ts'
+import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentCompiler } from './document-compile.ts'
@@ -295,6 +276,18 @@ export interface RunContext {
    */
   study: PlatoonStudy
   /**
+   * The study this run is conducted as, resolved from the plan and carried here.
+   *
+   * EVERY EXECUTOR THAT REPORTS THE STUDY READS IT THROUGH THIS rather than knowing which study it
+   * is: the baseline's arms, the experiment's provenance block, the figures, the table, the diagram
+   * and the fallback prose all come from it, so a second study is a second adapter rather than a
+   * branch in each of those four steps. See `study-adapter.ts`.
+   *
+   * It is set with {@link RunContext.study}, because the platoon adapter is built over the scenarios
+   * that field holds; a run whose Case Pack supplies them gets an adapter over the pack's study.
+   */
+  adapter: StudyAdapter
+  /**
    * The claim's DECLARED commitment: which way its quantity should move, whether it caps the change,
    * and by how much — the three fields the C gate grades.
    *
@@ -325,6 +318,24 @@ export interface RunContext {
   planSource: 'caller' | 'default'
   /** The fixed timestamp used across the run (set by the driver). */
   timestamp: number
+}
+
+/**
+ * Point a run context at a study, rebuilding the adapter over it.
+ *
+ * THE TWO ARE ONE ASSIGNMENT because they are one fact: every step that reports the study reads it
+ * through the adapter, so replacing `study` alone leaves the run measuring the study the context was
+ * built over while its artifacts name the one it was given. `A2-claim` is where this happens in
+ * production — the Case Pack supplies the scenarios the platoon study runs — and a caller that
+ * switches studies for a scenario does the same.
+ *
+ * @param ctx - the run context to repoint.
+ * @param study - the scenarios this run is now conducted over.
+ * @throws {Error} when the plan the context carries cannot be conducted as that study.
+ */
+export function setRunStudy(ctx: RunContext, study: PlatoonStudy): void {
+  ctx.study = study
+  ctx.adapter = requireStudyAdapter(ctx.studyPlan, study)
 }
 
 /** One prose-generation request handed to a {@link ResearchProseWriter}. */
@@ -927,8 +938,8 @@ function measureOutcomeWithSource(ctx?: ExecCtx): {
   // No record: this step was driven without its producer, so it measures the study itself and the
   // artifact it writes says so. In a driven run this branch is a defect, and `resultSource` on the
   // artifacts is what makes it visible rather than an assumption that the numbers agree.
-  const comparison = comparePlatoons(ctx?.runCtx.study ?? experimentStudy())
-  return { measured: measuredFromComparison(comparison), source: 'recomputed', contentHash: '' }
+  const adapter = ctx?.runCtx.adapter ?? platoonAdapter(experimentStudy())
+  return { measured: adapter.measure().measured, source: 'recomputed', contentHash: '' }
 }
 
 /**
@@ -958,94 +969,6 @@ function measureOutcome(ctx?: ExecCtx): MeasuredOutcome {
  * @param referenceCount - entries the draft carries for the reference list.
  * @returns the section body.
  */
-/**
- * The sentence that states what the run measured and what it did to the claim.
- *
- * ONE SENTENCE, DERIVED FROM THE MEASUREMENT, and the same sentence in every section that reports the
- * outcome. The delivered paper's sections each described the result in their own words and none of
- * them said the measurement contradicted the claim, so the words here come from the run: the sign of
- * the change, its magnitude, and what the argument plan says it did to the claim.
- *
- * @param argumentPlan - the plan this manuscript is written under.
- * @param measured - the run's own measurement.
- * @returns the sentence, without a trailing period.
- */
-function outcomeSentence(
-  argumentPlan: ArgumentPlan,
-  measured: ReturnType<typeof measureOutcome>,
-): string {
-  const percent = Math.abs(measured.improvementPct).toFixed(2)
-  const movement = measured.improvementPct >= 0 ? 'rose' : 'fell'
-  const verdict = argumentPlan.outcome === 'refuted'
-    ? 'which contradicts the claim this study committed to test'
-    : argumentPlan.outcome === 'supported'
-      ? 'which is the change the claim predicted'
-      : 'which falls short of the change the claim predicted'
-  return `the platoon minimum time-to-collision ${movement} by ${percent}%, ${verdict}`
-}
-
-function bodyTextFor(
-  id: string,
-  plan: StudyPlan,
-  measured: ReturnType<typeof measureOutcome>,
-  citations: ReadonlyArray<CitationUse>,
-  argumentPlan: ArgumentPlan,
-  citable: ReadonlyArray<CitableFloat>,
-): string {
-  // THE PROSE NAMES THE FLOATS THE DRAFT CARRIES. A float nothing refers to is a float the paper did
-  // not need — the delivered paper carries six of them — and the A gate refuses a draft whose prose
-  // never names one it carries. A section that reports results therefore points at the figure, the
-  // table and the diagram it is reporting, and the Method section points at the equations it states.
-  const named = (kind: string): string =>
-    citable.filter(item => item.label.toLowerCase().startsWith(kind))
-      .map(item => item.label)
-      .join(', ')
-  const study = experimentStudy()
-  const hv = study.variant.vehicleClasses.HV
-  const av = study.variant.vehicleClasses.AV
-  const inputs = SIMULATION_INPUTS
-  switch (id) {
-    case 'abstract':
-      return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency. Under the declared configuration '
-        + `${outcomeSentence(argumentPlan, measured)}.`
-    case 'introduction':
-      // THE LITERATURE POSITION IS A SENTENCE, NOT A REFERENCE LIST. This section used to state the
-      // claim and the prediction and say nothing about what is already known — the quality baseline
-      // reported exactly that, on this paper, as `no-literature-position`.
-      return `This work targets the claim: ${plan.claim.ref}. The falsifiable prediction is: ${plan.claim.prediction}. ${priorWorkSentence(citations)}`
-    case 'method':
-      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon. The equations this section states (${named('equation')}) are the model's own, and the parameters they carry are the ones the Case Pack declares.`
-    case 'experiments':
-      return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baseline.toFixed(2)} s for the homogeneous platoon and ${measured.variant.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${(measured.values['baselineTtcRatePct'] ?? 0).toFixed(2)}% and ${(measured.values['variantTtcRatePct'] ?? 0).toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
-    case 'results':
-      return `The comparison the claim is about is drawn in ${named('figure')} and its two values are listed in ${named('table')}; ${named('figure 2') === '' ? 'the research roadmap' : named('figure 2')} shows how the study reaches it. The measurement is that `
-        + `${outcomeSentence(argumentPlan, measured)}. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.`
-    case 'conclusion':
-      return `Under the declared configuration ${outcomeSentence(argumentPlan, measured)}, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
-    case 'references':
-      // The body states what the draft actually carries. It used to describe the LANDSCAPE SCAN's
-      // record count, which is what the reference list used to be; the list is now the sources the
-      // paper cites, and the sentence says that.
-      return citations.length === 0
-        ? 'No source is cited: this run holds no reviewed judgement binding one to its statements.'
-        : `The ${String(citations.length)} reviewed source(s) this paper cites, listed below.`
-    default:
-      return 'This section carries no generated content in this wave.'
-  }
-}
-
-/**
- * The argument plan for a manuscript assembled from the outline rather than from a draft.
- *
- * A DRAFT WITH SECTIONS AND NO PLAN IS REFUSED at E1, because there is nothing to judge its sections
- * against; a draft with NEITHER is the fallback path, and this is the plan its sections are written
- * under. Both readers — the fallback body writer and E1's check — call this, so the plan a section was
- * written under cannot differ from the plan it is judged by.
- *
- * @param plan - the study plan.
- * @param ctx - the step's context, which carries the measurement and what the claim committed to.
- * @returns the plan, derived from the run rather than configured.
- */
 function derivedArgumentPlan(plan: StudyPlan, ctx: ExecCtx): ArgumentPlan {
   const commitment = ctx.runCtx.commitment
   return argumentPlanOf({
@@ -1071,28 +994,53 @@ function defaultBodySections(
   ctx: ExecCtx,
   citations: ReadonlyArray<CitationUse> = [],
 ): ReadonlyArray<ManuscriptSection> {
-  const measured = measureOutcome(ctx)
-  const argumentPlan = derivedArgumentPlan(plan, ctx)
   return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
-    bodyText: bodyTextFor(
-      s.id,
-      plan,
-      measured,
-      citations,
-      argumentPlan,
-      // The roster this path's prose is written against: the same labels D1 planned, read off the
-      // figure plan the run holds. A fallback whose sections named nothing would be refused by the
-      // A gate for carrying floats nothing refers to.
-      citableFloats(
-        planFloats(Array.isArray(readInput(ctx, 'figure-plan')?.figures)
-          ? (readInput(ctx, 'figure-plan')?.figures as ReadonlyArray<FigurePlanEntry>)
-          : []),
-        MODEL_EQUATIONS,
-      ),
-    ),
+    // THE STUDY WRITES ITS OWN SECTIONS. Which nouns a result sentence uses, what the method section
+    // says was run, and what the experiments section reports are facts about the study — so they come
+    // from the adapter rather than from a template this file would have to keep in step with it.
+    bodyText: ctx.runCtx.adapter.body(s.id, proseContext(plan, ctx, citations)),
   }))
+}
+
+/**
+ * What one section's fallback prose is written from.
+ *
+ * The roster is the labels D1 planned, read off the figure plan the run holds: a fallback whose
+ * sections named nothing would be refused by the A gate for carrying floats nothing refers to. The
+ * prior-work sentence comes from the citation bindings, with one marker per source, so the fallback
+ * prose cites what the run actually reviewed rather than asserting a position.
+ *
+ * @param plan - the research the run carries.
+ * @param ctx - the step's context.
+ * @param citations - the bindings this run holds, or none where this path has none.
+ * @returns the input the adapter's `body` takes.
+ */
+function proseContext(
+  plan: StudyPlan,
+  ctx: ExecCtx,
+  citations: ReadonlyArray<CitationUse>,
+): StudyProse {
+  const figurePlan = readInput(ctx, 'figure-plan')
+  const floats = planFloats(
+    Array.isArray(figurePlan?.figures) ? (figurePlan.figures as ReadonlyArray<FigurePlanEntry>) : [],
+  )
+  // THE NUMBERED ITEMS THE PROSE MAY NAME: this draft's floats, then the study's equations, which
+  // E1 states inside the method section. A section that names an equation names one this run's own
+  // implementation computed — see `citableFloats`.
+  const citable = citableFloats(floats, ctx.runCtx.adapter.implementation.equations)
+  return {
+    plan,
+    measured: measureOutcome(ctx),
+    argumentPlan: derivedArgumentPlan(plan, ctx),
+    citations,
+    named: (kind: string) =>
+      citable.filter(item => item.label.toLowerCase().startsWith(kind))
+        .map(item => item.label)
+        .join(', '),
+    priorWork: priorWorkSentence(citations),
+  }
 }
 
 // ── Real-tool executors (real tool function, synthetic fixture input) ───────────
@@ -1422,7 +1370,10 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // selected input, so they take precedence; the module's own scenarios are the fallback for a
   // run with no pack. A pack whose scenarios this study cannot read falls back too, and the
   // artifacts then record the module's scenarios rather than pretending the pack was used.
-  ctx.runCtx.study = studyFromPack(packScenario) ?? experimentStudy()
+  // ...and the adapter is rebuilt over it in the same assignment, from the EFFECTIVE plan A2 just
+  // wrote: a plan whose measured quantity the pack changed must not keep the adapter of the quantity
+  // it no longer measures.
+  setRunStudy(ctx.runCtx, studyFromPack(packScenario) ?? experimentStudy())
   // The A channel reviews THIS material, so it is populated here, before A2's own gate runs.
   // Every field is what the claim actually states: a field the pack omits stays empty and the
   // review reports the gap rather than smoothing it over.
@@ -1746,7 +1697,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         fixture: methodSource === 'fixture',
         stepId: 'B1-method',
         slug: 'method-spec',
-        methodId: SCENARIO.variantIdentity,
+        methodId: ctx.runCtx.adapter.arms.variant.identity,
         family,
         ...(modelDeclaredFamily === undefined ? {} : { modelDeclaredFamily }),
         claimRef,
@@ -1871,58 +1822,6 @@ function checkDatasetFiles(): ReadonlyArray<FileCheck> {
   })
 }
 
-/**
- * The provenance of the demand every experiment executor runs against.
- *
- * The traffic experiment used to run on a demand array written into the source, so
- * an artifact reporting a measured reduction said nothing about where the demand
- * came from. Each experiment artifact now carries this block, which names the
- * measured series, its hash, and the split between what the series measured and
- * what the study assumed on top of it. It is the same object in C1, B3 and C3, so
- * the three cannot describe different inputs.
- *
- * @param plan - the run's plan, which states the quantity this study measures.
- * @param study - the scenarios the measurement ran.
- * @returns the demand evidence block attached to every experiment artifact.
- */
-function studyEvidence(
-  plan: StudyPlan,
-  study: PlatoonStudy = experimentStudy(),
-): Record<string, unknown> {
-  return {
-    source: 'declared-scenario',
-    study: {
-      baselineComposition: study.baseline.composition,
-      variantComposition: study.variant.composition,
-      initialSpeedMps: study.variant.initialSpeedMps,
-      desiredSpeedMps: study.variant.desiredSpeedMps,
-      initialGapM: study.variant.initialGapM,
-      vehicleClasses: study.variant.vehicleClasses,
-      leader: study.variant.leader,
-    },
-    designInputs: SIMULATION_INPUTS,
-    // WHICH PARAMETERS CAME FROM THE PACK AND WHICH THIS STUDY DERIVED. The pack's vehicle rows
-    // carry a reaction delay, a desired headway and a deceleration limit; they carry NO look-ahead
-    // horizon, so `studyFromPack` derives one as the vehicle's own reaction delay. Saying "each
-    // class carries the pack's declared parameters" over that derivation attributed a
-    // loader-invented number to the pack — and once the horizon became a real mechanism rather
-    // than a subtraction, it was worth 0.72 s of the measured effect. An audit found the wording.
-    derivedParameters: ['lookAheadHorizonSeconds (the vehicle\'s own reaction delay; the pack declares no horizon)'],
-    ruleVersion: EXPERIMENT_RULE_VERSION,
-    // What this measurement is and what it is NOT. An artifact that states only "an
-    // experiment ran" invites the reader to assume it tested the claim; naming both is what
-    // lets them check, and the previous study's artifact had to say its measurement was
-    // about an intersection while its claim was about a platoon.
-    measures: plan.metric.key,
-    alsoMeasured: ['ttc-lt-1.5s-rate-pct', 'mean-time-headway-seconds', 'mean-jerk-mps3', 'string-stability-index'],
-    doesNotMeasure: 'field crash frequency, any external SOTA, or any quantity outside the declared simulation',
-    note:
-      'the scenario is DECLARED by the Case Pack and the simulation inputs are declared '
-      + 'constants; there is no measured dataset behind these numbers, and no parameter '
-      + 'was fitted to the experiment outcome',
-  }
-}
-
 function b2Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
   const checks = checkDatasetFiles()
@@ -1942,7 +1841,7 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
         split: DATASET.split,
         source: DATASET.source,
         license: DATASET.license,
-        methodRef: (method?.methodId as string | undefined) ?? SCENARIO.variantIdentity,
+        methodRef: (method?.methodId as string | undefined) ?? ctx.runCtx.adapter.arms.variant.identity,
         files: checks,
         // The descriptor states what is ON DISK, not what was intended.
         acquisition: acquired
@@ -2008,11 +1907,13 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
 function b3Executor(ctx: ExecCtx): Record<string, unknown> {
   const method = readInput(ctx, 'method-spec')
   const dataset = readInput(ctx, 'dataset')
-  const study = ctx.runCtx.study
-  // The baseline is MEASURED, not declared: the homogeneous platoon is simulated under the
-  // study's own declared conditions, so the reference row is a number this study produced.
-  const comparison = comparePlatoons(study)
-  const measuredImprovementPct = comparison.relativeImprovementPct
+  const adapter = ctx.runCtx.adapter
+  const arms = adapter.arms
+  // The baseline is MEASURED, not declared: this study's baseline arm is run under the study's own
+  // declared conditions, so the reference row is a number this study produced. WHICH study, and what
+  // its arm is called, comes from the adapter — the step does not know.
+  const { measured } = adapter.measure()
+  const measuredImprovementPct = measured.improvementPct
 
   return {
     'baseline-results': tagArtifact(
@@ -2021,30 +1922,36 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         stepId: 'B3-baseline',
         slug: 'baseline-results',
         baseline: {
-          identity: SCENARIO.baselineIdentity,
-          protocol: 'simulate the homogeneous platoon under the study’s declared disturbance and read its minimum time-to-collision',
-          metric: { name: planOf(ctx).metric.key, direction: 'higher is better' },
-          // The input this NUMBER came from. The baseline is measured by running the
-          // simulation over the Case Pack's declared scenario, which is not the dataset B2
-          // registered; naming B2's descriptor here would attribute the measurement to a
-          // dataset no arithmetic in this step touches.
-          datasetRef: SCENARIO.datasetId,
+          identity: arms.baseline.identity,
+          protocol: `run this study's baseline arm under its declared conditions and read ${planOf(ctx).metric.key}`,
+          metric: {
+            name: planOf(ctx).metric.key,
+            direction: planOf(ctx).metric.direction === 'higher-is-better' ? 'higher is better' : 'lower is better',
+          },
+          // The input this NUMBER came from. The baseline is measured by running the study over its
+          // declared scenario or trace, which is not the dataset B2 registered; naming B2's
+          // descriptor here would attribute the measurement to a dataset no arithmetic here touches.
+          datasetRef: adapter.sourceRef,
           registeredDatasetRef: (dataset?.datasetId as string | undefined) ?? null,
-          methodRef: (method?.methodId as string | undefined) ?? SCENARIO.baselineIdentity,
+          methodRef: (method?.methodId as string | undefined) ?? arms.baseline.identity,
         },
         measured: {
-          baselineMinTtcSeconds: comparison.baseline.minTtcSeconds,
-          variantMinTtcSeconds: comparison.variant.minTtcSeconds,
+          // THE RECORD'S OWN SHAPE, not a per-study set of fields: the arms are named by the metric
+          // and whatever else the implementation reported travels under its own names, so a reader of
+          // this artifact does not have to know which study produced it.
+          metricKey: measured.metricKey,
+          unit: measured.unit,
+          baseline: measured.baseline,
+          variant: measured.variant,
           variantImprovementPct: measuredImprovementPct,
-          baselineTtcLt1_5RatePct: comparison.baseline.ttcLt1_5RatePct,
-          variantTtcLt1_5RatePct: comparison.variant.ttcLt1_5RatePct,
-          source: 'platoon-sim (both platoons simulated under the declared disturbance)',
-          study: studyEvidence(planOf(ctx), study),
+          values: measured.values,
+          source: `${adapter.implementation.id} (both arms run under the declared conditions)`,
+          study: adapter.describe(planOf(ctx)),
         },
-        beatsBaselineWhen: `variant minimum time-to-collision moves ${thresholdLabel(ctx.runCtx.commitment)} against the baseline's, in the claim's declared direction`,
-        note: 'baseline MEASURED by simulating the homogeneous platoon; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
+        beatsBaselineWhen: `the variant's ${measured.metricKey} moves ${thresholdLabel(ctx.runCtx.commitment)} against the baseline's, in the claim's declared direction`,
+        note: 'baseline MEASURED by running this study\'s baseline arm; the variant row is the same run under the same conditions, so the comparison is internally consistent. Ablation measurements are NOT part of baseline (they belong to C3-boundary)',
       },
-      B3_PRODUCER,
+      adapter.producers.baseline,
       'local_computation',
     ),
     'sota-comparison': tagArtifact(
@@ -2054,8 +1961,19 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         slug: 'sota-comparison',
         targetMetric: planOf(ctx).metric.key,
         rows: [
-          { method: 'HV-HV-HV (this study baseline)', minTtcSeconds: comparison.baseline.minTtcSeconds, source: 'measured by platoon-sim' },
-          { method: 'HV-AV-HV (this study variant)', minTtcSeconds: comparison.variant.minTtcSeconds, measuredImprovementPct, source: 'measured by platoon-sim' },
+          {
+            method: `${arms.baseline.label} (this study baseline)`,
+            value: measured.baseline,
+            unit: measured.unit,
+            source: `measured by ${adapter.implementation.id}`,
+          },
+          {
+            method: `${arms.variant.label} (this study variant)`,
+            value: measured.variant,
+            unit: measured.unit,
+            measuredImprovementPct,
+            source: `measured by ${adapter.implementation.id}`,
+          },
         ],
         // No external SOTA row is recorded, and THAT is stated rather than filled in.
         // Published minimum-TTC figures are prose in papers, not machine-readable fields, so
@@ -2063,10 +1981,10 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
         // of the text. Recording a guess here would manufacture the comparison this
         // step exists to ground.
         anchoring: 'none',
-        sotaGapClaim: "the variant's margin is compared against this study's own homogeneous platoon; a claim against PUBLISHED SOTA remains unanchored",
-        note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a minimum-TTC figure has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
+        sotaGapClaim: `the variant's margin is compared against this study's own ${arms.baseline.label} arm; a claim against PUBLISHED SOTA remains unanchored`,
+        note: 'the two rows are this study’s own measurements. No published-SOTA row is recorded: the literature channel retrieves real records, but a figure for this quantity has to be read out of a paper by a human or extracted by a reader pipeline, and inventing one would manufacture the very comparison this step grounds.',
       },
-      B3_PRODUCER,
+      adapter.producers.baseline,
       'local_computation',
     ),
   }
@@ -2077,16 +1995,18 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
  *  mvp artifact and the gate evidence are同源 (T19-S business coherence). */
 function c1Executor(ctx: ExecCtx): Record<string, unknown> {
   const { claimId, claimRef, predictionText } = canonicalOf(ctx)
-  // The experiment is RUN, not looked up: both policies are executed against the
-  // study's demand profile and the prediction is adjudicated against the measured
-  // reduction. The same call feeds the C gate (verdict.ts), so the artifact and the
-  // verdict are the same measurement rather than two tables that might disagree.
+  const adapter = ctx.runCtx.adapter
+  const measurement = adapter.measure()
+  // The experiment is RUN, not looked up: both arms are executed against the study's declared
+  // conditions and the prediction is adjudicated against the measured change. The same measurement
+  // feeds the C gate (verdict.ts), so the artifact and the verdict are one run rather than two
+  // tables that might disagree.
   const verdict = evaluatePrediction({
     predictionText,
     metric: planOf(ctx).metric,
     declaredMetricKey: ctx.runCtx.metricKey,
     commitment: ctx.runCtx.commitment,
-    measure: () => measureStudy(ctx.runCtx.study),
+    measure: () => measurement.prediction,
   })
   if (verdict.kind === 'unbindable') {
     // Fail-closed and symmetric with the C gate: an unbindable claim is not executed against,
@@ -2096,12 +2016,14 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
       + '(fail-closed: no adjudicable prediction ⇒ no pass)',
     )
   }
-  const comparison = comparePlatoons(ctx.runCtx.study)
   // The record every later step measures against. Written by the step that MEASURED, read by the
   // steps that report — see `result-version.ts` for what recomputing beside it cost.
-  const resultVersion = resultVersionOf(
-    comparison,
+  const resultVersion = resultVersionFrom(
+    measurement.measured,
     ctx.runCtx.metricKey === '' ? planOf(ctx).metric.key : ctx.runCtx.metricKey,
+    measurement.ruleVersion,
+    1,
+    measurement.series,
   )
   return {
     'mvp-results': tagArtifact(
@@ -2113,14 +2035,14 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         claimId,
         predictionText,
         experiment: {
-          source: 'platoon-sim (Intelligent Driver Model, three-vehicle platoon)',
+          source: `${adapter.implementation.id} (${adapter.implementation.algorithm})`,
           // What this experiment measures and what it does NOT. An artifact that states only
           // "an experiment ran" invites the reader to assume it tested the claim; naming the
           // quantity is what lets them check.
           measures: planOf(ctx).metric.key,
-          doesNotMeasure: 'field crash frequency, any external SOTA, or any road layout beyond one lane',
-          ruleVersion: EXPERIMENT_RULE_VERSION,
-          study: studyEvidence(planOf(ctx), ctx.runCtx.study),
+          doesNotMeasure: adapter.describe(planOf(ctx))['doesNotMeasure'],
+          ruleVersion: measurement.ruleVersion,
+          study: adapter.describe(planOf(ctx)),
         },
         outcome: {
           supportsPrediction: verdict.supportsPrediction,
@@ -2132,19 +2054,20 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
           detail: verdict.detail,
         },
         observed: {
-          baselineMinTtcSeconds: comparison.baseline.minTtcSeconds,
-          variantMinTtcSeconds: comparison.variant.minTtcSeconds,
+          // THE RECORD'S OWN NUMBERS, so an experiment artifact means the same thing whatever study
+          // produced it: the arms under the metric's name, the change, and whatever else the
+          // implementation reported under the names it gave them.
+          metricKey: measurement.measured.metricKey,
+          unit: measurement.measured.unit,
+          baseline: measurement.measured.baseline,
+          variant: measurement.measured.variant,
           improvementPct: verdict.improvementPct,
           thresholdPct: verdict.thresholdPct,
-          baselineTtcLt1_5RatePct: comparison.baseline.ttcLt1_5RatePct,
-          variantTtcLt1_5RatePct: comparison.variant.ttcLt1_5RatePct,
-          meanTimeHeadwaySeconds: comparison.variant.meanTimeHeadwaySeconds,
-          meanJerkMps3: comparison.variant.meanJerkMps3,
-          stringStabilityIndex: comparison.variant.stringStabilityIndex,
+          values: measurement.measured.values,
         },
-        note: 'mvp-results measured by simulating both platoons under the same declared disturbance; a refuted prediction is recorded as refuted and does not stop the run',
+        note: `mvp-results measured by running ${adapter.implementation.id}'s two arms under the same declared conditions; a refuted prediction is recorded as refuted and does not stop the run`,
       },
-      C1_PRODUCER,
+      adapter.producers.mvp,
       'local_computation',
     ),
     [RESULT_VERSION_SLUG]: tagArtifact(
@@ -2158,7 +2081,7 @@ function c1Executor(ctx: ExecCtx): Record<string, unknown> {
         resultSource: 'recomputed',
         note: 'the run’s measured result, written by the step that measured it; every later step reports these numbers rather than measuring again',
       },
-      C1_PRODUCER,
+      adapter.producers.mvp,
       'local_computation',
     ),
   }
@@ -2217,125 +2140,24 @@ function c2Executor(ctx: ExecCtx): Record<string, unknown> {
   }
 }
 
-/**
- * The measured effect of removing each of the AV's two mechanisms, one at a time.
- *
- * The Case Pack names both ablations; this runs them. Each row removes exactly one mechanism
- * and keeps the rest, so the difference against the full variant is attributable to that
- * mechanism. The numbers are measured, and the Case Pack's own mock ablation figures are
- * NOT cited here — they belong to no run.
- *
- * @param study - the study to ablate.
- * @returns one row per declared module, plus the full variant for comparison.
- */
-function moduleAblations(study: PlatoonStudy): Record<string, unknown> {
-  const full = runPlatoon(study.variant)
-  const rows = ABLATION_MODULES.map((moduleRemoved) => {
-    const ablated = ablationStudy(study, moduleRemoved)
-    const measured = ablated === undefined ? undefined : runPlatoon(ablated.variant)
-    return {
-      moduleRemoved,
-      measured: measured !== undefined,
-      minTtcSeconds: measured?.minTtcSeconds ?? null,
-      // Positive means removing the module RAISED the safety margin, i.e. the module was
-      // costing margin. A reader must be able to see the sign without doing arithmetic.
-      changeVsFullVariantSeconds: measured === undefined ? null : measured.minTtcSeconds - full.minTtcSeconds,
-      stringStabilityIndex: measured?.stringStabilityIndex ?? null,
-    }
-  })
-  return {
-    fullVariantMinTtcSeconds: full.minTtcSeconds,
-    rows,
-    note: 'each row removes ONE mechanism from the variant platoon and re-simulates; the baseline platoon is untouched by an ablation',
-  }
-}
 
-/**
- * The scope test the Case Pack's boundary file states, measured rather than quoted.
- *
- * The pack asserts that the claim is limited to steady free flow and that stop-and-go breaks
- * it. That is a falsifiable statement about the study, so it is checked by re-running the
- * variant under stop-and-go forcing and comparing the two margins. The result is whatever it
- * is, and the artifact reports both numbers and the ratio so a reader can see the arithmetic.
- *
- * @param study - the study whose variant is re-run.
- * @returns the free-flow and stop-and-go margins, their ratio, and whether the scope binds.
- */
-function boundaryProbe(study: PlatoonStudy): Record<string, unknown> {
-  const probe = boundaryTest(study)
-  return {
-    freeFlowMinTtcSeconds: probe.freeFlow.minTtcSeconds,
-    stopAndGoMinTtcSeconds: probe.stopAndGo.minTtcSeconds,
-    marginRatio: probe.marginRatio,
-    scopeLimited: probe.scopeLimited,
-    rule: `scope is limited to steady free flow when the stop-and-go margin falls below ${SIMULATION_INPUTS.boundaryMarginRatio.toFixed(2)}x the free-flow margin`,
-    note: 'both margins are MEASURED by the same simulator under two declared forcings; the ratio is arithmetic on them and neither number is quoted from the pack',
-  }
-}
 
-/**
- * The C3-boundary ablation definition: the mixed platoon vs the homogeneous one, over the
- * quantity the run's claim is about, 4 repetitions (real tool over a deterministic executor).
- *
- * @param metric - the quantity the claim is about. The ablation tool validates the direction
- *   against its own closed set, so the plan's direction is converted rather than restated.
- * @returns the definition the ablation tool is invoked with.
- */
-function ablationDefinition(metric: MeasuredMetric): AblationDefinition {
-  return {
-    baselineIdentity: SCENARIO.baselineIdentity,
-    variantIdentity: SCENARIO.variantIdentity,
-    removedOrReplacedComponents: [
-      { component: 'platoon-composition', action: 'replaced', replacement: SCENARIO.variantIdentity },
-    ],
-    dataset: { version: 'case-pack-traffic.v2', split: 'declared-scenario', seed: 20260909 },
-    metric: { name: metric.key, direction: ablationDirectionOf(metric) },
-    repetitions: 4,
-  }
-}
 
-/**
- * The ablation's execution seam, implemented for real.
- *
- * Both arms are MEASURED by simulating the two platoons: the baseline arm is the homogeneous
- * platoon, the variant arm the mixed one. The measurement is therefore the same car-following
- * model the C channel adjudicates against, so a boundary claim and an experiment claim come
- * from one source rather than two.
- *
- * @param study - the study whose two platoons the arms run.
- * @returns an executor that runs both arms for every declared repetition.
- */
-function platoonAblationExecutor(study: PlatoonStudy): AblationExecutor {
-  return {
-    execute(request: AblationRunRequest): ReadonlyArray<AblationRunResult> {
-      const results: AblationRunResult[] = []
-      for (let repetition = 0; repetition < request.definition.repetitions; repetition++) {
-        for (const arm of ABLATION_VARIANT_KINDS) {
-          const measured = arm === 'baseline'
-            ? runPlatoon(study.baseline)
-            : runPlatoon(study.variant)
-          results.push({
-            runKey: ablationRunKey(arm, repetition),
-            status: 'executed',
-            measurement: measured.minTtcSeconds,
-          })
-        }
-      }
-      return results
-    },
-  }
-}
 
 /** C3-boundary: real `runAblation` — boundary probing (variant vs baseline).
  *  Ablation lives HERE (canonical C3), not in B3-baseline (T19-S fix). */
 async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const verdict = readInput(ctx, 'converged-verdict')
-  const definition = ablationDefinition(planOf(ctx).metric)
+  // WHAT THIS STUDY'S BOUNDARY IS comes from its adapter: which arm is the reference, what removing
+  // one mechanism means, and which regime the claim stops carrying into are facts about a particular
+  // study, and this step ablates whichever one the run is conducting.
+  const boundary = ctx.runCtx.adapter.ablation()
+  const definition = boundary.definition
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('c3-fixture')
   const invocation = await invoker.invoke(
     'ablation',
     { definition },
-    { timestamp: FIXED_TS, deps: { ablationExecutor: platoonAblationExecutor(ctx.runCtx.study) } },
+    { timestamp: FIXED_TS, deps: { ablationExecutor: boundary.executor } },
   )
   if (!invocation.ok) {
     throw new Error(`[C3-boundary] ablation invocation failed: ${invocation.message}`)
@@ -2362,13 +2184,11 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // the dossier it cites said "pending" — two constants pointing opposite
         // ways. A missing input is now reported as absent, never as converged.
         convergedRef: (verdict?.convergence as string | undefined) ?? 'not-observed',
-        // The scope test the Case Pack's boundary file states, MEASURED here rather than
-        // quoted from it: the variant is re-run under stop-and-go forcing and its margin is
-        // compared with the free-flow one.
-        boundary: boundaryProbe(ctx.runCtx.study),
-        // What each of the AV's two declared mechanisms is worth, measured one at a time.
-        moduleAblations: moduleAblations(ctx.runCtx.study),
-        note: 'ablation-results produced by a REAL runAblation execution whose arms were MEASURED by the platoon simulation (homogeneous vs mixed platoon) — boundary probing belongs to C3, not B3',
+        // The scope test the study declares, MEASURED here rather than quoted from it.
+        boundary: boundary.probe,
+        // What each of the study's declared mechanisms is worth, measured one at a time.
+        moduleAblations: boundary.modules,
+        note: `ablation-results produced by a REAL runAblation execution whose arms were MEASURED by ${ctx.runCtx.adapter.implementation.id} — ${boundary.note}`,
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
@@ -2383,9 +2203,9 @@ async function c3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         },
         metric: definition.metric,
         aggregate: artifact.aggregate,
-        study: studyEvidence(planOf(ctx), ctx.runCtx.study),
-        boundary: boundaryProbe(ctx.runCtx.study),
-        note: 'boundary-map derived from the REAL runAblation execution over simulated platoons, plus the measured stop-and-go scope test — an applicability claim for this declared scenario only, not a general one',
+        study: ctx.runCtx.adapter.describe(planOf(ctx)),
+        boundary: boundary.probe,
+        note: `boundary-map derived from the REAL runAblation execution over ${ctx.runCtx.adapter.implementation.id}'s two arms, plus the measured scope test — an applicability claim for this declared configuration only, not a general one`,
       },
       C3_PRODUCER,
       'real_tool_fixture_input',
@@ -2476,21 +2296,18 @@ function citableFloats(
  * @param ctx - the step's context.
  * @returns the records, by slug, with the result version under its own slug.
  */
-function d1RecordsOf(
-  ctx: ExecCtx,
-  measured: { readonly baselineSeconds: number; readonly variantSeconds: number },
-): ReadonlyMap<string, Record<string, unknown>> {
+function d1RecordsOf(ctx: ExecCtx): ReadonlyMap<string, Record<string, unknown>> {
   const result = readInput(ctx, RESULT_VERSION_SLUG)
   if (result !== undefined) return new Map([[RESULT_VERSION_SLUG, result]])
   // A STEP DRIVEN ALONE MEASURED THE STUDY ITSELF (see `result-version.ts`), and the figure's values
-  // are that measurement. The plan names `recomputed-measurement` as its source in that case, so the
-  // plan and the reconciliation agree about where the numbers came from instead of the check being
-  // skipped — and the difference is visible on the artifact rather than hidden in the control flow.
+  // are that measurement. It is written in the SAME shape the run's own record holds — the metric's
+  // arms and, when the study measured one, its sequence — so the plan's keys resolve either way and
+  // the plan names `recomputed-measurement` as its source. The difference is then visible on the
+  // artifact rather than hidden in the control flow.
+  const measurement = ctx.runCtx.adapter.measure()
   return new Map([['recomputed-measurement', {
-    measured: {
-      baseline: measured.baselineSeconds,
-      variant: measured.variantSeconds,
-    },
+    measured: measurement.measured,
+    ...(measurement.series === undefined ? {} : { series: measurement.series }),
   }]])
 }
 
@@ -2501,12 +2318,11 @@ function d1SourceSlugOf(ctx: ExecCtx): string {
 
 async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('d1-fixture')
+  const adapter = ctx.runCtx.adapter
   // The figures plot the SAME measurements the experiment produced, so a chart can
   // never disagree with the verdict it illustrates. "The same" is now a record the run
   // holds, not a re-measurement: see `result-version.ts`.
   const outcome = measureOutcomeWithSource(ctx)
-  const measuredBaseline = outcome.measured.baseline
-  const measuredVariant = outcome.measured.variant
   // The caption says what the measurement did to the claim, derived the same way the argument plan
   // derives it — a figure of a refuted claim and a figure of a supported one do not have the same
   // caption, and the caption is what a reader who skips the text reads.
@@ -2516,84 +2332,32 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     d1Commitment?.direction ?? 'increase',
     d1Commitment?.thresholdPct,
   )
-  // THE FIGURE IS PLANNED BEFORE IT IS DRAWN. The plan states the question this figure answers, the
-  // record its values come from, its axes and units, its uncertainty and its size; the renderer is
-  // handed that spec, so the chart and the reason for it are one object. Before this, the size, the
-  // title and the single series were fixed here, and nothing said what the chart was FOR — which is
-  // how the delivered paper came to carry floats no sentence refers to.
-  const presentationPlan = shippedPresentationPlan({
+  // THE FIGURE IS PLANNED BEFORE IT IS DRAWN, AND THE STUDY PLANS IT. The plan states the question
+  // this figure answers, the record its values come from, its axes and units, its uncertainty and its
+  // size; the renderer spec is built from the same study, so the chart and the reason for it are one
+  // object. This step knows how a float is drawn, numbered and embedded — not whether the study's
+  // figure is a category comparison or a profile along a trace.
+  const presentation = adapter.presentation({
     sourceSlug: d1SourceSlugOf(ctx),
-    // THE RECORD'S OWN KEYS, which are the metric's two arms rather than the shipped study's field
-    // names: the figure reconciliation refused these values until they were named the way the record
-    // holds them, and that refusal is what a stale key looks like.
-    baselineKey: 'measured.baseline',
-    variantKey: 'measured.variant',
-    baselineSeconds: measuredBaseline,
-    variantSeconds: measuredVariant,
-    metricUnit: planOf(ctx).metric.unit,
     outcome: d1Outcome,
+    commitmentLabel: thresholdLabel(d1Commitment),
   })
   // EVERY VALUE A FIGURE PLOTS IS RECONCILED WITH THE RUN'S OWN RECORDS BEFORE ANYTHING IS DRAWN.
   // A figure that cannot be sourced from what the study measured is refused here rather than drawn
   // from a literal.
-  const presentationRefusals = checkPresentationPlan(
-    presentationPlan,
-    d1RecordsOf(ctx, { baselineSeconds: measuredBaseline, variantSeconds: measuredVariant }),
-  )
+  const presentationRefusals = checkPresentationPlan(presentation.plan, d1RecordsOf(ctx))
   if (presentationRefusals.length > 0) {
     throw new Error(
       '[D1-figure-map] the figure plan cannot be answered from this run: '
       + presentationRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
     )
   }
-  const planned = presentationPlan.figures[0] as PlannedFigure
-  const figureSpec = {
-    kind: 'bar',
-    title: planned.caption.length > 0 ? planned.answers : 'Figure',
-    width: planned.size.width,
-    height: planned.size.height,
-    series: planned.series.map(series => ({
-      name: series.name,
-      values: series.points.map(point => point.value),
-    })),
-    tokens: { palette: ['#1f77b4'] },
-    seed: 7,
-  }
-  const tableModel = {
-    title: 'Platoon Minimum Time-to-Collision Comparison',
-    columns: [
-      { header: 'Method', decimals: 0 },
-      { header: 'Minimum TTC (s)', decimals: 2, metricDirection: 'higher-is-better' },
-    ],
-    rows: [
-      [
-        { kind: 'text', text: 'HV-AV-HV' },
-        { kind: 'number', value: measuredVariant },
-      ],
-      [
-        { kind: 'text', text: 'HV-HV-HV' },
-        { kind: 'number', value: measuredBaseline },
-      ],
-    ],
-  }
-  const roadmapGraph: RoadmapGraph = {
-    nodes: [
-      { id: 'baseline-input', label: 'Homogeneous platoon (HV-HV-HV)', kind: 'input' },
-      { id: 'adaptive-policy', label: 'Mixed platoon (HV-AV-HV)', kind: 'process' },
-      { id: 'delay-experiment', label: 'Platoon experiment (C1)', kind: 'gate' },
-      { id: 'reduction-outcome', label: `Minimum TTC change ${thresholdLabel(ctx.runCtx.commitment)}`, kind: 'output' },
-    ],
-    edges: [
-      { from: 'baseline-input', to: 'delay-experiment', label: 'baseline' },
-      { from: 'adaptive-policy', to: 'delay-experiment', label: 'variant' },
-      { from: 'delay-experiment', to: 'reduction-outcome', label: 'verdict' },
-    ],
-  }
+  const { figureSpec, table: tableModel, roadmap: roadmapGraph, roadmapTitle } = presentation
   const base = { timestamp: FIXED_TS }
   const [figureInv, tableInv, roadmapInv] = await Promise.all([
     invoker.invoke('figure', figureSpec, base),
     invoker.invoke('three-line-table', { model: tableModel, target: 'markdown' }, base),
-    invoker.invoke('roadmap', { graph: roadmapGraph, options: { format: 'mermaid', title: 'Adaptive Control Research Roadmap' } }, base),
+    invoker.invoke('roadmap', { graph: roadmapGraph, options: { format: 'mermaid', title: roadmapTitle } }, base),
   ])
   if (!figureInv.ok) throw new Error(`[D1-figure-map] figure invocation failed: ${figureInv.message}`)
   if (!tableInv.ok) throw new Error(`[D1-figure-map] three-line-table invocation failed: ${tableInv.message}`)
@@ -2623,7 +2387,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     },
     {
       kind: 'three-line-table',
-      title: tableModel.title,
+      title: tableModel.title ?? 'Measured results',
       toolId: THREE_LINE_TABLE_TOOL_ID,
       tableMarkdown: table.render.text,
       bindingHash: table.bindingHash,
@@ -2648,7 +2412,7 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // WHAT EACH FIGURE WAS FOR, with the plan's version: a reader of the run can tell what question
         // a float answered and which record its values came from, rather than reading a chart and
         // guessing.
-        presentationPlan,
+        presentationPlan: presentation.plan,
         note: 'figure-plan derived from REAL figure + three-line-table + roadmap tool executions; the rendered svg and mermaid travel with the draft so the assembled manuscript EMBEDS the figures rather than pointing at them',
       },
       D1_PRODUCER,
@@ -2821,7 +2585,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // names the caption E1 renders. Handed to the writer rather than inserted afterwards: a sentence
   // this pipeline added on its own would be prose no step wrote, and it would land in whichever
   // section happened to come last rather than in the one the figure is about.
-  const citable = citableFloats(planFloats(renderedFigures), MODEL_EQUATIONS)
+  const citable = citableFloats(planFloats(renderedFigures), ctx.runCtx.adapter.implementation.equations)
   // WHAT EACH SECTION IS WRITTEN FROM, and what it cannot be written without. The request below
   // used to carry labels — a float roster and a claim sentence — and none of the run's data, so a
   // faithful model was asked to describe results it had never seen. A section whose required
@@ -2869,12 +2633,12 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     sectionIds: ids,
   })
   if (writer === undefined) {
-    const measured = d3Outcome.measured
+    const prose = proseContext(planOf(ctx), ctx, citations)
     sections = headings.map((h) => {
       const evidence = evidenceFor(h.id)
       return evidence.missing.length > 0
         ? { ...h, bodyText: '' }
-        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations, argumentPlan, citable) }
+        : { ...h, bodyText: ctx.runCtx.adapter.body(h.id, prose) }
     })
     proseSource = 'fixture'
   } else {
@@ -3108,8 +2872,11 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         response: points[1]?.response ?? '',
         requiresTextChange: true,
         // A REAL patch: the results section gains the sentence the concern asks for. It introduces
-        // no number, which is what keeps it past the A gate's number check.
-        patch: `${resultsBody} No published-SOTA row is recorded: a minimum time-to-collision figure has to be read out of a paper, so the comparison is against this study's own measured baseline and says so.`,
+        // no number, which is what keeps it past the A gate's number check — and it names NO
+        // quantity, because the executor does not know which study it is revising: a sentence about
+        // a minimum time-to-collision patched into a queueing study's results is a manuscript
+        // describing a measurement its own run never took.
+        patch: `${resultsBody} No published-SOTA row is recorded: a published figure for the measured quantity has to be read out of a paper, so the comparison is against this study's own measured baseline and says so.`,
       },
     ]
     applied = applyRevision(
@@ -3294,33 +3061,14 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
   // Real three-line-table sub-capability: the manuscript results table, built from
   // the SAME measurements the experiment produced — read off the run's record, so the
-  // table and the prose cannot come from two different computations.
+  // table and the prose cannot come from two different computations. WHICH table is the study's:
+  // its columns and rows come from the adapter, so this step renders the table the study asked for
+  // rather than one whose headers name a quantity some other study measured.
   const e1Outcome = measureOutcomeWithSource(ctx)
-  const measuredBaseline = e1Outcome.measured.baseline
-  const measuredVariant = e1Outcome.measured.variant
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
   const invocation = await invoker.invoke(
     'three-line-table',
-    {
-      model: {
-        title: 'Platoon Minimum Time-to-Collision Comparison',
-        columns: [
-          { header: 'Method', decimals: 0 },
-          { header: 'Minimum TTC (s)', decimals: 2, metricDirection: 'higher-is-better' },
-        ],
-        rows: [
-          [
-            { kind: 'text', text: 'HV-AV-HV' },
-            { kind: 'number', value: measuredVariant },
-          ],
-          [
-            { kind: 'text', text: 'HV-HV-HV' },
-            { kind: 'number', value: measuredBaseline },
-          ],
-        ],
-      },
-      target: 'markdown',
-    },
+    { model: ctx.runCtx.adapter.table(e1Outcome.measured), target: 'markdown' },
     { timestamp: FIXED_TS },
   )
   if (!invocation.ok) {
@@ -3431,9 +3179,9 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // entries, so the empty outline section is dropped here and the replacement is
   // recorded on the artifact rather than happening silently.
   // THE MODEL'S EQUATIONS GO IN THE METHOD SECTION, which is where a reader looks for them. They
-  // are the module's own computation (see MODEL_EQUATIONS), not decoration, and the section is
+  // are the study's own computation (the adapter's equations), not decoration, and the section is
   // extended rather than replaced so the prose the draft wrote stays where it is.
-  const equations = equationBlock(MODEL_EQUATIONS)
+  const equations = equationBlock(ctx.runCtx.adapter.implementation.equations)
   const withEquations = citedSections.map(section =>
     section.id === 'method' && equations.length > 0
       ? { ...section, bodyText: `${section.bodyText}\n\n${equations}` }
@@ -3542,7 +3290,10 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       label: plannedTable.label,
       title: plannedTable.title.length === 0 ? 'Measured results' : plannedTable.title,
       markdown: tableMarkdown,
-      note: 'Measured by simulating both platoons under the same declared disturbance.',
+      // NAMED BY THE RUN, NOT BY THIS STEP: which arms were measured and under what conditions is
+      // the study's own fact, and a caption naming the platoon study's would sit under a
+      // queueing study's table.
+      note: `Measured by running ${ctx.runCtx.adapter.implementation.id}'s two arms under the same declared conditions.`,
     }))
     renderedFloats.push({ label: plannedTable.label, title: plannedTable.title })
   }
@@ -3561,7 +3312,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // reference to it and report a manuscript that cites every equation it states.
   const crossReferences = citedFloats(
     sections.map(section => section.bodyText).join('\n\n'),
-    citableFloats(renderedFloats, MODEL_EQUATIONS),
+    citableFloats(renderedFloats, ctx.runCtx.adapter.implementation.equations),
   )
   // The package's OWN files, as CONTENT. E1 produces these; the run exporter adds the
   // run-level files (summary, step record, claim-evidence, citations, experiment,
@@ -3608,7 +3359,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           mermaid: roadmapMermaid,
         }]),
     ],
-    equations: MODEL_EQUATIONS.map(equation => ({ label: equation.name, latex: equation.latex })),
+    equations: ctx.runCtx.adapter.implementation.equations.map(equation => ({ label: equation.name, latex: equation.latex })),
     references: referenceEntries.flatMap((entry, index) =>
       entry.citeKey === undefined
         ? []

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-start-command-is-recoverable.md
-2026-09-16-a-start-command-is-recoverable.md: e5eef2110440be34927eb75baef49c2fe88e9fad
-2026-09-16-a-start-command-is-recoverable.zh.md: 1c61be36f5d278442e803faccdc4948b442bd1e2
+2026-09-16-a-start-command-is-recoverable.md: 12726009c0f00524131b57d300a9fa26741902e6
+2026-09-16-a-start-command-is-recoverable.zh.md: 711f1f3bf122f10d03855b1ea651ae86f1191c70

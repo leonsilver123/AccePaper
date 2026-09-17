@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/testing/2026-09-16-the-parser-that-could-not-say-what-it-threw-away.md
-2026-09-16-the-parser-that-could-not-say-what-it-threw-away.md: ed3ba498b3a907c6613c02a96e5633efba922166
-2026-09-16-the-parser-that-could-not-say-what-it-threw-away.zh.md: f1c7c0f9d198bb577c4aabb5d100553d6e300004
+2026-09-16-the-parser-that-could-not-say-what-it-threw-away.md: 6880950b342df9ba24e829d48ea96fbf6b182fae
+2026-09-16-the-parser-that-could-not-say-what-it-threw-away.zh.md: 094bf8c0974f7f98396ffc8133635bc6b21b92ea

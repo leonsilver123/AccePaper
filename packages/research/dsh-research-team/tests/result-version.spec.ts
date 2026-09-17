@@ -71,14 +71,15 @@ describe('the result record', () => {
     const { store, runId } = await fullRun()
     const record = readResultVersion(getArtifact(store, runId, RESULT_VERSION_SLUG))
     const mvp = getArtifact(store, runId, 'mvp-results') as
-      | { observed?: { baselineMinTtcSeconds?: number; improvementPct?: number } }
+      | { observed?: { baseline?: number; variant?: number; improvementPct?: number } }
       | undefined
     // `mvp-results.observed` reports the raw comparison; the record rounds to the precision the
     // manuscript states. Agreement is what matters: both are read off C1's one comparison, so a
     // reader of either sees the same experiment.
     const round2 = (value: number | undefined): number | undefined =>
       value === undefined ? undefined : Math.round(value * 100) / 100
-    expect(record?.measured.baseline).toBe(round2(mvp?.observed?.baselineMinTtcSeconds))
+    expect(record?.measured.baseline).toBe(round2(mvp?.observed?.baseline))
+    expect(record?.measured.variant).toBe(round2(mvp?.observed?.variant))
     expect(record?.measured.improvementPct).toBe(round2(mvp?.observed?.improvementPct))
   })
 

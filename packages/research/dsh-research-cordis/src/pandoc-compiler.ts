@@ -230,6 +230,8 @@ export class PandocCompiler {
    * Ask the machine what it has, and build the compiler that matches.
    *
    * @param config - the executable, an optional LaTeX engine, and the time limit.
+   * @param engineRunner - how a LaTeX engine is run over the source pandoc wrote; the host's own
+   *   process runner by default, and a seam a caller injects to test the PDF path.
    * @returns the compiler, whose `formats` are the ones that really work here.
    */
   static async probe(config: PandocCompilerConfig, engineRunner: EngineRunner = defaultEngineRunner): Promise<PandocCompiler> {

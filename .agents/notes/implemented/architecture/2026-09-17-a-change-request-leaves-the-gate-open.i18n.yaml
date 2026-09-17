@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-a-change-request-leaves-the-gate-open.md
-2026-09-17-a-change-request-leaves-the-gate-open.md: bf4b4a04009a17176f44cbf9de4a2c150f2511ce
-2026-09-17-a-change-request-leaves-the-gate-open.zh.md: 7c412a85f73db3efeacb5e9e23cb70b11f3b3090
+2026-09-17-a-change-request-leaves-the-gate-open.md: 66fd0e11594c14a46cf71db511aecaa453f47a73
+2026-09-17-a-change-request-leaves-the-gate-open.zh.md: a71c082f16299bcfee926a82b1d59188000a1e13

@@ -206,7 +206,15 @@ export function checkPresentationPlan(
 function readRecordValue(record: Record<string, unknown> | undefined, path: string): number | undefined {
   let cursor: unknown = record
   for (const step of path.split('.')) {
-    if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined
+    // A SEQUENCE IS ADDRESSED BY POSITION. A record that measured over an ordered sequence carries one
+    // array per arm, so `series.baseline.3` is the fourth observation of that arm; a numeric segment
+    // indexes it, and any other segment reaching an array names nothing the record holds.
+    if (Array.isArray(cursor)) {
+      if (!/^\d+$/u.test(step)) return undefined
+      cursor = cursor[Number(step)]
+      continue
+    }
+    if (cursor === null || typeof cursor !== 'object') return undefined
     cursor = (cursor as Record<string, unknown>)[step]
   }
   return typeof cursor === 'number' && Number.isFinite(cursor) ? cursor : undefined
@@ -263,6 +271,80 @@ export function shippedPresentationPlan(input: {
       necessity: 'required',
       justification: 'the claim is a comparison between two compositions; a table states the two'
         + ' values and a figure shows the difference the claim is about',
+    }],
+  }
+}
+
+/** One arm of a study that measured over a sequence, as the figure plan names it. */
+export interface SequenceArm {
+  /** The series' name as the legend shows it. */
+  readonly name: string
+  /** The arm's key in the result record's `series.arms`. */
+  readonly recordKey: string
+  readonly values: ReadonlyArray<number>
+}
+
+/**
+ * The figures a study whose measurement is a SEQUENCE carries.
+ *
+ * A DIFFERENT FIGURE BECAUSE IT ANSWERS A DIFFERENT QUESTION. The two-arm plan above plots a category
+ * comparison, which is the right chart for "does composition move the metric". A study that measures
+ * its quantity across an ordered trace asks whether the two arms DIVERGE ALONG that order, and the
+ * only chart that answers it draws both arms over the sequence axis — a bar chart of the two final
+ * percentiles would hide the shape the claim rests on.
+ *
+ * Its values are addressed BY POSITION in the record's own `series`, so a figure cannot plot an
+ * observation the measurement did not take, and the order it draws is the order the record holds.
+ *
+ * The positions themselves are not repeated here. They are the record's `series.bucket`, and the
+ * points below are addressed by their position in it — so a plan cannot state an axis the run did not
+ * measure, because the only thing it says about the axis is what kind of order it is.
+ *
+ * @param input - the sequence's axis, its arms, and the record the values were read from.
+ * @returns the plan, with its version.
+ */
+export function sequencePresentationPlan(input: {
+  readonly sourceSlug: string
+  readonly answers: string
+  readonly axisLabel: string
+  readonly axisUnit: string
+  readonly arms: ReadonlyArray<SequenceArm>
+  readonly yLabel: string
+  readonly yUnit: string
+  readonly caption: string
+  readonly size?: { readonly width: number; readonly height: number }
+}): PresentationPlan {
+  return {
+    version: PRESENTATION_PLAN_VERSION,
+    figures: [{
+      id: 'figure-1',
+      answers: input.answers,
+      sourceSlug: input.sourceSlug,
+      series: input.arms.map(arm => ({
+        name: arm.name,
+        unit: input.yUnit,
+        // ADDRESSED THE WAY THE RECORD HOLDS IT: the record's `series.arms` carries one array per
+        // arm, so the key is that path and the last segment is the observation's position in it.
+        points: arm.values.map((value, index) => ({
+          key: `series.arms.${arm.recordKey}.${String(index)}`,
+          value,
+        })),
+      })),
+      x: { label: input.axisLabel, unit: input.axisUnit, kind: 'sequence' },
+      y: { label: input.yLabel, unit: input.yUnit, kind: 'quantity' },
+      // THE UNCERTAINTY IS NOT QUANTIFIED AND SAYS SO, for the same reason the shipped plan's is not:
+      // a deterministic simulation over declared parameters has no sampling distribution to draw.
+      uncertainty: {
+        kind: 'not-quantified',
+        note: 'the study is a deterministic simulation over a declared trace, so the profile carries'
+          + ' no sampling uncertainty and no interval is drawn',
+      },
+      size: input.size ?? DEFAULT_FIGURE_SIZE,
+      format: 'svg',
+      caption: input.caption,
+      necessity: 'required',
+      justification: 'the claim is about how the two arms differ along the trace; a table states the'
+        + ' end-to-end percentiles and this figure shows where along the sequence they separate',
     }],
   }
 }

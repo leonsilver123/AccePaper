@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-one-round-is-not-a-revision-cycle.md
-2026-09-16-one-round-is-not-a-revision-cycle.md: a79907f6e675684c9019ac2680b6430fd690290c
-2026-09-16-one-round-is-not-a-revision-cycle.zh.md: 7869cc18dc2ccc60ffb789392551d1ad5d7c7a13
+2026-09-16-one-round-is-not-a-revision-cycle.md: b3b780123b6f661cff88925d87af783c84a8709c
+2026-09-16-one-round-is-not-a-revision-cycle.zh.md: dae24446366684a20e5c2807ea9c248785e23ba6

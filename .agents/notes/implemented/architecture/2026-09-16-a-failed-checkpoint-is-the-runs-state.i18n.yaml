@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-16-a-failed-checkpoint-is-the-runs-state.md
-2026-09-16-a-failed-checkpoint-is-the-runs-state.md: 69c35701a920a4df93365e0cd9536b0ddbfb0c77
-2026-09-16-a-failed-checkpoint-is-the-runs-state.zh.md: 3468a1d7c5e3ede0f9b7055bb279e87ecb9ba27d
+2026-09-16-a-failed-checkpoint-is-the-runs-state.md: 16f06515e03deb9048ffd0a937040b096ca357c7
+2026-09-16-a-failed-checkpoint-is-the-runs-state.zh.md: e882bfcdbcfa1af97f1e3bc1ce2bdb6e727966a5

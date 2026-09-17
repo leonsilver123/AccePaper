@@ -43,6 +43,7 @@ import type { RunResult } from '../src/runner/types.ts'
 import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
 import { CASE_PACK_INPUT_SLUGS } from '../src/runner/case-pack.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
+import { platoonAdapter } from '../src/runner/study-adapter.ts'
 import type { StudyPlan } from '../src/runner/study-plan.ts'
 import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
 
@@ -61,6 +62,10 @@ function freshRunCtx(): RunContext {
     studyPlan: DEFAULT_PLAN,
     planSource: 'default',
     timestamp: FIXED_TS,
+    // THE STUDY THE RUN IS CONDUCTED AS. A context built by hand resolves it here, exactly as
+    // `createRunContext` does for a driven run: every executor that reports the study reads it
+    // from the context, so a context without one cannot execute a step at all.
+    adapter: platoonAdapter(experimentStudy()),
   }
 }
 
@@ -554,8 +559,13 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
     // Canonical B3 = establish baseline + compare against SOTA.
     expect((res.baseline as { identity?: unknown }).identity).toBe('homogeneous-HV-HV-HV')
     expect((res.baseline as { metric?: { name?: unknown } }).metric?.name).toBe('min-ttc-seconds')
-    // The reference row is MEASURED by simulating the platoon, not a pre-registered constant.
-    expect((res.measured as { baselineMinTtcSeconds?: unknown }).baselineMinTtcSeconds).toBeGreaterThan(0)
+    // THE REFERENCE ROW IS MEASURED, not a pre-registered constant — and the artifact carries the
+    // record's own metric identity rather than a field named after this study's quantity, so a
+    // reader of a baseline from another study reads the same fields.
+    const measured = res.measured as { metricKey?: unknown; unit?: unknown; baseline?: unknown }
+    expect(measured.metricKey).toBe('min-ttc-seconds')
+    expect(measured.unit).toBe('s')
+    expect(measured.baseline as number).toBeGreaterThan(0)
     // Regression guard: ablation must NOT appear inside the baseline step.
     expect(res.ranRuns).toBeUndefined()
     expect(res.counts).toBeUndefined()
@@ -584,6 +594,7 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
       studyPlan: DEFAULT_PLAN,
       planSource: 'default',
       timestamp: FIXED_TS,
+      adapter: platoonAdapter(experimentStudy()),
     }
     // The experiment is now RUN, so the fail-closed condition is no longer "no fixture
     // row" but "the prediction states no threshold this study can check".

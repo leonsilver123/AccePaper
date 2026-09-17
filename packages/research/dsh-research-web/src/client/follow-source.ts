@@ -46,6 +46,8 @@ const MAX_FOLLOW_ATTEMPTS = 3
  * @param runId - the run to follow.
  * @param cursor - the position this page already holds, when it holds one.
  * @param onUpdate - called with every state the host reports.
+ * @param onPhase - called with what the follow is doing, so the page can say it is re-opening
+ *   rather than going quiet.
  * @returns when the run has stopped, or throws when the subscription cannot be repaired.
  */
 export async function followToRest(

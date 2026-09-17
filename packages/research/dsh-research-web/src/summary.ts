@@ -80,6 +80,14 @@ export interface StepApprovalView {
   readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
+/**
+ * One step of a run, as the page renders it.
+ *
+ * The view's own projection of a step's state: the identifier the page keys on, where the step sits
+ * in the sequence and which phase it belongs to, its status and attempt, and the gate components the
+ * host reported. It is derived from the snapshot rather than held alongside it, so the page and the
+ * service cannot disagree about what a step is doing.
+ */
 export interface StepView {
   readonly stepId: string
   readonly index: number

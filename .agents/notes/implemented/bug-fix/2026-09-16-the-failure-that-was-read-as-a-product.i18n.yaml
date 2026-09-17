@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-16-the-failure-that-was-read-as-a-product.md
-2026-09-16-the-failure-that-was-read-as-a-product.md: 6fec672694032c32eaab858fb7de52e83b22dd24
-2026-09-16-the-failure-that-was-read-as-a-product.zh.md: ba4f10717837f9ef005b510c800658e061ab7da1
+2026-09-16-the-failure-that-was-read-as-a-product.md: afc773a2840d8110dfb66219ff313e75779334ab
+2026-09-16-the-failure-that-was-read-as-a-product.zh.md: 99f21802aa5512794821087252713809e0d6f710

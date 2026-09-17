@@ -49,7 +49,6 @@ import { buildEvidenceAnchors } from './evidence-anchors.ts'
 import { REVIEW_ROLES, reviewClaim } from './redteam-review.ts'
 import { MANUSCRIPT_REVIEW_ROLES, reviewManuscript } from './manuscript-review.ts'
 import { RESULT_VERSION_SLUG } from './result-version.ts'
-import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC, measureStudy } from './platoon-sim.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 import { CANONICAL, planOf } from './registry.ts'
 import type { VerdictBuildCtx } from './types.ts'
@@ -421,12 +420,17 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
 
   // The experiment is RUN, not looked up. Both this gate and the C1 executor call
   // the same measurement, so the verdict can never disagree with the artifact.
+  // WHICH STUDY IS GRADED comes from the run's adapter, and the measurement is that study's own.
+  // Both this gate and the C1 executor read one adapter, so the verdict and the artifact cannot be
+  // two measurements that happened to agree — which is what reading the platoon module here did for
+  // every run, whatever study it was conducting.
+  const adapter = ctx.runCtx.adapter
   const experiment = evaluatePrediction({
     predictionText,
-    metric: MEASURED_METRIC,
+    metric: adapter.implementation.metric,
     declaredMetricKey: ctx.runCtx.metricKey,
     commitment: ctx.runCtx.commitment,
-    measure: () => measureStudy(ctx.runCtx.study),
+    measure: () => adapter.measure().prediction,
   })
   if (experiment.kind === 'unbindable') {
     // FAIL-CLOSED, and a HOLD rather than a verdict: this study cannot adjudicate the claim
@@ -459,8 +463,8 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
     // recorded as refuted and the step advances. Without this the run hard-fails whenever
     // the hypothesis loses, which is a pipeline that can only run studies that succeed.
     decisive: true,
-    evaluator: 'platoon-sim (Intelligent Driver Model, three-vehicle platoon, declared disturbance)',
-    ruleVersion: EXPERIMENT_RULE_VERSION,
+    evaluator: `${adapter.implementation.id} (${adapter.implementation.algorithm})`,
+    ruleVersion: adapter.measure().ruleVersion,
   }
   const rec = adjudicateClaimSupport({
     claimRef,
@@ -477,7 +481,7 @@ function verdictC(ctx: VerdictBuildCtx): GateVerdict {
       `team:adjudicateClaimSupport → core adjudicate('C') outcome=${rec.outcome} `
       + `verdict=${rec.verdict} (the experiment ran here: `
       + `measured ${experiment.improvementPct.toFixed(2)}% vs required ${String(experiment.thresholdPct)}% `
-      + `of ${MEASURED_METRIC.label}, which the claim names as "${experiment.matchedPhrase}"; `
+      + `of ${adapter.implementation.metric.label}, which the claim names as "${experiment.matchedPhrase}"; `
       + (negated
         ? 'the measurement NEGATED the prediction — recorded as refuted, and the step advances on a decisive test rather than failing)'
         : 'the measurement supports the prediction)'),

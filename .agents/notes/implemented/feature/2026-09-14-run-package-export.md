@@ -54,17 +54,9 @@ A path whose content is empty is **omitted**, never declared. That is the rule t
 
 ## Consequences
 
-**`citations.json` shipped the artifact, not the records, until 2026-09-15.** The exporter wrote
-`ledger: landscape?.records ?? landscape ?? null`. A1's landscape artifact carries its records under
-`hits`, so `records` was never a field, the fallback always won, and the file held the whole LABELLED
-artifact — `__producer`, `__kind`, `__provenance`, the corpus note and all — under a key that says
-"ledger". A reader looking for a DOI had to know to reach through `ledger.hits`, and nothing in the
-file said so. It is `landscape?.hits ?? null` now.
+**`citations.json` shipped the artifact, not the records, until 2026-09-15.** The exporter wrote `ledger: landscape?.records ?? landscape ?? null`. A1's landscape artifact carries its records under `hits`, so `records` was never a field, the fallback always won, and the file held the whole LABELLED artifact — `__producer`, `__kind`, `__provenance`, the corpus note and all — under a key that says "ledger". A reader looking for a DOI had to know to reach through `ledger.hits`, and nothing in the file said so. It is `landscape?.hits ?? null` now.
 
-Two things kept it invisible, and they are the reason it is written down here rather than just fixed:
-no test asserted the file's shape, and the fallback made the wrong answer a *plausible* one — a file
-full of citation-looking content that a person would not look at twice. It was found by the browser
-probe's S4 assertions on a real run, which asked for rows and got zero.
+Two things kept it invisible, and they are the reason it is written down here rather than just fixed: no test asserted the file's shape, and the fallback made the wrong answer a *plausible* one — a file full of citation-looking content that a person would not look at twice. It was found by the browser probe's S4 assertions on a real run, which asked for rows and got zero.
 
 
 - Every file the manifest names really exists, is non-empty, and carries a digest a reader can recompute. The spec drives a REAL 16-step run and then writes the package, so the assertion is against what the engine produced rather than against a hand-built store.

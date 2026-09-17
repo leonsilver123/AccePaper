@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-the-page-can-say-what-its-link-is-doing.md
-2026-09-17-the-page-can-say-what-its-link-is-doing.md: 3d8dc1546a7e215eeb5c3bf8904401fa32609369
-2026-09-17-the-page-can-say-what-its-link-is-doing.zh.md: da4e6af681da8a6ca7bcf132d885fe4d46c5f18f
+2026-09-17-the-page-can-say-what-its-link-is-doing.md: 3a32d3dc8865b633643090f7999b55b7e0eb91f1
+2026-09-17-the-page-can-say-what-its-link-is-doing.zh.md: 5a802cd7d2ed7279bf02e8a39f73123f7659208a

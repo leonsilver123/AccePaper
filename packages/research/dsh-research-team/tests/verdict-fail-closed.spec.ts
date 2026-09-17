@@ -18,7 +18,7 @@ import { DEFAULT_EVIDENCE_PROFILE, getStepDefinitionById } from '@deepseek-ai/ds
 import type { StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
-import { CANONICAL } from '../src/runner/registry.ts'
+import { CANONICAL, setRunStudy } from '../src/runner/registry.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import { evaluatePrediction } from '../src/runner/prediction-gate.ts'
 import { MEASURED_METRIC, experimentStudy, measureStudy } from '../src/runner/platoon-sim.ts'
@@ -38,7 +38,10 @@ function ctxWith(
   runCtx.claimRef = 'mixed platoon'
   runCtx.predictionText = predictionText
   runCtx.metricKey = metricKey
-  runCtx.study = study
+  // THE STUDY AND THE ADAPTER ARE ONE ASSIGNMENT: every step reports the study through the
+  // adapter, so replacing one without the other grades the study the context was BUILT over
+  // while the artifacts describe the one it was given.
+  setRunStudy(runCtx, study)
   // The claim's DECLARED commitment. The gate grades this rather than reading a direction out of
   // the prediction's prose; a run that declares none holds.
   runCtx.commitment = {
