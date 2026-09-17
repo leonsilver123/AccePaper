@@ -1369,10 +1369,8 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   @Remote('exportRunPackage')
   // A REMOTE METHOD ANSWERS OVER THE WIRE, where every call is a promise, and the package is written
-  // from state this process already holds — there is nothing here to await. The rule is disabled for
-  // this one declaration rather than an artificial `await` being added to satisfy it. (Same reason and
-  // same shape as the deterministic provider's `stream`.)
-  // oxlint-disable-next-line typescript/require-await -- a Remote method is async by contract
+  // from state this process already holds — there is nothing here to await, and an artificial
+  // `await` added to look busy would be a statement about the wire that is not true of this body.
   async exportRunPackageNow(request: {
     readonly runId: string
     readonly mode: 'draft' | 'final'
