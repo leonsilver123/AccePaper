@@ -41,6 +41,7 @@ import type {
   RunExecution,
   StepView,
   TrinityComponent,
+  PaperQualityReportView,
 } from './summary.ts'
 
 /** One gate verdict as the wire carries it. Twin of the Host's projection. */
@@ -237,6 +238,14 @@ export interface WirePackageExport {
    */
   readonly state?: 'draft' | 'final'
   readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
+  /**
+   * What the quality baseline found in the package's manuscript, AND WHAT IT COULD READ.
+   *
+   * The coverage is part of the value rather than a second field: an empty finding list means the
+   * rules that could read the manuscript found nothing, and a page showing it alone would tell a
+   * reader the paper is fine while some checks never ran.
+   */
+  readonly quality?: PaperQualityReportView
 }
 
 /**
@@ -655,6 +664,7 @@ function deliverablesOf(snapshot: WireRunSnapshot): ReadonlyArray<DeliverableVie
       ...(pkg.directory === undefined ? {} : { directory: pkg.directory }),
       ...(pkg.state === undefined ? {} : { state: pkg.state }),
       ...(pkg.checks === undefined ? {} : { checks: pkg.checks.map(check => ({ ...check })) }),
+      ...(pkg.quality === undefined ? {} : { quality: pkg.quality }),
     })
   }
   const stored = snapshot.runPersistence

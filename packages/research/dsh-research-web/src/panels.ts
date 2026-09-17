@@ -235,3 +235,46 @@ export function selectRecovery(summary: RunSummary): RecoverySlice {
     hasDegradation: summary.hasDegradation,
   }
 }
+
+/**
+ * What the quality panel shows: the findings, what each check could say, and the questions left to a
+ * reviewer.
+ *
+ * THE COVERAGE IS THE POINT, which is why this slice is not just the findings. An empty finding list
+ * is the output of the rules that could read the manuscript, and a panel that rendered the list alone
+ * would report "no findings" as "the paper is fine" — while a rule whose input the manuscript does
+ * not carry never ran at all. So the panel gets the checks with their outcomes, the questions no rule
+ * here answers, and the report's own summary sentence.
+ *
+ * @param summary - the flattened run summary.
+ * @returns the quality slice, or `null` when no package reported one.
+ */
+export function selectQuality(summary: RunSummary): QualitySlice | null {
+  const report = summary.quality
+  if (report === undefined) return null
+  return {
+    summary: summary.qualitySummary ?? report.summary,
+    findings: report.findings.map(finding => ({ ...finding })),
+    checks: report.checks.map(check => ({ ...check })),
+    domainReview: report.needsDomainReview.map(item => ({ ...item })),
+  }
+}
+
+/** The quality panel's slice: what was found, what could be read, and what a reviewer must judge. */
+export interface QualitySlice {
+  /** One sentence stating what the report IS — never that the paper is good. */
+  readonly summary: string
+  readonly findings: ReadonlyArray<{
+    readonly code: string
+    readonly where: string
+    readonly detail: string
+    readonly evidence: string
+  }>
+  readonly checks: ReadonlyArray<{
+    readonly code: string
+    readonly asks: string
+    readonly outcome: string
+    readonly reason?: string
+  }>
+  readonly domainReview: ReadonlyArray<{ readonly id: string; readonly asks: string }>
+}

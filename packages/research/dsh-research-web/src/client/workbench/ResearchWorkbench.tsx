@@ -33,6 +33,7 @@ import { RoadmapPanel } from './RoadmapPanel.tsx'
 import { GatePanel } from './GatePanel.tsx'
 import { AdversarialPanel } from './AdversarialPanel.tsx'
 import { ApprovalPanel } from './ApprovalPanel.tsx'
+import { QualityPanel } from './QualityPanel.tsx'
 import { RecoveryPanel } from './RecoveryPanel.tsx'
 import { StageNavigation } from './StageNavigation.tsx'
 import { StageWorkspace } from './StageWorkspace.tsx'
@@ -126,7 +127,7 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
 /** Workbench sub-panel tab identifiers. */
 type WorkbenchTab =
   | 'summary' | 'pipeline' | 'figures' | 'tables' | 'roadmap'
-  | 'gates' | 'adversarial' | 'approval' | 'revision' | 'recovery'
+  | 'gates' | 'adversarial' | 'approval' | 'revision' | 'quality' | 'recovery'
 
 /** Tab roster: id → label dictionary key (kept in `research` namespace order). */
 const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
@@ -139,6 +140,9 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
   { id: 'adversarial', labelKey: 'tab.adversarial' },
   { id: 'approval', labelKey: 'tab.approval' },
   { id: 'revision', labelKey: 'tab.revision' },
+  // THE QUALITY BASELINE SITS BESIDE THE REVISION LOOP, which is what answers it: a finding is
+  // addressed by asking for different work, and the panel that asks is the one next to this one.
+  { id: 'quality', labelKey: 'tab.quality' },
   { id: 'recovery', labelKey: 'tab.recovery' },
 ]
 
@@ -580,6 +584,7 @@ export function ResearchWorkbench({
               writesAllowed={allowsRevisionBoundWrite(connection)}
             />
           )}
+          {active === 'quality' && <QualityPanel summary={summary} t={t} />}
           {active === 'recovery' && <RecoveryPanel summary={summary} t={t} />}
         </>
       )}

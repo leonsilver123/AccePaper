@@ -187,22 +187,23 @@ describe('research workbench DOM', () => {
   })
 
   // 3. Nine workbench panels present and switchable (only one visible at a time).
-  it('renders nine switchable panels with exactly one visible at a time', () => {
+  it('renders every switchable panel with exactly one visible at a time', () => {
     renderComp(createElement(ResearchWorkbench, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
     const tabLabels = [
       'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',
-      'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.revision', 'tab.recovery',
+      'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.revision', 'tab.quality', 'tab.recovery',
     ] as const
     for (const key of tabLabels) {
       expect(screen.getByRole('button', { name: en[key] })).toBeTruthy()
     }
-    // THE NINE TABS ARE THE TAB STRIP, so the count is taken from the strip rather than from the
-    // whole page: the workbench also carries the stage navigation (six buttons) and the study list,
-    // and a page-wide count made every one of those a failure of this test.
+    // THE TABS ARE THE TAB STRIP, so the count is taken from the strip rather than from the whole
+    // page: the workbench also carries the stage navigation (six buttons) and the study list, and a
+    // page-wide count made every one of those a failure of this test. The count is the roster's own
+    // length, so adding a panel updates one number in one place.
     const strip = screen.getByRole('button', { name: en['tab.summary'] }).closest('nav')
     expect(strip).not.toBeNull()
-    expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(10)
+    expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(tabLabels.length)
 
     // Default view is the Summary panel.
     expect(screen.getByText(/Step progress/)).toBeTruthy()

@@ -308,6 +308,50 @@ export interface DeliverableView {
   readonly state?: 'draft' | 'final'
   /** Every condition a final package must meet, with the run's own record of it. */
   readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
+  /**
+   * What the quality baseline found in the package's manuscript, and what it could read.
+   *
+   * IT TRAVELS WITH THE COVERAGE because an empty finding list means "the rules that could read this
+   * manuscript found nothing", and a page that showed the list alone would report that as the paper
+   * being fine — while three of five checks may have had nothing to read at all.
+   */
+  readonly quality?: PaperQualityReportView
+  /** Every check the baseline could not answer, and why; the view renders these beside the findings. */
+  readonly qualityChecks?: ReadonlyArray<{
+    readonly code: string
+    readonly asks: string
+    readonly outcome: string
+    readonly reason?: string
+  }>
+  /** The questions no rule in the baseline answers, which a domain reviewer has to. */
+  readonly qualityDomainReview?: ReadonlyArray<{ readonly id: string; readonly asks: string }>
+  /** One sentence stating what the quality report IS; never that the paper is good. */
+  readonly qualitySummary?: string
+}
+
+/**
+ * The quality report, as the page renders it.
+ *
+ * Structural twin of the Host's `PaperQualityReport`. The COVERAGE IS PART OF THE VALUE rather than a
+ * second field: an empty finding list means the rules that could read the manuscript found nothing,
+ * and a page showing the list alone would report that as the paper being fine while some checks never
+ * ran.
+ */
+export interface PaperQualityReportView {
+  readonly findings: ReadonlyArray<{
+    readonly code: string
+    readonly where: string
+    readonly detail: string
+    readonly evidence: string
+  }>
+  readonly checks: ReadonlyArray<{
+    readonly code: string
+    readonly asks: string
+    readonly outcome: string
+    readonly reason?: string
+  }>
+  readonly needsDomainReview: ReadonlyArray<{ readonly id: string; readonly asks: string }>
+  readonly summary: string
 }
 
 /** Derived + raw presentation model handed to the view. */
@@ -354,6 +398,20 @@ export interface RunSummary {
   readonly degradations: ReadonlyArray<DegradationNote>
   /** What the run left on disk; see {@link RunSummaryInput.deliverables}. */
   readonly deliverables: ReadonlyArray<DeliverableView>
+  /**
+   * The quality report the package carries, and the three facts a panel renders from it.
+   *
+   * LIFTED OUT OF THE DELIVERABLES so the panel does not walk a file list to find a fact about the
+   * manuscript — and carried with its coverage, because an empty finding list means the rules that
+   * could read the manuscript found nothing, not that the paper is good.
+   */
+  readonly quality?: PaperQualityReportView
+  /** Every check and what it could say; see {@link PaperQualityReportView.checks}. */
+  readonly qualityChecks?: PaperQualityReportView['checks']
+  /** The questions no rule in the baseline answers; see {@link PaperQualityReportView.needsDomainReview}. */
+  readonly qualityDomainReview?: PaperQualityReportView['needsDomainReview']
+  /** One sentence stating what the report IS; see {@link PaperQualityReportView.summary}. */
+  readonly qualitySummary?: string
   /** Total step count (expected 16 for a full run). */
   readonly totalSteps: number
   /** Step count indexed by status. */
@@ -386,6 +444,28 @@ const EMPTY_BY_STATUS: Record<StepStatus, number> = {
   blocked: 0,
   failed: 0,
   unknown: 0,
+}
+
+/**
+ * The quality report a package deliverable carries, or nothing when there is no package.
+ *
+ * @param deliverables - what the run left on disk.
+ * @returns the fields the view renders, or an empty object when no package reported one.
+ */
+function qualityOf(deliverables: ReadonlyArray<DeliverableView>): {
+  readonly quality?: PaperQualityReportView
+  readonly qualityChecks?: PaperQualityReportView['checks']
+  readonly qualityDomainReview?: PaperQualityReportView['needsDomainReview']
+  readonly qualitySummary?: string
+} {
+  const quality = deliverables.find(entry => entry.quality !== undefined)?.quality
+  if (quality === undefined) return {}
+  return {
+    quality,
+    qualityChecks: quality.checks,
+    qualityDomainReview: quality.needsDomainReview,
+    qualitySummary: quality.summary,
+  }
 }
 
 /**
@@ -432,6 +512,10 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     abstentions: input.abstentions,
     degradations: input.degradations,
     deliverables: input.deliverables,
+    // THE QUALITY REPORT, LIFTED OUT OF THE DELIVERABLES so a panel can render it without walking the
+    // list: it is a fact about the manuscript, not about a file, and it is the same object the
+    // package's manifest carries.
+    ...qualityOf(input.deliverables),
     totalSteps: input.steps.length,
     byStatus,
     artifactCount: input.artifacts.length,

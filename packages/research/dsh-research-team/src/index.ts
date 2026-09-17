@@ -1437,6 +1437,9 @@ export class ResearchTeamService extends TypertRemoteService {
       directory,
       state: manifest.state,
       checks: manifest.checks.map(check => ({ code: check.code, passed: check.passed, detail: check.detail })),
+      // THE QUALITY REPORT TRAVELS WITH THE EXPORT, so the page can say what the baseline could read
+      // as well as what it found — see `ResearchPackageExport.quality`.
+      quality: manifest.quality,
     }
     // THE RUN NOW REPORTS THIS PACKAGE. A page that reloads, or a reader looking at the run through
     // any other client, reads the export off the run's own projection — so an export that only

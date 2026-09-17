@@ -402,6 +402,7 @@ export interface ResearchProposalAnswer {
 
 import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
 import type { StudyPlan } from './runner/study-plan.ts'
+import type { PaperQualityReport } from './runner/paper-quality.ts'
 
 export type { PlanClaim, PlanSection, StudyPlan } from './runner/study-plan.ts'
 
@@ -917,6 +918,17 @@ export interface ResearchPackageExport {
    */
   readonly state?: 'draft' | 'final'
   readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
+  /**
+   * What the quality baseline found in this package's manuscript, AND WHAT IT COULD READ.
+   *
+   * THE COVERAGE TRAVELS WITH THE FINDINGS, which is the whole reason this is a report rather than a
+   * list: an empty `findings` is the output of the rules that could read the manuscript and reads as
+   * a verdict on the paper, so a page that showed the list alone would tell a reader the paper is
+   * fine when three of five checks had nothing to read. `checks` says which rule reached which
+   * outcome, `needsDomainReview` names the questions no rule here answers, and `summary` states what
+   * the report IS.
+   */
+  readonly quality?: PaperQualityReport
 }
 
 // ── The document compile seam, re-exported for deployments ───────────────────
@@ -928,3 +940,11 @@ export type {
   CompileFormat, CompileRefusal, CompileRefusalCode, CompileRequest, CompiledDocument,
   DocumentBlock, DocumentCompiler, DocumentReference, DocumentSection, ManuscriptDocument,
 } from './runner/document-compile.ts'
+
+// The quality report reaches the PAGE, so its types are reachable from a public subpath: a client
+// that renders a finding has to name the shape it renders, and reaching an internal runner path for
+// it is how a boundary type ends up re-declared and drifted.
+export type {
+  PaperQualityFinding, PaperQualityFindingCode, PaperQualityInput, PaperQualityReport,
+  QualityCheck, QualityCheckOutcome, QualityReviewItem,
+} from './runner/paper-quality.ts'
