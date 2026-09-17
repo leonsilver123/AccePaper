@@ -119,9 +119,19 @@ describe('a citation that establishes nothing', () => {
 })
 
 describe('the keys of one manuscript', () => {
-  it('are refused when two citations claim one key', () => {
-    const refusals = checkCitationKeys([BINDING, { ...BINDING, statementId: 'stmt-other' }])
+  it('are refused when one key is minted to two sources', () => {
+    // A KEY NAMES ONE SOURCE. Two sources under one key print one number for two works, and a reader
+    // cannot tell which one a sentence means.
+    const refusals = checkCitationKeys([BINDING, { ...BINDING, literatureRef: 'W-somewhere-else' }])
     expect(refusals.map(refusal => refusal.code)).toEqual(['citation-duplicate-key'])
+    expect(refusals[0]?.detail).toContain('one name for two sources')
+  })
+
+  it('are accepted when THE SAME source is cited by two sentences', () => {
+    // NOT A DUPLICATE. A paper cites one source in two places, and that is two bindings for one key —
+    // the shape the per-sentence binding below exists to produce. Reading this as a collision would
+    // refuse every manuscript that uses a source twice.
+    expect(checkCitationKeys([BINDING, { ...BINDING, statementId: 'stmt-other' }])).toEqual([])
   })
 
   it('are accepted when every citation names its own source', () => {

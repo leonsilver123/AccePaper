@@ -157,6 +157,16 @@ export type CitationRefusalCode =
   | 'citation-statement-changed'
   /** The passage a judgement was made on is not the passage the source now holds. */
   | 'citation-evidence-changed'
+  /**
+   * A sentence cites a source and no binding covers THAT SENTENCE.
+   *
+   * THE OTHER DIRECTION OF THE SAME CHECK, and the one a set of bindings alone cannot see: every
+   * binding can be sound while a sentence that cites something has none, and then nothing verified
+   * the sentence at all. It is reachable without anybody doing anything wrong — a source cited in two
+   * sentences produced one binding for the first, and a revision that leaves the markers in place
+   * while the bindings age out leaves the later sentences unverified.
+   */
+  | 'citation-statement-unbound'
 
 /** One refusal, naming what is wrong. */
 export interface CitationRefusal {
@@ -437,11 +447,17 @@ export function bindJudgements(
 } {
   const byCiteKey = new Map(judgements.map(judgement => [judgement.citeKey, judgement]))
   const uses: CitationUse[] = []
+  // ONE BINDING PER SENTENCE THAT CITES, not one per source. The set below used to be keyed by cite
+  // key ALONE, so a source cited in two sentences produced a binding for the first and none for the
+  // second — and every check that reads bindings then had nothing to read for the second sentence.
+  // A paper citing the same source twice makes the same claim in two places, and each of them is a
+  // sentence a person has to be able to check; a binding that covers only the first is a citation
+  // nothing verified for the rest of the manuscript.
   const cited = new Set<string>()
   for (const statement of statements) {
     for (const key of citedKeysIn(statement.text)) {
       const judgement = byCiteKey.get(key)
-      if (judgement === undefined || cited.has(key)) continue
+      if (judgement === undefined) continue
       cited.add(key)
       uses.push({
         statementId: statement.statementId,
@@ -458,8 +474,20 @@ export function bindJudgements(
       })
     }
   }
+  // WHERE EACH STATEMENT SITS IN THE MANUSCRIPT, so the bindings for one source read in the order a
+  // reader meets them. Sorting by the statement's id instead would put an introduction after a
+  // discussion whenever the alphabet says so, which is a reading nobody does.
+  const positionOf = new Map(statements.map((statement, index) => [statement.statementId, index]))
   return {
-    uses: uses.sort((left, right) => left.citeKey.localeCompare(right.citeKey)),
+    // IN DOCUMENT ORDER WITHIN A KEY, so two readings of the same manuscript produce the same list:
+    // the key orders the groups, the sentence orders within one, and the content version is the
+    // tiebreak that keeps two occurrences of the same sentence from swapping places.
+    uses: uses.sort((left, right) =>
+      left.citeKey.localeCompare(right.citeKey)
+      || (positionOf.get(left.statementId) ?? 0) - (positionOf.get(right.statementId) ?? 0)
+      || left.statementSha256.localeCompare(right.statementSha256)),
+    // A SOURCE IS UNCITED ONLY WHEN NO SENTENCE NAMES IT — the fact this returns, not "which
+    // sentence claimed it first".
     uncited: judgements.filter(judgement => !cited.has(judgement.citeKey)),
   }
 }
@@ -486,6 +514,24 @@ export function checkStatementBindings(
   const byId = new Map(statements.map(statement => [statement.statementId, statement]))
   const byCiteKey = new Map(judgements.map(judgement => [judgement.citeKey, judgement]))
   const refusals: CitationRefusal[] = []
+  // EVERY CITED SENTENCE MUST HAVE A BINDING, read as a set equality rather than by walking the
+  // bindings: the bindings can all be sound while a sentence that cites something has none.
+  const bound = new Map<string, Set<string>>()
+  for (const use of uses) {
+    const keys = bound.get(use.statementId) ?? new Set<string>()
+    keys.add(use.citeKey)
+    bound.set(use.statementId, keys)
+  }
+  for (const statement of statements) {
+    for (const key of citedKeysIn(statement.text)) {
+      if (bound.get(statement.statementId)?.has(key) === true) continue
+      refusals.push({
+        code: 'citation-statement-unbound',
+        detail: `'${statement.statementId}' cites '${key}' and no binding covers that sentence —`
+          + ' the citation is one nobody read the source against',
+      })
+    }
+  }
   for (const use of uses) {
     const statement = byId.get(use.statementId)
     if (statement === undefined) {
@@ -616,19 +662,26 @@ export function citeKeyOf(source: Pick<SourceRecord, 'id'>): string {
  * @returns one refusal per duplicated key, or an empty list.
  */
 export function checkCitationKeys(
-  uses: ReadonlyArray<{ readonly citeKey: string }>,
+  uses: ReadonlyArray<{ readonly citeKey: string; readonly literatureRef?: string }>,
 ): ReadonlyArray<CitationRefusal> {
-  const seen = new Set<string>()
+  // A KEY NAMES ONE SOURCE. It does not name one citation: the same source cited in two sentences is
+  // two bindings for one key, which is what a paper does. What this refuses is ONE KEY MINTED TO TWO
+  // SOURCES — the manuscript then prints a number that stands for two different works, and no reader
+  // can tell which one a sentence means.
+  const firstSourceOf = new Map<string, string | undefined>()
   const refusals: CitationRefusal[] = []
   for (const use of uses) {
-    if (seen.has(use.citeKey)) {
-      refusals.push({
-        code: 'citation-duplicate-key',
-        detail: `'${use.citeKey}' is claimed by more than one citation, so the manuscript cannot name`
-          + ' one of them',
-      })
+    if (!firstSourceOf.has(use.citeKey)) {
+      firstSourceOf.set(use.citeKey, use.literatureRef)
+      continue
     }
-    seen.add(use.citeKey)
+    const first = firstSourceOf.get(use.citeKey)
+    if (use.literatureRef === undefined || first === undefined || first === use.literatureRef) continue
+    refusals.push({
+      code: 'citation-duplicate-key',
+      detail: `'${use.citeKey}' is claimed by '${first}' and by '${use.literatureRef}', so the`
+        + ' manuscript prints one name for two sources',
+    })
   }
   return refusals
 }

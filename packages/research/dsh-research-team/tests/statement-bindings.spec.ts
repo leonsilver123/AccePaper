@@ -110,6 +110,87 @@ describe('a judgement is attached to a statement, never inherited by one', () =>
   })
 })
 
+describe('one source cited by two sentences is two citations', () => {
+  it('binds each citing sentence, not just the first', () => {
+    // THE GAP THE REVIEW REPRODUCED. `bindJudgements` kept a set of cite keys and skipped any key it
+    // had already bound, so a source cited in the introduction AND again in the discussion produced a
+    // binding for whichever sentence came first and none for the other — and every check that reads
+    // bindings then had nothing to read for the second sentence. A paper citing a source twice makes
+    // the same claim in two places; each of them is a sentence somebody has to be able to check.
+    const twice = [
+      { id: 'introduction', bodyText: 'Prior work disagrees [@cite-10.1016/j.trb.2025.103352].' },
+      { id: 'discussion', bodyText: 'That tension is the one we measured [@cite-10.1016/j.trb.2025.103352].' },
+    ]
+    const statements = locateStatements(twice)
+    const uses = bindJudgements(judgements(), statements).uses
+    const forKey = uses.filter(use => use.citeKey === 'cite-10.1016/j.trb.2025.103352')
+    expect(forKey.map(use => use.statementId)).toEqual(['stmt-introduction-1', 'stmt-discussion-1'])
+    // EACH BINDING CARRIES THE VERSION OF THE SENTENCE IT WAS MADE ABOUT, so rewriting the second
+    // one invalidates the second binding and leaves the first alone.
+    expect(new Set(forKey.map(use => use.statementSha256)).size).toBe(2)
+    const rewritten = [
+      { id: 'introduction', bodyText: 'Prior work disagrees [@cite-10.1016/j.trb.2025.103352].' },
+      { id: 'discussion', bodyText: 'We measured that tension ourselves [@cite-10.1016/j.trb.2025.103352].' },
+    ]
+    const after = locateStatements(rewritten)
+    const refusals = checkStatementBindings(uses, after, judgements())
+    expect(refusals.map(refusal => refusal.code)).toEqual(['citation-statement-changed'])
+    expect(refusals[0]?.detail).toContain('stmt-discussion-1')
+  })
+
+  it('refuses a citing sentence no binding covers', () => {
+    // THE OTHER DIRECTION, and the one a set of bindings alone cannot see: every binding can be sound
+    // while a sentence that cites something has none. Reached here the way a revision reaches it — the
+    // bindings were made about the manuscript as it was, and a later sentence cites a source.
+    const before = locateStatements([
+      { id: 'introduction', bodyText: 'Prior work disagrees [@cite-10.1016/j.trb.2025.103352].' },
+    ])
+    const uses = bindJudgements(judgements(), before).uses
+    const after = locateStatements([
+      { id: 'introduction', bodyText: 'Prior work disagrees [@cite-10.1016/j.trb.2025.103352].' },
+      { id: 'discussion', bodyText: 'The same source reports the opposite [@cite-10.1016/j.trb.2025.103352].' },
+    ])
+    const refusals = checkStatementBindings(uses, after, judgements())
+    expect(refusals.map(refusal => refusal.code)).toEqual(['citation-statement-unbound'])
+    expect(refusals[0]?.detail).toContain('stmt-discussion-1')
+    expect(refusals[0]?.detail).toContain('no binding covers that sentence')
+    // AND IT IS NOT REFUSED ONCE THE SENTENCE IS BOUND, which is what keeps the rule about coverage
+    // rather than about the manuscript having grown.
+    expect(checkStatementBindings(bindJudgements(judgements(), after).uses, after, judgements()))
+      .toEqual([])
+  })
+})
+
+describe('a sentence that moves is a node whose text changed', () => {
+  it('refuses both judgements when two cited sentences swap places', () => {
+    // REORDERING IS NOT A NO-OP. A node's identity is its position among the section's cited
+    // sentences, so a swap puts each judgement under the other sentence's text — and the refusal
+    // names both nodes rather than silently re-pointing one judgement at prose nobody read.
+    const first = locateStatements([{
+      id: 'discussion',
+      bodyText: 'That tension is the one we measured [@cite-10.1016/j.trb.2025.103352].'
+        + ' The threshold was read from an abstract [@cite-10.1155/2017/3082781].',
+    }])
+    const uses = bindJudgements(judgements(), first).uses
+    expect(uses.map(use => use.statementId)).toEqual(['stmt-discussion-1', 'stmt-discussion-2'])
+    const swapped = locateStatements([{
+      id: 'discussion',
+      bodyText: 'The threshold was read from an abstract [@cite-10.1155/2017/3082781].'
+        + ' That tension is the one we measured [@cite-10.1016/j.trb.2025.103352].',
+    }])
+    const refusals = checkStatementBindings(uses, swapped, judgements())
+    // TWO FACTS, BOTH TRUE, BOTH REPORTED: each node now cites the other's source, so each binding's
+    // sentence changed AND each sentence's citation is one no binding covers. Reporting only the first
+    // would leave a reader thinking the sources were re-read; they were not.
+    expect([...refusals.map(refusal => refusal.code)].sort()).toEqual([
+      'citation-statement-changed', 'citation-statement-changed',
+      'citation-statement-unbound', 'citation-statement-unbound',
+    ])
+    expect(refusals.map(refusal => refusal.detail).join(' ')).toContain('stmt-discussion-1')
+    expect(refusals.map(refusal => refusal.detail).join(' ')).toContain('no binding covers that sentence')
+  })
+})
+
 describe('a judgement that no longer matches what is there is refused', () => {
   it('passes while the sentence and the passage are the ones it was made about', () => {
     const statements = locateStatements(sectionsWith(CITING))
