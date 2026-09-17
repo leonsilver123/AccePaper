@@ -101,6 +101,8 @@ import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursor
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
 import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
+import { isFigureProvider } from './runner/figure-provider.ts'
+import type { FigureProvider } from './runner/figure-provider.ts'
 import { requireStudyAdapter } from './runner/study-adapter.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
@@ -772,6 +774,23 @@ export class ResearchTeamService extends TypertRemoteService {
   private hostDocumentCompiler(): DocumentCompiler | undefined {
     const research = this.ctx.get('research') as { documentCompiler?: DocumentCompiler } | undefined
     return research?.documentCompiler
+  }
+
+  /**
+   * The drawing capability this deployment has, read off the research engine.
+   *
+   * PUBLIC FOR THE SAME REASON the prose channel is: the engine owns the deployment's configuration,
+   * and a run must draw with the library the deployment named rather than with whatever this package
+   * happens to have.
+   *
+   * @returns the provider, or undefined when the deployment named none.
+   */
+  private hostFigureProvider(): FigureProvider | undefined {
+    const research = this.ctx.get('research') as { figureProvider?: FigureProvider } | undefined
+    const candidate = research?.figureProvider
+    // CHECKED WHERE A DEPLOYMENT-FACING VALUE ARRIVES. The engine builds this from its own config, and
+    // a provider missing a method would fail at D1 — five steps into a run whose earlier gates closed.
+    return isFigureProvider(candidate) ? candidate : undefined
   }
 
   private hostEvidenceProfile(): EvidenceProfile {
@@ -1494,10 +1513,12 @@ export class ResearchTeamService extends TypertRemoteService {
     const stepTimeoutMs = this.hostStepTimeoutMs()
     const revisionRounds = this.hostRevisionRounds()
     const documentCompiler = this.hostDocumentCompiler()
+    const figureProvider = this.hostFigureProvider()
     return {
       evidenceProfile: this.hostEvidenceProfile(),
       researchProfile: this.hostResearchProfile(),
       ...(documentCompiler !== undefined ? { documentCompiler } : {}),
+      ...(figureProvider !== undefined ? { figureProvider } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),

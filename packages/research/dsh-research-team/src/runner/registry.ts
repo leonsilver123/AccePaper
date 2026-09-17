@@ -173,6 +173,7 @@ import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentCompiler } from './document-compile.ts'
+import type { FigureProvider } from './figure-provider.ts'
 import {
   bibliographyOf, bindJudgements, checkCitationKeys, checkCitationUse, checkManuscriptCitations,
   checkStatementBindings, judgementsFor, locateStatements,
@@ -429,6 +430,14 @@ export interface ExecCtx {
    * and this package does not spawn.
    */
   readonly documentCompiler?: DocumentCompiler
+  /**
+   * The deployment's drawing capability, when it has one.
+   *
+   * Absent means D1 draws with the built-in renderer — the same shape as the compiler, and the same
+   * reason: whether a machine has a scientific plotting library is a deployment fact, and a run whose
+   * deployment named none still draws its floats rather than failing.
+   */
+  readonly figureProvider?: FigureProvider
 
   readonly runId: string
   readonly stepId: string
@@ -2385,6 +2394,27 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const figure = figureInv.artifact as ReturnType<typeof renderFigure>
   const table = tableInv.artifact as ReturnType<typeof renderThreeLineTable>
   const roadmap = roadmapInv.artifact as ReturnType<typeof renderRoadmap>
+  // THE DEPLOYMENT'S DRAWING CAPABILITY, WHEN IT HAS ONE. The built-in renderer is deterministic and
+  // dependency-free, which is why it ships, and it is not a plotting library: the plan asks for a
+  // mature provider, and whether a machine has one is a deployment fact. A deployment that named none
+  // draws with the built-in tool and every float says which of them drew it — so a reader comparing
+  // two packages can tell a figure drawn by matplotlib from one drawn by a test fixture.
+  //
+  // THE DIAGRAM IS DRAWN HERE TOO, IN BOTH FORMATS. A roadmap left as mermaid source is a float the
+  // compiled document cannot carry — LaTeX renders it as text and no PDF reader draws it — which is
+  // the dropped float this step used to report rather than a picture.
+  const provider = ctx.figureProvider
+  const drawn = provider === undefined
+    ? undefined
+    : {
+      figure: await provider.renderFigure(figureSpec),
+      diagram: await provider.renderDiagram(roadmapGraph),
+    }
+  /** Which library drew one float, and the version it reported. */
+  const drawerOf = (which: 'figure' | 'diagram'): Record<string, unknown> =>
+    drawn === undefined
+      ? { drawnBy: FIGURE_TOOL_ID, drawnByVersion: FIGURE_TOOL_VERSION }
+      : { drawnBy: provider?.id ?? 'unknown', drawnByVersion: provider?.toolVersion ?? 'unknown', replacesBuiltIn: which === 'figure' }
   // THE FLOATS ARE NUMBERED HERE, ONCE. This step decides which floats exist, so it also decides
   // what they are called: D3 hands these labels to the prose channel (a section may then cite
   // `Table 1`) and E1 renders the captions from them. A counter in the assembler and a roster in the
@@ -2399,11 +2429,12 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       // The FULL svg, not a preview. D3 carries it into the draft and E1 embeds
       // it, so the manuscript holds the figure the tool actually rendered
       // instead of pointing at one.
-      svg: figure.svg.content,
-      // THE RASTER THE SAME TOOL PRODUCED FROM THE SAME SPEC. HTML embeds the SVG; LaTeX has no SVG
+      svg: drawn?.figure.svg ?? figure.svg.content,
+      // THE RASTER THE SAME RENDER PRODUCED FROM THE SAME SPEC. HTML embeds the SVG; LaTeX has no SVG
       // support and embeds this. Without it a document compiled to LaTeX or PDF would carry a figure
       // the reader cannot see, which is the loss the compile now refuses rather than reports.
-      pngBase64: figure.png.base64,
+      pngBase64: drawn?.figure.pngBase64 ?? figure.png.base64,
+      ...drawerOf('figure'),
     },
     {
       kind: 'three-line-table',
@@ -2422,6 +2453,17 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       // Full content, for the same reason as the svg above. The roadmap renders
       // as mermaid, which a markdown reader draws natively.
       content: roadmap.content,
+      // AND AS A PICTURE, when the deployment can draw one: the compiled document carries the SVG in
+      // HTML and the raster in LaTeX, so the diagram survives both formats instead of being reported
+      // as a dropped float.
+      ...(drawn === undefined
+        ? { diagramDrawn: false }
+        : {
+          diagramDrawn: true,
+          svg: drawn.diagram.svg,
+          pngBase64: drawn.diagram.pngBase64,
+          ...drawerOf('diagram'),
+        }),
     },
   ])
   return {

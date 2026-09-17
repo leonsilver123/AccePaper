@@ -20,6 +20,7 @@ import type { StudyPlan } from './study-plan.ts'
 import type { ResearchProfile } from './research-profile.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 import type { DocumentCompiler } from './document-compile.ts'
+import type { FigureProvider } from './figure-provider.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -123,6 +124,14 @@ export interface DriveOptions {
    */
   readonly documentCompiler?: DocumentCompiler
   /**
+   * The deployment's drawing capability, handed to `D1-figure-map`.
+   *
+   * Absent means the built-in renderer draws the floats, which is what every offline run does. A
+   * deployment that names a provider gets that provider's output, and each float records which one
+   * drew it — see {@link FigureProvider}.
+   */
+  readonly figureProvider?: FigureProvider
+  /**
    * Tool dependencies for capability steps; assembled by the Cordis adapter from
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
@@ -180,6 +189,8 @@ export interface DriveStepOptions {
   readonly proseWriter?: ResearchProseWriter
   /** The document compiler; see {@link DriveOptions.documentCompiler}. */
   readonly documentCompiler?: DocumentCompiler
+  /** The drawing capability; see {@link DriveOptions.figureProvider}. */
+  readonly figureProvider?: FigureProvider
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
   /**

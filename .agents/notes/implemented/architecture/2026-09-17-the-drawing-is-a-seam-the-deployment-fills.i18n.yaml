@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-the-drawing-is-a-seam-the-deployment-fills.md
+2026-09-17-the-drawing-is-a-seam-the-deployment-fills.md: a9f842400b69c386ad52e0fd69cc6e9b09b71b70
+2026-09-17-the-drawing-is-a-seam-the-deployment-fills.zh.md: 77af373019603aeb97f1903dc6f7ebb0d7d838db

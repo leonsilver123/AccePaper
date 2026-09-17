@@ -52,6 +52,7 @@ import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchTo
 import { createDeterministicAdapter } from './deterministic-llm.ts'
 import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
+import { MatplotlibProvider } from './matplotlib-provider.ts'
 import { PandocCompiler } from './pandoc-compiler.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
@@ -229,6 +230,13 @@ export interface Config {
    */
   readonly document?: DocumentChannel
   /**
+   * The drawing capability this deployment has, when it has one.
+   *
+   * ABSENT MEANS THE BUILT-IN RENDERER, and every float records which one drew it, so a package's
+   * figures can be traced to the library that produced them rather than to a guess about the machine.
+   */
+  readonly figures?: FigureChannel
+  /**
    * Directory of the Case Pack this deployment runs against.
    *
    * A DEPLOYMENT setting, deliberately not a request parameter: `runPipeline` is exposed
@@ -296,6 +304,23 @@ export interface Config {
    * until the same sections are still open, whichever comes first.
    */
   readonly revisionRounds?: number
+}
+
+/**
+ * The drawing capability a deployment names, when it has one.
+ *
+ * ABSENT BY DEFAULT, for the same reason the document toolchain is: whether a machine has a scientific
+ * plotting library is a fact about the machine. A run under a deployment that names none draws its
+ * floats with the built-in renderer and says so on each float — a different fact from a figure that
+ * failed to draw.
+ */
+export interface FigureChannel {
+  /** The Python interpreter that has matplotlib — a virtual environment's, usually. */
+  readonly executable: string
+  readonly timeoutMs?: number
+  /** The canvas the charts are drawn on, in pixels. */
+  readonly width?: number
+  readonly height?: number
 }
 
 /**
@@ -450,6 +475,17 @@ export class ResearchEngine extends Service {
    */
   documentCompiler: PandocCompiler | undefined
   /**
+   * The drawing capability this deployment has, or undefined when it named none.
+   *
+   * Public for the same reason the compiler is: the team service reads it and hands it to the step
+   * that draws the floats, so one deployment-level choice governs every figure of every run. Absent
+   * means the built-in renderer draws them and each float records which one drew it.
+   *
+   * Not `readonly`: the probe is asynchronous, so the field starts undefined and the deployment's
+   * library is known once the interpreter has answered.
+   */
+  figureProvider: MatplotlibProvider | undefined
+  /**
    * Milliseconds one step may run, when the deployment names a budget, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the runner-side service
    * reads it so one deployment decision governs every step of every run.
@@ -536,6 +572,16 @@ export class ResearchEngine extends Service {
     // THE PROBE DECIDES WHAT THIS DEPLOYMENT CAN PRODUCE. It runs once, here, so a machine without a
     // LaTeX engine is known before any run asks for a PDF — and the absence is a property of the
     // deployment rather than a compile that fails later.
+    this.figureProvider = undefined
+    if (config.figures !== undefined) {
+      const figures = config.figures
+      void MatplotlibProvider.probe({
+        executable: figures.executable,
+        ...(figures.timeoutMs === undefined ? {} : { timeoutMs: figures.timeoutMs }),
+        ...(figures.width === undefined ? {} : { width: figures.width }),
+        ...(figures.height === undefined ? {} : { height: figures.height }),
+      }).then((provider) => { this.figureProvider = provider })
+    }
     this.documentCompiler = undefined
     if (config.document !== undefined) {
       const document = config.document

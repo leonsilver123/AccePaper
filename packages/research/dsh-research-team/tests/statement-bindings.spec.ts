@@ -21,6 +21,7 @@ import {
 } from '../src/runner/citation-bindings.ts'
 import type { CitationUse, SourceJudgement, Statement } from '../src/runner/citation-bindings.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
+import type { FigureProvider } from '../src/runner/figure-provider.ts'
 
 // The judgements are keyed by the CLAIM, as the plan states it — not by the claim's id.
 const CLAIM = DEFAULT_PLAN.claim.ref
@@ -191,5 +192,74 @@ describe('what a section was asked for is part of the run', () => {
     // an instruction: "asked nothing" and "the record lost the request" are different facts.
     expect(draft.proseRequests.every(request => request.channel === 'fixture')).toBe(true)
     expect(draft.proseRequests.every(request => request.instruction === null)).toBe(true)
+  })
+})
+
+describe('a deployment that named a drawing provider gets its figures', () => {
+  it('draws the chart and the diagram through it, and the floats say which library drew them', async () => {
+    // THE SEAM'S PRODUCTION CONSUMER. The built-in renderer is deterministic and dependency-free, which
+    // is why it ships, and it is not a plotting library: a deployment that has one names it, and the
+    // floats must then be ITS output — with the diagram drawn too, because a roadmap left as mermaid
+    // source is a float the compiled document cannot carry.
+    const drawn: string[] = []
+    const provider: FigureProvider = {
+      id: 'spec-provider',
+      toolVersion: '1.2.3',
+      renderFigure: (spec) => {
+        drawn.push(`figure:${spec.kind ?? 'bar'}`)
+        return Promise.resolve({
+          svg: '<svg id="provider-figure"/>',
+          pngBase64: 'iVBORw0KGgoAAAA',
+          width: spec.width,
+          height: spec.height,
+          tool: 'spec-provider',
+          toolVersion: '1.2.3',
+        })
+      },
+      renderDiagram: (graph) => {
+        drawn.push(`diagram:${String(graph.nodes.length)}`)
+        return Promise.resolve({
+          svg: '<svg id="provider-diagram"/>',
+          pngBase64: 'iVBORw0KGgoBBBB',
+          width: 640,
+          height: 360,
+          tool: 'spec-provider',
+          toolVersion: '1.2.3',
+        })
+      },
+    }
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { figureProvider: provider })
+    const figures = (getArtifact(store, run.runId, 'figure-plan') as {
+      figures: ReadonlyArray<Record<string, unknown>>
+    }).figures
+    const chart = figures.find(entry => entry.kind === 'data-figure')
+    const diagram = figures.find(entry => entry.kind === 'roadmap')
+    // THE PROVIDER DREW BOTH, and both carry its markup rather than the built-in renderer's.
+    expect(drawn).toContain('figure:bar')
+    expect(drawn.some(entry => entry.startsWith('diagram:'))).toBe(true)
+    expect(String(chart?.svg)).toContain('provider-figure')
+    expect(String(chart?.pngBase64)).toBe('iVBORw0KGgoAAAA')
+    expect(chart?.drawnBy).toBe('spec-provider')
+    expect(chart?.drawnByVersion).toBe('1.2.3')
+    expect(diagram?.diagramDrawn).toBe(true)
+    expect(String(diagram?.svg)).toContain('provider-diagram')
+    expect(diagram?.drawnBy).toBe('spec-provider')
+  })
+
+  it('draws with the built-in renderer when the deployment named none, and says so', async () => {
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store)
+    const figures = (getArtifact(store, run.runId, 'figure-plan') as {
+      figures: ReadonlyArray<Record<string, unknown>>
+    }).figures
+    const chart = figures.find(entry => entry.kind === 'data-figure')
+    const diagram = figures.find(entry => entry.kind === 'roadmap')
+    // WHICH ONE DREW IT IS ON THE FLOAT, so a reader comparing two packages can tell a figure a
+    // plotting library drew from one a test fixture drew — and the diagram records that nothing drew
+    // it as a picture, which is the honest state rather than a dropped float nobody names.
+    expect(String(chart?.drawnBy)).toContain('figure')
+    expect(diagram?.diagramDrawn).toBe(false)
+    expect(diagram?.svg).toBeUndefined()
   })
 })
