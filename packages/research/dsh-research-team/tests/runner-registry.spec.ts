@@ -585,7 +585,9 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
   it('B3-baseline producer is the honest fixture brand (ablation producer moved to C3)', async () => {
     const b3 = STEP_EXECUTOR_REGISTRY.get('B3-baseline')
     const c3 = STEP_EXECUTOR_REGISTRY.get('C3-boundary')
-    expect(String(b3?.producer).startsWith('platoon-sim:baseline')).toBe(true)
+    // THE BRAND IS THE STUDY'S, so the static table declares its SHAPE and the artifact carries the
+    // implementation that measured it — a queueing run's baseline says `service-latency-sim:`.
+    expect(b3?.producer).toBe('<implementation>:baseline')
     expect(String(c3?.producer).startsWith(`${ABLATION_TOOL_ID}@`)).toBe(true)
   })
 

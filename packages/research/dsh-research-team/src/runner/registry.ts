@@ -601,8 +601,13 @@ const B2_PRODUCER = 'dataset:on-disk-verification'
 // THIS package's experiment and convergence modules, not by a registered tool and
 // not by a fixture table. Naming them `fixture:*` understated what ran and made the
 // artifact brand contradict the artifact's own `fixture: false`.
-const B3_PRODUCER = 'platoon-sim:baseline'
-const C1_PRODUCER = 'platoon-sim:mvp'
+// THE STUDY STAMPS ITS OWN BRAND, and this table cannot know which study a run is conducting. These
+// are the SHAPE of the brand — `<implementation>:<what it measured>` — and the executor stamps the
+// adapter's, so a queueing run's baseline artifact says `service-latency-sim:baseline` rather than
+// naming a simulator that did not run. A literal here would be a static declaration contradicting the
+// artifact it describes, which is the drift the registry's `basis` fields exist to prevent.
+const B3_PRODUCER = '<implementation>:baseline'
+const C1_PRODUCER = '<implementation>:mvp'
 const C2_PRODUCER = 'convergence:trinity-loop'
 const C3_PRODUCER = `${ABLATION_TOOL_ID}@${ABLATION_TOOL_VERSION}`
 const D1_PRODUCER = `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`
