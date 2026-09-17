@@ -33,7 +33,12 @@ function document(cited = ['cite-W1']): ManuscriptDocument {
 }
 
 /** A compiler that renders whatever it is asked for, in the shape a real one returns. */
-function stubCompiler(formats: ReadonlyArray<CompileFormat> = ['html', 'latex']): DocumentCompiler {
+// THE THREE DELIVERABLES AND NOT PDF, which is what a deployment with pandoc and no LaTeX engine
+// offers: a stub declaring fewer formats than the run requests is how `compile-format-unavailable`
+// becomes reachable in a run rather than only in a unit call.
+function stubCompiler(
+  formats: ReadonlyArray<CompileFormat> = ['html', 'latex', 'docx'],
+): DocumentCompiler {
   return {
     tool: 'stub',
     formats,
@@ -134,7 +139,7 @@ describe('a run that compiles its document', () => {
       compilation: { tool: string | null; compiled: ReadonlyArray<string>; refusals: ReadonlyArray<string> }
     }
     expect(manuscript.compilation.tool).toBe('stub')
-    expect(manuscript.compilation.compiled).toEqual(['manuscript.html', 'manuscript.tex'])
+    expect(manuscript.compilation.compiled).toEqual(['manuscript.html', 'manuscript.tex', 'manuscript.docx'])
     expect(manuscript.compilation.refusals).toEqual([])
     expect(manuscript.packageFiles['manuscript.html']).toContain('<document>')
     expect(manuscript.packageFiles['manuscript.tex']).toContain('<document>')

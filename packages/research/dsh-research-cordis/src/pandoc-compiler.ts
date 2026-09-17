@@ -32,7 +32,7 @@ import { join } from 'node:path'
 // checked against the seam where the team reads it.
 
 /** One format a compiler can produce. */
-type CompileFormat = 'html' | 'latex' | 'pdf'
+type CompileFormat = 'html' | 'latex' | 'docx' | 'pdf'
 
 /** One block of the document model. */
 type DocumentBlock =
@@ -238,7 +238,10 @@ export class PandocCompiler {
     const formats: CompileFormat[] = []
     const version = await run(config.executable, ['--version'], '', DEFAULT_TIMEOUT_MS).catch(() => undefined)
     if (version !== undefined && version.code === 0) {
-      formats.push('html', 'latex')
+      // DOCX NEEDS NO ENGINE OF ITS OWN: pandoc writes the whole package, figures embedded and
+      // equations as OMML, so a deployment that has pandoc can hand a journal its .docx. PDF is the
+      // format that needs a LaTeX engine, and it is offered only when one answered.
+      formats.push('html', 'latex', 'docx')
       if (config.latexEngine !== undefined) {
         const engine = await run(config.latexEngine, ['--version'], '', DEFAULT_TIMEOUT_MS).catch(() => undefined)
         if (engine !== undefined && engine.code === 0) formats.push('pdf')
@@ -294,10 +297,18 @@ export class PandocCompiler {
               continue
             }
             const name = `${slugOf(block.label)}.png`
-            writeFileSync(join(work, name), Buffer.from(block.pngBase64, 'base64'))
+            const absolute = join(work, name)
+            writeFileSync(absolute, Buffer.from(block.pngBase64, 'base64'))
             files.push({ path: `assets/${name}`, label: block.label, base64: block.pngBase64 })
             embedded.push(block.label)
-            rendered.push(`![${block.caption}](${join(work, name)})`)
+            // THE PATH IS PASSED AS AN ABSOLUTE PATH. `file://` URLs were tried and do NOT work
+            // here: pandoc 2.12 cannot fetch them for a local image, so the figure is dropped AND the
+            // document is truncated. THE DEFECT THIS LEAVES IS RECORDED, not papered over: a
+            // document whose prose names its figure comes back from the LaTeX branch as a PREAMBLE
+            // WITH NO BODY, because the path carries backslashes the reader takes as escapes and a
+            // space that ends the inline link. DOCX is unaffected. It is open, with its evidence, in
+            // `project-plan/architecture-review-2026-09-15/OVERNIGHT-STATUS.md`.
+            rendered.push(`![${block.caption}](${absolute})`)
             continue
           }
           if (block.kind === 'diagram') {
@@ -319,12 +330,14 @@ export class PandocCompiler {
         ? await this.runToStdout(markdown, ['-f', 'markdown+tex_math_dollars', '-t', 'html5', '--standalone', '--self-contained', '--mathml'])
         : request.format === 'latex'
           ? await this.runToStdout(markdown, ['-f', 'markdown+tex_math_dollars', '-t', 'latex', '--standalone'])
-          // THE PDF IS REQUESTED AS A PDF. The LaTeX branch with `--pdf-engine` produced LaTeX on
-          // stdout and exited 0 — a file named `manuscript.pdf` that is not one — so the output goes to
-          // a real `.pdf` path, comes back as BYTES, and is checked for the PDF header before it is
-          // accepted.
+          // DOCX IS WRITTEN TO A FILE, like the PDF and unlike the two text formats: it is a ZIP
+          // package, so it comes back as BYTES and is checked for the package signature.
           : ''
       if (request.format === 'pdf') {
+        // THE PDF IS REQUESTED AS A PDF. The LaTeX branch with `--pdf-engine` produced LaTeX on
+        // stdout and exited 0 — a file named `manuscript.pdf` that is not one — so the output goes to
+        // a real `.pdf` path, comes back as BYTES, and is checked for the PDF header before it is
+        // accepted.
         // TWO STEPS, BOTH OBSERVABLE. Pandoc renders the LaTeX source to a file; the engine compiles
         // THAT file; this code reads the `.pdf` the engine wrote. Handing pandoc `--pdf-engine` did
         // neither — it produced LaTeX on stdout and exited 0 — and running the engine ourselves is
@@ -360,6 +373,30 @@ export class PandocCompiler {
         return {
           format: 'pdf',
           fileName: 'manuscript.pdf',
+          content: bytes.toString('base64'),
+          encoding: 'base64',
+          tool: this.tool,
+          assets: { embedded, dropped },
+          files,
+        }
+      }
+      if (request.format === 'docx') {
+        const target = join(work, 'manuscript.docx')
+        await this.runToFile(markdown, ['-f', 'markdown+tex_math_dollars', '-t', 'docx'], target)
+        if (!existsSync(target)) {
+          throw new Error(`'${this.config.executable}' produced no DOCX (it wrote no file where its output belongs)`)
+        }
+        const bytes = readFileSync(target)
+        // AN OOXML PACKAGE IS A ZIP, and its signature is the first check: a file that is not one would
+        // be handed to a journal as a .docx it cannot open. The bytes are the document, so what is
+        // checked is the package, not its extension.
+        const header = bytes.subarray(0, 4).toString('latin1')
+        if (header !== 'PK') {
+          throw new Error(`'${this.config.executable}' produced no DOCX (output begins '${header}')`)
+        }
+        return {
+          format: 'docx',
+          fileName: 'manuscript.docx',
           content: bytes.toString('base64'),
           encoding: 'base64',
           tool: this.tool,

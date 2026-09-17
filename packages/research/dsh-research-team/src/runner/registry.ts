@@ -3536,9 +3536,18 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // is the SAME one the HTML and the LaTeX were rendered from, so the three formats cannot describe
   // different manuscripts — and the PDF is what a referee receives, which is why leaving it out of the
   // run's own artifacts made "the deployment has an engine" unverifiable from a package.
+  // DOCX AND LATEX ARE THE DELIVERABLES: most journals' submission systems take a Word file, some
+  // want the LaTeX source, and both are produced from the same document model. PDF is compiled
+  // ADDITIONALLY when the deployment has a LaTeX engine for it, and is never the thing a journal is
+  // handed here — a PDF this pipeline produced is a reading copy, not the submission.
+  // THE THREE DELIVERABLES ARE ALWAYS REQUESTED, even when there is no compiler at all: a deployment
+  // that configured none must reach the artifact with `compile-compiler-missing` on it, which is a
+  // reader's only way to tell "not compiled" from "compiled badly". PDF is requested only when the
+  // deployment's own probe says it can produce one, because "this machine has no LaTeX engine" is a
+  // property of the deployment rather than a compile that failed.
   const compileFormats = (ctx.documentCompiler?.formats ?? []).includes('pdf')
-    ? (['html', 'latex', 'pdf'] as const)
-    : (['html', 'latex'] as const)
+    ? (['html', 'latex', 'docx', 'pdf'] as const)
+    : (['html', 'latex', 'docx'] as const)
   for (const format of compileFormats) {
     // A DRAFT, at this point in the run: the manuscript this step assembles has not been approved, so
     // what it compiles is a working document. A float that cannot be embedded is recorded here and

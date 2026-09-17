@@ -24,6 +24,13 @@ export type CompileFormat =
   | 'html'
   /** A LaTeX source file, for a journal that wants one, or for a PDF engine to compile. */
   | 'latex'
+  /**
+   * A Word document, which is what most journals' submission systems take.
+   *
+   * IT NEEDS NO ENGINE BEYOND PANDOC, unlike a PDF: the figures are embedded in the package and the
+   * equations arrive as OMML, so a deployment with pandoc alone can hand a journal its .docx.
+   */
+  | 'docx'
   /** A PDF, which needs a LaTeX engine and is refused when the deployment has none. */
   | 'pdf'
 
@@ -165,6 +172,7 @@ export interface CompileRefusal {
 const FILE_NAME_BY_FORMAT: Readonly<Record<CompileFormat, string>> = {
   html: 'manuscript.html',
   latex: 'manuscript.tex',
+  docx: 'manuscript.docx',
   pdf: 'manuscript.pdf',
 }
 
