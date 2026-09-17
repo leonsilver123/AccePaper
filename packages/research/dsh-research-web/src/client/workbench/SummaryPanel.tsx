@@ -1,4 +1,5 @@
 /** T26 summary panel: the fixture/snapshot run-summary body (MOCK-labelled). */
+import { useState } from 'react'
 import type { PanelProps } from './shared.ts'
 import css from '../ResearchView.module.css'
 
@@ -8,7 +9,30 @@ import css from '../ResearchView.module.css'
  * conversation-view entry and the workbench Summary tab.
  * @param props - the flattened run summary and the `research` translate `t`.
  */
-export function SummaryPanel({ summary, t }: PanelProps) {
+export interface SummaryPanelProps extends PanelProps {
+  /**
+   * Ask the host to write the package again, as a draft or as the final one.
+   *
+   * Absent on a host that cannot export, and the controls are then not rendered at all: a button that
+   * calls nothing is worse than no button. The host refuses a final package for the same reasons it
+   * states here, so hiding the control is not what enforces anything.
+   */
+  readonly onExportPackage?: (runId: string, mode: 'draft' | 'final') => Promise<void>
+}
+
+export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps) {
+  const [exporting, setExporting] = useState<'draft' | 'final' | undefined>(undefined)
+  const [exportError, setExportError] = useState<string | undefined>(undefined)
+
+  const exportPackage = (mode: 'draft' | 'final'): void => {
+    if (onExportPackage === undefined || exporting !== undefined) return
+    setExporting(mode)
+    setExportError(undefined)
+    void onExportPackage(summary.runId, mode)
+      .catch((cause: unknown) => { setExportError(cause instanceof Error ? cause.message : String(cause)) })
+      .finally(() => { setExporting(undefined) })
+  }
+
   return (
     <div className={css.root}>
       {/* The badge states where the numbers came from: this panel is used both by the
@@ -214,9 +238,68 @@ export function SummaryPanel({ summary, t }: PanelProps) {
                       .join(', ')}
                   </div>
                 )}
+                {/* WHICH PACKAGE THIS IS. A list of filenames read the same whether a person had
+                    approved the paper or nothing had been decided yet, and the package a drive
+                    writes when it stops at the human gate is always a draft. */}
+                {deliverable.kind === 'package' && deliverable.state !== undefined && (
+                  <div data-research-package-state={deliverable.state}>
+                    <span className={`${css.tag} ${deliverable.state === 'final' ? '' : css['s-blocked']}`}>
+                      {deliverable.state === 'final'
+                        ? t('deliverables.stateFinal')
+                        : t('deliverables.stateDraft')}
+                    </span>
+                  </div>
+                )}
+                {deliverable.kind === 'package' && (deliverable.checks?.length ?? 0) > 0 && (
+                  <ul className={css.list} data-research-package-checks="">
+                    {deliverable.checks?.map(check => (
+                      <li key={check.code} className={css.row} data-research-package-check={check.code}>
+                        <span className={css.name}>{check.code}</span>
+                        <span className={css.note}>
+                          {check.passed ? t('deliverables.checkPassed') : check.detail}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {exportError !== undefined && (
+                  <div className={`${css.tag} ${css['s-failed']}`} data-research-package-error="">
+                    {t('deliverables.exportRefused', { message: exportError })}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
+        )}
+        {/* THE CONTROLS BELONG TO THE RUN, not to a package file that exists yet: a study taken back
+            from a previous process has no export recorded, and a reader on it must still be able to
+            ask for one. Absent on a host that cannot export. */}
+        {onExportPackage !== undefined && (
+          <div className={css.tabs}>
+            <button
+              type="button"
+              className={css.tab}
+              data-research-package-export="draft"
+              disabled={exporting !== undefined}
+              onClick={() => { exportPackage('draft') }}
+            >
+              {exporting === 'draft' ? t('deliverables.exporting') : t('deliverables.exportDraft')}
+            </button>
+            <button
+              type="button"
+              className={css.tab}
+              data-research-package-export="final"
+              disabled={exporting !== undefined}
+              onClick={() => { exportPackage('final') }}
+            >
+              {exporting === 'final' ? t('deliverables.exporting') : t('deliverables.exportFinal')}
+            </button>
+          </div>
+        )}
+        {exportError !== undefined && (
+          <div className={`${css.tag} ${css['s-failed']}`} data-research-package-error="">
+            {t('deliverables.exportRefused', { message: exportError })}
+          </div>
         )}
       </section>
     </div>

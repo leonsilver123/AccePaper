@@ -907,4 +907,14 @@ export interface ResearchPackageExport {
    * the package files themselves must never contain.
    */
   readonly directory?: string
+  /**
+   * Whether what was written is the final package or a working draft, and the conditions that
+   * decided it.
+   *
+   * Reported on the wire because the page states them BESIDE the export control: a reader who is
+   * told "refused" and not which condition failed has to guess what to do next, and a reader who is
+   * told the package is final has to be able to check that against the run's own records.
+   */
+  readonly state?: 'draft' | 'final'
+  readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
 }

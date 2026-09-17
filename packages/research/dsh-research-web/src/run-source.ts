@@ -228,6 +228,15 @@ export interface WirePackageExport {
   readonly files: ReadonlyArray<{ readonly path: string; readonly bytes: number; readonly sha256: string }>
   readonly error?: string
   readonly directory?: string
+  /**
+   * Whether the package is the final one or a working draft, and the conditions that decided it.
+   *
+   * OPTIONAL, like every field added after this twin was written: a host built before them still
+   * satisfies the type, and the page then states no state rather than defaulting one — a package
+   * whose state was invented by the client would read as final on a host that never said so.
+   */
+  readonly state?: 'draft' | 'final'
+  readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
 }
 
 /**
@@ -644,6 +653,8 @@ function deliverablesOf(snapshot: WireRunSnapshot): ReadonlyArray<DeliverableVie
       revision: null,
       ...(pkg.error === undefined ? {} : { error: pkg.error }),
       ...(pkg.directory === undefined ? {} : { directory: pkg.directory }),
+      ...(pkg.state === undefined ? {} : { state: pkg.state }),
+      ...(pkg.checks === undefined ? {} : { checks: pkg.checks.map(check => ({ ...check })) }),
     })
   }
   const stored = snapshot.runPersistence

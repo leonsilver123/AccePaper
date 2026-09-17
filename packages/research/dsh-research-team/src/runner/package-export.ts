@@ -17,11 +17,39 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getArtifact, getAuditHistory, getRunSnapshot } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getAuditHistory, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import { readinessOfRun } from './submission-readiness.ts'
+import {
+  checkFinalPackage, finalPackageApprovalOf, finalPackageFactsOf, finalPackageStateOf,
+} from './final-package.ts'
+import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from './final-package.ts'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
-import type { RunResult, StepOutcome } from './types.ts'
+import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
+
+/**
+ * What a package needs to know about one step.
+ *
+ * Narrower than {@link StepOutcome} on purpose: a run's outcome carries the evidence of the drive
+ * (artifact values, whether a real tool ran), and a package written AFTER the drive — by an operator
+ * asking for the final one — has no drive result to hand. What it has is the run's own record plus
+ * the executor registry, and those are what the manifest's step table is built from.
+ */
+export interface PackageStepFacts {
+  readonly stepId: string
+  readonly status: string
+  readonly attemptId: number
+  readonly kind: string
+  readonly producer: string
+  readonly outputSlugs: ReadonlyArray<string>
+  readonly verdicts: Readonly<Record<string, string>>
+}
+
+/** The run as a package needs it: its id and one entry per step. */
+export interface PackageRunFacts {
+  readonly runId: string
+  readonly steps: ReadonlyArray<PackageStepFacts>
+}
 
 /** One file the package will contain, as content rather than as a name. */
 export interface PackageFile {
@@ -75,6 +103,25 @@ export interface RunPackageManifest {
   readonly profileEligible: boolean
   readonly submissionReady: boolean
   readonly readinessNote: string
+  /**
+   * Whether this package is the FINAL one or a working draft.
+   *
+   * `final` means every condition in {@link checks} holds: the run was conducted under the
+   * production profile, finished, was approved at the version it holds, saved, and the package
+   * carries every file the manuscript declares. A draft is a real package of a real run that is not
+   * yet the thing to hand anyone — and the files it contains say so.
+   */
+  readonly state: FinalPackageState
+  /** Every condition a final package must meet, with what the run recorded about it. */
+  readonly checks: ReadonlyArray<FinalPackageCheck>
+  /**
+   * The decision that made this package final, as the run recorded it.
+   *
+   * Absent on a draft, and absent on a package whose approval was refused. Present means a person
+   * approved THESE artifact versions: the targets are the refs frozen at the moment of the decision,
+   * so a reader comparing two packages can see whether the same revision was approved.
+   */
+  readonly approval?: FinalPackageApproval
   readonly note: string
 }
 
@@ -140,7 +187,7 @@ function markdownFile(lines: ReadonlyArray<string>): string {
 }
 
 /** One step's recorded outcome, in the manifest's shape. */
-function stepRecord(outcome: StepOutcome): RunPackageManifest['steps'][number] {
+function stepRecord(outcome: PackageStepFacts): RunPackageManifest['steps'][number] {
   return {
     stepId: outcome.stepId,
     status: outcome.status,
@@ -162,12 +209,16 @@ function stepRecord(outcome: StepOutcome): RunPackageManifest['steps'][number] {
  * @param run - the driven run result.
  * @param evidenceProfile - the profile the run was conducted under, which decides whether the
  *   package it produced may be submitted.
+ * @param options - whether this is the final package or a working draft, and the run's last write
+ *   failure when one was reported. The checks are computed here from the run's own records; the
+ *   caller states only its INTENT, never whether the conditions hold.
  * @returns the files, the manifest, and the run id.
  */
 export function planRunPackage(
   store: ResearchRunStore,
-  run: RunResult,
+  run: PackageRunFacts,
   evidenceProfile: EvidenceProfile,
+  options: { readonly mode: 'draft' | 'final'; readonly saveError?: string } = { mode: 'draft' },
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
   const readiness: SubmissionReadiness = readinessOfRun(store, runId, evidenceProfile)
@@ -187,34 +238,6 @@ export function planRunPackage(
       if (typeof content === 'string' && content.length > 0) files.push({ path, content: `${content.replace(/\n+$/u, '')}\n` })
     }
   }
-
-  files.push({
-    path: 'run-summary.md',
-    content: markdownFile([
-      '# Run summary',
-      '',
-      `- runId: \`${runId}\``,
-      `- steps driven: ${run.steps.length} of 16`,
-      `- final status: \`${run.steps[run.steps.length - 1]?.status ?? 'none'}\``,
-      `- evidence profile: \`${evidenceProfile}\``,
-      `- evidence eligible: ${readiness.profileEligible ? 'yes' : 'NO'}`,
-      `- submission ready: ${readiness.ready ? 'yes' : '**NO**'}`,
-      '',
-      '## What this package is',
-      '',
-      'Artifacts of a synthetic research run. The pipeline, its tool calls, its gates and its',
-      'session log are real; the measurements are the study\'s own deterministic simulation over a',
-      'measured demand profile. Nothing here is a published result.',
-      '',
-      readiness.reason,
-      '',
-      '## Step outcomes',
-      '',
-      '| step | status | attempt | channel | producer |',
-      '|---|---|---|---|---|',
-      ...run.steps.map(s => `| ${s.stepId} | ${s.status} | ${s.attemptId} | ${s.kind} | ${s.producer} |`),
-    ]),
-  })
 
   files.push({ path: 'steps.json', content: jsonFile(run.steps.map(stepRecord)) })
   files.push({
@@ -264,6 +287,44 @@ export function planRunPackage(
   })
 
   const written = new Set(files.map(file => file.path))
+  // The paths this package WILL carry: the files written so far plus the summary, which is built
+  // below because its text states the state these checks decide.
+  const facts = finalPackageFactsOf(
+    store, runId, evidenceProfile, [...written, 'run-summary.md'],
+    options.saveError,
+  )
+  const checks = checkFinalPackage(facts)
+  const state = finalPackageStateOf(checks)
+  const approval = finalPackageApprovalOf(facts.approval)
+  files.unshift({
+    path: 'run-summary.md',
+    content: markdownFile([
+      '# Run summary',
+      '',
+      `- runId: \`${runId}\``,
+      `- steps driven: ${run.steps.length} of 16`,
+      `- final status: \`${run.steps[run.steps.length - 1]?.status ?? 'none'}\``,
+      `- evidence profile: \`${evidenceProfile}\``,
+      `- evidence eligible: ${readiness.profileEligible ? 'yes' : 'NO'}`,
+      `- submission ready: ${readiness.ready ? 'yes' : '**NO**'}`,
+      `- package state: \`${state}\`${state === 'final' ? '' : ' — A WORKING DRAFT, not for submission'}`,
+      '',
+      '## What this package is',
+      '',
+      'Artifacts of a synthetic research run. The pipeline, its tool calls, its gates and its',
+      'session log are real; the measurements are the study\'s own deterministic simulation over a',
+      'measured demand profile. Nothing here is a published result.',
+      '',
+      readiness.reason,
+      '',
+      '## Step outcomes',
+      '',
+      '| step | status | attempt | channel | producer |',
+      '|---|---|---|---|---|',
+      ...run.steps.map(s => `| ${s.stepId} | ${s.status} | ${s.attemptId} | ${s.kind} | ${s.producer} |`),
+    ]),
+  })
+
   const manifest: RunPackageManifest = {
     runId,
     // Read from the RUN, not derived from the files: the revision is what the artifacts in this
@@ -285,12 +346,53 @@ export function planRunPackage(
     profileEligible: readiness.profileEligible,
     submissionReady: readiness.ready,
     readinessNote: readiness.reason,
+    state,
+    checks,
+    ...(approval === undefined ? {} : { approval }),
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
-      + 'records no absolute directory and no credential.',
+      + 'records no absolute directory and no credential. `state` is `final` only when every entry '
+      + 'in `checks` holds, and an `approval` names the artifact versions a person decided on.',
   }
 
   return { runId, files, manifest }
+}
+
+/**
+ * Read the step table a package records, off the run as it stands now.
+ *
+ * The kinds and producers come from the executor registry — the audit source of truth for both —
+ * rather than from a drive result, so a package exported AFTER the drive (an operator asking for the
+ * final one) states the same table a package exported at the end of the drive does. A step the
+ * registry does not know is reported as such instead of being given a kind it did not run under.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @returns one entry per step the pipeline declares, in pipeline order.
+ */
+export function packageRunFactsOf(store: ResearchRunStore, runId: string): PackageRunFacts {
+  const snapshot = getRunSnapshot(store, runId)
+  return {
+    runId,
+    steps: getStepDefinitions().map((definition) => {
+      const state = snapshot.steps[definition.id]
+      const entry = STEP_EXECUTOR_REGISTRY.get(definition.id)
+      return {
+        stepId: definition.id,
+        status: state?.status ?? 'pending',
+        attemptId: state?.attemptId ?? 0,
+        kind: entry?.kind ?? 'unknown',
+        producer: entry?.producer ?? 'unknown',
+        outputSlugs: [...(state?.outputs ?? [])],
+        // THE DISCRIMINANT, not the verdict object: the manifest's audit table records what each
+        // component decided (`passed` / `blocked` / `failed` / `abstained`), and a table of
+        // `[object Object]` would name nothing a reader could act on.
+        verdicts: Object.fromEntries(
+          Object.entries(state?.gateResults ?? {}).map(([component, verdict]) => [component, verdict.outcome]),
+        ),
+      }
+    }),
+  }
 }
 
 /**

@@ -289,6 +289,17 @@ export interface DeliverableView {
   readonly error?: string
   /** The directory the output was written to, so the reader can go and look. */
   readonly directory?: string
+  /**
+   * Whether the package on disk is the final one or a working draft.
+   *
+   * A draft is a real package of a real run that is not yet the thing to hand anyone. The page states
+   * which it is BESIDE the files, because the list of names looked the same either way before — and
+   * the package a drive writes when it stops at the human gate is always a draft, since the decision
+   * that would make it final has not been taken yet.
+   */
+  readonly state?: 'draft' | 'final'
+  /** Every condition a final package must meet, with the run's own record of it. */
+  readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
 }
 
 /** Derived + raw presentation model handed to the view. */

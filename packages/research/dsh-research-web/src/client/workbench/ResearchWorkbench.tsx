@@ -108,6 +108,15 @@ export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
     onPhase?: (state: ConnectionState) => void,
   ) => Promise<void>
   /**
+   * Writes the run's package, as a working draft or as the final one. Omitted by a host that cannot
+   * export, in which case the summary shows the files it has and offers no control.
+   */
+  readonly onExportPackage?: (
+    runId: string,
+    mode: 'draft' | 'final',
+    onUpdate: (summary: RunSummary) => void,
+  ) => Promise<void>
+  /**
    * The revision loop's read and its two operations. Omitted by a host that cannot record
    * revisions, in which case the tab says so rather than offering controls that cannot work.
    */
@@ -156,7 +165,7 @@ const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
  */
 export function ResearchWorkbench({
   t, summary: injected, onRun, onPropose, onApprove, onResume, onRetrySave, onListRuns, onOpenRun,
-  revisions, onAdoptRun,
+  revisions, onAdoptRun, onExportPackage,
 }: ResearchViewProps) {
   const [live, setLive] = useState<RunSummary | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -539,7 +548,15 @@ export function ResearchWorkbench({
             ))}
           </nav>
 
-          {active === 'summary' && <SummaryPanel summary={summary} t={t} />}
+          {active === 'summary' && (
+            <SummaryPanel
+              summary={summary}
+              t={t}
+              {...onExportPackage === undefined
+                ? {}
+                : { onExportPackage: (runId: string, mode: 'draft' | 'final') => onExportPackage(runId, mode, (update) => { setLive(update) }) }}
+            />
+          )}
           {active === 'pipeline' && <PipelinePanel summary={summary} t={t} />}
           {active === 'figures' && <ArtifactsPanel summary={summary} t={t} variant="figure" />}
           {active === 'tables' && <ArtifactsPanel summary={summary} t={t} variant="table" />}

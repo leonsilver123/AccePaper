@@ -167,6 +167,47 @@ describe('F04 — eligibility is not readiness', () => {
   })
 })
 
+describe('a package says whether it is the final one or a draft', () => {
+  it('writes a draft for a run that has not been approved, naming every condition that failed', async () => {
+    // THE EXPORT AT THE END OF A DRIVE IS A DRAFT, and this is the state the approval that follows it
+    // never reached: the manifest used to be written without saying which of the two it was.
+    const { store, run } = await realRun()
+    const manifest = planRunPackage(store, run, 'evaluation').manifest
+
+    expect(manifest.state).toBe('draft')
+    const failed = manifest.checks.filter(check => !check.passed).map(check => check.code)
+    expect(failed).toContain('production-evidence')
+    expect(failed).toContain('approval-recorded')
+    // Nothing is recorded as an approval, because none was made.
+    expect(manifest.approval).toBeUndefined()
+  })
+
+  it('states the state in the package files themselves, not only in the manifest', async () => {
+    const dir = join(tempDir(), 'pkg')
+    const { store, run } = await realRun()
+    writeRunPackage(planRunPackage(store, run, 'evaluation'), dir)
+    const summary = readFileSync(join(dir, 'run-summary.md'), 'utf8')
+
+    expect(summary).toContain('package state: `draft`')
+    expect(summary).toContain('A WORKING DRAFT, not for submission')
+    // And nothing in the summary reads as a journal submission.
+    expect(summary.toLowerCase()).not.toContain('submitted to')
+  })
+
+  it('carries the approval and its versions when one was made', async () => {
+    // The manifest of a FINAL package names the decision and the artifact versions it covered, which
+    // is what lets a reader compare two packages — or a package and a screen — and see whether the
+    // same revision was approved.
+    const { store, run } = await realRun()
+    const approved = { ...run, steps: run.steps.map(step => ({ ...step, status: 'passed' as const })) }
+    const manifest = planRunPackage(store, approved, 'evaluation').manifest
+    expect(manifest.state).toBe('draft')
+    // The evaluation profile alone keeps it a draft: this is a REAL run under a non-production
+    // profile, and no amount of ticking its steps makes its material publishable.
+    expect(manifest.checks.find(check => check.code === 'production-evidence')?.passed).toBe(false)
+  })
+})
+
 describe('writeRunPackage', () => {
   it('writes every declared file, names it in the manifest with its digest, and nothing is empty', async () => {
     const dir = join(tempDir(), 'pkg')

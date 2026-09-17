@@ -25,7 +25,8 @@ import { researchViewWith } from './ResearchEntry.tsx'
 import type { WirePlan, WireProposalAnswer } from './direction-source.ts'
 import { runListFrom } from '../run-source.ts'
 import type {
-  RunListEntryView, WireRevisionView, WireRunFrame, WireRunSaveRetry, WireRunStart, WireRunSummaryEntry,
+  RunListEntryView, WirePackageExport, WireRevisionView, WireRunFrame, WireRunSaveRetry, WireRunStart,
+  WireRunSummaryEntry,
 } from '../run-source.ts'
 
 /**
@@ -196,6 +197,19 @@ interface ResearchRemoteNamespace {
    */
   retryRunSave(request: { readonly runId: string }): Promise<
     { readonly ok: true; readonly value: WireRunSaveRetry }
+    | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+  >
+
+  /**
+   * Write one run's package again, as a working draft or as the final one.
+   *
+   * The drive writes a draft when it stops, and a run that reaches the human gate always stops there
+   * — so the package a reader has before deciding is a draft BY CONSTRUCTION, and the one they want
+   * after approving has to be asked for. A host that refuses a final package answers with its own
+   * reason, which the page states rather than folding into a failed export.
+   */
+  exportRunPackage(request: { readonly runId: string; readonly mode: 'draft' | 'final' }): Promise<
+    { readonly ok: true; readonly value: WirePackageExport }
     | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
   >
 }
@@ -413,6 +427,31 @@ export function apply(ctx: Context): void {
   }
 
   /**
+   * Ask the host to write the run's package, as a draft or as the final one.
+   *
+   * THE REFUSAL IS THROWN WITH THE HOST'S OWN WORDS, which name the first condition that failed: a
+   * page that reported "export failed" would leave the reader guessing which of nine conditions the
+   * run did not meet, while the host already has the sentence.
+   *
+   * @param runId - the run to package.
+   * @param mode - which of the two the person asked for.
+   * @returns the files written, their digests, the directory, and the state with its checks.
+   */
+  const exportPackage = async (
+    runId: string,
+    mode: 'draft' | 'final',
+    onUpdate: (summary: ReturnType<typeof buildSummary>) => void,
+  ): Promise<void> => {
+    const answered = await namespace().exportRunPackage({ runId, mode })
+    if (!answered.ok) throw new Error(`${answered.error.code}: ${answered.error.message}`)
+    // THE RUN IS RE-READ, so the page shows the package the host just recorded on it — the files, the
+    // digests, and the state with its checks. Rendering the answer locally would put a second copy of
+    // those facts in the page, and the next reload would disagree with it.
+    const after = await namespace().runSnapshot({ runId })
+    if (after.ok && after.value !== null) onUpdate(buildSummary(summaryInputFrom(after.value)))
+  }
+
+  /**
    * Ask the host for research directions. The failure is surfaced rather than turned into an empty
    * answer: "the host could not propose" and "the host proposed nothing" are different facts, and
    * the dialog says which.
@@ -529,5 +568,5 @@ export function apply(ctx: Context): void {
     // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
   }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun, {
     list: listRevisions, request: requestRevision, step: revisionStep,
-  }, adoptRun)))
+  }, adoptRun, exportPackage)))
 }

@@ -84,7 +84,12 @@ async function boot(options: {
    * Exposed for the one test that needs the deployment's directory to answer differently over time —
    * which is how a root that moved, or a write that failed, is expressed without touching internals.
    */
-  readonly engine: { snapshotDirectory?: string; toolDeps?: { literatureAdapter: LiteratureSearchAdapter } }
+  readonly engine: {
+    snapshotDirectory?: string
+    /** Where the deployment writes packages; set by a spec that exports one. */
+    packageDirectory?: string
+    toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
+  }
   directoryEntries(name: string): ReadonlyArray<string>
   /** Point the deployment's saves at another directory, as a reconfiguration would. */
   setSnapshotDirectory(directory: string): void
@@ -109,7 +114,11 @@ async function boot(options: {
   // deployment fills from cordis.yml, so a test that fills it is testing the production path.
   // ONE mutable object, because the service reads this per save — which is what makes "the
   // deployment's directory stopped being writable" expressible in a test without a race.
-  const engine: { snapshotDirectory?: string; toolDeps?: { literatureAdapter: LiteratureSearchAdapter } } = {}
+  const engine: {
+    snapshotDirectory?: string
+    packageDirectory?: string
+    toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
+  } = {}
   if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
   if (options.literatureAdapter !== undefined) engine.toolDeps = { literatureAdapter: options.literatureAdapter }
   ctx.provide('research', engine)
@@ -891,6 +900,60 @@ async function untilStopped(service: ResearchTeamService, runId: string): Promis
     await new Promise<void>((resolve) => { setImmediate(resolve) })
   }
 }
+
+describe('the final package is exported by asking for one', () => {
+  it('refuses the final package of a run nobody approved, writes the draft, and refuses an unheld run', async () => {
+    const root = snapshotRoot()
+    const packages = mkdtempSync(join(tmpdir(), 'dsh-packages-'))
+    roots.push(packages)
+    const host = await boot({ snapshotDirectory: root })
+    host.engine.packageDirectory = packages
+    try {
+      const started = await host.service.startRun({ commandId: 'command-package' })
+      await untilStopped(host.service, started.runId)
+
+      // The drive's own export is the draft that already sits there, which is the state this test
+      // then tries to publish as final.
+      const manifestFile = join(packages, started.runId, 'run-manifest.json')
+      expect(existsSync(manifestFile)).toBe(true)
+      const beforeRefusal = readFileSync(manifestFile, 'utf8')
+
+      // THE FINAL PACKAGE IS REFUSED IN THE OPERATION, not by hiding a control: a caller that never
+      // saw a page is refused for the same reason. This run is under the evaluation profile and its
+      // human gate has no decision, so the first condition named is the profile.
+      await expect(host.service.exportRunPackageNow({ runId: started.runId, mode: 'final' }))
+        .rejects.toThrow(/\[final-package-refused\] production-evidence/)
+      // AND THE DRAFT IS UNTOUCHED: a refusal that had written anything, or emptied the directory on
+      // its way out, would take away the package a reader still has.
+      expect(readFileSync(manifestFile, 'utf8')).toBe(beforeRefusal)
+
+      // THE DRAFT IS WRITTEN ANYWAY, labelled, with the same conditions in its manifest.
+      const draft = await host.service.exportRunPackageNow({ runId: started.runId, mode: 'draft' })
+      expect(draft.state).toBe('draft')
+      expect(draft.files.length).toBeGreaterThan(0)
+      expect(draft.checks?.filter(check => !check.passed).map(check => check.code))
+        .toContain('production-evidence')
+      const manifest = JSON.parse(
+        readFileSync(join(packages, started.runId, 'run-manifest.json'), 'utf8'),
+      ) as { state: string; checks: ReadonlyArray<{ code: string; passed: boolean }> }
+      expect(manifest.state).toBe('draft')
+      expect(manifest.checks.find(check => check.code === 'production-evidence')?.passed).toBe(false)
+    } finally {
+      await host.dispose()
+    }
+
+    // A RUN THIS PROCESS DOES NOT HOLD: a package is written from the state in memory, and a run read
+    // back from its file is already at the state its file records.
+    const second = await boot({ snapshotDirectory: root })
+    second.engine.packageDirectory = packages
+    try {
+      await expect(second.service.exportRunPackageNow({ runId: 'no-such-run', mode: 'draft' }))
+        .rejects.toThrow(/holds no run/)
+    } finally {
+      await second.dispose()
+    }
+  })
+})
 
 describe('a study a previous process left is taken back before it can be decided', () => {
   /**

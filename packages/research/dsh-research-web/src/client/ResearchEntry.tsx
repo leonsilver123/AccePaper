@@ -84,6 +84,19 @@ export type ResearchRunAdoptSource = (
 ) => Promise<void>
 
 /**
+ * Write one run's package, as a working draft or as the final one.
+ *
+ * THE HOST DECIDES, the page asks: a final package is refused unless every condition holds, and the
+ * refusal names the first one that failed. Omitted by a host that cannot export, in which case the
+ * controls are absent rather than inert.
+ */
+export type ResearchPackageExportSource = (
+  runId: string,
+  mode: 'draft' | 'final',
+  onUpdate: (summary: RunSummary) => void,
+) => Promise<void>
+
+/**
  * Build the slot component bound to one run source and one approval endpoint.
  *
  * @param run - starts a run and reports each snapshot as it is read.
@@ -96,6 +109,7 @@ export type ResearchRunAdoptSource = (
  * @param retrySave - retries a run's write after the host reported it did not land. Omitted by a
  *   host that cannot retry one, in which case the control that offers it is absent rather than
  *   inert.
+ * @param exportPackage - writes a run's package as a draft or as the final one.
  * @param listRuns - the studies this deployment holds. Omitted by a host that cannot list them, in
  *   which case the picker is absent and a page with nothing on screen stays that way.
  * @param openRun - opens one of those studies. Omitted on the same terms as {@link listRuns}.
@@ -115,6 +129,7 @@ export function researchViewWith(
   openRun?: ResearchRunOpenSource,
   revisions?: RevisionSource,
   adoptRun?: ResearchRunAdoptSource,
+  exportPackage?: ResearchPackageExportSource,
 ) {
   return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
@@ -136,6 +151,7 @@ export function researchViewWith(
         {...openRun === undefined ? {} : { onOpenRun: openRun }}
         {...revisions === undefined ? {} : { revisions }}
         {...adoptRun === undefined ? {} : { onAdoptRun: adoptRun }}
+        {...exportPackage === undefined ? {} : { onExportPackage: exportPackage }}
       />
     )
   }

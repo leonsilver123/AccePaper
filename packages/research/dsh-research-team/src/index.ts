@@ -128,7 +128,8 @@ import type { AuditEvent, EvidenceProfile } from '@deepseek-ai/dsh-research-core
 import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
-import { planRunPackage, writeRunPackage } from './runner/package-export.ts'
+import { packageRunFactsOf, planRunPackage, writeRunPackage } from './runner/package-export.ts'
+import { finalPackageRefusalOf } from './runner/final-package.ts'
 import type { CasePackRunInput } from './runner/case-pack.ts'
 import { createRunContext, driveRemaining, runT19B } from './runner/drive.ts'
 import { experimentStudy, studyFromPack } from './runner/platoon-sim.ts'
@@ -1243,7 +1244,9 @@ export class ResearchTeamService extends TypertRemoteService {
         // WHAT WAS IN FLIGHT when the snapshot was taken. A resumed run rolls these back and
         // re-executes them, so a reader told "stopped" is also told what stopping cost.
         interrupted: restored.interrupted.map(step => step.stepId),
-        ...(directory === undefined ? {} : { directory }),
+        // `directory` is defined by the guard above: a run this deployment stores no snapshot for was
+        // reported as absent rather than as a run with nowhere to look.
+        directory,
       },
     }
   }
@@ -1271,15 +1274,116 @@ export class ResearchTeamService extends TypertRemoteService {
     // `join`, not concatenation: this path is shown to the operator, and a mixed-separator path
     // reads as a bug in something they may copy.
     const directory = join(root, run.runId)
+    const saveFailure = this.hostSaveErrorOf(run.runId)
+    const saveErrorOfDraft = saveFailure === undefined ? {} : { saveError: saveFailure }
     try {
-      const manifest = writeRunPackage(planRunPackage(store, run, this.hostEvidenceProfile()), directory)
+      // A DRIVE THAT HAS JUST ENDED HAS NOT BEEN DECIDED ON, so what it exports is a draft with the
+      // failing conditions in its manifest. It used to be written unlabelled, and the manifest of a
+      // run that had reached the human gate said `E2-submit: gated` while the run's own record said
+      // the person had approved — the approval that followed never reached the file. A final package
+      // is exported by asking for one, through {@link exportRunPackageNow}.
+      const manifest = writeRunPackage(
+        planRunPackage(store, { runId: run.runId, steps: run.steps }, this.hostEvidenceProfile(), {
+          mode: 'draft',
+          ...saveErrorOfDraft,
+        }),
+        directory,
+      )
       return {
         files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
         directory,
+        state: manifest.state,
+        checks: manifest.checks.map(check => ({ code: check.code, passed: check.passed, detail: check.detail })),
       }
     } catch (error) {
       return { files: [], error: errorMessage(error) }
     }
+  }
+
+  /**
+   * Write one run's package on demand, as a working draft or as the final package.
+   *
+   * TWO EXPORTS, TWO INTENTS. The drive-end export is a draft of wherever the run stopped. THIS one
+   * is a person asking for the package now, and it can ask for the FINAL one — which is refused
+   * unless every condition holds, in the operation rather than by hiding a control:
+   *
+   * - the run was conducted under the production evidence profile (evaluation material may be read
+   *   and drafted, never published as a production package),
+   * - it finished, produced a manuscript, and left no section refused and no concern open,
+   * - a person approved the human gate,
+   * - that approval still covers the artifacts the run holds (an approval about another version is
+   *   not an approval of this one),
+   * - every file the manuscript declares is in the package,
+   * - and the run's last write landed (a package of state that is not on disk describes a study a
+   *   restart would not find).
+   *
+   * A DRAFT IS WRITTEN ANYWAY, carrying the same checks and naming itself a draft in its manifest and
+   * in its run summary: a reader who wants the current material should get it, labelled, rather than
+   * a refusal that helps nobody. Nothing anywhere in the package reads as a journal submission.
+   *
+   * @param request - the run to package and which of the two the caller wants.
+   * @returns the files written, their digests, the directory, and the state with its checks.
+   * @throws {Error} when this process holds no such run, and when a final package is refused.
+   */
+  @Remote('exportRunPackage')
+  // A REMOTE METHOD ANSWERS OVER THE WIRE, where every call is a promise, and the package is written
+  // from state this process already holds — there is nothing here to await. The rule is disabled for
+  // this one declaration rather than an artificial `await` being added to satisfy it. (Same reason and
+  // same shape as the deterministic provider's `stream`.)
+  // oxlint-disable-next-line typescript/require-await -- a Remote method is async by contract
+  async exportRunPackageNow(request: {
+    readonly runId: string
+    readonly mode: 'draft' | 'final'
+  }): Promise<ResearchPackageExport> {
+    const active = this.activeRuns.get(request.runId)
+    if (active === undefined) {
+      throw new Error(
+        `[research] this process holds no run '${request.runId}': a package is written from the state`
+        + ' in memory, and a run read back from its file is already at the state its file records',
+      )
+    }
+    const research = this.ctx.get('research') as { packageDirectory?: string } | undefined
+    const root = research?.packageDirectory
+    if (root === undefined) {
+      throw new Error(
+        '[research] this deployment configures no package directory, so there is nowhere to write a package',
+      )
+    }
+    const directory = join(root, request.runId)
+    const saveError = this.hostSaveErrorOf(request.runId)
+    const plan = planRunPackage(
+      active.store,
+      packageRunFactsOf(active.store, request.runId),
+      this.hostEvidenceProfile(),
+      { mode: request.mode, ...(saveError === undefined ? {} : { saveError }) },
+    )
+    // REFUSED BEFORE ANYTHING IS WRITTEN. A refusal that had already emptied the directory would
+    // destroy the draft a reader still has.
+    const refusal = request.mode === 'final' ? finalPackageRefusalOf(plan.manifest.checks) : undefined
+    if (refusal !== undefined) throw new Error(refusal)
+    const manifest = writeRunPackage(plan, directory)
+    const exported: ResearchPackageExport = {
+      files: manifest.files.map(file => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
+      directory,
+      state: manifest.state,
+      checks: manifest.checks.map(check => ({ code: check.code, passed: check.passed, detail: check.detail })),
+    }
+    // THE RUN NOW REPORTS THIS PACKAGE. A page that reloads, or a reader looking at the run through
+    // any other client, reads the export off the run's own projection — so an export that only
+    // answered the caller would leave the page it was asked from showing the previous one.
+    active.packageExport = exported
+    return exported
+  }
+
+  /**
+   * The run's last write failure as this process recorded it, when it recorded one.
+   *
+   * @param runId - the run to read.
+   * @returns the deployment's own message, or undefined when the last write landed.
+   */
+  private hostSaveErrorOf(runId: string): string | undefined {
+    const active = this.activeRuns.get(runId)
+    return active === undefined ? undefined : this.livePersistence(active, runId)?.error
   }
 
   /**
