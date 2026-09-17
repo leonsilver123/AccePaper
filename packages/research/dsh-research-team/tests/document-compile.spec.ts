@@ -10,11 +10,12 @@ import { describe, expect, it } from 'vitest'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import {
-  checkCompileRequest, citedKeysOf, compileManuscript,
+  checkCompileRequest, citedKeysOf, compileManuscript, unembeddableFloats,
 } from '../src/runner/document-compile.ts'
 import type {
   CompileFormat, CompiledDocument, DocumentCompiler, ManuscriptDocument,
 } from '../src/runner/document-compile.ts'
+import type { FigureProvider } from '../src/runner/figure-provider.ts'
 
 /** A manuscript with one cited source and one that is cited and not listed. */
 function document(cited = ['cite-W1']): ManuscriptDocument {
@@ -55,6 +56,70 @@ function stubCompiler(
     },
   }
 }
+
+/**
+ * A compiler that keeps the document it was handed, and reports what it could not embed.
+ *
+ * IT REPORTS THROUGH THE SEAM'S OWN PREDICATE rather than deciding for itself, so a case below tests
+ * what E1 assembled and not what this stub believes about figures. The real writer is covered against
+ * real pandoc by `pdf-acceptance.spec.ts`; what this one adds is that the document E1 hands over —
+ * which no artifact carries in full — is the one the writer is promised.
+ *
+ * @returns the compiler and the documents it was asked to render, in order.
+ */
+function recordingCompiler(): { compiler: DocumentCompiler; documents: ManuscriptDocument[] } {
+  const documents: ManuscriptDocument[] = []
+  return {
+    documents,
+    compiler: {
+      tool: 'recording',
+      formats: ['html', 'latex', 'docx'],
+      compile(request) {
+        documents.push(request.document)
+        return Promise.resolve({
+          format: request.format,
+          fileName: '',
+          content: `<document>${request.document.title}</document>`,
+          encoding: 'utf8' as const,
+          tool: 'recording@1',
+          assets: {
+            embedded: [],
+            dropped: unembeddableFloats(request.document, request.format)
+              .map(entry => ({ label: entry.label, reason: entry.reason })),
+          },
+          files: [],
+        } satisfies CompiledDocument)
+      },
+    },
+  }
+}
+
+/** A drawing provider that answers with markup a case can recognise; no library, no process. */
+function drawingProvider(): FigureProvider {
+  return {
+    id: 'spec-drawer',
+    toolVersion: '9.9.9',
+    renderFigure: spec => Promise.resolve({
+      svg: '<svg id="drawn-chart"/>',
+      pngBase64: PNG_ONE_PIXEL,
+      width: spec.width,
+      height: spec.height,
+      tool: 'spec-drawer',
+      toolVersion: '9.9.9',
+    }),
+    renderDiagram: () => Promise.resolve({
+      svg: '<svg id="drawn-roadmap"/>',
+      pngBase64: PNG_ONE_PIXEL,
+      width: 640,
+      height: 360,
+      tool: 'spec-drawer',
+      toolVersion: '9.9.9',
+    }),
+  }
+}
+
+/** One real 1×1 PNG, so a raster a writer embeds is a raster and not a string that says `PNG`. */
+const PNG_ONE_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 describe('what a document cites', () => {
   it('is read from its prose, once per key, in order', () => {
@@ -143,6 +208,66 @@ describe('a run that compiles its document', () => {
     expect(manuscript.compilation.refusals).toEqual([])
     expect(manuscript.packageFiles['manuscript.html']).toContain('<document>')
     expect(manuscript.packageFiles['manuscript.tex']).toContain('<document>')
+  })
+
+  it('hands the compiler the roadmap as a figure the deployment drew, not as its source', async () => {
+    // A ROADMAP THE PROVIDER DREW IS A FIGURE, and E1 is where that is decided: the drawing reached
+    // the figure plan and was dropped on the way into the document, so every compiled manuscript
+    // carried a float no format can embed — reported as `a diagram is carried as its own source`.
+    // That is what kept a run under a deployment WITH a drawing provider at `draft`.
+    const store: ResearchRunStore = new Map()
+    const recorded = recordingCompiler()
+    const run = await runT19B(store, {
+      figureProvider: drawingProvider(),
+      documentCompiler: recorded.compiler,
+    })
+    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+      packageFiles: Record<string, string>
+      compilation: {
+        floatsEmbedded: Record<string, ReadonlyArray<string>>
+        floatsDropped: ReadonlyArray<{ label: string; reason: string; format: string }>
+      }
+    }
+    // THE DOCUMENT ITSELF, which is what the compile chain is handed: the roadmap is a figure with
+    // the provider's own two renderings, and no block in it is a diagram.
+    const kinds = recorded.documents[0]?.sections.flatMap(section =>
+      section.blocks.map(block => `${block.label}:${block.kind}`)) ?? []
+    expect(kinds).toContain('Figure 2:figure')
+    expect(kinds.some(entry => entry.endsWith(':diagram'))).toBe(false)
+    const roadmap = recorded.documents[0]?.sections
+      .flatMap(section => section.blocks)
+      .find(block => block.label === 'Figure 2')
+    expect(roadmap?.kind === 'figure' ? roadmap.svg : '').toContain('drawn-roadmap')
+    expect(roadmap?.kind === 'figure' ? roadmap.pngBase64 : undefined).toBe(PNG_ONE_PIXEL)
+    // WHAT THE COMPILE COULD NOT EMBED, per format: nothing, which is the fact `compiled-document-
+    // complete` reads to decide whether a package may be final.
+    expect(manuscript.compilation.floatsDropped).toEqual([])
+    expect(manuscript.compilation.floatsEmbedded['latex']).toEqual([])
+    // AND THE PACKAGE CARRIES THE PICTURE THE MARKDOWN POINTS AT, so the manuscript's own
+    // `![Figure 2: …](figures/figure-2.svg)` resolves inside the package.
+    expect(manuscript.packageFiles['figures/figure-2.svg']).toContain('drawn-roadmap')
+    expect(manuscript.packageFiles['manuscript.md']).toContain('figures/figure-2.svg')
+    expect(manuscript.packageFiles['manuscript.md']).not.toContain('```mermaid')
+  })
+
+  it('leaves the roadmap as its source when the deployment drew nothing, and says what that costs', async () => {
+    // THE OTHER DIRECTION, and it is not a defect: a deployment with no drawing provider has a
+    // roadmap whose only form is Mermaid, and the compile records it as a float it cannot carry
+    // rather than passing the source off as a figure.
+    const store: ResearchRunStore = new Map()
+    const recorded = recordingCompiler()
+    const run = await runT19B(store, { documentCompiler: recorded.compiler })
+    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+      packageFiles: Record<string, string>
+      compilation: { floatsDropped: ReadonlyArray<{ label: string; reason: string }> }
+    }
+    const roadmap = recorded.documents[0]?.sections.flatMap(section => section.blocks)
+      .find(block => block.label === 'Figure 2')
+    expect(roadmap?.kind).toBe('diagram')
+    expect(manuscript.compilation.floatsDropped.map(entry => entry.label)).toContain('Figure 2')
+    expect(manuscript.compilation.floatsDropped[0]?.reason).toContain('no static rendering')
+    expect(manuscript.packageFiles['manuscript.md']).toContain('```mermaid')
+    expect(manuscript.packageFiles['figures/figure-2.svg']).toBeUndefined()
   })
 
   it('records that it did not compile when the deployment configured no compiler', async () => {

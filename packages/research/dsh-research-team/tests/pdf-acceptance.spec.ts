@@ -17,8 +17,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { PandocCompiler } from '../../dsh-research-cordis/src/pandoc-compiler.ts'
+import { MatplotlibProvider } from '../../dsh-research-cordis/src/matplotlib-provider.ts'
 import { compileManuscript, documentOf } from '../src/runner/document-compile.ts'
+import { runT19B } from '../src/runner/drive.ts'
 
 /** The entries of a ZIP package, by name. */
 function zipNames(path: string): ReadonlyArray<string> {
@@ -60,8 +63,19 @@ function pdfPython(): string | undefined {
   return candidates.map(candidate => resolve(candidate)).find(candidate => existsSync(candidate))
 }
 
+/** The interpreter this machine has matplotlib on, when it has one; the provider names its own. */
+function drawingPython(): string | undefined {
+  const candidates = [
+    process.env['DSH_MATPLOTLIB_PYTHON'],
+    '.workbuddy/tmp/plot-venv/Scripts/python.exe',
+    '.workbuddy/tmp/plot-venv/bin/python',
+  ].filter((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0)
+  return candidates.map(candidate => resolve(candidate)).find(candidate => existsSync(candidate))
+}
+
 const ENGINE = latexEngine()
 const PYTHON = pdfPython()
+const DRAWER = drawingPython()
 
 /**
  * Read a PDF's pages with a real parser: one entry per page, with its text.
@@ -173,6 +187,114 @@ describe.skipIf(PYTHON === undefined)('the formats a submission actually needs, 
     expect(result.compiled.assets.dropped).toEqual([])
     expect(result.compiled.files.map(file => file.path)).toContain('assets/figure-1.png')
   })
+
+  it('carries BOTH floats — the data figure and the drawn roadmap — into one DOCX', async () => {
+    // THE SECOND FLOAT IS THE ONE THAT USED TO GO MISSING. A roadmap the deployment's provider drew
+    // reached E1 and was written into the document as Mermaid source, which no writer can embed, so a
+    // manuscript with a plotted chart and a drawn roadmap arrived at the journal carrying the chart.
+    // Both are figures now, and this reads the OOXML package to show both pictures are in it.
+    const work = mkdtempSync(join(tmpdir(), 'docx-two-'))
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc', timeoutMs: 120_000 })
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const document = documentOf({
+      title: 'A manuscript with two floats',
+      sections: [
+        { id: 'introduction', heading: 'Introduction', bodyText: 'The introduction states the claim.' },
+        { id: 'results', heading: 'Results', bodyText: 'Figure 1 and Figure 2 show the two.' },
+      ],
+      floats: [
+        {
+          kind: 'figure' as const,
+          label: 'Figure 1',
+          caption: 'The measured comparison.',
+          svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+          pngBase64: png,
+        },
+        {
+          kind: 'figure' as const,
+          label: 'Figure 2',
+          caption: 'The plan the study followed.',
+          svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+          pngBase64: png,
+        },
+      ],
+      equations: [],
+      references: [],
+    })
+    const result = await compileManuscript({ document, format: 'docx', mode: 'submission' }, compiler)
+    if (!result.ok) {
+      throw new Error('compile refused: '
+        + result.refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '))
+    }
+    const path = join(work, 'manuscript.docx')
+    writeFileSync(path, Buffer.from(result.compiled.content, 'base64'))
+    // TWO MEDIA PARTS, not one: a package that embedded the chart and dropped the roadmap would carry
+    // a `Figure 2` caption under nothing.
+    const media = zipNames(path).filter(name => name.startsWith('word/media/'))
+    expect(media).toHaveLength(2)
+    const text = zipText(path, 'word/document.xml')
+    expect(text).toContain('The measured comparison.')
+    expect(text).toContain('The plan the study followed.')
+    expect(result.compiled.assets.embedded).toEqual(['Figure 1', 'Figure 2'])
+    expect(result.compiled.assets.dropped).toEqual([])
+  })
+})
+
+describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floats', () => {
+  it('puts the library\'s roadmap into the package the journal receives', async () => {
+    // THE WHOLE CHAIN IN ONE READING: a real plotting library draws both floats, the run assembles its
+    // manuscript, and a real pandoc compiles it — so what is asserted is a package, not a seam. The
+    // roadmap is the float that used to be lost between the drawing and the document, and this is the
+    // case that would have caught it: `floatsDropped` named `Figure 2` for every format.
+    const provider = await MatplotlibProvider.probe({ executable: DRAWER ?? 'python', timeoutMs: 300_000 })
+    expect(provider).toBeDefined()
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc', timeoutMs: 120_000 })
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      // The real library for the floats and the real toolchain for the compile: neither is stubbed,
+      // so a figure that reached the document is a figure the machine drew.
+      ...(provider === undefined ? {} : { figureProvider: provider }),
+      documentCompiler: compiler,
+      // THE STEP BUDGET IS RAISED FOR THIS DEPLOYMENT, exactly as a real one does: the registry's
+      // default fits the offline channels, and D1 drawing through a library plus E1 compiling four
+      // formats through pandoc are process spawns that do not.
+      timeoutMs: 300_000,
+    })
+    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+      packageFiles: Record<string, string>
+      compilation: {
+        tool: string | null
+        floatsEmbedded: Record<string, ReadonlyArray<string>>
+        floatsDropped: ReadonlyArray<{ label: string; reason: string }>
+        refusals: ReadonlyArray<string>
+      }
+    }
+    expect(manuscript.compilation.tool).toBe('pandoc')
+    expect(manuscript.compilation.refusals).toEqual([])
+    // BOTH FLOATS, IN BOTH FORMATS THAT NEED A RASTER. HTML takes the SVG either way; LaTeX and DOCX
+    // can only carry a picture, which is what the provider's raster is for.
+    expect(manuscript.compilation.floatsEmbedded['latex']).toEqual(['Figure 1', 'Figure 2'])
+    expect(manuscript.compilation.floatsDropped).toEqual([])
+    // AND THE PICTURE IS REALLY A PICTURE: the roadmap's own file in the package is the SVG the
+    // library produced, not the Mermaid source it was planned from.
+    const roadmap = manuscript.packageFiles['figures/figure-2.svg'] ?? ''
+    expect(roadmap).toContain('<svg')
+    expect(manuscript.packageFiles['manuscript.md']).toContain('figures/figure-2.svg')
+    expect(manuscript.packageFiles['manuscript.md']).not.toContain('```mermaid')
+    // WHAT THE COMPILED DOCX CARRIES, read from the OOXML package rather than from a size. The DOCX is
+    // binary, so it travels as bytes under `compilation.documents` — not among the figures the document
+    // embeds, which is where a reader looking for the manuscript a journal receives would not look.
+    const docx = (manuscript.compilation as { documents: ReadonlyArray<{ path: string; base64: string }> })
+      .documents.find(entry => entry.path === 'manuscript.docx')
+    expect(docx).toBeDefined()
+    expect(manuscript.packageFiles['manuscript.docx']).toBeUndefined()
+    const work = mkdtempSync(join(tmpdir(), 'drawn-docx-'))
+    const path = join(work, 'manuscript.docx')
+    writeFileSync(path, Buffer.from(docx?.base64 ?? '', 'base64'))
+    expect(zipNames(path).filter(name => name.startsWith('word/media/'))).toHaveLength(2)
+    // The probe imports matplotlib and the run draws two floats through it; both are process spawns,
+    // which do not fit the default budget.
+  }, 300_000)
 })
 
 describe.skipIf(ENGINE === undefined || PYTHON === undefined)('the PDF a real engine produces', () => {

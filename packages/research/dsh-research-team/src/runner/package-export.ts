@@ -434,13 +434,19 @@ export function planRunPackage(
       if (typeof content === 'string' && content.length > 0) files.push({ path, content: `${content.replace(/\n+$/u, '')}\n` })
     }
   }
-  // AND THE BYTES E1 PRODUCED: a figure the compiled document embeds. Trailing whitespace is not
-  // trimmed here — that rule is about text, and trimming base64 would corrupt the asset.
-  // THE ASSETS LIVE WITH THE COMPILE THAT PRODUCED THEM (`compilation.assets`): they are outputs of
-  // the same step, and a second home for them would be a second thing to keep in step.
-  const assets = (manuscript as { compilation?: { assets?: unknown } } | undefined)?.compilation?.assets
-  if (Array.isArray(assets)) {
-    for (const entry of assets) {
+  // AND THE BYTES E1 PRODUCED: the compiled documents a journal is handed, and the figures they
+  // embed. Trailing whitespace is not trimmed here — that rule is about text, and trimming base64
+  // would corrupt the asset.
+  // THEY LIVE WITH THE COMPILE THAT PRODUCED THEM (`compilation.documents` / `compilation.assets`):
+  // they are outputs of the same step, and a second home for them would be a second thing to keep in
+  // step. Both lists are written the same way — the split is about what a reader is told, not about
+  // what the package holds.
+  const compileRecord = (manuscript as {
+    compilation?: { documents?: unknown; assets?: unknown }
+  } | undefined)?.compilation
+  for (const list of [compileRecord?.documents, compileRecord?.assets]) {
+    if (!Array.isArray(list)) continue
+    for (const entry of list) {
       const asset = entry as { path?: unknown; base64?: unknown }
       if (typeof asset.path === 'string' && typeof asset.base64 === 'string' && asset.base64.length > 0) {
         files.push({ path: asset.path, content: asset.base64, encoding: 'base64' })

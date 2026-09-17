@@ -82,6 +82,22 @@
         # was not compiled.
         document:
           executable: pandoc
+        # THE DRAWN FLOATS. `figures` names a Python interpreter that has matplotlib, and the two
+        # floats a study plans are then DRAWN through it rather than emitted as source: the chart from
+        # the measured values, and the roadmap as a picture. That second one is why the channel
+        # exists — a roadmap left as Mermaid source is a float no compiled document can embed, and a
+        # manuscript that reaches a journal without its plan is not the paper.
+        #
+        # NOT NAMED HERE, for the same reason no LaTeX engine is: which interpreter has the library is
+        # a fact about the machine, and a path committed from one deployment is wrong on the next. A
+        # deployment that has one adds this line and gets figures instead of source —
+        #
+        #        figures:
+        #          executable: /path/to/venv/bin/python
+        #
+        # — and one that has none loses nothing: the run draws with the built-in renderer, records on
+        # each float that no library drew it, and its artifact says the roadmap is a float its
+        # documents cannot carry. Measured absence, not a failed step.
         # Prose steps (A1 gap analysis, B1 method, D2 outline, D3 writing, D4
         # rebuttal) route through the REAL agent loop on this provider route, so the
         # manuscript text is written by a model rather than by the offline stand-in.

@@ -17,6 +17,7 @@ import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { resolveResearchProfile } from '../src/runner/research-profile.ts'
 import { checkPackagedFiles, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
+import type { DocumentCompiler } from '../src/runner/document-compile.ts'
 
 const created: string[] = []
 
@@ -42,6 +43,47 @@ async function realRun(): Promise<{ store: ResearchRunStore; run: RunResult }> {
   const store = new Map() as ResearchRunStore
   const run = await runT19B(store)
   return { store, run }
+}
+
+/**
+ * A compiler that answers with the two kinds of binary a real one produces.
+ *
+ * A DOCX is a ZIP and a figure is a PNG, and this answers with each one's real magic bytes: a writer
+ * that decoded, re-encoded or text-wrapped the content would still pass a length check and would not
+ * pass this. The document's own content is not what is under test here — `pdf-acceptance.spec.ts`
+ * reads a real one.
+ *
+ * @returns the compiler, as `DriveOptions.documentCompiler` takes it.
+ */
+function byteCompiler(): DocumentCompiler {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  return {
+    tool: 'bytes',
+    formats: ['html', 'latex', 'docx'],
+    compile(request) {
+      // `PK`, base64 — the ZIP signature every DOCX begins with.
+      const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]).toString('base64')
+      return Promise.resolve(request.format === 'docx'
+        ? {
+          format: request.format,
+          fileName: 'manuscript.docx',
+          content: zip,
+          encoding: 'base64' as const,
+          tool: 'bytes@1',
+          assets: { embedded: ['Figure 1'], dropped: [] },
+          files: [{ path: 'assets/figure-1.png', label: 'Figure 1', base64: PNG }],
+        }
+        : {
+          format: request.format,
+          fileName: `manuscript.${request.format === 'latex' ? 'tex' : 'html'}`,
+          content: `<document>${request.document.title}</document>`,
+          encoding: 'utf8' as const,
+          tool: 'bytes@1',
+          assets: { embedded: ['Figure 1'], dropped: [] },
+          files: [{ path: 'assets/figure-1.png', label: 'Figure 1', base64: PNG }],
+        })
+    },
+  }
 }
 
 describe('planRunPackage', () => {
@@ -76,6 +118,23 @@ describe('planRunPackage', () => {
       expect(paths, required).toContain(required)
     }
     for (const file of plan.files) expect(file.content.length, file.path).toBeGreaterThan(0)
+  })
+
+  it('writes the compiled documents as bytes, beside the figures they embed', async () => {
+    // THE DELIVERABLES A JOURNAL IS HANDED ARE BINARY. A DOCX and a PDF cannot go in the text files,
+    // and they are not figures the document embeds either — a package that listed the manuscript among
+    // its own assets left a reader looking for it in the wrong place, and one that listed it nowhere
+    // left them without it. Both lists are written here, so this asserts the file is on disk.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { documentCompiler: byteCompiler() })
+    const plan = planRunPackage(store, run, 'evaluation')
+    const docx = plan.files.find(file => file.path === 'manuscript.docx')
+    const figure = plan.files.find(file => file.path === 'assets/figure-1.png')
+    expect(docx?.encoding).toBe('base64')
+    // The byte file is the ZIP a DOCX really is, not its base64 text written out as a document.
+    expect(Buffer.from(docx?.content ?? '', 'base64').subarray(0, 2).toString('latin1')).toBe('PK')
+    expect(figure?.encoding).toBe('base64')
+    expect(Buffer.from(figure?.content ?? '', 'base64').subarray(0, 4).toString('latin1')).toBe(String.fromCharCode(137) + 'PNG')
   })
 
   it('records every driven step with how it was produced, and nothing it did not drive', async () => {

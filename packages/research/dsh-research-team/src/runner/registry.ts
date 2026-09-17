@@ -170,7 +170,7 @@ import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from '
 import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
-import type { DocumentCompiler } from './document-compile.ts'
+import type { DocumentBlock, DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import {
   bibliographyOf, bindJudgements, checkCitationKeys, checkCitationUse, checkManuscriptCitations,
@@ -2277,7 +2277,7 @@ interface FigurePlanEntry {
   readonly label?: unknown
   /** The caption the plan gave it. */
   readonly title?: unknown
-  /** The rendered SVG, for a data figure. */
+  /** The rendered SVG, for a data figure — and for a roadmap the deployment's provider drew. */
   readonly svg?: unknown
   /** The PNG bytes, base64, when the producing tool emitted a raster of the same canvas. */
   readonly pngBase64?: unknown
@@ -2285,8 +2285,24 @@ interface FigurePlanEntry {
   readonly content?: unknown
   /** The diagram format, for a roadmap. */
   readonly format?: unknown
+  /** Whether a roadmap was drawn as a picture, which is what decides whether it is a float or source. */
+  readonly diagramDrawn?: unknown
   /** The tool's own rendering, for a table. */
   readonly tableMarkdown?: unknown
+}
+
+/**
+ * Where the manuscript's own copy of a rendered float lives, derived from the label the plan gave it.
+ *
+ * DERIVED, NOT COUNTED: a second float must not be able to land on the first one's file, and a file
+ * named after the float's number is how the manuscript and the package come to disagree about which
+ * picture `Figure 2` is. `Figure 1` → `figures/figure-1.svg`.
+ *
+ * @param label - the float's label, as the plan assigned it.
+ * @returns the path, relative to the package root.
+ */
+function figureAssetPath(label: string): string {
+  return `figures/${label.trim().toLowerCase().replace(/\s+/gu, '-')}.svg`
 }
 
 /**
@@ -3380,10 +3396,21 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // Kept separately as well as inline: the package writes each part as its own file with its
   // own source, so the figure's provenance never stands in for the table's or the roadmap's.
   let figureSvg = ''
-  // The raster the figure tool produced for the same spec, carried so a LaTeX or PDF document can
-  // embed the figure rather than drop it.
-  let figurePngBase64 = ''
   let roadmapMermaid = ''
+  // THE ROADMAP AS A PICTURE, when the deployment's provider drew one. A drawn roadmap is a FIGURE —
+  // it has the same two renderings a data figure has and the formats take them the same way — while
+  // an undrawn one stays the diagram source its tool produced. Without this the drawing D1 paid for
+  // was dropped here, and every compiled document carried a float no format can embed (`a diagram is
+  // carried as its own source`), which is what kept a run with a figure provider at `draft`.
+  let roadmapSvg = ''
+  // The document's floats, built where the Markdown's are so a label, a caption or a rendering cannot
+  // reach one and not the other. See `documentOf`: this is the only place that says how the parts
+  // compose, and a second construction of the same list is how a compiled document comes to describe
+  // a manuscript the Markdown does not.
+  const documentFloats: DocumentBlock[] = []
+  // Where the table belongs among them, in the plan's order. It is laid out below, so its position is
+  // recorded here and it is spliced in there rather than appended.
+  let tableFloatIndex = documentFloats.length
   // NUMBERED, CAPTIONED, AND LINKED — the paper shapes. Before this the data figure was pushed as
   // raw inline SVG with no number and no caption, and the roadmap as an unlabelled mermaid block, so
   // nothing in the prose could refer to either. A figure is a file or an inline diagram, never both;
@@ -3401,29 +3428,68 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   for (const entry of floats) {
     if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
       figureSvg = entry.svg
-      if (typeof entry.pngBase64 === 'string') figurePngBase64 = entry.pngBase64
       figureBlocks.push(figureBlock({
         label: entry.label,
         title: entry.title,
-        path: 'figures/figure-1.svg',
+        path: figureAssetPath(entry.label),
         note: 'Rendered by the figure tool from the measurements this run produced.',
       }))
+      documentFloats.push({
+        kind: 'figure',
+        label: entry.label,
+        caption: entry.title,
+        svg: entry.svg,
+        ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
+      })
       renderedFloats.push({ label: entry.label, title: entry.title })
       continue
     }
     if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
       roadmapMermaid = entry.content.trim()
+      // A DRAWN ROADMAP IS A FIGURE; an undrawn one is the source its tool produced. The two are not
+      // the same float: the first can be embedded by every format this deployment can produce, the
+      // second by none, and reporting the second as the first is how a document comes to claim a
+      // figure it does not carry.
+      if (entry.diagramDrawn === true && typeof entry.svg === 'string') {
+        roadmapSvg = entry.svg
+        figureBlocks.push(figureBlock({
+          label: entry.label,
+          title: entry.title,
+          path: figureAssetPath(entry.label),
+          note: 'Drawn from the roadmap this run planned, by the deployment\'s figure provider.',
+        }))
+        documentFloats.push({
+          kind: 'figure',
+          label: entry.label,
+          caption: entry.title,
+          svg: entry.svg,
+          ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
+        })
+        renderedFloats.push({ label: entry.label, title: entry.title })
+        continue
+      }
       figureBlocks.push(figureBlock({
         label: entry.label,
         title: entry.title,
         mermaid: roadmapMermaid,
       }))
+      documentFloats.push({
+        kind: 'diagram',
+        label: entry.label,
+        caption: entry.title,
+        mermaid: roadmapMermaid,
+      })
       renderedFloats.push({ label: entry.label, title: entry.title })
       continue
     }
     // The table is laid out after this loop, from the structured model the tool returned rather than
-    // from the plan's rendered text, so it is not a miss here.
-    if (entry.kind === 'three-line-table') continue
+    // from the plan's rendered text, so it is not a miss here — but its PLACE among the floats is
+    // the plan's, recorded here so the document prints the floats in the order the plan numbered
+    // them rather than moving the table to the end.
+    if (entry.kind === 'three-line-table') {
+      tableFloatIndex = documentFloats.length
+      continue
+    }
     floatsNotRendered.push(entry.label)
   }
   // THE TABLE, AS A TABLE. The tool's own "markdown" rendering draws box-drawing rules, which a
@@ -3512,16 +3578,11 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       heading: section.heading,
       bodyText: section.bodyText,
     })),
+    // The floats the loop above built, in the plan's own order, with the table spliced in at the
+    // place the plan put it — it is laid out from the tool's structured model rather than from the
+    // plan's rendered text, so it is composed here instead of in that loop.
     floats: [
-      ...(figureSvg.length > 0
-        ? [{
-          kind: 'figure' as const,
-          label: floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1',
-          caption: floats.find(entry => entry.kind === 'data-figure')?.title ?? '',
-          svg: figureSvg,
-          ...(figurePngBase64 === '' ? {} : { pngBase64: figurePngBase64 }),
-        }]
-        : []),
+      ...documentFloats.slice(0, tableFloatIndex),
       ...(tableMarkdown === undefined
         ? []
         : [{
@@ -3530,14 +3591,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           caption: plannedTable.title,
           markdown: tableMarkdown,
         }]),
-      ...(roadmapMermaid.length === 0
-        ? []
-        : [{
-          kind: 'diagram' as const,
-          label: floats.find(entry => entry.kind === 'roadmap')?.label ?? 'Figure 2',
-          caption: floats.find(entry => entry.kind === 'roadmap')?.title ?? '',
-          mermaid: roadmapMermaid,
-        }]),
+      ...documentFloats.slice(tableFloatIndex),
     ],
     equations: ctx.runCtx.adapter.implementation.equations.map(equation => ({ label: equation.name, latex: equation.latex })),
     references: referenceEntries.flatMap((entry, index) =>
@@ -3545,7 +3599,16 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ? []
         : [{ citeKey: entry.citeKey, entry: entry.formatted, number: index + 1 }]),
   })
-  const compiled: Array<{ readonly path: string; readonly content: string; readonly encoding?: 'utf8' | 'base64' }> = []
+  // EVERY FILE ONE COMPILE PRODUCED, EACH WITH WHAT IT IS. A compiled document and a figure the
+  // document embeds are both files of the same compile, and they are not the same kind of thing: the
+  // `.docx` is the deliverable and the `.png` belongs to it. The kind is taken from where the compile
+  // put it — its own `fileName` versus its `files` — rather than guessed from the path.
+  const compiled: Array<{
+    readonly path: string
+    readonly content: string
+    readonly encoding?: 'utf8' | 'base64'
+    readonly kind: 'document' | 'asset'
+  }> = []
   const compileRefusals: string[] = []
   // WHICH FLOATS THE COMPILED DOCUMENT ACTUALLY CARRIES, per format: a figure that could not be
   // embedded is a figure the reader will not see, and the artifact says so rather than leaving it to
@@ -3579,11 +3642,12 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         path: result.compiled.fileName,
         content: result.compiled.content,
         encoding: result.compiled.encoding,
+        kind: 'document',
       })
       // THE ASSETS THE DOCUMENT EMBEDS travel beside it, as bytes, so the compiled file is buildable
       // outside this run and the figures can be reconciled by their labels rather than by a count.
       for (const asset of result.compiled.files) {
-        compiled.push({ path: asset.path, content: asset.base64, encoding: 'base64' })
+        compiled.push({ path: asset.path, content: asset.base64, encoding: 'base64', kind: 'asset' })
       }
       embeddedFloats[format] = result.compiled.assets.embedded
       droppedFloats.push(...result.compiled.assets.dropped.map(entry => ({ ...entry, format })))
@@ -3613,10 +3677,25 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       content: artifact.render.text,
       source: `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`,
     },
-    'figures/figure-1.svg': {
-      content: figureSvg,
-      source: `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`,
-    },
+    ...(figureSvg.length === 0
+      ? {}
+      : {
+        [figureAssetPath(floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1')]: {
+          content: figureSvg,
+          source: `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`,
+        },
+      }),
+    // THE ROADMAP'S OWN PICTURE, when the deployment drew one — the same bytes the compiled document
+    // embeds, so the Markdown manuscript's `![Figure 2: …](figures/figure-2.svg)` resolves inside the
+    // package instead of pointing at a file only the run's memory had.
+    ...(roadmapSvg.length === 0
+      ? {}
+      : {
+        [figureAssetPath(floats.find(entry => entry.kind === 'roadmap')?.label ?? 'Figure 2')]: {
+          content: roadmapSvg,
+          source: `${ROADMAP_TOOL_ID}@${ROADMAP_TOOL_VERSION} (drawn by the deployment's figure provider)`,
+        },
+      }),
     'roadmap.md': {
       content: roadmapMermaid.length > 0 ? ['```mermaid', roadmapMermaid, '```'].join('\n') : '',
       source: `${ROADMAP_TOOL_ID}@${ROADMAP_TOOL_VERSION}`,
@@ -3645,10 +3724,17 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           tool: ctx.documentCompiler?.tool ?? null,
           formats: ctx.documentCompiler?.formats ?? [],
           compiled: compiled.map(file => file.path),
+          // THE COMPILED DOCUMENTS CARRIED AS BYTES, separately from the figures they embed. A DOCX
+          // and a PDF are binary, so neither is in the package's text files — and a reader looking for
+          // the manuscript a journal receives must not have to find it under `assets`, which names the
+          // things the document carries rather than the document. The two are written the same way.
+          documents: compiled
+            .filter(file => file.kind === 'document' && file.encoding === 'base64')
+            .map(file => ({ path: file.path, base64: file.content })),
           // THE ASSETS, AS BYTES. A figure the compiled document embeds is not text, and a package
           // that carried it as base64 text would ship a file that looks written and is not the asset.
           assets: compiled
-            .filter(file => file.encoding === 'base64')
+            .filter(file => file.kind === 'asset')
             .map(file => ({ path: file.path, base64: file.content })),
           // WHAT IS IN THE COMPILED DOCUMENT AND WHAT IS NOT. A float that could not be embedded is
           // named with its reason; a submission-grade compile refuses when this list is not empty.

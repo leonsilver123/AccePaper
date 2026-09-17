@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-17-the-drawn-roadmap-reached-the-plan-and-stopped-there.md
+2026-09-17-the-drawn-roadmap-reached-the-plan-and-stopped-there.md: 53eb28d28e2e39e3750e3b91a4e78958f8d043f8
+2026-09-17-the-drawn-roadmap-reached-the-plan-and-stopped-there.zh.md: 08ddcae624adb2a34f6b1a21e29fb50f37e3add1
