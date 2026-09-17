@@ -85,13 +85,17 @@ function manuscriptUnderReview(ctx: VerdictBuildCtx): {
   readonly declaredNumbers: ReadonlyArray<number>
   readonly referenceCount: number
   readonly floatLabels: ReadonlyArray<string>
+  /** The manuscript's own title, when the artifact carries one. */
+  readonly title?: string
 } | undefined {
   if (ctx.readInput === undefined) return undefined
   for (const slug of MANUSCRIPT_SLUGS) {
     const value = ctx.readInput(slug)
     const sections = sectionsOfManuscript(value)
     if (sections === undefined) continue
-    const draft = value as { references?: unknown; renderedFigures?: unknown }
+    // THE MANUSCRIPT'S OWN TITLE, off the artifact rather than off the plan: a run whose title was
+    // rewritten mid-flight is graded on what it says, not on what the plan asked for.
+    const draft = value as { references?: unknown; renderedFigures?: unknown; title?: unknown }
     const references = Array.isArray(draft.references) ? draft.references : []
     const figures = Array.isArray(draft.renderedFigures) ? draft.renderedFigures : []
     // THE NUMBERED LABEL, not the title. `D1-figure-map` numbers a float when it decides the float
@@ -132,6 +136,9 @@ function manuscriptUnderReview(ctx: VerdictBuildCtx): {
       declaredNumbers,
       referenceCount: references.length,
       floatLabels,
+      // The manuscript's own title: it is the headline claim, and grading the sections without it
+      // would grade everything except the sentence a reader is most likely to read.
+      ...(typeof draft.title === 'string' ? { title: draft.title } : {}),
     }
   }
   return undefined
@@ -203,6 +210,10 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
       declaredNumbers: manuscript.declaredNumbers,
       referenceCount: manuscript.referenceCount,
       floatLabels: manuscript.floatLabels,
+      // THE TITLE, so the one sentence every reader reads is graded with the rest of the manuscript.
+      // A manuscript that reports its refutation under a title asserting the opposite finding has
+      // told its reader the opposite of what it found.
+      ...(manuscript.title === undefined ? {} : { title: manuscript.title }),
       commitment: ctx.runCtx.commitment,
       predictionText: ctx.runCtx.predictionText,
       metricPhrases: planOf(ctx).metric.phrases,

@@ -161,6 +161,7 @@ function writerStatingNoOutcome(): ResearchProseWriter {
               .join(' ')
             return 'This section discusses the platoon and the autonomous vehicle it carries, the'
               + ` conditions both platoons were run under, and what is already known ${markers}.`
+              + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.'
           }
           default:
             return 'The run states what it measured and nothing it did not.'

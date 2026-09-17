@@ -990,7 +990,16 @@ function bodyTextFor(
   measured: ReturnType<typeof measureOutcome>,
   citations: ReadonlyArray<CitationUse>,
   argumentPlan: ArgumentPlan,
+  citable: ReadonlyArray<CitableFloat>,
 ): string {
+  // THE PROSE NAMES THE FLOATS THE DRAFT CARRIES. A float nothing refers to is a float the paper did
+  // not need — the delivered paper carries six of them — and the A gate refuses a draft whose prose
+  // never names one it carries. A section that reports results therefore points at the figure, the
+  // table and the diagram it is reporting, and the Method section points at the equations it states.
+  const named = (kind: string): string =>
+    citable.filter(item => item.label.toLowerCase().startsWith(kind))
+      .map(item => item.label)
+      .join(', ')
   const study = experimentStudy()
   const hv = study.variant.vehicleClasses.HV
   const av = study.variant.vehicleClasses.AV
@@ -1005,11 +1014,11 @@ function bodyTextFor(
       // reported exactly that, on this paper, as `no-literature-position`.
       return `This work targets the claim: ${plan.claim.ref}. The falsifiable prediction is: ${plan.claim.prediction}. ${priorWorkSentence(citations)}`
     case 'method':
-      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon.`
+      return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon. The equations this section states (${named('equation')}) are the model's own, and the parameters they carry are the ones the Case Pack declares.`
     case 'experiments':
       return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baselineMinTtcSeconds.toFixed(2)} s for the homogeneous platoon and ${measured.variantMinTtcSeconds.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${measured.baselineTtcRatePct.toFixed(2)}% and ${measured.variantTtcRatePct.toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
     case 'results':
-      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The measurement is that '
+      return `The comparison the claim is about is drawn in ${named('figure')} and its two values are listed in ${named('table')}; ${named('figure 2') === '' ? 'the research roadmap' : named('figure 2')} shows how the study reaches it. The measurement is that `
         + `${outcomeSentence(argumentPlan, measured)}. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.`
     case 'conclusion':
       return `Under the declared configuration ${outcomeSentence(argumentPlan, measured)}, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
@@ -1067,7 +1076,22 @@ function defaultBodySections(
   return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
-    bodyText: bodyTextFor(s.id, plan, measured, citations, argumentPlan),
+    bodyText: bodyTextFor(
+      s.id,
+      plan,
+      measured,
+      citations,
+      argumentPlan,
+      // The roster this path's prose is written against: the same labels D1 planned, read off the
+      // figure plan the run holds. A fallback whose sections named nothing would be refused by the
+      // A gate for carrying floats nothing refers to.
+      citableFloats(
+        planFloats(Array.isArray(readInput(ctx, 'figure-plan')?.figures)
+          ? (readInput(ctx, 'figure-plan')?.figures as ReadonlyArray<FigurePlanEntry>)
+          : []),
+        MODEL_EQUATIONS,
+      ),
+    ),
   }))
 }
 
@@ -2841,7 +2865,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       const evidence = evidenceFor(h.id)
       return evidence.missing.length > 0
         ? { ...h, bodyText: '' }
-        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations, argumentPlan) }
+        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations, argumentPlan, citable) }
     })
     proseSource = 'fixture'
   } else {

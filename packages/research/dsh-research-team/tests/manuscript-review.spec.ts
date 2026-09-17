@@ -48,7 +48,12 @@ function cleanInput(overrides: Partial<ManuscriptReviewInput> = {}): ManuscriptR
       {
         id: 'results',
         heading: 'Results',
-        bodyText: `The homogeneous platoon held ${String(RECORD.measured.baselineMinTtcSeconds)} s of minimum time-to-collision and the mixed platoon ${String(RECORD.measured.variantMinTtcSeconds)} s, a change of ${String(NUMBER)}%.`,
+        // THE PROSE NAMES THE FLOATS THE MANUSCRIPT CARRIES: a draft that carries a float no sentence
+        // refers to is refused, and this fixture is the manuscript that passes every check.
+        bodyText: 'The comparison is drawn in Figure 1 and its two values are listed in Table 1.'
+          + ` The homogeneous platoon held ${String(RECORD.measured.baselineMinTtcSeconds)} s of`
+          + ' minimum time-to-collision and the mixed platoon'
+          + ` ${String(RECORD.measured.variantMinTtcSeconds)} s, a change of ${String(NUMBER)}%.`,
       },
       { id: 'conclusion', heading: 'Conclusion', bodyText: 'The mixed platoon lowers the platoon minimum time-to-collision under the declared disturbance.' },
     ],
@@ -110,6 +115,11 @@ describe('a clean manuscript passes every check', () => {
     // string below is one the real run produced.
     const input = cleanInput({
       sections: [
+        {
+          id: 'results',
+          heading: 'Results',
+          bodyText: 'The comparison is drawn in Figure 1 and its values are listed in Table 1.',
+        },
         {
           id: 'references',
           heading: 'References',
@@ -272,7 +282,9 @@ describe('a citation to nothing is found', () => {
     const input = cleanInput({
       sections: [
         { id: 'method', heading: 'Method', bodyText: 'The Intelligent Driver Model at a 0.02 s step.' },
-        { id: 'results', heading: 'Results', bodyText: 'See Figure 1 and prior work [2].' },
+        // Every float the manuscript carries is named, which is what the citation role checks in
+        // both directions: a cited label must exist, and a carried float must be referred to.
+        { id: 'results', heading: 'Results', bodyText: 'See Figure 1 and Table 1 and prior work [2].' },
       ],
     })
     expect(positionOf(input, 'red-citation')).toBe('support')
@@ -438,5 +450,62 @@ describe('a required check that did not run blocks the gate', () => {
     const roles = reviewManuscript(cleanInput()).map(entry => entry.role)
     expect(roles).toEqual(['red-method', 'red-stat', 'red-citation', 'red-claim'])
     expect(getStepDefinitions().length).toBe(16)
+  })
+})
+
+describe('a float the prose never names', () => {
+  it('is refused, because a float nothing refers to is a float the paper did not need', () => {
+    // THE DELIVERED PAPER, EXACTLY: Figure 1, Figure 2, Table 1 and three equations, with no sentence
+    // naming any of them. A reader meets them as decoration, and the A gate refuses the draft rather
+    // than reporting it — a draft that carries a float has decided the float belongs.
+    const input = cleanInput({
+      sections: [
+        { id: 'method', heading: 'Method', bodyText: 'The Intelligent Driver Model at a 0.02 s step.' },
+        { id: 'results', heading: 'Results', bodyText: 'The comparison is stated below.' },
+      ],
+      floatLabels: ['Figure 1', 'Table 1'],
+    })
+    expect(positionOf(input, 'red-citation')).toBe('refute')
+    expect(findingsOf(input, 'red-citation')).toContain('floats no sentence refers to: Figure 1, Table 1')
+  })
+
+  it('accepts a draft whose prose names every float it carries', () => {
+    const input = cleanInput({
+      sections: [
+        { id: 'method', heading: 'Method', bodyText: 'The Intelligent Driver Model at a 0.02 s step.' },
+        { id: 'results', heading: 'Results', bodyText: 'The comparison is drawn in Figure 1 and listed in Table 1.' },
+      ],
+      floatLabels: ['Figure 1', 'Table 1'],
+    })
+    expect(positionOf(input, 'red-citation')).toBe('support')
+  })
+})
+
+describe('a title that claims the finding the study refuted', () => {
+  it('is refused, naming the word and the measurement', () => {
+    // THE DELIVERED PAPER'S TITLE: "Raising Minimum Time-to-Collision in Three-Vehicle Platoons ..."
+    // above a manuscript reporting that the quantity FELL by 38.2%. The headline asserts the finding
+    // the study refuted, and a reader who stops at the title has read the opposite of the result.
+    const input = cleanInput({
+      title: 'Raising Minimum Time-to-Collision in Three-Vehicle Platoons via Adaptive Gap Control',
+    })
+    expect(positionOf(input, 'red-claim')).toBe('refute')
+    expect(findingsOf(input, 'red-claim')).toContain('the headline asserts the finding the study refuted')
+  })
+
+  it('accepts a title that claims no direction, which is what the truth looks like here', () => {
+    // WHAT A TITLE MAY SAY when the measurement went against the claim: that the study measured the
+    // quantity, not that it moved the way the authors hoped.
+    const input = cleanInput({ title: 'Inserting One Autonomous Vehicle Changes a Platoon Minimum Time-to-Collision' })
+    expect(positionOf(input, 'red-claim')).toBe('support')
+  })
+
+  it('refuses a title claiming a fall when the record rose', () => {
+    const input = cleanInput({
+      title: 'Lowering the Platoon Minimum Time-to-Collision',
+      // The record's own field is `improvementPct`, signed in the metric's units.
+      result: { ...RECORD, measured: { ...RECORD.measured, improvementPct: 38.2 } },
+    })
+    expect(positionOf(input, 'red-claim')).toBe('refute')
   })
 })

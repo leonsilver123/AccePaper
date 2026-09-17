@@ -385,11 +385,13 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(manuscript).toContain('**Figure 2.**')
     expect(manuscript).toContain('**Table 1.**')
     expect(manuscript).toContain('**Equation 1 — ')
-    // The fixture prose names none of them. The artifact says so instead of the assembler adding a
-    // sentence no step wrote.
+    // THE PROSE NAMES THE EQUATIONS, because the Method section states them and this step's fallback
+    // writes that section from the model's own equations. It does NOT name the figures: this spec
+    // supplies no figure-plan input, so there are no figure labels to name — and the artifact says so
+    // instead of the assembler adding a sentence no step wrote.
     const cross = doc.crossReferences as { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
-    expect(cross.cited).toEqual([])
-    expect(cross.uncited).toEqual(['Figure 1', 'Figure 2', 'Table 1', 'Equation 1', 'Equation 2', 'Equation 3'])
+    expect(cross.cited).toEqual(['Equation 1', 'Equation 2', 'Equation 3'])
+    expect(cross.uncited).toEqual(['Figure 1', 'Figure 2', 'Table 1'])
     expect(doc.floatsNotRendered).toEqual([])
   })
 

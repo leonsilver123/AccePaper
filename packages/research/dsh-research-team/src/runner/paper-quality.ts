@@ -91,7 +91,16 @@ const LITERATURE_CLAIM = new RegExp(
 )
 
 /** A bracketed citation label, as the manuscript writes one. */
-const CITATION_LABEL = /\[\d+\]/u
+/**
+ * What counts as a citation in a section's text.
+ *
+ * TWO SYNTAXES, ONE FACT. A section the writer produced carries the cite key it was told to emit
+ * (`[@cite-10.1016/...]`) and E1 prints those as the numbers the reference list assigns (`[1]`), so
+ * the same sentence reads one way in the draft and another in the assembled manuscript. A baseline
+ * that knew only the numbers reported this run's Introduction as citing nothing — two findings
+ * against a paper that cites three sources — because it was reading the draft.
+ */
+const CITATION_LABEL = /(?:\[\d+\]|\[@[^[\]\s]+\])/u
 
 /** A percentage in the prose, with its sign written either as a word or by the verb around it. */
 const PERCENT = /(\d+(?:\.\d+)?)\s*%/gu

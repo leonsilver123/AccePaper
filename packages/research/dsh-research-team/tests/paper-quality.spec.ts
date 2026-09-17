@@ -250,9 +250,13 @@ describe('the same baseline on a different research task', () => {
     })
     const codes = ['uncited-object', 'unrendered-object', 'unsupported-statement', 'metric-misread', 'no-literature-position']
     for (const finding of findings) expect(codes).toContain(finding.code)
-    // The objects nobody refers to are a property of how this pipeline writes, not of which way its
-    // result went, so they are found here as well.
-    expect(findings.some(finding => finding.code === 'uncited-object')).toBe(true)
+    // AND IT FINDS NOTHING HERE EITHER, which is the reading to keep on both tasks: the manuscript of
+    // THIS run names its floats and cites its sources, so the rules that reported six unreferenced
+    // objects and no literature position on the pipeline's earlier output now report neither — on a
+    // run whose verdict is the opposite of the shipped one. The rules' directions are pinned by the
+    // fixtures above; this is the same baseline reading a second task's real output and staying quiet
+    // because there is nothing to say.
+    expect(findings).toEqual([])
   })
 })
 

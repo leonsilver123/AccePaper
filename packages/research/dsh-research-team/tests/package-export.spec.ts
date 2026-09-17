@@ -252,14 +252,17 @@ describe('the package states what the quality baseline found', () => {
     // A PACKAGE IS WHAT A READER RECEIVES. A list of files with digests says nothing about whether the
     // manuscript refers to its own figures or positions itself in its own bibliography — so the
     // baseline runs where the package is built, and its findings travel with it.
+    //
+    // AND ON THIS RUN IT FINDS NOTHING, which is the reading to keep: the same baseline reported six
+    // floats nothing referred to and no literature position on the paper this pipeline produced
+    // before, and the units that followed made the sections name their floats, cite their sources and
+    // report their own refutation. A regression in any of those turns this assertion red — the
+    // directions of the rules themselves are tested in `paper-quality.spec.ts`.
     const { store, run } = await realRun()
     const manifest = planRunPackage(store, run, 'evaluation').manifest
 
     expect(Array.isArray(manifest.qualityFindings)).toBe(true)
-    // The shipped pipeline's own output, as the baseline reads it: objects it carries and never uses.
-    const uncited = manifest.qualityFindings.filter(finding => finding.code === 'uncited-object')
-    expect(uncited.length).toBeGreaterThan(0)
-    for (const finding of uncited) expect(finding.detail).toContain('no sentence in it refers')
+    expect(manifest.qualityFindings).toEqual([])
   })
 })
 

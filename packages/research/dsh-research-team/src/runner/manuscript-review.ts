@@ -56,6 +56,14 @@ export interface ManuscriptReviewInput {
   readonly referenceCount: number
   /** The float roster the draft carries, by label. */
   readonly floatLabels: ReadonlyArray<string>
+  /**
+   * The manuscript's title, when the caller knows it.
+   *
+   * The title is a claim about the study like any other sentence in it, and a reader who stops there
+   * has read the claim and not the evidence — which is why a title asserting a direction the
+   * measurement contradicts is refused rather than left to a copy editor.
+   */
+  readonly title?: string
   /** What the claim committed its quantity to. Absent means nothing to check a conclusion against. */
   readonly commitment?: PredictionCommitment | undefined
   /** The claim's own falsifiable prediction, quoted so an overstatement can be compared to it. */
@@ -366,6 +374,22 @@ function reviewManuscriptCitations(input: ManuscriptReviewInput): RoleReview {
       cited.add(`${(match[1] ?? '').replace(/\.$/u, '').toLowerCase()} ${String(Number(match[2]))}`)
     }
   }
+  // A FLOAT NOTHING REFERS TO IS A FLOAT THE PAPER DID NOT NEED. The delivered paper carries six of
+  // them — Figure 1, Figure 2, Table 1 and three equations, with no sentence naming any — and a
+  // reader meets them as decoration. A draft that carries a float has decided the float belongs; a
+  // draft whose prose never names it has not used it.
+  const uncited = input.floatLabels
+    .filter(label => !cited.has(label.toLowerCase().replace(/\s+/gu, ' ')))
+    .filter(label => !/^equation \d+$/u.test(label.toLowerCase()))
+  if (uncited.length > 0) {
+    findings.push({
+      check: 'does the prose refer to every float the draft carries?',
+      found:
+        `floats no sentence refers to: ${uncited.join(', ')} — the draft carries `
+        + input.floatLabels.join(', '),
+      position: 'refute',
+    })
+  }
   const dangling = [...cited].filter(label => !labels.has(label) && !/^equation \d+$/u.test(label))
   if (dangling.length > 0) {
     findings.push({
@@ -431,6 +455,30 @@ function reviewManuscriptConclusion(
     })
     // Same distinction as `red-stat` above: nothing was compared, so nothing was evaluated.
     return review('red-claim', findings, false)
+  }
+  // THE TITLE IS THE ONE SENTENCE EVERY READER READS, and the delivered paper's asserts a rise
+  // ("Raising Minimum Time-to-Collision ...") that its own measurement contradicts by −38.2% — a
+  // headline claim the study refuted, printed above a manuscript that reports the refutation.
+  const title = input.title ?? ''
+  const ROSE_TITLE = /\b(?:raising|raise[sd]?|increas(?:e|es|ed|ing)|improv(?:e|es|ed|ing)|higher|greater|exceed(?:s|ed|ing)?)\b/iu
+  const titleRose = ROSE_TITLE.test(title)
+  const titleFell = /\b(?:lowering|lower(?:s|ed)?|reduc(?:e|es|ed|ing)|decreas(?:e|es|ed|ing)|less|smaller)\b/iu.test(title)
+  const measuredUp = record.improvementPct > 0
+  if (titleRose && !titleFell && !measuredUp) {
+    findings.push({
+      check: 'does the title claim the direction the measurement found?',
+      found:
+        `the title states a rise ('${title}') while the record measures ${String(record.improvementPct)} %`
+        + ' — the headline asserts the finding the study refuted',
+      position: 'refute',
+    })
+  } else if (titleFell && !titleRose && measuredUp) {
+    findings.push({
+      check: 'does the title claim the direction the measurement found?',
+      found:
+        `the title states a fall ('${title}') while the record measures +${String(record.improvementPct)} %`,
+      position: 'refute',
+    })
   }
   const prose = input.sections.map(section => section.bodyText).join('\n')
   const clause = findingClauseOf(prose, input.metricPhrases)

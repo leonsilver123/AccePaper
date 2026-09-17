@@ -20,6 +20,10 @@ const CASE_PACK_DIR = join(process.cwd(), 'plan/overnight/2026-09-09/case-pack-t
 /** A literature position written without citing anything, which is the delivered paper's shape. */
 const STATED_WITHOUT_CITING =
   'Prior work on this quantity has been reported, and the literature is not unanimous.'
+  // THE FLOATS ARE NAMED, so the manuscript fails on exactly the omission under test: it states a
+  // literature position and cites nothing. A draft that also carried floats its prose never named
+  // would be refused earlier, by the A gate, and the refusal under test would never be reached.
+  + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.'
 
 /** The reviewed sources this deployment holds, which is what a manuscript may cite. */
 const REVIEWED_KEYS = [
@@ -78,7 +82,8 @@ function writerSaying(introduction: string): ResearchProseWriter {
           case 'D3-writing':
             return introduction
           default:
-            return 'The run states what it measured and nothing it did not.'
+            return 'The run states what it measured and nothing it did not. The comparison is drawn in'
+              + ' Figure 1, Figure 2 and Table 1.'
         }
       })()
       return Promise.resolve({ text, provider: 'spec', model: 'spec' })
@@ -155,7 +160,8 @@ describe('a run that cites a source it never reviewed', () => {
     const run = await runT19B(store, {
       studyPlan: DEFAULT_PLAN,
       proseWriter: writerSaying(
-        'Prior work on this quantity has been reported [@cite-10.1016/j.trb.2024.999999].',
+        'Prior work on this quantity has been reported [@cite-10.1016/j.trb.2024.999999].'
+        + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
       ),
       casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
     })

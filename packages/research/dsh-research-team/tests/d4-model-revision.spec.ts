@@ -55,7 +55,13 @@ const WELL_FORMED = [
   'CONCERN: The results section does not report the baseline value.',
   'SECTION: results',
   'RESPONSE: The baseline value is added, keeping every sentence the section needs.',
-  `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the mixed platoon ${VARIANT} s, a change of ${CHANGE}%. Both are read from the same result record.`,
+  // THE PATCH NAMES THE FLOATS TOO: the revised manuscript is what the gate reads, and a results
+  // section that stopped naming Figure 1 and Table 1 would be refused for carrying floats nothing
+  // refers to.
+  'PATCH: The comparison is drawn in Figure 1 and its two values are listed in Table 1; Figure 2'
+  + ` shows how the study reaches it. The homogeneous platoon held ${BASELINE} s of`
+  + ` minimum time-to-collision and the mixed platoon ${VARIANT} s, a change of ${CHANGE}%. Both are`
+  + ' read from the same result record.',
 ].join('\n')
 
 /** A reply whose second exchange never says which section it is about. */
@@ -82,9 +88,12 @@ function d3Section(request: ResearchProseRequest): string {
         + ` under a declared disturbance. It fell by ${CHANGE}%, contradicting the claim this study`
         + ' committed to test.'
     case 'results':
-      return `The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the mixed`
-        + ` platoon ${VARIANT} s, a change of ${CHANGE}%: the quantity fell, contradicting the claim`
-        + ' this study committed to test.'
+      // THE PROSE NAMES THE FLOATS THE DRAFT CARRIES — the A gate refuses a draft that carries a
+      // float no sentence refers to, and the reply is what a writer following the roster produces.
+      return 'The comparison the claim is about is drawn in Figure 1 and its values are listed in'
+        + ` Table 1. The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the`
+        + ` mixed platoon ${VARIANT} s, a change of ${CHANGE}%: the quantity fell, contradicting the`
+        + ' claim this study committed to test. Figure 2 shows how the study reaches that comparison.'
     case 'conclusion':
       return 'The mixed platoon lowered the platoon minimum time-to-collision by'
         + ` ${String(Math.abs(Number(CHANGE)))}% under the declared disturbance, contradicting the`
@@ -324,9 +333,11 @@ describe('a revision round that leaves a concern open', () => {
       // THE PATCH STILL DISCHARGES WHAT THE SECTION OWES: a revision of a section that reports the
       // outcome must state the measurement, its direction and what it did to the claim, or E1 refuses
       // the manuscript — a revision is not a way to drop them.
-      `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the mixed`
-      + ` platoon ${VARIANT} s, a change of ${CHANGE}%: the quantity fell, contradicting the claim this`
-      + " study committed to test. The baseline value is reported here as this study's own reference row.",
+      'PATCH: The comparison is drawn in Figure 1 and its two values are listed in Table 1; Figure 2'
+      + ` shows how the study reaches it. The homogeneous platoon held ${BASELINE} s of`
+      + ` minimum time-to-collision and the mixed platoon ${VARIANT} s, a change of ${CHANGE}%: the`
+      + ' quantity fell, contradicting the claim this study committed to test. The baseline value is'
+      + " reported here as this study's own reference row.",
     ].join('\n')
     // The second round answers the ONE concern that is still open, against the body as it now is.
     const second = [
