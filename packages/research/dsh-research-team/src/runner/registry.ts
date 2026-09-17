@@ -150,8 +150,6 @@ import type { ChannelVerdict } from './convergence.ts'
 import { buildRevisionRecord } from './rebuttal.ts'
 import type { RebuttalPoint } from './rebuttal.ts'
 import {
-  HOMOGENEOUS_PLATOON_COMPOSITION,
-  MIXED_PLATOON_COMPOSITION,
   experimentStudy,
   studyFromPack,
 } from './platoon-sim.ts'
@@ -585,7 +583,19 @@ const A1_PRODUCER = `${LITERATURE_SEARCH_TOOL_ID}@${LITERATURE_SEARCH_TOOL_VERSI
 
 /** A1's offline gap statement, emitted only when no model writer is injected.
  *  It is a fixture constant, never a finding — the artifact labels it `fixture`. */
-const FIXTURE_GAP_STATEMENT = 'SOTA minimum-time-to-collision gap for mixed platoons is unverified'
+/**
+ * A1's offline gap statement, NAMED BY THE RUN'S OWN SUBJECT.
+ *
+ * It used to be a constant about mixed platoons, so a queueing run's landscape scan reported a gap in
+ * somebody else's field — and the gap is what A2 answers with its claim, so the run's whole argument
+ * came from a sentence about a study it was not conducting.
+ *
+ * @param plan - the research this run carries.
+ * @returns the gap a deployment with no writer records.
+ */
+function fixtureGapStatement(plan: StudyPlan): string {
+  return `no published SOTA figure for ${plan.metric.label} is anchored for ${plan.direction}`
+}
 const A2_PRODUCER = `${CLAIM_CONSTRUCT_TOOL_ID}@${CLAIM_CONSTRUCT_TOOL_VERSION}`
 const A3_PRODUCER = 'fixture:agenda'
 // A4 matches the venue against A1's retrieved records and B2 verifies the dataset's bytes on
@@ -980,7 +990,8 @@ function measureOutcomeWithSource(ctx?: ExecCtx): {
  * The run's measured outcome, rounded to the precision the manuscript reports.
  *
  * @param ctx - the run, when the caller has one; the record is read from it.
- * @returns both platoons' minimum time-to-collision plus the change between them.
+ * @returns the study's measured outcome: both arms, the change between them and whatever else the
+ *   implementation reported.
  */
 function measureOutcome(ctx?: ExecCtx): MeasuredOutcome {
   return measureOutcomeWithSource(ctx).measured
@@ -1128,7 +1139,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let gapKind: Truthfulness = labelling.kind
   let gapRoute: Record<string, unknown> = proseRouteOf(undefined)
   if (writer === undefined) {
-    gaps = [FIXTURE_GAP_STATEMENT]
+    gaps = [fixtureGapStatement(planOf(ctx))]
     gapSource = 'fixture'
     gapKind = 'fixture_executor'
   } else {
@@ -1478,8 +1489,10 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let plan: ReadonlyArray<string> = [
     'claim → method → data → baseline → mvp → trinity → boundary → figures → outline → writing → format → submit',
   ]
+  // THE CONTRIBUTION IS THE CLAIM, in the run's own words: a contribution list naming another study's
+  // finding is a plan for a paper nobody is writing.
   let contributions: ReadonlyArray<{ id: string; statement: string }> = [
-    { id: 'c1', statement: 'the mixed platoon changes the platoon minimum time-to-collision relative to the homogeneous platoon' },
+    { id: 'c1', statement: planOf(ctx).claim.ref },
   ]
   let agendaSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let agendaRoute: Record<string, unknown> = proseRouteOf(undefined)
@@ -1552,7 +1565,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           id: contribution.id,
           claimRef,
           claim: contribution.statement,
-          expectedEvidence: `platoon minimum-TTC change ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
+          expectedEvidence: `${planOf(ctx).metric.label} moving ${thresholdLabel(ctx.runCtx.commitment)} (prediction: ${predictionText})`,
         })),
         agendaSource,
         note: agendaSource === 'fixture'
@@ -1625,7 +1638,9 @@ function a4Executor(ctx: ExecCtx): Record<string, unknown> {
         stepId: 'A4-venue',
         slug: 'venue-scope',
         venueId,
-        matches: ['car-following simulation', 'mixed-platoon safety comparison', 'falsifiable experiment'],
+        // THE SCOPE KEYWORDS COME FROM THE RUN'S OWN PLAN: the field, the direction, and the one
+        // property every study here has. A fixed list described the platoon study to every venue.
+        matches: [planOf(ctx).field, planOf(ctx).direction, 'falsifiable experiment'],
         rejects: ['no falsifiable experiment'],
         // The venue is measured; the scope criteria are not. Venue acceptance
         // patterns would have to be read from the venue's own author guidelines,
@@ -1666,9 +1681,12 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // manuscript reports, because the manuscript's method must be the one that ran.
   let modelDeclaredFamily: string | undefined
   const family = `${implementation.algorithm} (${implementation.version})`
+  // THE PROCEDURE IS THE IMPLEMENTATION'S, not the platoon study's: the two arms are the ones the
+  // resolved implementation varies, and what is integrated is what its own module declares.
+  const arms = ctx.runCtx.adapter.arms
   let steps: ReadonlyArray<string> = [
-    `build the two platoons (${HOMOGENEOUS_PLATOON_COMPOSITION.join('-')} against ${MIXED_PLATOON_COMPOSITION.join('-')})`,
-    `integrate ${implementation.algorithm} at ${String(implementation.parameters['stepSeconds'])} s steps`,
+    `run the ${arms.baseline.label} arm against the ${arms.variant.label} arm`,
+    `apply ${implementation.algorithm}`,
     `measure ${implementation.metric.label}`,
   ]
   let metricName: string = planOf(ctx).metric.key
@@ -1881,14 +1899,17 @@ function b2Executor(ctx: ExecCtx): Record<string, unknown> {
         acquisition: acquired
           ? 'acquired — every declared file is present, size-matched and hash-matched against the record in data/README.md'
           : 'not acquired on this host — the dataset is named but its recorded bytes were not verified here',
-        // What this dataset has to do with THIS run. The platoon study's experiment consumes
-        // the Case Pack's declared scenario, not these bytes: the SUMO run is a signal-control
-        // trace, so it carries no mixed-platoon trajectory the study could measure against.
+        // What this dataset has to do with THIS run. The experiment consumes the source the study
+        // declares — the Case Pack's scenario, or a trace the study builds — and not these bytes.
         // Recording the descriptor without that sentence invites a reader to take "the study's
         // dataset" for an input the experiment used, which it is not.
-        consumedBy: 'no step of this run — this run\'s experiment reads the Case Pack\'s declared '
-          + 'scenario. The trace is a signal-control run, so it holds no platoon trajectory to '
-          + 'measure against, and no artifact of this run is derived from its bytes.',
+        //
+        // WHAT THE STUDY MEASURES IS NAMED BY THE STUDY, not by this step: the sentence used to say
+        // "no platoon trajectory", which is a claim about a study this run may not be conducting.
+        consumedBy: 'no step of this run — this run\'s experiment reads '
+          + `${ctx.runCtx.adapter.sourceRef}, which is not this dataset. No artifact of this run is `
+          + 'derived from its bytes, and the quantity this study measures '
+          + `(${planOf(ctx).metric.label}) is not a column of it.`,
         note: acquired
           ? 'dataset descriptor for the real SUMO signal-control run recorded in data/README.md; its bytes were verified on this host, and the verification is the whole of this step\'s claim about it'
           : 'dataset descriptor names a real, openly-licensed dataset; its bytes are not present on this host',
@@ -2010,7 +2031,7 @@ function b3Executor(ctx: ExecCtx): Record<string, unknown> {
           },
         ],
         // No external SOTA row is recorded, and THAT is stated rather than filled in.
-        // Published minimum-TTC figures are prose in papers, not machine-readable fields, so
+        // Published figures for this quantity are prose in papers, not machine-readable fields, so
         // a retrieved record cannot supply one without someone reading the number out
         // of the text. Recording a guess here would manufacture the comparison this
         // step exists to ground.
@@ -2985,13 +3006,13 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     const resultsBody = bodiesShown.get('results') ?? ''
     points = [
       {
-        concern: `Is the ${measured.improvementPct.toFixed(2)}% minimum-TTC change robust at the boundary?`,
+        concern: `Is the measured ${planOf(ctx).metric.label} change of ${measured.improvementPct.toFixed(2)}% robust at the boundary?`,
         response: 'Boundary probing at C3 re-runs the same simulation under stop-and-go forcing and reports the measured margin ratio, which delimits the applicability domain.',
         requiresRevision: false,
       },
       {
         concern: 'Are the SOTA anchors real?',
-        response: 'No published-SOTA row is recorded: a minimum-TTC figure must be read out of a paper, so the comparison is against this study\'s own measured baseline and says so.',
+        response: `No published-SOTA row is recorded: a figure for ${planOf(ctx).metric.label} must be read out of a paper, so the comparison is against this study's own measured baseline and says so.`,
         requiresRevision: true,
       },
     ]
@@ -3790,7 +3811,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
     // `real_tool_fixture_input` made the report print it among the "real tool
     // functions executed", which it is not.
     kind: 'local_computation',
-    basis: 'the baseline is MEASURED: the homogeneous platoon is simulated under the study\'s declared scenario (see C1-mvp for the full study declaration) and its minimum time-to-collision is the reference row. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published minimum-TTC figure has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
+    basis: 'the baseline is MEASURED: the study\'s own baseline arm is run under its declared conditions (see C1-mvp for the full study declaration) and its measured value is the reference row. The arm, the quantity and the code that ran are the STUDY\'s, named by the run\'s adapter; this entry states the shape rather than one study\'s. Ablation is NOT a baseline capability and was moved to C3-boundary. The SOTA comparison still records NO published-SOTA row, because a published figure for a quantity has to be read out of a paper by a human or a reader pipeline — recording one here would manufacture the comparison this step exists to ground',
     producer: B3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -3799,7 +3820,7 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   {
     stepId: 'C1-mvp',
     kind: 'local_computation',
-    basis: 'the platoon-sim experiment engine RUNS both platoons under the study\'s declared scenario (composition, vehicle parameters and disturbance all recorded on the artifact) and measures each one\'s minimum time-to-collision. No model was called and no measured dataset stands behind the numbers, so this is "the experiment really ran on the declared scenario", not "the claim is proven"',
+    basis: 'the study\'s own experiment engine RUNS both of its arms under its declared conditions — every input is recorded on the artifact through the adapter\'s provenance block — and measures the quantity the study declares. No model was called and no measured dataset stands behind the numbers, so this is "the experiment really ran on the declared scenario", not "the claim is proven"',
     producer: C1_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -3977,7 +3998,7 @@ export const STEP_CAPABILITIES: Readonly<Record<string, ReadonlyArray<StepCapabi
  *    `adjudicate('B')`. The `live_external` label below describes the corpus path, which is the
  *    one a run of the default study takes; the fallback is labelled where it is built.
  *  - C: the REAL team `adjudicateClaimSupport` → core `adjudicate('C')` runs over a
- *    `live` experiment report MEASURED by platoon-sim over the study's declared scenario
+ *    `live` experiment report MEASURED by the study's own engine over its declared conditions
  *    profile; the claim and its prediction are the fixture-supplied input. The
  *    measurement is this package's own code, hence `local_computation`.
  */
@@ -4001,12 +4022,12 @@ export const VERDICT_CHANNELS: Readonly<Record<TrinityComponent, { kind: Truthfu
   C: {
     // The measurement is made by this package's experiment module, not by a tool.
     kind: 'local_computation',
-    // The experiment RUNS (platoon-sim simulates both platoons over the declared
+    // The experiment RUNS (the study's engine runs both arms over the declared
     // demand profile; the report carries source 'live' and grades 'locally-measured' — which
     // names the channel, not a level of verification).
     // Its INPUT — the claim and its prediction — is fixture-supplied on the default
     // path, which is what keeps this short of `live_external`.
-    basis: 'team adjudicateClaimSupport → core adjudicate(`C`) executes for real over an experiment MEASURED by platoon-sim: both platoons are simulated under the Case Pack\'s declared scenario, and every reported number is computed from the simulated trajectories (the artifact records the composition, the vehicle parameters and the disturbance). Report source is the literal `live` — the experiment ran HERE, not against an external system — and evidenceGrade is `locally-measured`, derived from that literal by equality: it distinguishes which channel ran and grades nothing. The claim and prediction it adjudicates come from the selected Case Pack, and the claim is recorded as REFUTED when the measurement negates it',
+    basis: 'team adjudicateClaimSupport → core adjudicate(`C`) executes for real over an experiment MEASURED by the study\'s own engine: both of its arms are run under the declared conditions, and every reported number is computed from that run (the artifact records the inputs through the adapter\'s provenance block). Report source is the literal `live` — the experiment ran HERE, not against an external system — and evidenceGrade is `locally-measured`, derived from that literal by equality: it distinguishes which channel ran and grades nothing. The claim and prediction it adjudicates come from the selected Case Pack, and the claim is recorded as REFUTED when the measurement negates it',
   },
 }
 
