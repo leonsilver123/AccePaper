@@ -371,6 +371,11 @@ export function documentOf(input: {
           latex: equation.latex,
         })))
       }
+      // THE FLOATS SIT WITH THE SECTION THAT REPORTS THEM, which is `results` in this outline. A
+      // caller building a document for another skeleton has to put them where its own results are —
+      // measured, the hard way: a fixture whose float belonged to a section the assembler does not
+      // attach floats to produced a LaTeX file with no figure, and that was read as a LaTeX defect
+      // for a while. It was the fixture.
       if (section.id === 'results') blocks.push(...input.floats)
       return { id: section.id, heading: section.heading, blocks }
     }),

@@ -140,16 +140,19 @@ describe.skipIf(PYTHON === undefined)('the formats a submission actually needs, 
     const compiler = await PandocCompiler.probe({ executable: 'pandoc', timeoutMs: 120_000 })
     const document = documentOf({
       title: 'A manuscript for a journal',
-      // THE SECTION DOES NOT NAME A FIGURE, and that is deliberate — see the open defect recorded in
-      // the status file: on this pandoc, a LaTeX document whose prose names its figure comes back as a
-      // PREAMBLE WITH NO BODY, because the absolute path written into the markdown is escape
-      // sequences to the reader. This case pins what works; the defect has its own entry.
-      sections: [{
-        id: 'introduction',
-        heading: 'Introduction',
-        bodyText: 'The introduction states the claim.',
+      // THE FLOATS SIT WITH THE RESULTS SECTION — that is where the document assembler attaches them,
+      // and a fixture that put one anywhere else would test the fixture rather than the writer.
+      sections: [
+        { id: 'introduction', heading: 'Introduction', bodyText: 'The introduction states the claim.' },
+        { id: 'results', heading: 'Results', bodyText: 'The results are drawn in Figure 1.' },
+      ],
+      floats: [{
+        kind: 'figure' as const,
+        label: 'Figure 1',
+        caption: 'The measured comparison.',
+        svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        pngBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
       }],
-      floats: [],
       equations: [],
       references: [],
     })
@@ -162,9 +165,13 @@ describe.skipIf(PYTHON === undefined)('the formats a submission actually needs, 
     expect(result.compiled.encoding).toBe('utf8')
     expect(source).toContain(String.fromCharCode(92) + 'documentclass')
     expect(source).toContain('The introduction states the claim.')
-    // THE FIGURE IS REFERENCED, not inlined: LaTeX cannot carry an SVG, so the raster travels beside
-    // the source as an asset the journal's own compile will find.
+    // THE FIGURE IS REFERENCED AND THE RASTER TRAVELS BESIDE THE SOURCE: LaTeX cannot carry an SVG, so
+    // the picture the document declares is the PNG, embedded as an asset the journal's own compile
+    // finds. A figure that reached neither is the loss `assets.dropped` exists to report.
+    expect(source).toContain('includegraphics')
+    expect(result.compiled.assets.embedded).toContain('Figure 1')
     expect(result.compiled.assets.dropped).toEqual([])
+    expect(result.compiled.files.map(file => file.path)).toContain('assets/figure-1.png')
   })
 })
 

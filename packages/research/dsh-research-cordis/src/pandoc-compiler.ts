@@ -301,13 +301,10 @@ export class PandocCompiler {
             writeFileSync(absolute, Buffer.from(block.pngBase64, 'base64'))
             files.push({ path: `assets/${name}`, label: block.label, base64: block.pngBase64 })
             embedded.push(block.label)
-            // THE PATH IS PASSED AS AN ABSOLUTE PATH. `file://` URLs were tried and do NOT work
-            // here: pandoc 2.12 cannot fetch them for a local image, so the figure is dropped AND the
-            // document is truncated. THE DEFECT THIS LEAVES IS RECORDED, not papered over: a
-            // document whose prose names its figure comes back from the LaTeX branch as a PREAMBLE
-            // WITH NO BODY, because the path carries backslashes the reader takes as escapes and a
-            // space that ends the inline link. DOCX is unaffected. It is open, with its evidence, in
-            // `project-plan/architecture-review-2026-09-15/OVERNIGHT-STATUS.md`.
+            // THE PATH IS PASSED AS AN ABSOLUTE PATH, and that is enough: pandoc resolves it and the
+            // writer emits `\includegraphics` with the caption. A `file://` URL was tried and is
+            // WORSE — pandoc cannot fetch it for a local image, so the figure is dropped and the
+            // document truncates — which is why the plain path stays.
             rendered.push(`![${block.caption}](${absolute})`)
             continue
           }

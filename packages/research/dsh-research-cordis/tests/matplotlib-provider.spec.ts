@@ -37,6 +37,17 @@ function realPython(): string | undefined {
 
 const PYTHON = realPython()
 
+/**
+ * The probed provider, ONCE for the whole file.
+ *
+ * Probing is a process spawn plus a matplotlib import, and this file ran four of them per execution —
+ * under a full parallel suite that was measured as an intermittent failure while the file passed on
+ * its own. One probe, shared, is fewer processes and one thing to diagnose.
+ */
+const PROVIDER = PYTHON === undefined
+  ? undefined
+  : await MatplotlibProvider.probe({ executable: PYTHON, timeoutMs: 300_000 })
+
 /** A runner that answers with a fixed result and records what it was asked. */
 function standIn(answer: string, code = 0): { readonly runner: PythonRunner; readonly calls: string[] } {
   const calls: string[] = []
@@ -144,9 +155,9 @@ describe('a provider that drew a figure', () => {
 // THE TIMEOUT IS THE TEST'S, not the product's: the shipped default is 30 seconds, which a cold
 // matplotlib import under a full parallel suite can exceed — measured as a flaky failure that passed
 // whenever the file ran alone.
-describe.skipIf(PYTHON === undefined)('the provider, against the real library', () => {
+describe.skipIf(PYTHON === undefined || PROVIDER === undefined)('the provider, against the real library', () => {
   it('draws a chart the machine actually rendered', async () => {
-    const provider = await MatplotlibProvider.probe({ executable: PYTHON ?? '', timeoutMs: 180_000 })
+    const provider = PROVIDER
     expect(provider, 'a probed interpreter that cannot draw').toBeDefined()
     const drawn = await provider?.renderChart({
       ...CHART,
@@ -166,14 +177,13 @@ describe.skipIf(PYTHON === undefined)('the provider, against the real library', 
   })
 
   it('draws a roadmap the machine actually rendered', async () => {
-    const provider = await MatplotlibProvider.probe({ executable: PYTHON ?? '', timeoutMs: 180_000 })
+    const provider = PROVIDER
     const drawn = await provider?.renderDiagramRequest(DIAGRAM)
     expect(drawn?.svg).toContain('<svg')
     expect(drawn?.pngBase64.startsWith(PNG_BASE64_PREFIX)).toBe(true)
   })
 
-  it('reports the library version it probed', async () => {
-    const provider = await MatplotlibProvider.probe({ executable: PYTHON ?? '', timeoutMs: 180_000 })
-    expect(provider?.toolVersion).toMatch(/^\d+\.\d+/u)
+  it('reports the library version it probed', () => {
+    expect(PROVIDER?.toolVersion).toMatch(/^\d+\.\d+/u)
   })
 })
