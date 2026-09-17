@@ -73,6 +73,15 @@
           kind: openalex
         citationResolver:
           kind: openalex
+        # THE DOCUMENT TOOLCHAIN. `pandoc` compiles the manuscript's document model into a
+        # self-contained HTML file (figures inline, equations as MathML, so it reads with the
+        # network off) and into a LaTeX source. No LaTeX engine is named, so this profile does not
+        # offer PDF: a deployment that has one adds `latexEngine: <executable>` and the formats are
+        # probed from the executables that actually answer. A machine without pandoc fails nothing —
+        # the run exports its Markdown manuscript and the artifact records, with the reason, that it
+        # was not compiled.
+        document:
+          executable: pandoc
         # Prose steps (A1 gap analysis, B1 method, D2 outline, D3 writing, D4
         # rebuttal) route through the REAL agent loop on this provider route, so the
         # manuscript text is written by a model rather than by the offline stand-in.

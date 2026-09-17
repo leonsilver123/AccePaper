@@ -95,6 +95,7 @@ import { requireMetricDeclaration } from './runner/metrics.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
 import { resolveResearchProfile } from './runner/research-profile.ts'
 import type { JournalProfile, ResearchProfile } from './runner/research-profile.ts'
+import type { DocumentCompiler } from './runner/document-compile.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
 import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
@@ -756,6 +757,20 @@ export class ResearchTeamService extends TypertRemoteService {
    *
    * @returns the declared profile, or {@link DEFAULT_EVIDENCE_PROFILE}.
    */
+  /**
+   * The document compiler this deployment configured, or undefined when it configured none.
+   *
+   * Read off the research engine the way the prose channel is, and never from a request field: whether
+   * a machine has a document toolchain is a deployment fact, and a client must not be able to make a
+   * run compile with a tool the deployment did not name.
+   *
+   * @returns the compiler, or undefined.
+   */
+  private hostDocumentCompiler(): DocumentCompiler | undefined {
+    const research = this.ctx.get('research') as { documentCompiler?: DocumentCompiler } | undefined
+    return research?.documentCompiler
+  }
+
   private hostEvidenceProfile(): EvidenceProfile {
     const research = this.ctx.get('research') as { evidenceProfile?: EvidenceProfile } | undefined
     return research?.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE
@@ -1462,9 +1477,11 @@ export class ResearchTeamService extends TypertRemoteService {
     const casePackInputs = this.hostCasePackInputs()
     const stepTimeoutMs = this.hostStepTimeoutMs()
     const revisionRounds = this.hostRevisionRounds()
+    const documentCompiler = this.hostDocumentCompiler()
     return {
       evidenceProfile: this.hostEvidenceProfile(),
       researchProfile: this.hostResearchProfile(),
+      ...(documentCompiler !== undefined ? { documentCompiler } : {}),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),

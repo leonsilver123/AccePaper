@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-17-the-manuscript-is-a-document-and-compiling-it-is-a-seam.md
+2026-09-17-the-manuscript-is-a-document-and-compiling-it-is-a-seam.md: 160c77dfc81fed6ab516e71970462adc4b8cea54
+2026-09-17-the-manuscript-is-a-document-and-compiling-it-is-a-seam.zh.md: dc52b8e790acadf4cdeb99da19297c8627a8e51f

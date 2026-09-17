@@ -15,11 +15,14 @@
 | `evidenceProfile` | 本部署的证据允许属于哪一类,以及其产物能否提交(`production` 或 `evaluation`) | `evaluation`:允许合成证据,因此该 run 的产物不可提交 |
 | `literatureSearch` / `citationResolver` | 检索与引文身份链打哪个目录(`fixture` 或 `openalex`) | fixture(离线) |
 | `prose` | 正文步骤走哪个提供方路由 | 正文步骤输出其 fixture 文本,不调模型 |
+| `document` | 这个部署拥有哪套文档工具链(`executable`,可选 `latexEngine`) | 不编译:运行照旧导出 Markdown 稿件,并在工件上记录它没有被编译 |
 | `workspace` | 引擎创建的**每个** agent 会话的绝对工作目录 | `process.cwd()` |
 
 `workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达提供方**之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
 
 ## 已知限制与延期工作
+
+- **稿件由文档模型编译而来,工具链是探测出来的而不是假定的**(2026-09-17):`src/pandoc-compiler.ts` 用 `pandoc` 渲染 E1 装配出的文档 —— 带块的章节、作为内联 SVG 的图、作为显示数学的公式、被参考文献表分配的编号替换掉的引用标记 —— 产出一份**自包含**的 HTML 与一份 LaTeX 源。公式用 MathML 而不是脚本:`--mathjax` 会拉进一个渲染器(自包含形式下实测 1.78 MB),而计划要的是断网也能读的成品,于是同一份文档编译出来是 14 KB 且由浏览器原生渲染(同样实测)。**格式是被探测的**:`PandocCompiler.probe` 去问可执行文件它们是什么,于是一台有 pandoc、没有 LaTeX 引擎的部署提供 `html` 与 `latex`、并以那条理由拒绝 `pdf`,而不是写出一个空文件 —— 出货 bundle 只写 `pandoc`、不写引擎,这正是本机的状态。这道缝是**结构化**满足的(与 prose 通道一样),所以本包仍然不依赖 research-team 包。**这里没有的**:本仓库的任何部署目前都还没有 PDF(任何地方都没有写出 LaTeX 引擎),所以 PDF 这条腿实现过、没被走到;编译的排版是 pandoc 的默认,不是期刊模板,因为没有任何期刊模板被读过(见 TRC 核验表)。
 
 - **失败的轮次现在就是失败的写入,不管它吐了多少文本**(2026-09-16):失败检查曾经坐在 `LlmProseWriter.write` 的**零长度分支里**,于是一次吐出几句之后死掉的会话 —— 流中途的 provider 错误、被取消的请求、再也没回来的工具调用 —— 把那几句话当作该步的产物返回,该步也就认证了一段没有任何轮次写完的散文。现在先查失败,消息里同时带上原因与被拒的未完成文本长度。失败读的是**最后一条** `turn/end`:更早一轮失败而更后一轮成功,是一个恢复了的会话,不是一个失败的会话。
 - **引用条目现在带年份,而这一条链曾经只缺提供者**(2026-09-16)。`LiteratureHit` 曾**没有 year 字段**,于是 `OpenAlexLiteratureAdapter` 把目录已经给出的 `publication_year` 丢掉 —— 一份真实运行的导出里,25 条参考文献每条都有 venue、作者与 DOI,**没有一条有年份**。渲染侧早已就绪:E1 会从每个条目读 `year`、`paper-format.ts` 的 `formatReference` 会渲染它;缺的只是提供它的人。现在 `LiteratureHit.year` 是可选字段,`toHit` 读目录的那个字段,**读不出可信年份时留空而不是编造**(`null`、`forthcoming`、五位数一律算「目录没说」),因为一个被编造出来的年份不是缺失字段,而是一条错误引用。

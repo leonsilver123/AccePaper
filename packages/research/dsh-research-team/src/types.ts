@@ -918,3 +918,13 @@ export interface ResearchPackageExport {
   readonly state?: 'draft' | 'final'
   readonly checks?: ReadonlyArray<{ readonly code: string; readonly passed: boolean; readonly detail: string }>
 }
+
+// ── The document compile seam, re-exported for deployments ───────────────────
+// A DEPLOYMENT IMPLEMENTS THIS, so its types have to be reachable from a published entry: the
+// research packages state the seam and the Cordis package fills it, and a seam whose types live only
+// on an internal path cannot be implemented from outside the package. Type-only, so this file stays
+// free of runtime imports.
+export type {
+  CompileFormat, CompileRefusal, CompileRefusalCode, CompileRequest, CompiledDocument,
+  DocumentBlock, DocumentCompiler, DocumentReference, DocumentSection, ManuscriptDocument,
+} from './runner/document-compile.ts'

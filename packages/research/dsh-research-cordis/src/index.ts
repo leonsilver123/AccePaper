@@ -52,6 +52,7 @@ import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchTo
 import { createDeterministicAdapter } from './deterministic-llm.ts'
 import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
+import { PandocCompiler } from './pandoc-compiler.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
   adjudicate,
@@ -216,6 +217,18 @@ export interface Config {
    */
   readonly prose?: ProseChannel
   /**
+   * The document toolchain this deployment has, when it has one.
+   *
+   * ABSENT BY DEFAULT, and that is the honest default: whether a machine has `pandoc` (and a LaTeX
+   * engine behind it) is a fact about the machine, so a deployment states it. A run under a
+   * deployment that names none still exports its manuscript as Markdown and records on the artifact
+   * that it was not compiled — which is a different fact from a compile that failed.
+   *
+   * The formats the compiler offers are PROBED from the executables named here, so a deployment
+   * without a LaTeX engine refuses `pdf` instead of producing an empty file.
+   */
+  readonly document?: DocumentChannel
+  /**
    * Directory of the Case Pack this deployment runs against.
    *
    * A DEPLOYMENT setting, deliberately not a request parameter: `runPipeline` is exposed
@@ -283,6 +296,21 @@ export interface Config {
    * until the same sections are still open, whichever comes first.
    */
   readonly revisionRounds?: number
+}
+
+/**
+ * The document toolchain a deployment has: the executables, named rather than looked up.
+ *
+ * A CHANNEL like the prose and literature channels, and absent by default for the same reason: a
+ * machine's toolchain is not something a deployment can assume, so it is stated or it is not had.
+ */
+export interface DocumentChannel {
+  /** The pandoc executable. */
+  readonly executable: string
+  /** The LaTeX engine, when the deployment has one. Absent means this deployment cannot produce PDF. */
+  readonly latexEngine?: string
+  /** Time limit for one compile, milliseconds. */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -412,6 +440,16 @@ export class ResearchEngine extends Service {
    */
   readonly proseWriter: LlmProseWriter | undefined
   /**
+   * The document compiler this deployment has, or undefined when it named none.
+   *
+   * Public for the same reason {@link ResearchEngine.proseWriter} is: the team service reads it and
+   * hands it to the step that compiles, so one deployment-level choice governs every run.
+   *
+   * Not `readonly`: the probe that fills it is asynchronous, so the field starts undefined and the
+   * deployment's own formats are known once the executables have answered.
+   */
+  documentCompiler: PandocCompiler | undefined
+  /**
    * Milliseconds one step may run, when the deployment names a budget, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the runner-side service
    * reads it so one deployment decision governs every step of every run.
@@ -494,6 +532,18 @@ export class ResearchEngine extends Service {
       }, 'llm')
     } else {
       this.proseWriter = undefined
+    }
+    // THE PROBE DECIDES WHAT THIS DEPLOYMENT CAN PRODUCE. It runs once, here, so a machine without a
+    // LaTeX engine is known before any run asks for a PDF — and the absence is a property of the
+    // deployment rather than a compile that fails later.
+    this.documentCompiler = undefined
+    if (config.document !== undefined) {
+      const document = config.document
+      void PandocCompiler.probe({
+        executable: document.executable,
+        ...(document.latexEngine === undefined ? {} : { latexEngine: document.latexEngine }),
+        ...(document.timeoutMs === undefined ? {} : { timeoutMs: document.timeoutMs }),
+      }).then((compiler) => { this.documentCompiler = compiler })
     }
   }
 

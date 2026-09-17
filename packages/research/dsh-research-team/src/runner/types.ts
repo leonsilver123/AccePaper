@@ -19,6 +19,7 @@ import type { CasePackRunInput } from './case-pack.ts'
 import type { StudyPlan } from './study-plan.ts'
 import type { ResearchProfile } from './research-profile.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
+import type { DocumentCompiler } from './document-compile.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -114,6 +115,14 @@ export interface DriveOptions {
    */
   readonly proseWriter?: ResearchProseWriter
   /**
+   * The document compiler the deployment configured, handed to E1-format.
+   *
+   * INJECTED, NOT SPAWNED HERE. Whether a machine has a document toolchain is a deployment fact, so
+   * the deployment states it; a run under a deployment that configured none still exports its
+   * manuscript and records that it was not compiled rather than failing.
+   */
+  readonly documentCompiler?: DocumentCompiler
+  /**
    * Tool dependencies for capability steps; assembled by the Cordis adapter from
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
@@ -169,6 +178,8 @@ export interface DriveStepOptions {
   readonly invoker?: ResearchToolInvoker
   /** Real-model prose writer; see {@link DriveOptions.proseWriter}. */
   readonly proseWriter?: ResearchProseWriter
+  /** The document compiler; see {@link DriveOptions.documentCompiler}. */
+  readonly documentCompiler?: DocumentCompiler
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
   /**

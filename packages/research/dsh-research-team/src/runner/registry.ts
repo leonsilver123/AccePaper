@@ -190,6 +190,8 @@ import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from '
 import { checkPresentationPlan, shippedPresentationPlan } from './presentation-plan.ts'
 import type { PlannedFigure } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
+import { compileManuscript, documentOf } from './document-compile.ts'
+import type { DocumentCompiler } from './document-compile.ts'
 import {
   bibliographyOf, checkCitationKeys, checkCitationUse, checkManuscriptCitations, citationUsesOf,
   citeKeyOf, renderCitationMarkers, reviewedSources,
@@ -407,6 +409,15 @@ export interface ResearchProseWriter {
 
 /** Context handed to every registry executor (drive layer adapts core's StepExecContext). */
 export interface ExecCtx {
+  /**
+   * The document compiler this deployment configured, or undefined when it configured none.
+   *
+   * A DEPLOYMENT FACT, carried on the context the way the prose writer is: whether a machine has a
+   * document toolchain is not something a step can discover for itself without spawning a process,
+   * and this package does not spawn.
+   */
+  readonly documentCompiler?: DocumentCompiler
+
   readonly runId: string
   readonly stepId: string
   readonly attemptId: number
@@ -3520,6 +3531,64 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // reproducibility, manifest) and writes the whole set to disk. A path whose upstream step
   // did not run has no content and is OMITTED, never declared empty — the earlier version of
   // this artifact listed five filenames no step wrote, which read as run output.
+  // THE DOCUMENT, AND THE COMPILE CHAIN. The parts this step assembled are handed to a compiler as a
+  // DOCUMENT — sections with their blocks, floats with their labels, equations as display mathematics,
+  // references keyed the way the prose cites them — so a backend renders the document rather than
+  // re-parsing the assembled Markdown. The compile is a seam the deployment fills: this package spawns
+  // nothing, and a deployment that configured no compiler records that fact instead of failing a run
+  // that still holds a complete Markdown manuscript.
+  const document = documentOf({
+    title,
+    sections: sections.map(section => ({
+      id: section.id,
+      heading: section.heading,
+      bodyText: section.bodyText,
+    })),
+    floats: [
+      ...(figureSvg.length > 0
+        ? [{
+          kind: 'figure' as const,
+          label: floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1',
+          caption: floats.find(entry => entry.kind === 'data-figure')?.title ?? '',
+          svg: figureSvg,
+        }]
+        : []),
+      ...(tableMarkdown === undefined
+        ? []
+        : [{
+          kind: 'table' as const,
+          label: plannedTable.label,
+          caption: plannedTable.title,
+          markdown: tableMarkdown,
+        }]),
+      ...(roadmapMermaid.length === 0
+        ? []
+        : [{
+          kind: 'diagram' as const,
+          label: floats.find(entry => entry.kind === 'roadmap')?.label ?? 'Figure 2',
+          caption: floats.find(entry => entry.kind === 'roadmap')?.title ?? '',
+          mermaid: roadmapMermaid,
+        }]),
+    ],
+    equations: MODEL_EQUATIONS.map(equation => ({ label: equation.name, latex: equation.latex })),
+    references: referenceEntries.flatMap((entry, index) =>
+      entry.citeKey === undefined
+        ? []
+        : [{ citeKey: entry.citeKey, entry: entry.formatted, number: index + 1 }]),
+  })
+  const compiled: Array<{ readonly path: string; readonly content: string }> = []
+  const compileRefusals: string[] = []
+  for (const format of ['html', 'latex'] as const) {
+    const result = await compileManuscript({ document, format }, ctx.documentCompiler)
+    if (result.ok) {
+      compiled.push({ path: result.compiled.fileName, content: result.compiled.content })
+      continue
+    }
+    // NOT A FAILED STEP: the manuscript this run produced is complete without a compiled form, and a
+    // deployment without a compiler is a fact about the deployment. It is recorded, with the reason,
+    // so a reader of the package can tell "not compiled" from "compiled badly".
+    compileRefusals.push(...result.refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`))
+  }
   const pkg = nonEmptyPackageFiles({
     'manuscript.md': {
       content: assembled.markdown,
@@ -3537,11 +3606,32 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       content: roadmapMermaid.length > 0 ? ['```mermaid', roadmapMermaid, '```'].join('\n') : '',
       source: `${ROADMAP_TOOL_ID}@${ROADMAP_TOOL_VERSION}`,
     },
+    'manuscript.html': {
+      content: compiled.find(file => file.path === 'manuscript.html')?.content ?? '',
+      source: compiled.some(file => file.path === 'manuscript.html')
+        ? `${ctx.documentCompiler?.tool ?? 'no compiler'} (from the document model, not the assembled markdown)`
+        : 'NOT COMPILED by this deployment',
+    },
+    'manuscript.tex': {
+      content: compiled.find(file => file.path === 'manuscript.tex')?.content ?? '',
+      source: compiled.some(file => file.path === 'manuscript.tex')
+        ? `${ctx.documentCompiler?.tool ?? 'no compiler'} (from the document model, not the assembled markdown)`
+        : 'NOT COMPILED by this deployment',
+    },
   })
   return {
     'formatted-manuscript': tagArtifact(
       {
         title,
+        // WHAT RENDERED IT, AND WHAT COULD NOT. A package that named only `manuscript.html` would
+        // leave a reader unable to tell a compiled document from a copy of the Markdown — and a run
+        // that could not compile says so here rather than by the absence of a file.
+        compilation: {
+          tool: ctx.documentCompiler?.tool ?? null,
+          formats: ctx.documentCompiler?.formats ?? [],
+          compiled: compiled.map(file => file.path),
+          refusals: compileRefusals,
+        },
         venueName,
         venueId,
         venueStyle: `${venueName} template`,
