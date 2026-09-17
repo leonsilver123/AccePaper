@@ -10,10 +10,15 @@
  * criticise, and the plan behind this module says so: "不以现有坏产物作为 golden 正例". The last case
  * here runs the real pipeline and records what it finds — as a finding, never as a target to match.
  */
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
+import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
 import { reviewPaperQuality, type PaperQualityInput } from '../src/runner/paper-quality.ts'
+
+/** A SECOND TASK: the same study, a claim that commits to a decrease. Synthetic, test-owned. */
+const DECREASE_PACK_DIR = fileURLToPath(new URL('./fixtures/case-pack-decrease', import.meta.url))
 
 /** A manuscript with nothing wrong with it: every object cited, every claim sourced. */
 function cleanInput(overrides: Partial<PaperQualityInput> = {}): PaperQualityInput {
@@ -32,6 +37,10 @@ function cleanInput(overrides: Partial<PaperQualityInput> = {}): PaperQualityInp
     ],
     crossReferences: { cited: ['Figure 1', 'Table 1'], uncited: [] },
     floatsNotRendered: [],
+    // ZERO BY DEFAULT, so a case about one rule is not also a case about the bibliography: the
+    // crafted sections below are about objects, statements and directions, and a fixture that
+    // accidentally carried references would have every such case failing for a second reason.
+    referenceCount: 0,
     metric: { name: 'min-ttc-seconds', direction: 'higher is better', changePct: -38.2 },
     ...overrides,
   }
@@ -62,6 +71,32 @@ describe('the baseline is silent about a manuscript with nothing wrong with it',
     expect(codesOf(cleanInput({
       sections: [{ id: 'introduction', heading: 'Introduction', bodyText: 'Prior work is not cited here.' }],
     }))).toEqual(['unsupported-statement'])
+  })
+})
+
+describe('a bibliography the prose never uses', () => {
+  it('catches a manuscript that carries references and cites none', () => {
+    const findings = reviewPaperQuality(cleanInput({
+      referenceCount: 2,
+      sections: [
+        { id: 'introduction', heading: 'Introduction', bodyText: 'We test one claim about platoon control.' },
+        { id: 'references', heading: 'References', bodyText: '[1] Someone. A paper. 2001.' },
+      ],
+    }))
+    expect(findings.map(finding => finding.code)).toEqual(['no-literature-position'])
+    expect(findings[0]?.detail).toContain('never says what it builds on')
+  })
+
+  it('is silent when the text cites, and silent when there is nothing to cite', () => {
+    // A citation anywhere in the body answers it; a document with no bibliography at all is a
+    // different fact — it has nothing to fail to use.
+    expect(codesOf(cleanInput())).toEqual([])
+    expect(codesOf(cleanInput({ referenceCount: 0 }))).toEqual([])
+    // ...and a bibliography the text DOES use is clean, which is what makes the rule a rule.
+    expect(codesOf(cleanInput({
+      referenceCount: 1,
+      sections: [{ id: 'introduction', heading: 'Introduction', bodyText: 'Platoon control has been studied [1].' }],
+    }))).toEqual([])
   })
 })
 
@@ -162,6 +197,65 @@ describe('a result described in the wrong direction', () => {
   })
 })
 
+describe('the same baseline on a different research task', () => {
+  it('reads a study whose claim commits to the opposite direction, and finds its own defects there', async () => {
+    // A DIFFERENT TASK, THE SAME MEASUREMENT. What the C gate grades is the claim's DECLARED
+    // commitment, not its prose — the plan's own note records four audit rounds dismantling a prose
+    // reader. So a task that commits to a DECREASE is satisfied by the very −38.20% that the shipped
+    // task is refuted by, and the pipeline should report support instead of a refutation.
+    //
+    // WHY THIS IS THE MULTI-TASK HALF OF Q00: a baseline proved only on the one manuscript it was
+    // written beside is a baseline tuned to that manuscript. Running it against a run that ends with
+    // the opposite verdict is what shows the rules read the records rather than the expected answer.
+    const store = new Map() as ResearchRunStore
+    // ITS OWN PACK, because the commitment the C gate grades is read from the pack the run is given —
+    // an injected value is not the task. Everything else in the copy is the shipped study, so the
+    // measurement is identical and only the claim differs.
+    const pack = loadCasePack(DECREASE_PACK_DIR)
+    const inputs = planCasePackInputs(pack)
+    const run = await runT19B(store, { casePackInputs: inputs })
+    const mvp = getArtifact(store, run.runId, 'mvp-results') as {
+      outcome: { supportsPrediction: boolean; verdict: string }
+      observed: { improvementPct: number }
+    }
+    // THE SAME NUMBERS, THE OPPOSITE VERDICT: the measurement did not change, the commitment did.
+    expect(mvp.observed.improvementPct).toBeLessThan(0)
+    expect(mvp.outcome.supportsPrediction).toBe(true)
+
+    // AND THE BASELINE READS THIS MANUSCRIPT TOO — the same rules, applied to a run that ended the
+    // other way, still finding what is actually wrong with the document rather than what the shipped
+    // task's answer looks like.
+    const draft = getArtifact(store, run.runId, 'draft') as {
+      sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
+    }
+    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+      crossReferences: { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
+      floatsNotRendered: ReadonlyArray<string>
+      manuscriptCounts: { references: number }
+    }
+    const baseline = getArtifact(store, run.runId, 'baseline-results') as {
+      baseline: { metric: { name: string; direction: string } }
+      measured: { variantImprovementPct: number }
+    }
+    const findings = reviewPaperQuality({
+      sections: draft.sections,
+      crossReferences: manuscript.crossReferences,
+      floatsNotRendered: manuscript.floatsNotRendered,
+      referenceCount: manuscript.manuscriptCounts.references,
+      metric: {
+        name: baseline.baseline.metric.name,
+        direction: baseline.baseline.metric.direction,
+        changePct: baseline.measured.variantImprovementPct,
+      },
+    })
+    const codes = ['uncited-object', 'unrendered-object', 'unsupported-statement', 'metric-misread', 'no-literature-position']
+    for (const finding of findings) expect(codes).toContain(finding.code)
+    // The objects nobody refers to are a property of how this pipeline writes, not of which way its
+    // result went, so they are found here as well.
+    expect(findings.some(finding => finding.code === 'uncited-object')).toBe(true)
+  })
+})
+
 describe('the shipped run, read by the baseline', () => {
   it('reports what it finds, and every finding is one of the four kinds', async () => {
     // NOT A TARGET: this is the pipeline's own current output. Whatever the baseline finds here is a
@@ -176,6 +270,7 @@ describe('the shipped run, read by the baseline', () => {
     const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
       crossReferences: { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
       floatsNotRendered: ReadonlyArray<string>
+      manuscriptCounts: { references: number }
     }
     const baseline = getArtifact(store, run.runId, 'baseline-results') as {
       baseline: { metric: { name: string; direction: string } }
@@ -186,6 +281,7 @@ describe('the shipped run, read by the baseline', () => {
       sections: draft.sections,
       crossReferences: manuscript.crossReferences,
       floatsNotRendered: manuscript.floatsNotRendered,
+      referenceCount: manuscript.manuscriptCounts.references,
       metric: {
         name: baseline.baseline.metric.name,
         direction: baseline.baseline.metric.direction,
@@ -194,7 +290,7 @@ describe('the shipped run, read by the baseline', () => {
     })
 
     for (const finding of findings) {
-      expect(['uncited-object', 'unrendered-object', 'unsupported-statement', 'metric-misread'])
+      expect(['uncited-object', 'unrendered-object', 'unsupported-statement', 'metric-misread', 'no-literature-position'])
         .toContain(finding.code)
       // EVERY FINDING IS ACTIONABLE: it says where, what, and on what evidence.
       expect(finding.where.length).toBeGreaterThan(0)

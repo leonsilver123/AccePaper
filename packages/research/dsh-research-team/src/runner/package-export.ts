@@ -26,6 +26,8 @@ import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from 
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
 import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
+import { reviewPaperQuality } from './paper-quality.ts'
+import type { PaperQualityFinding } from './paper-quality.ts'
 
 /**
  * What a package needs to know about one step.
@@ -129,6 +131,15 @@ export interface RunPackageManifest {
    * so a reader comparing two packages can see whether the same revision was approved.
    */
   readonly approval?: FinalPackageApproval
+  /**
+   * What the quality baseline found in this manuscript.
+   *
+   * Carried in the manifest because a package is what a reader receives: a list of files and digests
+   * says nothing about whether the manuscript inside refers to its own figures or positions itself in
+   * its own bibliography. The findings are computed here, from the run's records and the manuscript
+   * the package contains, so the package states them without anyone having to run a separate tool.
+   */
+  readonly qualityFindings: ReadonlyArray<PaperQualityFinding>
   readonly note: string
 }
 
@@ -180,6 +191,29 @@ function artifactRecord(store: ResearchRunStore, runId: string, slug: string): R
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
+}
+
+/**
+ * The metric a run registered, as the quality baseline needs it: its name, which way is better, and
+ * the measured change. Read from the run's own records — never from the manuscript's prose, which is
+ * the thing being judged.
+ *
+ * @param baseline - the `baseline-results` artifact, when the run produced one.
+ * @param claim - the `claim` artifact, whose metric key names the quantity.
+ * @returns the metric, or undefined when the run measured none.
+ */
+function metricOf(
+  baseline: Record<string, unknown> | undefined,
+  claim: Record<string, unknown> | undefined,
+): { readonly name: string; readonly direction: string; readonly changePct: number } | undefined {
+  if (baseline === undefined) return undefined
+  const metric = (baseline.baseline as { metric?: { name?: unknown; direction?: unknown } } | undefined)?.metric
+  const measured = baseline.measured as { variantImprovementPct?: unknown } | undefined
+  const name = typeof metric?.name === 'string' ? metric.name : claim?.metricKey
+  const direction = typeof metric?.direction === 'string' ? metric.direction : undefined
+  const changePct = typeof measured?.variantImprovementPct === 'number' ? measured.variantImprovementPct : undefined
+  if (typeof name !== 'string' || direction === undefined || changePct === undefined) return undefined
+  return { name, direction, changePct }
 }
 
 /** A JSON file body: sanitized, pretty-printed, newline-terminated. */
@@ -247,6 +281,8 @@ export function planRunPackage(
   const experiment = artifactRecord(store, runId, 'mvp-results')
   const baseline = artifactRecord(store, runId, 'baseline-results')
   const method = artifactRecord(store, runId, 'method-spec')
+  const draftArtifact = artifactRecord(store, runId, 'draft')
+  const baselineArtifact = artifactRecord(store, runId, 'baseline-results')
 
   const files: PackageFile[] = []
 
@@ -344,6 +380,22 @@ export function planRunPackage(
     ]),
   })
 
+  // THE BASELINE RUNS WHERE THE PACKAGE IS BUILT, which is the one place that holds the manuscript,
+  // the objects it carries and the metric the run registered, all at once.
+  const metric = metricOf(baselineArtifact, claim)
+  const qualityFindings = reviewPaperQuality({
+    sections: Array.isArray(draftArtifact?.sections)
+      ? (draftArtifact.sections as ReadonlyArray<{ id: string; heading: string; bodyText: string }>)
+      : [],
+    crossReferences: {
+      cited: (manuscript?.crossReferences as { cited?: ReadonlyArray<string> } | undefined)?.cited ?? [],
+      uncited: (manuscript?.crossReferences as { uncited?: ReadonlyArray<string> } | undefined)?.uncited ?? [],
+    },
+    floatsNotRendered: (manuscript?.floatsNotRendered as ReadonlyArray<string> | undefined) ?? [],
+    referenceCount: (manuscript?.manuscriptCounts as { references?: number } | undefined)?.references ?? 0,
+    ...(metric === undefined ? {} : { metric }),
+  })
+
   const manifest: RunPackageManifest = {
     runId,
     // Read from the RUN, not derived from the files: the revision is what the artifacts in this
@@ -368,6 +420,7 @@ export function planRunPackage(
     state,
     checks,
     ...(approval === undefined ? {} : { approval }),
+    qualityFindings,
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
       + 'records no absolute directory and no credential. `state` is `final` only when every entry '

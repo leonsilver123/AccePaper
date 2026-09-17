@@ -26,6 +26,8 @@ export type PaperQualityFindingCode =
   | 'unsupported-statement'
   /** A result described in a direction its own measurement contradicts. */
   | 'metric-misread'
+  /** A bibliography the prose never uses: the paper carries references and cites none in its text. */
+  | 'no-literature-position'
 
 /** One defect, located and evidenced. */
 export interface PaperQualityFinding {
@@ -71,6 +73,8 @@ export interface PaperQualityInput {
   }
   /** Objects the prose refers to that the document does NOT carry. */
   readonly floatsNotRendered: ReadonlyArray<string>
+  /** How many references the document carries, so "cites nothing" can be told from "has nothing". */
+  readonly referenceCount: number
   /** The metric the paper reports, when the run registered one. */
   readonly metric?: QualityMetric
 }
@@ -142,6 +146,25 @@ export function reviewPaperQuality(input: PaperQualityInput): ReadonlyArray<Pape
       where: object,
       detail: `the prose refers to ${object} and the document does not carry it`,
       evidence: `not rendered: ${input.floatsNotRendered.join(', ')}`,
+    })
+  }
+
+  // A PAPER THAT CARRIES A BIBLIOGRAPHY AND USES NONE OF IT HAS NOT POSITIONED ITSELF. This is the
+  // defect the baseline found in the shipped pipeline's own output — a References section with works
+  // in it, and not one sentence anywhere in the text that draws on them. It is not a formatting
+  // problem: a reader cannot tell what the work builds on or what it is answering, and no amount of
+  // citation-style checking can see it. The rule needs both halves: a bibliography to have, and a
+  // text that never uses it.
+  const citesInText = input.sections
+    .filter(section => section.id !== 'references' && section.heading.toLowerCase() !== 'references')
+    .some(section => CITATION_LABEL.test(section.bodyText))
+  if (input.referenceCount > 0 && !citesInText) {
+    findings.push({
+      code: 'no-literature-position',
+      where: 'the manuscript',
+      detail: `the document carries ${String(input.referenceCount)} reference(s) and no sentence in the`
+        + ' text cites any of them, so the paper never says what it builds on',
+      evidence: `references: ${String(input.referenceCount)}, citations in text: 0`,
     })
   }
 

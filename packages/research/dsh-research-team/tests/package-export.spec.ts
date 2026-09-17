@@ -246,6 +246,22 @@ describe('a package verifies as what its manifest says it is', () => {
   })
 })
 
+describe('the package states what the quality baseline found', () => {
+  it('carries the findings in the manifest, computed from the run and the manuscript', async () => {
+    // A PACKAGE IS WHAT A READER RECEIVES. A list of files with digests says nothing about whether the
+    // manuscript refers to its own figures or positions itself in its own bibliography — so the
+    // baseline runs where the package is built, and its findings travel with it.
+    const { store, run } = await realRun()
+    const manifest = planRunPackage(store, run, 'evaluation').manifest
+
+    expect(Array.isArray(manifest.qualityFindings)).toBe(true)
+    // The shipped pipeline's own output, as the baseline reads it: objects it carries and never uses.
+    const uncited = manifest.qualityFindings.filter(finding => finding.code === 'uncited-object')
+    expect(uncited.length).toBeGreaterThan(0)
+    for (const finding of uncited) expect(finding.detail).toContain('no sentence in it refers')
+  })
+})
+
 describe('a package says whether it is the final one or a draft', () => {
   it('writes a draft for a run that has not been approved, naming every condition that failed', async () => {
     // THE EXPORT AT THE END OF A DRIVE IS A DRAFT, and this is the state the approval that follows it

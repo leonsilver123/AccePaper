@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "mock",
+  "provenance": "synthetic_deterministic",
+  "generatedAt": "2026-09-14T00:00:00.000Z",
+  "mock": true,
+  "disclaimer": "MOCK ablation. All numbers must trace to mock-experiment.json conventions; not empirical.",
+  "seed": 20260909,
+  "scenario": "scenario-mixed-HV-AV-HV",
+  "referenceRow": "S1-adaptive",
+  "ablations": [
+    {
+      "moduleRemoved": "av-reaction",
+      "description": "AV reaction-delay module disabled → AV reactionDelay_ms forced to 1200 (HV-like). Degrades to baseline.",
+      "rowId": "ABL-remove-av-reaction",
+      "ttcLt1_5_rate_pct": 26.0,
+      "meanTHW_s": 1.8,
+      "meanJerk_mps3": 2.2,
+      "stringStabilityIndex": -0.12,
+      "stringStable": false,
+      "seed": 20260909,
+      "source": "ablation.json#ABL-remove-av-reaction",
+      "deltaVsReference": {
+        "ttcLt1_5_rate_pct": 8.0,
+        "stringStable": "false (regressed)"
+      }
+    },
+    {
+      "moduleRemoved": "predictive",
+      "description": "AV predictive/look-ahead module disabled; fast reaction retained. Partial degradation.",
+      "rowId": "ABL-remove-predictive",
+      "ttcLt1_5_rate_pct": 21.0,
+      "meanTHW_s": 1.68,
+      "meanJerk_mps3": 1.75,
+      "stringStabilityIndex": -0.04,
+      "stringStable": false,
+      "seed": 20260909,
+      "source": "ablation.json#ABL-remove-predictive",
+      "deltaVsReference": {
+        "ttcLt1_5_rate_pct": 3.0,
+        "stringStable": "false (regressed)"
+      }
+    }
+  ],
+  "conclusion": "Removing either module degrades the adaptive result; AV reaction module is the dominant contributor (MOCK).",
+  "consumedBy": "NOT CONSUMED BY THE RUN. Every number in this file is MOCK content, kept because the reproducibility manifest lists it as an input and because it records what the pack's authors wrote. No executor reads it: the run's experiment is the platoon simulation in dsh-research-team/src/runner/platoon-sim.ts, the run's ablation is measured at C3-boundary, and the run's boundary probe re-runs the simulation under stop-and-go forcing. A figure here therefore cannot reach an artifact, and a disagreement between this file and a measurement is not evidence that either is wrong."
+}

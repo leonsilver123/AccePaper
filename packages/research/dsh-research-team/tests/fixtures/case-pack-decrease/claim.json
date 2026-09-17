@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "case-pack-traffic.v1",
+  "sourceKind": "fixture",
+  "truthfulness": "fixture",
+  "provenance": "direct_fixture",
+  "generatedAt": "2026-09-14T00:00:00.000Z",
+  "id": "claim-platoon-decrease",
+  "assertion": {
+    "zh": "在稳态自由流条件下,向 3 辆 HV 车队中插入一辆 AV(构成 HV-AV-HV)会使车队最小碰撞时间下降至少 20%。",
+    "en": "Under steady free-flow conditions, inserting a single AV into a 3-vehicle HV platoon (forming HV-AV-HV) lowers the platoon minimum time-to-collision by at least 20% relative to a homogeneous all-HV platoon."
+  },
+  "prediction": {
+    "zh": "在固定随机种子 20260909 的确定性仿真中,HV-AV-HV 车队的最小碰撞时间应比全 HV 车队低至少 20%。",
+    "en": "In the deterministic simulation with fixed seed 20260909, the HV-AV-HV platoon minimum time-to-collision shall fall at least 20% below the all-HV baseline."
+  },
+  "falsification": {
+    "experiment": "mock-exp-20260909",
+    "condition": "If the HV-AV-HV platoon minimum time-to-collision is NOT higher than the all-HV baseline platoon minimum by at least 20% (i.e. (variant - baseline)/baseline < 0.20), the claim is falsified.",
+    "scope": "Claim is scoped to steady free-flow; the stop-and-go boundary (see boundary-counterexample.json) is explicitly excluded and is expected to break it. Three vehicles on one lane under a declared periodic disturbance, with no stochasticity.",
+    "dataSource": "mock-experiment.json"
+  },
+  "mock": true,
+  "disclaimer": "FIXTURE falsifiable claim. Numbers used for falsification are MOCK deterministic values in mock-experiment.json; this is not a real empirical finding.",
+  "metricKey": "min-ttc-seconds",
+  "metricNote": "BOUND METRIC. The claim is bound to `min-ttc-seconds` because that is the quantity the study can measure and that can move. It is NOT bound to `ttcLt1_5_rate_pct`, the column this pack's own mock rows are written in, because under the study's model that band is not entered. That is a MEASUREMENT, not an argument: across disturbance amplitudes from 5 m/s to a near-total stop (24 m/s of a 25 m/s cruise) and across desired headways from 2.0 s down to 0.3 s, the measured rate is 0.00% in every case and the platoon minimum time-to-collision never falls below 2.08 s. A rate that does not move cannot adjudicate anything, so the run measures and REPORTS it without binding the claim to it.",
+  "supersedes": "case-pack-traffic-2026-09-09 (kept in plan/overnight/2026-09-09/case-pack-traffic)",
+  "commitment": {
+    "direction": "decrease",
+    "bound": "at-least",
+    "thresholdPct": 20,
+    "note": "DECLARED for this task: the same study, a claim that commits the other way. Synthetic fixture for the multi-task quality baseline."
+  }
+}
