@@ -19,6 +19,7 @@
 // Whether the supplied evidence is enough for a good section is a reviewer's question.
 
 import type { SupportAssessment } from './evidence-corpus.ts'
+import { contractFor } from './argument-plan.ts'
 import { readResultVersion } from './result-version.ts'
 
 /** The run data one section is written from. */
@@ -54,27 +55,13 @@ export interface SectionEvidence {
 }
 
 /**
- * What each section is written from.
+ * A section the outline names but the argument plan does not declare: refuse it rather than guess.
  *
- * `required` is deliberately short. A section that lists everything it could use refuses itself
- * over a missing nicety, and a pipeline that refuses often is one nobody runs. Each entry names the
- * evidence without which the section would have to assert something the run does not hold: a Method
- * section without the method, a Results section without the result, a References section with no
- * references.
+ * The requirements themselves live on the section's CONTRACT (`argument-plan.ts`), beside the
+ * obligations they serve — one entry per section rather than two tables that can drift apart. This
+ * module reads them and reports what is missing; it does not hold them.
  */
-const SECTION_EVIDENCE: Readonly<Record<string, { readonly required: ReadonlyArray<string> }>> = {
-  abstract: { required: ['claim', 'result'] },
-  introduction: { required: ['claim'] },
-  method: { required: ['method', 'execution'] },
-  experiments: { required: ['method', 'execution', 'accounting'] },
-  results: { required: ['result', 'figures'] },
-  discussion: { required: ['result', 'records'] },
-  conclusion: { required: ['claim', 'result'] },
-  references: { required: ['records'] },
-}
-
-/** A section the outline names but this table does not: refuse it rather than guess its needs. */
-const UNKNOWN_SECTION = { required: ['section-definition'] } as const
+const UNKNOWN_SECTION = { evidence: ['section-definition'] } as const
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
@@ -94,7 +81,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * @returns the section's evidence and its missing names.
  */
 export function sectionEvidenceFor(sectionId: string, input: SectionEvidenceInput): SectionEvidence {
-  const rule = SECTION_EVIDENCE[sectionId] ?? UNKNOWN_SECTION
+  const rule = { evidence: contractFor(sectionId)?.evidence ?? UNKNOWN_SECTION.evidence }
   const supplied: Record<string, unknown> = {}
 
   const claim = { metricKey: input.metricKey, metricLabel: input.metricLabel, direction: input.metricDirection }
@@ -191,6 +178,6 @@ export function sectionEvidenceFor(sectionId: string, input: SectionEvidenceInpu
     }))
   }
 
-  const missing = rule.required.filter(name => supplied[name] === undefined)
-  return { sectionId, supplied, required: rule.required, missing }
+  const missing = rule.evidence.filter((name: string) => supplied[name] === undefined)
+  return { sectionId, supplied, required: rule.evidence, missing }
 }

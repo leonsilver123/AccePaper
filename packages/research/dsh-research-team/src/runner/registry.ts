@@ -186,6 +186,8 @@ import { assertWellFormed, parseReply, type DiscardedExchange } from './issue-pa
 import type { RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
+import { argumentPlanOf, checkArgumentPlan, contractFor } from './argument-plan.ts'
+import type { ArgumentPlan } from './argument-plan.ts'
 import {
   bibliographyOf, checkCitationKeys, checkCitationUse, checkManuscriptCitations, citationUsesOf,
   citeKeyOf, renderCitationMarkers, reviewedSources,
@@ -770,6 +772,23 @@ function referenceEntriesFor(
 }
 
 /**
+ * The obligations one section owes, written as the instruction a writer can follow.
+ *
+ * AN OBLIGATION THE WRITER IS NOT TOLD IS AN OBLIGATION IT CANNOT DISCHARGE, and E1 refuses the
+ * manuscript for it. The words are the obligation's own statement — the same text the refusal quotes
+ * — so what the writer was asked for and what it is judged against cannot be two different things.
+ *
+ * @param plan - the argument plan the draft is written under.
+ * @param sectionId - the section about to be written.
+ * @returns one sentence per obligation, or an empty string for a section that owes none.
+ */
+function obligationsInstructionOf(plan: ArgumentPlan, sectionId: string): string {
+  const contract = plan.sections.find(section => section.id === sectionId)
+  if (contract === undefined || contract.obligations.length === 0) return ''
+  return `This section must ${contract.obligations.map(o => o.statement).join('; and must ')}. `
+}
+
+/**
  * The prose route a step's text came from, as the artifact records it.
  *
  * A `*Source: 'model'` label used to be the whole claim, and it proved only that a
@@ -926,20 +945,47 @@ function measureOutcome(ctx?: ExecCtx): MeasuredOutcome {
  * @param referenceCount - entries the draft carries for the reference list.
  * @returns the section body.
  */
+/**
+ * The sentence that states what the run measured and what it did to the claim.
+ *
+ * ONE SENTENCE, DERIVED FROM THE MEASUREMENT, and the same sentence in every section that reports the
+ * outcome. The delivered paper's sections each described the result in their own words and none of
+ * them said the measurement contradicted the claim, so the words here come from the run: the sign of
+ * the change, its magnitude, and what the argument plan says it did to the claim.
+ *
+ * @param argumentPlan - the plan this manuscript is written under.
+ * @param measured - the run's own measurement.
+ * @returns the sentence, without a trailing period.
+ */
+function outcomeSentence(
+  argumentPlan: ArgumentPlan,
+  measured: ReturnType<typeof measureOutcome>,
+): string {
+  const percent = Math.abs(measured.improvementPct).toFixed(2)
+  const movement = measured.improvementPct >= 0 ? 'rose' : 'fell'
+  const verdict = argumentPlan.outcome === 'refuted'
+    ? 'which contradicts the claim this study committed to test'
+    : argumentPlan.outcome === 'supported'
+      ? 'which is the change the claim predicted'
+      : 'which falls short of the change the claim predicted'
+  return `the platoon minimum time-to-collision ${movement} by ${percent}%, ${verdict}`
+}
+
 function bodyTextFor(
   id: string,
   plan: StudyPlan,
   measured: ReturnType<typeof measureOutcome>,
   citations: ReadonlyArray<CitationUse>,
+  argumentPlan: ArgumentPlan,
 ): string {
   const study = experimentStudy()
   const hv = study.variant.vehicleClasses.HV
   const av = study.variant.vehicleClasses.AV
   const inputs = SIMULATION_INPUTS
-  const direction = measured.improvementPct >= 0 ? 'raises' : 'lowers'
   switch (id) {
     case 'abstract':
-      return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency.'
+      return 'We test whether inserting a single autonomous vehicle into a three-vehicle human platoon changes the platoon\'s car-following risk, measured as its minimum time-to-collision, under a declared periodic speed disturbance. Both platoons are simulated with the Intelligent Driver Model at the Case Pack\'s declared vehicle parameters. This is a deterministic offline simulation, not field data, and it reports no crash frequency. Under the declared configuration '
+        + `${outcomeSentence(argumentPlan, measured)}.`
     case 'introduction':
       // THE LITERATURE POSITION IS A SENTENCE, NOT A REFERENCE LIST. This section used to state the
       // claim and the prediction and say nothing about what is already known — the quality baseline
@@ -950,9 +996,10 @@ function bodyTextFor(
     case 'experiments':
       return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baselineMinTtcSeconds.toFixed(2)} s for the homogeneous platoon and ${measured.variantMinTtcSeconds.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${measured.baselineTtcRatePct.toFixed(2)}% and ${measured.variantTtcRatePct.toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
     case 'results':
-      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.'
+      return 'The figures below carry the same measurement the C gate adjudicated: the data figure as the SVG the figure tool rendered, the roadmap as the mermaid the roadmap tool rendered, and the results table. The measurement is that '
+        + `${outcomeSentence(argumentPlan, measured)}. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.`
     case 'conclusion':
-      return `Under the declared configuration the autonomous vehicle ${direction} the platoon's minimum time-to-collision by ${Math.abs(measured.improvementPct).toFixed(2)}%, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
+      return `Under the declared configuration ${outcomeSentence(argumentPlan, measured)}, measured inside the study's own car-following model. The scope is three vehicles on one lane under a declared disturbance with no stochasticity; submission remains a human act at E2.`
     case 'references':
       // The body states what the draft actually carries. It used to describe the LANDSCAPE SCAN's
       // record count, which is what the reference list used to be; the list is now the sources the
@@ -963,6 +1010,31 @@ function bodyTextFor(
     default:
       return 'This section carries no generated content in this wave.'
   }
+}
+
+/**
+ * The argument plan for a manuscript assembled from the outline rather than from a draft.
+ *
+ * A DRAFT WITH SECTIONS AND NO PLAN IS REFUSED at E1, because there is nothing to judge its sections
+ * against; a draft with NEITHER is the fallback path, and this is the plan its sections are written
+ * under. Both readers — the fallback body writer and E1's check — call this, so the plan a section was
+ * written under cannot differ from the plan it is judged by.
+ *
+ * @param plan - the study plan.
+ * @param ctx - the step's context, which carries the measurement and what the claim committed to.
+ * @returns the plan, derived from the run rather than configured.
+ */
+function derivedArgumentPlan(plan: StudyPlan, ctx: ExecCtx): ArgumentPlan {
+  const commitment = ctx.runCtx.commitment
+  return argumentPlanOf({
+    question: plan.direction,
+    claimRef: plan.claim.ref,
+    metricLabel: plan.metric.label,
+    measuredPct: measureOutcome(ctx).improvementPct,
+    committedDirection: commitment?.direction ?? 'increase',
+    ...(commitment === undefined ? {} : { thresholdPct: commitment.thresholdPct }),
+    sectionIds: plan.outline.map(s => s.id),
+  })
 }
 
 /**
@@ -978,10 +1050,11 @@ function defaultBodySections(
   citations: ReadonlyArray<CitationUse> = [],
 ): ReadonlyArray<ManuscriptSection> {
   const measured = measureOutcome(ctx)
+  const argumentPlan = derivedArgumentPlan(plan, ctx)
   return plan.outline.map(s => ({
     id: s.id,
     heading: s.heading,
-    bodyText: bodyTextFor(s.id, plan, measured, citations),
+    bodyText: bodyTextFor(s.id, plan, measured, citations, argumentPlan),
   }))
 }
 
@@ -2657,13 +2730,27 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // Read once, for both prose paths: a draft written by a model quotes the same numbers as one
   // written by the fixture, and both have to say where those numbers came from.
   const d3Outcome = measureOutcomeWithSource(ctx)
+  // WHAT EACH SECTION IS FOR, built from the run's own measurement and from what the claim committed
+  // to. The contract decides what the writer is asked for and what E1 refuses to accept: a run whose
+  // measurement refuted its claim obliges the sections that report the outcome to say so, and a
+  // section that reports the number alone does not discharge it.
+  const commitment = ctx.runCtx.commitment
+  const argumentPlan = argumentPlanOf({
+    question: planOf(ctx).direction,
+    claimRef,
+    metricLabel: planOf(ctx).metric.label,
+    measuredPct: d3Outcome.measured.improvementPct,
+    committedDirection: commitment?.direction ?? 'increase',
+    ...(commitment === undefined ? {} : { thresholdPct: commitment.thresholdPct }),
+    sectionIds: ids,
+  })
   if (writer === undefined) {
     const measured = d3Outcome.measured
     sections = headings.map((h) => {
       const evidence = evidenceFor(h.id)
       return evidence.missing.length > 0
         ? { ...h, bodyText: '' }
-        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations) }
+        : { ...h, bodyText: bodyTextFor(h.id, planOf(ctx), measured, citations, argumentPlan) }
     })
     proseSource = 'fixture'
   } else {
@@ -2676,7 +2763,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
         return writer.write({
           stepId: 'D3-writing',
-          instruction: `Write the "${h.heading}" section of a research paper. Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`,
+          instruction: `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`,
           // The evidence travels as DATA, not as prose the model has to parse. `citable` is the
           // float roster; `citations` is what the paper may cite and what each source establishes;
           // `evidence` is the run's own material for THIS section.
@@ -2686,6 +2773,9 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             claimRef,
             figureCount: figures ?? 0,
             citable,
+            // The section's contract travels as DATA too, so a caller reading the log can rebuild what
+            // this section was asked to establish rather than inferring it from the prose.
+            sectionContract: contractFor(h.id) ?? null,
             citations: citations.map(citation => ({
               citeKey: citation.citeKey,
               establishes: citation.support,
@@ -2748,6 +2838,9 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // sentence and every sentence on a passage somebody read.
         citations,
         references,
+        // THE PLAN THIS DRAFT WAS WRITTEN UNDER, with its version, so the log can rebuild what each
+        // section was asked for and which argument the run had when it wrote them.
+        argumentPlan,
         renderedFigures,
         note: proseSource === 'fixture'
           ? 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave'
@@ -2801,6 +2894,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // source the run holds no reviewed judgement about, so a revision that dropped the bindings would
   // turn every correct citation into an unreviewed one and stop the run at the assembly.
   const citations = Array.isArray(draft?.citations) ? draft.citations : []
+  // AND THE ARGUMENT PLAN, for the same reason and one more: a revision is written under the plan the
+  // draft was, and a plan recomputed at assembly could oblige a section to say something it was never
+  // asked for.
+  const argumentPlan = draft?.argumentPlan as ArgumentPlan | undefined
   // Same reasoning as the references: a revision keeps the figures it is revising.
   const renderedFigures = Array.isArray(draft?.renderedFigures) ? draft.renderedFigures : []
   const d4Outcome = measureOutcomeWithSource(ctx)
@@ -3040,6 +3137,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         openIssues: applied.openIssues,
         citations,
         references,
+        ...(argumentPlan === undefined ? {} : { argumentPlan }),
         renderedFigures,
         resultSource: d4Outcome.source,
         resultRef: d4Outcome.contentHash,
@@ -3161,6 +3259,31 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     throw new Error(
       '[E1-format] the manuscript\'s citations and its reference list disagree: '
       + citationRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
+    )
+  }
+  // AND WHAT EACH SECTION OWED ITS READER. A section that reports the measurement without saying what
+  // it did to the claim leaves a reader who skims with the impression the study found what it hoped
+  // for — which is the delivered paper, and the reason this is refused rather than reported. The plan
+  // is read off the REVISED draft: a revision is written under the plan the draft was, and a plan that
+  // was recomputed here could oblige a section under a different argument than the one it was written
+  // under. A draft carrying NEITHER sections nor a plan is the fallback path, and the plan for it is
+  // derived the same way its sections were.
+  const argumentPlan = (revised?.argumentPlan as ArgumentPlan | undefined)
+    ?? (Array.isArray(revised?.sections) ? undefined : derivedArgumentPlan(planOf(ctx), ctx))
+  if (argumentPlan === undefined) {
+    throw new Error(
+      '[E1-format] the draft records no argument plan, so no section can be judged against the'
+      + ' obligations it was written under',
+    )
+  }
+  const argumentRefusals = checkArgumentPlan(
+    argumentPlan,
+    sections.map(section => ({ id: section.id, bodyText: section.bodyText })),
+  )
+  if (argumentRefusals.length > 0) {
+    throw new Error(
+      '[E1-format] a section did not discharge what the argument plan obliges it to: '
+      + argumentRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
     )
   }
   const numberByKey = new Map<string, number>()

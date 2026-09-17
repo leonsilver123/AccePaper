@@ -75,12 +75,20 @@ function d3Section(request: ResearchProseRequest): string {
     case 'method':
       return 'Both platoons are run with the Intelligent Driver Model at a fixed 0.02 s step and'
         + ' differ only in composition: an HV-HV-HV baseline against an HV-AV-HV variant.'
+    case 'abstract':
+      // THE ABSTRACT REPORTS THE OUTCOME, so it owes the measurement, its direction and what it did to
+      // the claim — the three obligations the sections that report an outcome carry.
+      return 'We ask whether one autonomous vehicle changes the platoon minimum time-to-collision'
+        + ` under a declared disturbance. It fell by ${CHANGE}%, contradicting the claim this study`
+        + ' committed to test.'
     case 'results':
       return `The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the mixed`
-        + ` platoon ${VARIANT} s, a change of ${CHANGE}%.`
+        + ` platoon ${VARIANT} s, a change of ${CHANGE}%: the quantity fell, contradicting the claim`
+        + ' this study committed to test.'
     case 'conclusion':
       return 'The mixed platoon lowered the platoon minimum time-to-collision by'
-        + ` ${String(Math.abs(Number(CHANGE)))}% under the declared disturbance.`
+        + ` ${String(Math.abs(Number(CHANGE)))}% under the declared disturbance, contradicting the`
+        + ' claim this study committed to test.'
     case 'experiments':
       return 'Both platoons were run for 240 s after a 120 s warm-up under one declared disturbance.'
     case 'introduction': {
@@ -313,7 +321,12 @@ describe('a revision round that leaves a concern open', () => {
       'CONCERN: The results section does not report the baseline value.',
       'SECTION: results',
       'RESPONSE: The baseline value is added.',
-      `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision, a change of ${CHANGE}%.`,
+      // THE PATCH STILL DISCHARGES WHAT THE SECTION OWES: a revision of a section that reports the
+      // outcome must state the measurement, its direction and what it did to the claim, or E1 refuses
+      // the manuscript — a revision is not a way to drop them.
+      `PATCH: The homogeneous platoon held ${BASELINE} s of minimum time-to-collision and the mixed`
+      + ` platoon ${VARIANT} s, a change of ${CHANGE}%: the quantity fell, contradicting the claim this`
+      + " study committed to test. The baseline value is reported here as this study's own reference row.",
     ].join('\n')
     // The second round answers the ONE concern that is still open, against the body as it now is.
     const second = [
