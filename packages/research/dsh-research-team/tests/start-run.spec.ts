@@ -463,7 +463,7 @@ describe('a study is started and read back', () => {
       writeFileSync(unwritable, 'not a directory')
       host.setSnapshotDirectory(unwritable)
 
-      held.release()
+      void held.release()
       const reported = await untilPersistedError(host.service, started.runId)
 
       // THE FAILURE IS REPORTED WHERE SAVING IS REPORTED, while the run is still going, and it is
@@ -475,7 +475,7 @@ describe('a study is started and read back', () => {
       expect(reported.readinessNote).toContain('last save did not reach the disk')
       await untilStopped(host.service, started.runId)
     } finally {
-      held.release()
+      void held.release()
       await host.dispose()
     }
   })
@@ -668,10 +668,10 @@ describe('a study is started and read back', () => {
       const entry = (await running.service.listRuns()).find(candidate => candidate.runId === started.runId)
       expect(entry?.execution).toBe('running')
       expect(entry?.stepsTotal).toBe(STEP_EXECUTOR_REGISTRY.size)
-      held.release()
+      void held.release()
       await untilStopped(running.service, started.runId)
     } finally {
-      held.release()
+      void held.release()
       await running.dispose()
     }
 
