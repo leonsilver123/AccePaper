@@ -45,6 +45,7 @@ import { commitStepOutputs } from '../src/engine/commit.ts'
 import { runStep } from '../src/engine/pipeline.ts'
 import type { ResearchRunStore } from '../src/engine/types.ts'
 import { _resetApprovalChannelForTests, createHostApprovalChannel } from '../src/host.ts'
+import { ACCEPTANCE_PRODUCER } from '../src/engine/acceptance.ts'
 import { abstainVerdict, commitAll, freshStore, passStep, runFullPipeline, seedRun, submitBound, verdict } from './helpers.ts'
 
 const RUN_ID = 'run-p5-fixture'
@@ -658,6 +659,27 @@ describe('run-persistence: rejected snapshots', () => {
       })
     })
   }
+
+  it('loads a record whose artifact a person published, and still refuses an unknown producer', async () => {
+    // A PERSON IS A PRODUCER. `acceptManuscriptCandidate` writes the manuscript over E1's with the
+    // producer `human-acceptance`, and the parser's "a producer is a step" rule rejected it — so a
+    // study whose manuscript had been accepted could not be restored at all: every listing threw, and
+    // the acceptance was durable only until the next load. The rule still refuses what it is for.
+    await writeTampered((raw) => {
+      const registry = raw['registry'] as Record<string, Record<string, unknown>>
+      registry['landscape-map']!['producerStepId'] = ACCEPTANCE_PRODUCER
+    })
+    const restored = await persistence.tryLoad(freshCapability())
+    expect(restored?.store.get(RUN_ID)?.registry['landscape-map']?.producerStepId).toBe(ACCEPTANCE_PRODUCER)
+
+    // The other direction, on a fresh file: a producer the pipeline never ran is still refused.
+    await persistence.discard()
+    await writeTampered((raw) => {
+      const registry = raw['registry'] as Record<string, Record<string, unknown>>
+      registry['landscape-map']!['producerStepId'] = 'Z9-not-a-step'
+    })
+    await expect(persistence.tryLoad(freshCapability())).rejects.toBeInstanceOf(SnapshotInvalidError)
+  })
 
   it('leaves a rejected snapshot readable and lets the caller start clean explicitly', async () => {
     await writeTampered((raw) => {

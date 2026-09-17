@@ -43,6 +43,7 @@ import type { SnapshotStore } from './snapshot-store.ts'
 import { ResearchError, ResearchRunError } from './engine/state-machine.ts'
 import type { CommitReceipt } from './engine/commit.ts'
 import { getStepDefinitionById } from './engine/steps-accessor.ts'
+import { ACCEPTANCE_PRODUCER } from './engine/acceptance.ts'
 import type { ProjectRevision } from './domain/ids.ts'
 import type {
   ApprovalRecord,
@@ -709,9 +710,16 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
       rec.producerStepId,
       `${what}.producerStepId`,
     )
-    if (getStepDefinitionById(producerStepId) === undefined) {
+    // A PERSON IS A PRODUCER TOO. The check catches a record that names something the pipeline never
+    // ran — corruption, or a format from another build — and it must not also reject the one producer
+    // that is deliberately NOT a step: a manuscript a person published over E1's, which core's
+    // acceptance writes with `ACCEPTANCE_PRODUCER`. Refusing it made the snapshot unreadable, so a
+    // study whose manuscript had been accepted could not be restored AT ALL: `listRuns` threw, the
+    // picker came back empty, and the acceptance was durable only until the next `tryLoad`.
+    if (producerStepId !== ACCEPTANCE_PRODUCER && getStepDefinitionById(producerStepId) === undefined) {
       throw new SnapshotInvalidError(
-        `${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline.`,
+        `${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline, and is`
+        + ` not the acceptance producer '${ACCEPTANCE_PRODUCER}' either.`,
       )
     }
     if (typeof rec.invalidated !== 'boolean') {
