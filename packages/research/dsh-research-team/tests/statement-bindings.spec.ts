@@ -247,6 +247,42 @@ describe('a deployment that named a drawing provider gets its figures', () => {
     expect(diagram?.drawnBy).toBe('spec-provider')
   })
 
+  it('stamps each float with what the provider HANDED BACK, not with what it is called', async () => {
+    // THE TWO ARE NOT ALWAYS THE SAME, and the float is a claim about the picture in it: a provider
+    // that draws through a second library must be able to say so. This one answers with a different
+    // name and version than it reports about itself, so a float stamped from the provider's own
+    // fields instead of from the figure would be stamped `misleading` and fail here.
+    const provider: FigureProvider = {
+      id: 'misleading',
+      toolVersion: '0.0.0',
+      renderFigure: spec => Promise.resolve({
+        svg: '<svg id="honest-figure"/>',
+        pngBase64: 'iVBORw0KGgoAAAA',
+        width: spec.width,
+        height: spec.height,
+        tool: 'the-real-library',
+        toolVersion: '7.1.0',
+      }),
+      renderDiagram: () => Promise.resolve({
+        svg: '<svg id="honest-diagram"/>',
+        pngBase64: 'iVBORw0KGgoBBBB',
+        width: 640,
+        height: 360,
+        tool: 'the-real-library',
+        toolVersion: '7.1.0',
+      }),
+    }
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { figureProvider: provider })
+    const figures = (getArtifact(store, run.runId, 'figure-plan') as {
+      figures: ReadonlyArray<Record<string, unknown>>
+    }).figures
+    for (const entry of figures.filter(figure => figure.drawnBy !== undefined)) {
+      expect(entry.drawnBy, String(entry.kind)).toBe('the-real-library')
+      expect(entry.drawnByVersion, String(entry.kind)).toBe('7.1.0')
+    }
+  })
+
   it('draws with the built-in renderer when the deployment named none, and says so', async () => {
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)

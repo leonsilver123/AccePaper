@@ -267,6 +267,7 @@ describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floa
         floatsEmbedded: Record<string, ReadonlyArray<string>>
         floatsDropped: ReadonlyArray<{ label: string; reason: string }>
         refusals: ReadonlyArray<string>
+        documents: ReadonlyArray<{ path: string; base64: string }>
       }
     }
     expect(manuscript.compilation.tool).toBe('pandoc')
@@ -284,8 +285,7 @@ describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floa
     // WHAT THE COMPILED DOCX CARRIES, read from the OOXML package rather than from a size. The DOCX is
     // binary, so it travels as bytes under `compilation.documents` — not among the figures the document
     // embeds, which is where a reader looking for the manuscript a journal receives would not look.
-    const docx = (manuscript.compilation as { documents: ReadonlyArray<{ path: string; base64: string }> })
-      .documents.find(entry => entry.path === 'manuscript.docx')
+    const docx = manuscript.compilation.documents.find(entry => entry.path === 'manuscript.docx')
     expect(docx).toBeDefined()
     expect(manuscript.packageFiles['manuscript.docx']).toBeUndefined()
     const work = mkdtempSync(join(tmpdir(), 'drawn-docx-'))

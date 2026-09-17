@@ -77,6 +77,18 @@ export interface ProviderFigure {
   readonly pngBase64: string
   readonly width: number
   readonly height: number
+  /**
+   * What drew this figure, and which version of it.
+   *
+   * THEY TRAVEL ON THE FIGURE, not only on the provider, because that is the shape the drawing seam
+   * hands back: a float records the code that drew it, so two packages whose charts differ name two
+   * libraries rather than leaving a reader to guess from the pixels. The type is stated here as plain
+   * strings rather than imported from the seam, because `dsh-research-team` is not a dependency of
+   * this package — the two are structurally compatible, and the spec that drives a real run with this
+   * provider is where that is checked.
+   */
+  readonly tool: string
+  readonly toolVersion: string
 }
 
 /** How this provider runs its Python. Injectable so a test can drive the seam without a library. */
@@ -358,7 +370,14 @@ export class MatplotlibProvider {
         + ' reach a LaTeX document as bytes no reader can render',
       )
     }
-    return { svg: parsed.svg, pngBase64: parsed.pngBase64, width, height }
+    return {
+      svg: parsed.svg,
+      pngBase64: parsed.pngBase64,
+      width,
+      height,
+      tool: this.id,
+      toolVersion: this.toolVersion,
+    }
   }
 }
 

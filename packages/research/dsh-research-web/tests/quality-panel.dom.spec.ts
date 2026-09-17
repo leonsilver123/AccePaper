@@ -110,6 +110,31 @@ describe('a package whose baseline reported nothing', () => {
     expect(screen.getByText(en['quality.domainReview'])).toBeTruthy()
     expect(screen.getByText(/is this claim worth testing/)).toBeTruthy()
   })
+
+  it('names each check and its outcome on the element, for the reading of a real page', () => {
+    // THE BROWSER ACCEPTANCE READS THIS PANEL AGAINST THE MANIFEST the deployment wrote, and it can
+    // only do that if the outcome is on the element: a list of outcome labels in innerText would be
+    // read in whatever order the copy happened to be in. These attributes are the panel's contract
+    // with that probe, so a refactor that drops one has to fail here.
+    const { container } = render(createElement(QualityPanel, { t, summary: toRunSummary(withQuality(SILENT)) }))
+
+    const checks = [...container.querySelectorAll('[data-research-quality-check]')]
+    expect(checks.map(el => el.getAttribute('data-research-quality-check')))
+      .toEqual(['uncited-object', 'metric-misread', 'no-literature-position'])
+    expect(checks.map(el => el.getAttribute('data-research-quality-outcome')))
+      .toEqual(['no-defect-found', 'not-applicable', 'not-applicable'])
+    expect(container.querySelector('[data-research-quality]')?.getAttribute('data-research-quality'))
+      .toBe('report')
+    expect([...container.querySelectorAll('[data-research-quality-domain]')]
+      .map(el => el.getAttribute('data-research-quality-domain'))).toEqual(['claim-worth-testing'])
+  })
+
+  it('marks the finding with the code it was reported under', () => {
+    const { container } = render(createElement(QualityPanel, { t, summary: toRunSummary(withQuality(DEFECTIVE)) }))
+
+    expect([...container.querySelectorAll('[data-research-quality-finding]')]
+      .map(el => el.getAttribute('data-research-quality-finding'))).toEqual(['uncited-object'])
+  })
 })
 
 describe('a package whose baseline found something', () => {

@@ -17,6 +17,12 @@
  *
  * READ-ONLY. It reports; it decides nothing, and it offers no control — a finding is answered by a
  * revision request or by a person's judgement, and both live in the panels that own them.
+ *
+ * IT CARRIES `data-research-quality-*` ATTRIBUTES because a browser acceptance reads this panel
+ * against the manifest the deployment just wrote, and a page that rendered an empty list for a report
+ * it never received would otherwise be indistinguishable from one whose report had no findings. The
+ * attributes name the code, the outcome and the question, so the reading is of the report and not of
+ * this file's markup.
  */
 import { selectQuality } from '../../panels.ts'
 import type { PanelProps } from './shared.ts'
@@ -66,17 +72,17 @@ export function QualityPanel({ summary, t }: PanelProps) {
 
   if (quality === null) {
     return (
-      <section className={css.panel}>
+      <section className={css.panel} data-research-quality="no-package">
         <h3 className={css.panelHeader}>{t('quality.title')}</h3>
         {/* NO PACKAGE, NO REPORT — said as its own state. A panel that rendered "no findings" here
             would be reporting a clean manuscript for a run that has not exported one. */}
-        <p className={css.empty}>{t('quality.noPackage')}</p>
+        <p className={css.empty} data-research-quality-empty="">{t('quality.noPackage')}</p>
       </section>
     )
   }
 
   return (
-    <section className={css.panel}>
+    <section className={css.panel} data-research-quality="report">
       <h3 className={css.panelHeader}>{t('quality.title')}</h3>
       {/* THE REPORT'S OWN SENTENCE, untranslated: it is composed from the run's numbers and states
           what the report IS. A view that paraphrased it could say something the report does not. */}
@@ -90,7 +96,11 @@ export function QualityPanel({ summary, t }: PanelProps) {
             {quality.findings.map((finding, index) => {
               const label = findingLabel(finding.code)
               return (
-                <li key={`${finding.code}-${finding.where}-${String(index)}`} className={css.cell}>
+                <li
+                  key={`${finding.code}-${finding.where}-${String(index)}`}
+                  className={css.cell}
+                  data-research-quality-finding={finding.code}
+                >
                   {/* A CODE WITH NO COPY RENDERS AS ITSELF, so a finding added without a translation is
                     visible on the page rather than silently labelled with an empty string. */}
                   <span className={css.tag}>
@@ -111,7 +121,12 @@ export function QualityPanel({ summary, t }: PanelProps) {
         {quality.checks.map((check) => {
           const label = outcomeLabel(check.outcome)
           return (
-            <li key={check.code} className={css.cell}>
+            <li
+              key={check.code}
+              className={css.cell}
+              data-research-quality-check={check.code}
+              data-research-quality-outcome={check.outcome}
+            >
               <span className={css.tag}>
                 {label === undefined ? check.outcome : t(label)}
               </span>
@@ -126,7 +141,7 @@ export function QualityPanel({ summary, t }: PanelProps) {
       <p className={css.note}>{t('quality.domainReviewNote')}</p>
       <ul className={css.list}>
         {quality.domainReview.map(item => (
-          <li key={item.id} className={css.cell}>
+          <li key={item.id} className={css.cell} data-research-quality-domain={item.id}>
             <div className={css.summary}>{item.asks}</div>
           </li>
         ))}

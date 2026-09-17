@@ -13,7 +13,7 @@ import {
   checkCompileRequest, citedKeysOf, compileManuscript, unembeddableFloats,
 } from '../src/runner/document-compile.ts'
 import type {
-  CompileFormat, CompiledDocument, DocumentCompiler, ManuscriptDocument,
+  CompileFormat, CompiledDocument, DocumentBlock, DocumentCompiler, ManuscriptDocument,
 } from '../src/runner/document-compile.ts'
 import type { FigureProvider } from '../src/runner/figure-provider.ts'
 
@@ -92,6 +92,33 @@ function recordingCompiler(): { compiler: DocumentCompiler; documents: Manuscrip
       },
     },
   }
+}
+
+/**
+ * The labelled floats one document carries, as `<label>:<kind>`.
+ *
+ * Only the blocks that carry a label are named: prose and equations are not floats, and a case below
+ * asserts on what the document HOLDS as a figure rather than on the order its parts were built in.
+ *
+ * @param document - the document a recording compiler was handed, when it was handed one.
+ * @returns one entry per labelled block, in the document's order.
+ */
+function blockKinds(document: ManuscriptDocument | undefined): ReadonlyArray<string> {
+  return (document?.sections ?? []).flatMap(section => section.blocks.flatMap(block =>
+    block.kind === 'figure' || block.kind === 'table' || block.kind === 'diagram'
+      ? [`${block.label}:${block.kind}`]
+      : []))
+}
+
+/** One labelled block of a document by its label, or undefined when it carries none. */
+function labelledBlock(
+  document: ManuscriptDocument | undefined,
+  label: string,
+): DocumentBlock | undefined {
+  return (document?.sections ?? [])
+    .flatMap(section => section.blocks)
+    .find(block => (block.kind === 'figure' || block.kind === 'table' || block.kind === 'diagram')
+      && block.label === label)
 }
 
 /** A drawing provider that answers with markup a case can recognise; no library, no process. */
@@ -230,13 +257,10 @@ describe('a run that compiles its document', () => {
     }
     // THE DOCUMENT ITSELF, which is what the compile chain is handed: the roadmap is a figure with
     // the provider's own two renderings, and no block in it is a diagram.
-    const kinds = recorded.documents[0]?.sections.flatMap(section =>
-      section.blocks.map(block => `${block.label}:${block.kind}`)) ?? []
+    const kinds = blockKinds(recorded.documents[0])
     expect(kinds).toContain('Figure 2:figure')
     expect(kinds.some(entry => entry.endsWith(':diagram'))).toBe(false)
-    const roadmap = recorded.documents[0]?.sections
-      .flatMap(section => section.blocks)
-      .find(block => block.label === 'Figure 2')
+    const roadmap = labelledBlock(recorded.documents[0], 'Figure 2')
     expect(roadmap?.kind === 'figure' ? roadmap.svg : '').toContain('drawn-roadmap')
     expect(roadmap?.kind === 'figure' ? roadmap.pngBase64 : undefined).toBe(PNG_ONE_PIXEL)
     // WHAT THE COMPILE COULD NOT EMBED, per format: nothing, which is the fact `compiled-document-
@@ -261,8 +285,7 @@ describe('a run that compiles its document', () => {
       packageFiles: Record<string, string>
       compilation: { floatsDropped: ReadonlyArray<{ label: string; reason: string }> }
     }
-    const roadmap = recorded.documents[0]?.sections.flatMap(section => section.blocks)
-      .find(block => block.label === 'Figure 2')
+    const roadmap = labelledBlock(recorded.documents[0], 'Figure 2')
     expect(roadmap?.kind).toBe('diagram')
     expect(manuscript.compilation.floatsDropped.map(entry => entry.label)).toContain('Figure 2')
     expect(manuscript.compilation.floatsDropped[0]?.reason).toContain('no static rendering')

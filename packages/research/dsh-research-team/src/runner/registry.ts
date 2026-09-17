@@ -2452,11 +2452,27 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       figure: await provider.renderFigure(figureSpec),
       diagram: await provider.renderDiagram(roadmapGraph),
     }
-  /** Which library drew one float, and the version it reported. */
-  const drawerOf = (which: 'figure' | 'diagram'): Record<string, unknown> =>
-    drawn === undefined
-      ? { drawnBy: FIGURE_TOOL_ID, drawnByVersion: FIGURE_TOOL_VERSION }
-      : { drawnBy: provider?.id ?? 'unknown', drawnByVersion: provider?.toolVersion ?? 'unknown', replacesBuiltIn: which === 'figure' }
+  /**
+   * Which library drew one float, and the version it reported.
+   *
+   * READ OFF THE RENDERED FIGURE, not off the provider: it is the value that came back with the
+   * picture, so a provider that reported one version while drawing with another cannot stamp its
+   * floats with the wrong one — and the field has a consumer, which is what keeps it from being a
+   * promise in an interface that nothing reads. A figure that came back without its own name falls
+   * back to the provider's, because a deployment's provider is only shape-checked at the boundary.
+   *
+   * @param which - the float to name.
+   * @returns the fields every float's record carries.
+   */
+  const drawerOf = (which: 'figure' | 'diagram'): Record<string, unknown> => {
+    if (drawn === undefined) return { drawnBy: FIGURE_TOOL_ID, drawnByVersion: FIGURE_TOOL_VERSION }
+    const rendered = drawn[which]
+    return {
+      drawnBy: rendered.tool.length > 0 ? rendered.tool : (provider?.id ?? 'unknown'),
+      drawnByVersion: rendered.toolVersion.length > 0 ? rendered.toolVersion : (provider?.toolVersion ?? 'unknown'),
+      replacesBuiltIn: which === 'figure',
+    }
+  }
   // THE FLOATS ARE NUMBERED HERE, ONCE. This step decides which floats exist, so it also decides
   // what they are called: D3 hands these labels to the prose channel (a section may then cite
   // `Table 1`) and E1 renders the captions from them. A counter in the assembler and a roster in the

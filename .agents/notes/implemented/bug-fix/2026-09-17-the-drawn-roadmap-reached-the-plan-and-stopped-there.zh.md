@@ -16,6 +16,8 @@ Status: implemented
 - **文档的 float 列表与 Markdown 的在同一个地方构建。** `documentFloats` 由填 `figureBlocks` 的那个循环一并填,`documentOf` 收下这份列表。旧代码在循环之后**按 `kind` 重新找一遍**来重建列表(`floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1'`),那是对计划的第二次读法,而两次读法可以不一致 —— 而标题印出来的那个编号,恰恰是不能不一致的东西。表格按计划给它的位置**插回原位**,于是文档按计划的顺序印 float,而不是把表格挪到末尾。
 - **同一处改动顺带发现:二进制交付件被归成了 assets。** `compilation.assets` 的文档写的是「编译产物内联的一张图」,而它实际携带**每一个** base64 文件 —— 包括 `manuscript.docx` 与 `manuscript.pdf`。既然 DOCX 与 LaTeX 才是这个 fork 产出的交付件,工件现在把它们分开:`compilation.documents` 作为字节携带编译出来的文档,`compilation.assets` 携带它们内联的图;类别取自编译把它放在了哪里(它自己的 `fileName` 还是它的 `files`),而不是从路径猜。`package-export` 两份都写,所以落盘的包没有变化。
 - **图资产路径由标签派生**(`figureAssetPath`):`Figure 2` → `figures/figure-2.svg`。数据图的路径此前是字面量 `figures/figure-1.svg`,那是与计划编号可能漂移的第二套编号;派生出来的路径对 `Figure 1` 与那个字面量**逐字相同**,所以没有任何东西挪位。
+- **部署提供的 provider 并不满足它插进去的那道缝,而类型检查器说了出来。** 在一个用例里用**真实**的 `MatplotlibProvider` 驱动一次真实运行被拒绝了:它的 `renderFigure`/`renderDiagram` 返回 `{svg, pngBase64, width, height}`,而 `FigureProvider` 承诺的是 `RenderedFigure` —— 同一个对象外加 `tool` 与 `toolVersion`。引擎的字段类型是 `MatplotlibProvider | undefined`,team 侧通过一次 cast 读它,所以从来没有任何东西比较过这两者;`isFigureProvider` 只查 `id` 与两个方法,于是放行。现在 provider 把这两个名字一并交回,而那个 cast 由一条把真实 provider 传进 `runT19B` 选项的用例走着,于是下一次分歧是编译错误,而不是一张没有库名的 float。
+- **`drawnBy` 从画好的图身上读,而不是从 provider 身上读。** 那道缝说图自己点明是哪个代码画的它,而这个字段此前没有任何读者 —— D1 用 `provider.id` 盖戳,那是可以与随图回来的事实不一致的第二个事实。没有带名字回来的图仍然退回 provider 的名字,因为部署提供的 provider 在边界上只做了形状检查。
 - **出货 bundle 说明这条通道存在。** `packages/bundle/research-app/cordis.patch.yml` 现在在 `document` 旁边点名 `figures`,写成可选追加项、解释器留给部署 —— 与「不把 `latexEngine` 写进这个文件」是同一个理由。没有这个库的部署不损失什么:内置渲染器照画,每张 float 记下没有库画过它,工件也写明路线图是它的文档装不下的 float。这是**测得的不存在**,不是失败的步骤。
 
 ## 考虑过的替代方案
@@ -29,6 +31,7 @@ Status: implemented
 - **两个方向都被钉住。** `tests/document-compile.spec.ts` 用一个记录型编译器驱动真实的 16 步运行:有绘图 provider 时 `Figure 2` 是携带 provider 的 SVG 与栅格的**图**,`floatsDropped` 为空,包里持有 `figures/figure-2.svg`、`manuscript.md` 引用它;没有 provider 时同一次运行保住 `diagram` 块,Markdown 保住 Mermaid 围栏,编译报出它装不下什么。前一个用例对着**关掉的分支**跑过并失败。
 - **整条链用真实工具读了一次。** `tests/pdf-acceptance.spec.ts` 探测本机真实的 matplotlib 解释器,用它和真实 pandoc 驱动一次运行,并对**包自己的文件**断言:`floatsEmbedded.latex` 是 `['Figure 1', 'Figure 2']`、`floatsDropped` 为空、`figures/figure-2.svg` 是那个库产出的 SVG、编译出来的 DOCX 带两个 `word/media/` 部件。这个用例抬高 `timeoutMs`,因为 D1 通过库画图、E1 编译四种格式都是进程启动,registry 给离线通道的预算是装不下的。
 - **`tests/package-export.spec.ts` 钉住字节。** 一个用真实 ZIP 签名与真实 PNG 签名作答的编译器:导出的包以 base64 携带 `manuscript.docx` 与 `assets/figure-1.png`,解码后头几个字节分别是 `PK` 与 PNG 魔数 —— 于是把内容文本包装过或重新编码过的写法会失败。
+- **经由第二个库作画的 provider 现在能被看出来**:`statement-bindings.spec.ts` 用一个叫 `misleading`、而图自报 `the-real-library@7.1.0` 的 provider 驱动一次运行,每张画出来的 float 都必须是后者。
 - **这里不是什么。** 它没有为**不点名绘图 provider** 的部署关掉 R02:那种部署的路线图仍然只有 Mermaid,它的包仍然停在 `draft` —— README 里记着的诚实状态。路线图印在第几页、是否清晰、一张 matplotlib 的方框箭头图读起来像不像方法图,是读者的判断,不是这条检查的。
 
 ## 文件
@@ -36,4 +39,5 @@ Status: implemented
 - `packages/research/dsh-research-team/src/runner/registry.ts`(`diagramDrawn`、`figureAssetPath`、float 循环、`compilation.documents`),`src/runner/package-export.ts`(两份字节列表都写)。
 - `packages/bundle/research-app/cordis.patch.yml`(`figures` 通道,已写明)。
 - `packages/research/dsh-research-team/README.md` / `README.zh.md`(更正 R05②/R02 的说法)。
-- 用例:`tests/document-compile.spec.ts`、`tests/pdf-acceptance.spec.ts`、`tests/package-export.spec.ts`。
+- 用例:`tests/document-compile.spec.ts`、`tests/pdf-acceptance.spec.ts`、`tests/package-export.spec.ts`、`tests/statement-bindings.spec.ts`。
+- `packages/research/dsh-research-cordis/src/matplotlib-provider.ts`(`ProviderFigure` 带上 `tool`/`toolVersion`)、`README.md` / `README.zh.md`(配置表的 `figures` 行,以及 R01/R02 那轮留下的两处过期说法)。
