@@ -970,6 +970,60 @@ describe('the final package is exported by asking for one', () => {
   })
 })
 
+describe('a late arrival cannot rewrite what has already been published', () => {
+  it('refuses a candidate written against the manuscript an acceptance replaced', async () => {
+    // THE ORDER THAT MAKES A REQUEST STALE. A request records the sections it read and the hash each
+    // one had. If a person accepts a candidate while another request is still open, that other
+    // request's basis is now the PREVIOUS manuscript — and generating from it would publish text
+    // answering a document nobody has, over the one that was just accepted. This is the "late
+    // arrival" case at the operation level: nothing is racing, the state simply moved.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    try {
+      const started = await host.service.startRun({ commandId: 'command-late-candidate' })
+      await untilStopped(host.service, started.runId)
+      host.engine.proseWriter = {
+        channel: 'deterministic',
+        write: () => Promise.resolve({
+          text: 'Rewritten by this deployment deterministic route; no model was called.',
+          provider: 'fixture',
+          model: 'fixture',
+        }),
+      }
+
+      // The first request is taken out and then LEFT OPEN while a second one is carried all the way.
+      const open = await host.service.requestRevision({
+        requestId: 'request-left-open', runId: started.runId, stepId: 'E2-submit',
+        instruction: 'make the abstract shorter',
+      })
+      const carried = await host.service.requestRevision({
+        requestId: 'request-carried', runId: started.runId, stepId: 'E2-submit',
+        instruction: 'tighten the claim so it matches what was measured',
+      })
+      const candidate = (await host.service.generateCandidate({
+        runId: started.runId, requestId: carried.requestId, candidateId: '',
+      })).candidates[0]?.candidateId ?? ''
+      await host.service.reviewCandidate({ runId: started.runId, requestId: carried.requestId, candidateId: candidate })
+      await host.service.acceptCandidate({
+        runId: started.runId, requestId: carried.requestId, candidateId: candidate,
+        expectedRevision: carried.projectRevision, expectedManuscriptVersion: carried.manuscriptVersion,
+      })
+
+      // NOW THE OPEN REQUEST IS ANSWERED — against a manuscript that is no longer the one it read.
+      await expect(host.service.generateCandidate({
+        runId: started.runId, requestId: open.requestId, candidateId: '',
+      })).rejects.toThrow(/revision-basis-stale/)
+      // AND NOTHING WAS WRITTEN: the refusal happens before a candidate record exists, so the
+      // accepted manuscript is the only one there is.
+      const view = (await host.service.listRevisions({ runId: started.runId }))
+        .find(entry => entry.requestId === open.requestId)
+      expect(view?.candidates).toEqual([])
+    } finally {
+      await host.dispose()
+    }
+  })
+})
+
 describe('a decision a person made survives the process that took it', () => {
   it('reads back as an approval that still covers the manuscript, until the manuscript moves', async () => {
     // TWO OPPOSITE FAILURES, ONE TEST. An approval a restart forgets asks the person to decide again;
