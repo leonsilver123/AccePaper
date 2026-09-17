@@ -192,3 +192,59 @@ describe('a package whose compiled document is missing a figure', () => {
     expect(finalPackageStateOf(checks)).toBe('final')
   })
 })
+
+describe('a package that replaces a moved reading, re-checked and re-approved', () => {
+  // THE REVIEW'S R06, both directions. A late export of a state the run has left, with nobody having
+  // re-examined the move, is refused; the same move, re-checked and re-approved, must let a normal
+  // export through. Without the second half the check refused the remedy it recommends, and a package
+  // that differed from the previous export could never be final again.
+
+  /** The state of a run whose artifacts have moved since the package on disk was read. */
+  const moved = { read: ['formatted-manuscript@1', 'figure-plan@1'], moved: ['formatted-manuscript'] }
+
+  it('refuses a late export of an old version, naming the artifact that moved', () => {
+    // NOBODY RE-EXAMINED THE MOVE. The package would replace a reading of an artifact the run has
+    // left, and nothing in what it carries says the move was looked at.
+    const facts = readyFacts({ artifactRefs: moved, approval: undefined })
+    const check = checkOf(facts, 'artifacts-current')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('formatted-manuscript')
+    expect(check.detail).toContain('re-export')
+    // AND THE STATE IS DRAFT: a reading of a state the run has left is not the package to hand anyone.
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
+  })
+
+  it('refuses the same export when the approval no longer covers the run', () => {
+    // The other reason a late export is late: the artifacts moved past the decision, so the approval
+    // that would justify the replacement no longer covers the run. `approval-current` names it, so the
+    // refusal does not rest on this check alone.
+    const facts = readyFacts({
+      artifactRefs: moved,
+      staleApproval: "'formatted-manuscript' moved from version 3 to version 4",
+    })
+    expect(checkOf(facts, 'approval-current').passed).toBe(false)
+    expect(checkOf(facts, 'artifacts-current').passed).toBe(false)
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
+  })
+
+  it('lets the re-export through once the run was re-checked and re-approved', () => {
+    // THE SAME MOVE, RE-EXAMINED. The package replaces a reading of artifacts the run has moved past,
+    // and the approval it carries covers the run as it stands — so it describes the state the decision
+    // was taken on, and every other condition holds.
+    const facts = readyFacts({ artifactRefs: moved })
+    const checks = checkFinalPackage(facts)
+    expect(checks.filter(check => !check.passed)).toEqual([])
+    expect(finalPackageStateOf(checks)).toBe('final')
+    const check = checkOf(facts, 'artifacts-current')
+    expect(check.detail).toContain('formatted-manuscript')
+    expect(check.detail).toContain('covers the run as it stands')
+  })
+
+  it('does not let an unapproved run through on the same move', () => {
+    // The half that must not weaken: the move is what makes a final export need re-examination, and a
+    // run with no approval at all is refused by `approval-recorded` whatever this check says.
+    const facts = readyFacts({ artifactRefs: moved, approval: undefined })
+    expect(checkOf(facts, 'approval-recorded').passed).toBe(false)
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
+  })
+})

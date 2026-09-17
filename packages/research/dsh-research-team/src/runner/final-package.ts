@@ -194,16 +194,29 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
     {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
       // package describes: a later step, a revision, a re-run or a hand edit replaces an artifact the
-      // package was built from, and the manifest still carries the older one's digest. The check
-      // names which artifact moved, so a reader knows whether to re-export or to look at what changed.
+      // package was built from, and the manifest still carries the older one's digest.
+      //
+      // A MOVE THAT WAS RE-CHECKED AND RE-APPROVED IS NOT A MOVE THIS CHECK REFUSES. The refusal is
+      // for a LATE export — one that would replace a reading of a state the run has left behind
+      // nobody re-examined — and the artifact that proves it was re-examined is the approval: an
+      // approval names the artifact versions it was taken on, so one that still covers the run as it
+      // stands is exactly the evidence that the move was looked at. Without this the check refused
+      // the remedy it names ("re-export to describe the run as it stands"): a re-export over a moved
+      // run handed back the previous package's versions, which could never come to match again, so
+      // "differs from the previous export" was permanently illegal — found by the review as R06.
       code: 'artifacts-current',
-      passed: facts.artifactRefs.moved.length === 0,
+      passed: facts.artifactRefs.moved.length === 0
+        || (facts.approval !== undefined && facts.staleApproval === undefined),
       detail: facts.artifactRefs.read.length === 0
         ? 'this package names no artifact versions, so nothing can be said about whether they stand'
         : facts.artifactRefs.moved.length === 0
           ? `every artifact this package was read from still stands (${facts.artifactRefs.read.length})`
-          : `these artifacts moved after this package was read: ${facts.artifactRefs.moved.join(', ')}`
-            + ' — re-export to describe the run as it stands',
+          : facts.approval !== undefined && facts.staleApproval === undefined
+            ? `this package replaces a reading of ${facts.artifactRefs.moved.join(', ')}, which the run`
+              + ' has moved past — and the approval it carries covers the run as it stands, so this'
+              + ' package describes the state the decision was taken on'
+            : `these artifacts moved after this package was read: ${facts.artifactRefs.moved.join(', ')}`
+              + ' — re-export to describe the run as it stands',
     },
     {
       code: 'run-saved',
