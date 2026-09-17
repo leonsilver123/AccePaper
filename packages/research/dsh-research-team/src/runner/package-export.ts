@@ -28,6 +28,7 @@ import type { SubmissionReadiness } from './submission-readiness.ts'
 import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
 import { reviewPaperQuality } from './paper-quality.ts'
 import type { PaperQualityFinding } from './paper-quality.ts'
+import { metricsForStudy } from './metrics.ts'
 
 /**
  * What a package needs to know about one step.
@@ -279,8 +280,15 @@ function declaredMetricsOf(
   store: ResearchRunStore,
   runId: string,
 ): RunPackageManifest['declaredMetrics'] {
+  // THE STUDY'S OWN METRICS, not the research type's. The frozen profile carries the type-level view
+  // (which metrics are applicable to this kind of work); with two studies of one type that view names
+  // both, and a run requires only its own. The implementation id is read off the same frozen spec, so
+  // a run that was configured as another study reports that study's metrics.
   const spec = getRunSnapshot(store, runId).spec
-  const metrics = (spec['researchProfile'] as { readonly metrics?: unknown } | undefined)?.metrics
+  const implementationId = (spec['studyPlan'] as { readonly implementationId?: unknown } | undefined)?.implementationId
+  const metrics = typeof implementationId === 'string'
+    ? metricsForStudy(implementationId)
+    : (spec['researchProfile'] as { readonly metrics?: unknown } | undefined)?.metrics
   const required = isRecordArray((metrics as { required?: unknown } | undefined)?.required)
     ? (metrics as { required: ReadonlyArray<Record<string, unknown>> }).required
     : undefined

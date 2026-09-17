@@ -14,7 +14,7 @@ import {
 } from '../src/runner/service-latency-sim.ts'
 import { SUPPORTED_IMPLEMENTATIONS, implementationOf } from '../src/runner/implementations.ts'
 import { declaredMetricKeyOf, implementationForPlan } from '../src/runner/study-plan.ts'
-import { checkMetricDeclaration } from '../src/runner/metrics.ts'
+import { checkMetricDeclaration, metricDefinition, metricsForStudy } from '../src/runner/metrics.ts'
 
 describe('the quantity the second study measures', () => {
   it('is a different quantity, in a different unit, with the opposite direction', () => {
@@ -26,23 +26,21 @@ describe('the quantity the second study measures', () => {
     expect(LATENCY_METRIC.key).not.toBe('min-ttc-seconds')
   })
 
-  it('is NOT yet declared in the deployment registry, which is what a run of it would stop on', () => {
-    // WHAT REMAINS, STATED AS A READING RATHER THAN A GAP IN PROSE. `checkMetricDeclaration` is what
-    // the run start calls, and it refuses this study's quantity today: `METRIC_REGISTRY` holds the
-    // platoon study's three metrics, and `declaredMetrics` on a run is computed by RESEARCH TYPE —
-    // with two studies of one type, "which metrics this run requires" is a fact about the STUDY, not
-    // about the type, and that model change has not been made.
-    //
-    // The refusal is the correct behaviour for an undeclared metric; what is missing is the
-    // declaration and the study-scoped view of it. Until then the second study is DECLARED, PLANNED
-    // and SIMULATED, and cannot be driven end to end.
+  it('is declared in the deployment registry, with the study that measures it', () => {
+    // THE DECLARATION AND THE STUDY-SCOPED VIEW, both of which this study needed and neither of
+    // which existed when it was written: without them a run of it would be refused at the start for a
+    // metric the deployment did not declare, or would report the other study's metrics as its own.
     const refusals = checkMetricDeclaration({
       key: LATENCY_METRIC.key,
       unit: LATENCY_METRIC.unit,
       direction: LATENCY_METRIC.direction,
     })
-    expect(refusals.map(refusal => refusal.code)).toEqual(['metric-unknown'])
-    expect(refusals[0]?.detail).toContain('cannot be compared with anything')
+    expect(refusals).toEqual([])
+    // AND IT IS THE SECOND STUDY'S, not the first one's: the registry says which study declares each
+    // quantity, so a run's own metrics are read off its study rather than off the research type.
+    expect(metricDefinition(LATENCY_METRIC.key)?.study).toBe('service-latency-coalescing')
+    expect(metricsForStudy('service-latency-coalescing').required.map(entry => entry.key))
+      .toEqual([LATENCY_METRIC.key])
   })
 })
 

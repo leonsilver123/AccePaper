@@ -36,6 +36,15 @@ export interface MetricDefinition {
   readonly direction: MetricDirection
   /** What a movement means, in one sentence, for whoever reads a result. */
   readonly interpretation: string
+  /**
+   * The implementation — the study — that measures this quantity.
+   *
+   * A METRIC IS DECLARED BY A STUDY. It used to be declared per research TYPE, which was enough while
+   * one implementation existed per type: with two simulation studies, "the metrics a simulation study
+   * requires" stopped being a fact about the type. The registry keeps the type view (below) for the
+   * checks a type makes applicable, and this field is what makes a run's own metrics its study's.
+   */
+  readonly study: string
   /** The research types this metric belongs to. A type not listed does not have it at all. */
   readonly requiredFor: ReadonlyArray<ResearchType>
 }
@@ -75,6 +84,7 @@ export const METRIC_REGISTRY: ReadonlyArray<MetricDefinition> = [
     interpretation:
       'the smallest time-to-collision reached during the measurement window; a larger value means more '
       + 'time before a potential collision, so a fall is a worsening whatever the prose calls it',
+    study: 'idm-platoon-simulation',
     requiredFor: ['simulation-study'],
   },
   {
@@ -84,6 +94,7 @@ export const METRIC_REGISTRY: ReadonlyArray<MetricDefinition> = [
     interpretation:
       'how much a perturbation grows along the platoon; below one it is attenuated, so a rise toward '
       + 'one is a worsening',
+    study: 'idm-platoon-simulation',
     requiredFor: ['simulation-study'],
   },
   {
@@ -93,7 +104,20 @@ export const METRIC_REGISTRY: ReadonlyArray<MetricDefinition> = [
     interpretation:
       'the share of a review\'s statements that carry a citation to a work that supports them; a '
       + 'higher value means less of the review rests on nothing',
+    study: 'literature-review',
     requiredFor: ['literature-review'],
+  },
+  {
+    key: 'p95-latency-ms',
+    unit: 'ms',
+    direction: 'lower-is-better',
+    interpretation:
+      'the 95th-percentile request latency of a service under a declared arrival trace; a lower value '
+      + 'means fewer requests wait longer than they should, so a rise is a worsening',
+    // A SECOND STUDY'S METRIC. It shares the research type with the platoon study and shares nothing
+    // else: another domain, another unit, the opposite direction, and its own implementation.
+    study: 'service-latency-coalescing',
+    requiredFor: ['simulation-study'],
   },
 ]
 
@@ -164,6 +188,25 @@ export interface MetricApplicability {
   readonly required: ReadonlyArray<MetricDefinition>
   /** Metrics that belong to OTHER research types: not missing, simply not part of this one. */
   readonly notApplicable: ReadonlyArray<MetricDefinition>
+}
+
+/**
+ * The metrics one STUDY carries, and the ones that belong to other studies.
+ *
+ * THE LEVEL A RUN'S OWN METRICS ARE READ AT. A research type says which metrics are applicable to
+ * that kind of work — with two simulation studies that is the union of both — while a RUN is conducted
+ * as one study, and the metrics it requires are that study's. `required: false` here means "this
+ * quantity belongs to another study", which is a different fact from a metric the study failed to
+ * measure, and the two must not be collapsed in a run's own manifest.
+ *
+ * @param study - the implementation id the run is conducted as.
+ * @returns the metrics that study measures, and every other metric this deployment declares.
+ */
+export function metricsForStudy(study: string): MetricApplicability {
+  return {
+    required: METRIC_REGISTRY.filter(definition => definition.study === study),
+    notApplicable: METRIC_REGISTRY.filter(definition => definition.study !== study),
+  }
 }
 
 /**

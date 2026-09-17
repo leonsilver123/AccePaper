@@ -101,6 +101,12 @@ async function boot(options: {
     }
     /** The research type this deployment is configured as. */
     researchType?: string
+    /** The journal profile this deployment is configured with, when it states one. */
+    journal?: {
+      readonly id: string
+      readonly name: string
+      readonly rules: ReadonlyArray<{ readonly id: string; readonly statement: string; readonly source: string }>
+    }
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   }
   directoryEntries(name: string): ReadonlyArray<string>
@@ -1029,13 +1035,26 @@ describe('a late arrival cannot rewrite what has already been published', () => 
 
 describe('the research profile a run is conducted under', () => {
   it('is resolved at the start and frozen into the run, so reconfiguring does not change it', async () => {
-    // WHAT DRIFT WOULD COST: a deployment switched from a simulation study to a literature review
-    // while a study is under way would change which metrics that study has and which venue it is
-    // written for — mid-run, with nothing on the run saying so. The profile therefore travels in the
-    // spec, the same way the plan does, and the run's own file is what a restart reads.
+    // WHAT DRIFT WOULD COST: a deployment reconfigured while a study is under way — another venue's
+    // rules, another journal's requirements — would change what the manuscript is written for, mid-run,
+    // with nothing on the run saying so. The profile therefore travels in the spec, the same way the
+    // plan does, and the run's own file is what a restart reads.
+    //
+    // THE VENUE IS THE AXIS HERE, not the research type: the platoon study can only be conducted as a
+    // simulation study (the driver refuses a type whose metrics do not include the study's quantity),
+    // and a journal profile is a deployment fact that any study can be written for.
     const root = snapshotRoot()
     const first = await boot({ snapshotDirectory: root })
-    first.engine.researchType = 'literature-review'
+    first.engine.researchType = 'simulation-study'
+    first.engine.journal = {
+      id: 'trc',
+      name: 'Transportation Research Part C: Emerging Technologies',
+      rules: [{
+        id: 'abstract-word-limit',
+        statement: "the abstract is limited to the venue's stated maximum",
+        source: 'https://example.invalid/author-guide (read 2026-09-17)',
+      }],
+    }
     let runId = ''
     try {
       runId = (await first.service.startRun({ commandId: 'command-profile' })).runId
@@ -1044,23 +1063,34 @@ describe('the research profile a run is conducted under', () => {
       await first.dispose()
     }
 
-    const specOf = (): { researchProfile?: { researchType: string; metrics: { required: ReadonlyArray<{ key: string }> } } } =>
+    interface FrozenProfile {
+      readonly researchType: string
+      readonly journal: { readonly rules: ReadonlyArray<{ readonly id: string }> }
+      readonly metrics: { readonly required: ReadonlyArray<{ readonly key: string }> }
+    }
+    const specOf = (): { researchProfile?: FrozenProfile } =>
       (JSON.parse(readFileSync(join(root, runId, 'research-run-snapshot.json'), 'utf8')) as {
-        run: { spec: { researchProfile?: { researchType: string; metrics: { required: ReadonlyArray<{ key: string }> } } } }
+        run: { spec: { researchProfile?: FrozenProfile } }
       }).run.spec
 
-    // FROZEN AS CONFIGURED: the review's metric, and not the simulation study's.
+    // FROZEN AS CONFIGURED: the venue's rule, and the study's own metrics.
     const frozen = specOf().researchProfile
-    expect(frozen?.researchType).toBe('literature-review')
-    expect(frozen?.metrics.required.map(metric => metric.key)).toEqual(['citation-coverage'])
+    expect(frozen?.researchType).toBe('simulation-study')
+    expect(frozen?.journal.rules.map(rule => rule.id)).toEqual(['abstract-word-limit'])
+    // THE TYPE-LEVEL VIEW, which is what the profile carries: with two simulation studies it names
+    // both quantities, and the run's own metrics are read off its study at the package (see
+    // `package-export.spec.ts`).
+    expect(frozen?.metrics.required.map(metric => metric.key))
+      .toEqual(['min-ttc-seconds', 'string-stability-index', 'p95-latency-ms'])
 
     // AND A LATER CONFIGURATION DOES NOT MOVE IT. A second deployment on the same directory is
-    // configured differently, which is exactly what a reconfiguration looks like from the run's side.
+    // configured with the shipped, rule-free profile — which is exactly what a reconfiguration looks
+    // like from the run's side.
     const second = await boot({ snapshotDirectory: root })
-    second.engine.researchType = 'simulation-study'
     try {
       await second.service.openStoredRun({ runId })
-      expect(specOf().researchProfile?.researchType).toBe('literature-review')
+      expect(specOf().researchProfile?.journal.rules.map(rule => rule.id))
+        .toEqual(['abstract-word-limit'])
     } finally {
       await second.dispose()
     }

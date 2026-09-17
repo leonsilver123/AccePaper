@@ -385,6 +385,21 @@ export function prepareRun(
     throw new Error(`T19B drive: the plan cannot be executed — ${resolvedPlan.reason}`)
   }
   const plan = resolvedPlan.plan
+  // THE STUDY AND THE RESEARCH TYPE MUST AGREE. A profile that says this deployment conducts
+  // literature reviews, driving a plan whose quantity is a simulated platoon measurement, is two
+  // configurations disagreeing about what the run IS — and the metrics a reader would check it against
+  // come from the type while the numbers come from the study. Refused here, before the first step,
+  // rather than discovered by a reader of the finished paper.
+  const typeMetrics = opts.researchProfile?.metrics.required ?? []
+  const metricKey = plan.metric.key
+  if (typeMetrics.length > 0 && !typeMetrics.some(definition => definition.key === metricKey)) {
+    throw new Error(
+      `T19B drive: this run is conducted as a '${opts.researchProfile?.researchType ?? 'unknown'}'`
+      + ` and its plan measures '${metricKey}', which that research type does not have`
+      + ` (it has: ${typeMetrics.map(definition => definition.key).join(', ')}) — the study and the`
+      + ' type must be the same configuration',
+    )
+  }
   const runCtx: RunContext = createRunContext(
     timestamp,
     plan,

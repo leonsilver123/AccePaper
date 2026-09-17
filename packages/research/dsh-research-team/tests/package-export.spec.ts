@@ -317,10 +317,15 @@ describe('the metrics a package states its study was conducted under', () => {
       researchProfile: resolveResearchProfile({ researchType: 'simulation-study' }),
     })
     const declared = planRunPackage(store, run, 'evaluation').manifest.declaredMetrics
+    // THE RUN'S OWN STUDY'S METRICS, not the research type's: the type says which quantities are
+    // applicable to this kind of work (both simulation studies' metrics), while a RUN requires the
+    // ones its study measures. `required: false` is "belongs to another study", which is a different
+    // fact from a metric the study failed to measure.
     expect(declared?.map(metric => [metric.key, metric.required])).toEqual([
       ['min-ttc-seconds', true],
       ['string-stability-index', true],
       ['citation-coverage', false],
+      ['p95-latency-ms', false],
     ])
     // The package states what the numbers MEAN, so a reader does not have to know the registry.
     expect(declared?.[0]?.direction).toBe('higher-is-better')
@@ -328,24 +333,27 @@ describe('the metrics a package states its study was conducted under', () => {
     expect(declared?.[0]?.interpretation.length).toBeGreaterThan(40)
   })
 
-  it('names its own type\'s metric for a literature review', async () => {
+  it('REFUSES a run whose plan is not a study of the type it is conducted as', () => {
+    // THE STUDY AND THE TYPE MUST AGREE. Driving the platoon plan under a `literature-review` profile
+    // is two configurations disagreeing about what the run is: a reader would check it against the
+    // review's metric while the numbers came from a simulation. Refused before the first step.
+    //
+    // A review that actually runs would need a review implementation, which this runner does not have
+    // — so the honest reading today is the refusal, not a package naming a review's metric.
     const store: ResearchRunStore = new Map()
-    const run = await runT19B(store, {
+    return expect(runT19B(store, {
       researchProfile: resolveResearchProfile({ researchType: 'literature-review' }),
-    })
-    const declared = planRunPackage(store, run, 'evaluation').manifest.declaredMetrics
-    expect(declared?.map(metric => [metric.key, metric.required])).toEqual([
-      ['citation-coverage', true],
-      ['min-ttc-seconds', false],
-      ['string-stability-index', false],
-    ])
+    })).rejects.toThrow(/the study and the type must be the same configuration/u)
   })
 
-  it('states none for a run that recorded no profile, rather than a default', async () => {
-    // A RUN WITH NO PROFILE HAS NO DECLARED METRICS. Filling the field with the shipped default would
-    // attribute a configuration to a run that never recorded one.
+  it('states the study\'s own metrics for a run that recorded no profile', async () => {
+    // A RUN DRIVEN WITHOUT A PROFILE still has a STUDY — the plan resolved to an implementation — so
+    // its metrics are read off that study. The fallback is the study, not a default profile: the run's
+    // own plan is what says what it measured.
     const { store, run } = await realRun()
-    expect(planRunPackage(store, run, 'evaluation').manifest.declaredMetrics).toBeUndefined()
+    const declared = planRunPackage(store, run, 'evaluation').manifest.declaredMetrics
+    expect(declared?.filter(metric => metric.required).map(metric => metric.key))
+      .toEqual(['min-ttc-seconds', 'string-stability-index'])
   })
 })
 

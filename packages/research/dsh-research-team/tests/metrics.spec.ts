@@ -8,7 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  METRIC_REGISTRY, checkMetricDeclaration, metricDefinition, metricsFor, requireMetricDeclaration,
+  METRIC_REGISTRY, checkMetricDeclaration, metricDefinition, metricsFor, metricsForStudy,
+  requireMetricDeclaration,
 } from '../src/runner/metrics.ts'
 import { MEASURED_METRIC } from '../src/runner/platoon-sim.ts'
 
@@ -98,9 +99,11 @@ describe('the declaration a run must be able to make', () => {
 
 describe('required and not-applicable are different facts', () => {
   it('says what a simulation study requires, and what simply is not part of it', () => {
+    // THE TYPE-LEVEL VIEW IS A UNION OF THE STUDIES THAT TYPE CONTAINS: with two simulation studies
+    // it names both quantities, and says which metrics belong to other kinds of work entirely.
     const simulation = metricsFor('simulation-study')
     expect(simulation.required.map(definition => definition.key))
-      .toEqual(['min-ttc-seconds', 'string-stability-index'])
+      .toEqual(['min-ttc-seconds', 'string-stability-index', 'p95-latency-ms'])
     // A review's metric is not missing from a simulation study: it does not belong to it.
     expect(simulation.notApplicable.map(definition => definition.key)).toEqual(['citation-coverage'])
   })
@@ -109,7 +112,29 @@ describe('required and not-applicable are different facts', () => {
     const review = metricsFor('literature-review')
     expect(review.required.map(definition => definition.key)).toEqual(['citation-coverage'])
     expect(review.notApplicable.map(definition => definition.key))
+      .toEqual(['min-ttc-seconds', 'string-stability-index', 'p95-latency-ms'])
+  })
+
+  it('separates the metrics of one STUDY from the metrics of another', () => {
+    // THE LEVEL A RUN'S OWN METRICS ARE READ AT. Two studies can share a research type and share no
+    // quantity: a run conducted as one of them requires its own metrics and reports the other's as
+    // belonging elsewhere, which is what the package's `declaredMetrics` states.
+    const platoon = metricsForStudy('idm-platoon-simulation')
+    expect(platoon.required.map(definition => definition.key))
       .toEqual(['min-ttc-seconds', 'string-stability-index'])
+    expect(platoon.notApplicable.map(definition => definition.key))
+      .toEqual(['citation-coverage', 'p95-latency-ms'])
+
+    const latency = metricsForStudy('service-latency-coalescing')
+    expect(latency.required.map(definition => definition.key)).toEqual(['p95-latency-ms'])
+    expect(latency.notApplicable.map(definition => definition.key))
+      .toEqual(['min-ttc-seconds', 'string-stability-index', 'citation-coverage'])
+  })
+
+  it('says which study declares each metric, so nothing is reachable by accident', () => {
+    for (const definition of METRIC_REGISTRY) {
+      expect(definition.study.length, definition.key).toBeGreaterThan(0)
+    }
   })
 
   it('gives every registered metric a research type it belongs to', () => {
