@@ -8,9 +8,9 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { RunResult } from '../src/runner/types.ts'
@@ -164,6 +164,34 @@ describe('F04 — eligibility is not readiness', () => {
     const summary = plan.files.find(file => file.path === 'run-summary.md')
     expect(summary?.content).toMatch(/- evidence eligible: yes/)
     expect(summary?.content).toMatch(/- submission ready: \*\*NO\*\*/)
+  })
+})
+
+describe('a package that fails to write leaves the one that was there', () => {
+  it('keeps the published package intact, and leaves no half-written directory behind', async () => {
+    // WHAT AN IN-PLACE WRITER COSTS. A package is the directory AND the manifest beside it, and the
+    // two are the same object only while every entry matches. A failure halfway through writing files
+    // in place leaves the PREVIOUS manifest beside THIS export's files: a directory that reads like a
+    // package, verifies as nothing, and says nothing about which entries are which.
+    const dir = join(tempDir(), 'pkg')
+    const { store, run } = await realRun()
+    const published = writeRunPackage(planRunPackage(store, run, 'evaluation'), dir)
+    const before = readFileSync(join(dir, 'run-manifest.json'), 'utf8')
+
+    // A plan that cannot be written: `b` is a file, and `b/c.md` needs `b` to be a directory.
+    const broken = planRunPackage(store, run, 'evaluation')
+    const failing = {
+      files: [...broken.files, { path: 'b', content: 'a file\n' }, { path: 'b/c.md', content: 'under it\n' }],
+      manifest: broken.manifest,
+    }
+    expect(() => writeRunPackage(failing, dir)).toThrow(/run-package|ENOTDIR|EEXIST|ENOENT/)
+
+    // THE PACKAGE IS THE ONE FROM BEFORE: same manifest bytes, and every entry still verifies.
+    expect(readFileSync(join(dir, 'run-manifest.json'), 'utf8')).toBe(before)
+    expect(checkPackagedFiles(dir, published).filter(check => check.status !== 'ok')).toEqual([])
+    // AND NOTHING WAS LEFT BESIDE IT: no staging directory, no superseded copy.
+    const siblings = readdirSync(dirname(dir))
+    expect(siblings.filter(name => name.includes('staging-') || name.includes('superseded-'))).toEqual([])
   })
 })
 

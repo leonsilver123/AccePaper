@@ -14,8 +14,8 @@
 // The manifest records paths relative to the package root and never the absolute directory
 // it was written to; `sanitizeForExport` strips anything that looks like a secret.
 
-import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { getArtifact, getAuditHistory, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import { readinessOfRun } from './submission-readiness.ts'
@@ -415,19 +415,50 @@ export function packageRunFactsOf(store: ResearchRunStore, runId: string): Packa
 }
 
 /**
- * Write a package plan to disk.
+ * Write a package plan to disk, and publish it only once it is complete.
+ *
+ * STAGED, VERIFIED, THEN SWAPPED IN. A package is the directory AND the manifest beside it, and the
+ * two are only the same object while every entry still matches. Writing files in place makes a
+ * half-finished export indistinguishable from a finished one: the reader who opens the directory
+ * after a failure finds a manifest from the previous export sitting beside files from the failed one,
+ * and nothing on disk says which entries are which. So the files go into a staging directory, the
+ * staged package is checked against its own manifest, and only then does it replace what was there.
+ * A failure anywhere before the swap leaves the previous package exactly as it was.
  *
  * Every file is written, then re-read through `statSync` so a zero-byte or unreadable file is
- * reported here rather than discovered by whoever opens the package. The manifest is written
- * LAST and lists the files with their digests, so a manifest that exists means the files it
- * names were written.
+ * reported here rather than discovered by whoever opens the package. The manifest is written LAST,
+ * so a manifest that exists means the files it names were written.
  *
  * @param plan - the files and manifest to write.
- * @param directory - the package root; created when absent.
+ * @param directory - the package root; created when absent, replaced when it is already there.
  * @returns the manifest, with every file's byte count and digest filled in.
- * @throws {Error} when a written file is missing or empty afterwards.
+ * @throws {Error} when a written file is empty, when the staged package does not verify, or when the
+ *   swap itself fails — in which case the previous package is put back.
  */
 export function writeRunPackage(
+  plan: { readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest },
+  directory: string,
+): RunPackageManifest {
+  const staging = `${directory}.staging-${randomUUID().slice(0, 8)}`
+  try {
+    const manifest = writePackageFiles(plan, staging)
+    const failed = checkPackagedFiles(staging, manifest).filter(check => check.status !== 'ok')
+    if (failed.length > 0) {
+      throw new Error(
+        '[run-package] the staged package does not match its own manifest: '
+        + failed.map(check => `${check.path} (${check.status})`).join(', '),
+      )
+    }
+    publish(staging, directory)
+    return manifest
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true })
+    throw error
+  }
+}
+
+/** Write every file of a plan into one directory, and the manifest last. */
+function writePackageFiles(
   plan: { readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest },
   directory: string,
 ): RunPackageManifest {
@@ -446,6 +477,29 @@ export function writeRunPackage(
   const manifest: RunPackageManifest = { ...plan.manifest, files: written }
   writeFileSync(join(directory, 'run-manifest.json'), jsonFile(manifest), 'utf8')
   return manifest
+}
+
+/**
+ * Move a completed staging directory into place, keeping the package that was there.
+ *
+ * THE OLD PACKAGE IS MOVED ASIDE, NOT DELETED: a rename that fails — a lock, a full disk — is
+ * followed by putting it back, so the failure mode is "the package is the one from before" rather
+ * than "there is no package".
+ *
+ * @param staging - the verified package.
+ * @param directory - where it belongs.
+ */
+function publish(staging: string, directory: string): void {
+  const superseded = `${directory}.superseded-${randomUUID().slice(0, 8)}`
+  const replacing = existsSync(directory)
+  if (replacing) renameSync(directory, superseded)
+  try {
+    renameSync(staging, directory)
+  } catch (error) {
+    if (replacing) renameSync(superseded, directory)
+    throw error
+  }
+  if (replacing) rmSync(superseded, { recursive: true, force: true })
 }
 
 /** One file's state against what a manifest says about it. */
