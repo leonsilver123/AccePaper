@@ -33,7 +33,7 @@ import type {
 import { ABLATION_VARIANT_KINDS, ablationRunKey } from '@deepseek-ai/dsh-research-tools'
 
 import type { ArgumentPlan, ClaimOutcome } from './argument-plan.ts'
-import type { CitationUse } from './citation-bindings.ts'
+import type { SourceJudgement } from './citation-bindings.ts'
 import type { MethodImplementation } from './implementations.ts'
 import { SUPPORTED_IMPLEMENTATIONS } from './implementations.ts'
 import type { MeasuredMetric } from './prediction-gate.ts'
@@ -160,7 +160,7 @@ export interface StudyProse {
   readonly plan: StudyPlan
   readonly measured: MeasuredOutcome
   readonly argumentPlan: ArgumentPlan
-  readonly citations: ReadonlyArray<CitationUse>
+  readonly citations: ReadonlyArray<SourceJudgement>
   /** The label of every float of one kind the draft carries, e.g. `Figure 1, Figure 2`. */
   readonly named: (kind: string) => string
   /** The sentence stating where this work sits against the sources the run reviewed. */

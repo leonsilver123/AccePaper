@@ -174,10 +174,11 @@ import type { ArgumentPlan } from './argument-plan.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentCompiler } from './document-compile.ts'
 import {
-  bibliographyOf, checkCitationKeys, checkCitationUse, checkManuscriptCitations, citationUsesOf,
+  bibliographyOf, bindJudgements, checkCitationKeys, checkCitationUse, checkManuscriptCitations,
+  checkStatementBindings, judgementsFor, locateStatements,
   citeKeyOf, renderCitationMarkers, reviewedSources,
 } from './citation-bindings.ts'
-import type { CitationUse } from './citation-bindings.ts'
+import type { CitationUse, SourceJudgement } from './citation-bindings.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -600,16 +601,35 @@ const D2_PRODUCER = 'fixture:framework'
 const D3_PRODUCER = 'fixture:writing'
 
 /**
- * The statement the reviewed sources are cited for.
+ * The version of the record a prose request leaves behind.
  *
- * A CITATION IS FOR A SENTENCE, NOT FOR A PAPER. The reviewed corpus binds each judgement to the
- * claim it was assessed against, and the sentence that states where this work sits in the literature
- * is the one those judgements answer — so every binding made here names that statement, and a later
- * revision of it is a different statement whose citations have to be re-made.
+ * A LOG ENTRY IS READ AGAINST THE SHAPE THAT PRODUCED IT, so the shape carries a version: what a
+ * request recorded in v1 (the instruction, the evidence names, the citation roster with the version
+ * of each passage) is a different set of facts from what a later one might, and a reader comparing
+ * two runs has to be able to tell which they are holding.
  */
-const STATEMENT_LITERATURE_POSITION = 'introduction:prior-work'
+const PROSE_REQUEST_VERSION = 'prose-request-v1'
+
 const D4_PRODUCER = 'fixture:rebuttal'
 const E1_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`
+
+/**
+ * The VERSION of the passage one cite key's judgement rests on, or null when nothing establishes it.
+ *
+ * The evidence version is what a request recorded and what a later judgement is checked against, so a
+ * refusal for `citation-evidence-changed` can be traced back to the request that was answered with a
+ * sentence resting on the old passage.
+ *
+ * @param citeKey - the key the manuscript cites.
+ * @param judgements - what the reviewed corpus establishes now.
+ * @returns the passage's hash, or null.
+ */
+function judgementVersionOf(
+  citeKey: string,
+  judgements: ReadonlyArray<SourceJudgement>,
+): string | null {
+  return judgements.find(judgement => judgement.citeKey === citeKey)?.quoteSha256 ?? null
+}
 
 /** Artifact type carried by each declared output slug (audit vocabulary). */
 const ARTIFACT_TYPE_BY_SLUG: Readonly<Record<string, string>> = {
@@ -746,14 +766,14 @@ function thresholdLabel(commitment: PredictionCommitment | undefined): string {
  * @param citations - the bindings this run holds.
  * @returns the sentence, with one citation marker per source.
  */
-function priorWorkSentence(citations: ReadonlyArray<CitationUse>): string {
-  if (citations.length === 0) {
+function priorWorkSentence(judgements: ReadonlyArray<SourceJudgement>): string {
+  if (judgements.length === 0) {
     return 'No reviewed source bears on the condition this study varies, so this work is not placed'
       + ' against prior findings.'
   }
-  const clauses = citations.map((citation) => {
-    const marker = `[@${citation.citeKey}]`
-    return citation.support === 'contradicted'
+  const clauses = judgements.map((judgement) => {
+    const marker = `[@${judgement.citeKey}]`
+    return judgement.support === 'contradicted'
       ? `a reviewed source reports the opposite of the claim under test ${marker}`
       : `a reviewed source reports the mechanism this study varies ${marker}`
   })
@@ -992,7 +1012,7 @@ function derivedArgumentPlan(plan: StudyPlan, ctx: ExecCtx): ArgumentPlan {
 function defaultBodySections(
   plan: StudyPlan,
   ctx: ExecCtx,
-  citations: ReadonlyArray<CitationUse> = [],
+  judgements: ReadonlyArray<SourceJudgement> = [],
 ): ReadonlyArray<ManuscriptSection> {
   return plan.outline.map(s => ({
     id: s.id,
@@ -1000,7 +1020,7 @@ function defaultBodySections(
     // THE STUDY WRITES ITS OWN SECTIONS. Which nouns a result sentence uses, what the method section
     // says was run, and what the experiments section reports are facts about the study — so they come
     // from the adapter rather than from a template this file would have to keep in step with it.
-    bodyText: ctx.runCtx.adapter.body(s.id, proseContext(plan, ctx, citations)),
+    bodyText: ctx.runCtx.adapter.body(s.id, proseContext(plan, ctx, judgements)),
   }))
 }
 
@@ -1020,7 +1040,7 @@ function defaultBodySections(
 function proseContext(
   plan: StudyPlan,
   ctx: ExecCtx,
-  citations: ReadonlyArray<CitationUse>,
+  judgements: ReadonlyArray<SourceJudgement>,
 ): StudyProse {
   const figurePlan = readInput(ctx, 'figure-plan')
   const floats = planFloats(
@@ -1034,12 +1054,12 @@ function proseContext(
     plan,
     measured: measureOutcome(ctx),
     argumentPlan: derivedArgumentPlan(plan, ctx),
-    citations,
+    citations: judgements,
     named: (kind: string) =>
       citable.filter(item => item.label.toLowerCase().startsWith(kind))
         .map(item => item.label)
         .join(', '),
-    priorWork: priorWorkSentence(citations),
+    priorWork: priorWorkSentence(judgements),
   }
 }
 
@@ -2554,25 +2574,33 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? (figurePlan.figures as ReadonlyArray<FigurePlanEntry>)
     : []
   // D3's canonical purpose includes adding the references — and a reference is now what the paper's
-  // statements cite, not what the search returned. The bindings below are this claim version's
-  // reviewed sources with the passage that was read; the reference list and the citation roster the
-  // writer is handed both come from them, so the two cannot name different sources.
-  const citations = citationUsesOf({ claimRef, statementId: STATEMENT_LITERATURE_POSITION })
-  // A BINDING IS CHECKED WHERE IT IS MADE, before any of it reaches the draft: an empty passage, a
+  // statements cite, not what the search returned. THE JUDGEMENTS COME FIRST AND THE BINDINGS LATER:
+  // what the reviewed corpus establishes about this claim's sources says nothing about where in a
+  // manuscript a source will be cited, so a judgement made before the prose exists could only be
+  // about a slot — which is what this used to be, and why a rewritten sentence kept its support.
+  const judgements = judgementsFor(claimRef)
+  // A JUDGEMENT IS CHECKED WHERE IT IS MADE, before any of it reaches the draft: an empty passage, a
   // judgement stronger than what was read, or a source the retrieval does not hold is refused here.
-  for (const citation of citations) {
-    const refusals = checkCitationUse(citation, reviewedSources().get(citation.literatureRef))
+  for (const judgement of judgements) {
+    const refusals = checkCitationUse(judgement, reviewedSources().get(judgement.literatureRef))
     if (refusals.length > 0) {
       throw new Error(
         `[D3-writing] ${refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; ')}`,
       )
     }
   }
-  const duplicateKeys = checkCitationKeys(citations)
+  // WHAT THE PAPER MAY CITE, for the writer's request and for the fallback prose. Not bindings: the
+  // sentences they will be attached to are written below.
+  const citableSources = judgements.map(judgement => ({
+    citeKey: judgement.citeKey,
+    establishes: judgement.support,
+    readScope: judgement.readScope,
+    source: judgement.location,
+  }))
+  const duplicateKeys = checkCitationKeys(judgements)
   if (duplicateKeys.length > 0) {
     throw new Error(`[D3-writing] ${duplicateKeys.map(refusal => refusal.detail).join('; ')}`)
   }
-  const references = referenceEntriesFor(citations)
   const headings: ReadonlyArray<{ id: string; heading: string }> = ids.map((id, index) => {
     const heading =
       Array.isArray(rawOutline) && typeof (rawOutline[index] as { heading?: unknown } | undefined)?.heading === 'string'
@@ -2632,13 +2660,33 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ...(commitment === undefined ? {} : { thresholdPct: commitment.thresholdPct }),
     sectionIds: ids,
   })
+  // WHAT THE MODEL WAS SHOWN, kept as the run's own record. A prose request is the one place where
+  // the run's evidence reaches a model, and until now nothing recorded it: the artifact carried the
+  // prose that came back, so a reader could see what was written and not what it was written FROM.
+  // The entries below carry the instruction verbatim (it IS model-visible), the evidence names the
+  // section required and received, the floats it was offered, and the citation roster with the
+  // VERSION of each passage — so a judgement later refused for a changed passage is traceable to the
+  // request that asked for the sentence resting on it.
+  const proseRequests: Array<Record<string, unknown>> = []
   if (writer === undefined) {
-    const prose = proseContext(planOf(ctx), ctx, citations)
+    const prose = proseContext(planOf(ctx), ctx, judgements)
     sections = headings.map((h) => {
       const evidence = evidenceFor(h.id)
-      return evidence.missing.length > 0
-        ? { ...h, bodyText: '' }
-        : { ...h, bodyText: ctx.runCtx.adapter.body(h.id, prose) }
+      if (evidence.missing.length > 0) return { ...h, bodyText: '' }
+      proseRequests.push({
+        sectionId: h.id,
+        channel: 'fixture',
+        // No instruction reaches a model on this path, and the field says so rather than being
+        // omitted: "asked nothing" and "the record lost the request" are different facts.
+        instruction: null,
+        evidenceSupplied: Object.keys(evidence.supplied),
+        evidenceRequired: evidence.required,
+        citations: citableSources.map(source => ({
+          citeKey: source.citeKey,
+          evidenceVersion: judgementVersionOf(source.citeKey, judgements),
+        })),
+      })
+      return { ...h, bodyText: ctx.runCtx.adapter.body(h.id, prose) }
     })
     proseSource = 'fixture'
   } else {
@@ -2649,9 +2697,21 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // withholding the result is how a plausible number gets invented, so the request is not
         // made and the absence is recorded instead.
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
+        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
+        proseRequests.push({
+          sectionId: h.id,
+          channel: proseLabelling(writer).source,
+          instruction,
+          evidenceSupplied: Object.keys(evidence.supplied),
+          evidenceRequired: evidence.required,
+          citations: citableSources.map(source => ({
+            citeKey: source.citeKey,
+            evidenceVersion: judgementVersionOf(source.citeKey, judgements),
+          })),
+        })
         return writer.write({
           stepId: 'D3-writing',
-          instruction: `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`,
+          instruction,
           // The evidence travels as DATA, not as prose the model has to parse. `citable` is the
           // float roster; `citations` is what the paper may cite and what each source establishes;
           // `evidence` is the run's own material for THIS section.
@@ -2664,12 +2724,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             // The section's contract travels as DATA too, so a caller reading the log can rebuild what
             // this section was asked to establish rather than inferring it from the prose.
             sectionContract: contractFor(h.id) ?? null,
-            citations: citations.map(citation => ({
-              citeKey: citation.citeKey,
-              establishes: citation.support,
-              readScope: citation.readScope,
-              source: citation.location,
-            })),
+            citations: citableSources,
             evidence: evidence.supplied,
             requiredEvidence: evidence.required,
           },
@@ -2690,6 +2745,30 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     // fields of one artifact contradicting each other.
     if (first !== undefined) producer = `${proseSource === 'model' ? 'llm' : 'deterministic'}:${first.provider}/${first.model}`
   }
+  // WHERE EACH STATEMENT IS, AND WHAT IT IS BOUND TO — in that order.
+  //
+  // THE ATTACHMENT HAPPENS HERE, over prose that exists. A judgement says what a source establishes;
+  // a statement says where the manuscript says it. Binding them records the CONTENT VERSION of the
+  // sentence and the EVIDENCE VERSION of the passage it rests on, both as they stand now, so a
+  // revision that rewrites the sentence leaves a judgement about text nobody has read — which
+  // `checkStatementBindings` refuses at E1 rather than letting the citation transfer silently.
+  const statements = locateStatements(sections)
+  const bound = bindJudgements(judgements, statements)
+  // A REVIEWED SOURCE NO SENTENCE CITES IS REFUSED, not dropped from the reference list. The two ways
+  // to reach it are a manuscript that never stated a position its own evidence supports and a source
+  // that does not bear on this paper — and the second is a judgement that should not have been made,
+  // which a reader has to fix rather than a list that quietly omits it. The REFERENCE LIST is derived
+  // from the bindings below, so an omission here would make the defect invisible instead of refused.
+  if (bound.uncited.length > 0) {
+    throw new Error(
+      '[D3-writing] [citation-source-uncited] '
+      + `${bound.uncited.map(judgement => `'${judgement.citeKey}'`).join(', ')} `
+      + 'carry a reviewed judgement about this claim and no sentence in the draft cites them — the'
+      + ' paper states no position its own evidence establishes, or the judgement does not bear on it',
+    )
+  }
+  const citations = bound.uses
+  const references = referenceEntriesFor(citations)
   const sectionEvidence = headings.map(h => evidenceFor(h.id))
   const refused = sectionEvidence.filter(entry => entry.missing.length > 0)
 
@@ -2704,6 +2783,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         sections,
         proseSource,
         proseRoute,
+        // WHAT EACH SECTION WAS ASKED FOR, with the evidence and the versions behind it. The record
+        // is what makes "which request produced the sentence whose judgement was refused" answerable
+        // from the run rather than from a log nobody kept.
+        proseRequests,
+        proseRequestVersion: PROSE_REQUEST_VERSION,
         // WHAT EACH SECTION WAS WRITTEN FROM, and which sections could not be written. A reader
         // holding only the prose cannot tell a section backed by the run's measurement from one the
         // model filled in, and neither can a reviewer.
@@ -2721,10 +2805,19 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         resultRef: d3Outcome.contentHash,
         figureRef: figures ?? 0,
         landscapeRef: hitCount ?? 0,
-        // WHAT THIS PAPER CITES, with the passage each citation was read from. The reference list
-        // below is derived from these, so a reader of the draft can check that every entry rests on a
-        // sentence and every sentence on a passage somebody read.
+        // WHERE THE MANUSCRIPT'S STATEMENTS ARE, each with the version of its text. The identity
+        // survives a revision and the version does not, which is what lets a reader see that a node's
+        // text changed and lets a judgement about the old text be refused.
+        statements,
+        // WHAT THIS PAPER CITES, with the passage each citation was read from AND the versions the
+        // judgement was made about. The reference list below is derived from these, so a reader of the
+        // draft can check that every entry rests on a sentence and every sentence on a passage
+        // somebody read.
         citations,
+        // THE REVIEWED SOURCES NO SENTENCE CITES. Reported rather than dropped: a judgement nobody
+        // used is either a manuscript that failed to state a position it holds, or a source that does
+        // not bear on this paper — and only a reader can say which.
+        uncitedSources: bound.uncited.map(judgement => judgement.citeKey),
         references,
         // THE PLAN THIS DRAFT WAS WRITTEN UNDER, with its version, so the log can rebuild what each
         // section was asked for and which argument the run had when it wrote them.
@@ -3044,6 +3137,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *  revised draft + venue scope. three-line-table is the REAL table sub-capability
  *  inside the assembly — E1 is the format STEP, not the table tool (T19-S fix). */
 async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const { claimRef } = canonicalOf(ctx)
   const venue = readInput(ctx, 'venue')
   const venueScope = readInput(ctx, 'venue-scope')
   const revised = readInput(ctx, 'revised-draft')
@@ -3131,6 +3225,24 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     throw new Error(
       '[E1-format] the manuscript\'s citations and its reference list disagree: '
       + citationRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
+    )
+  }
+  // AND WHETHER EACH JUDGEMENT STILL HOLDS ABOUT WHAT IS THERE NOW. This is where a revision's
+  // consequences land: the draft's bindings were made against the text the draft carried, and the
+  // manuscript assembled here is the REVISED one. A sentence D4 rewrote leaves a judgement about text
+  // nobody read, and a correction to the corpus leaves one about a passage the source no longer holds.
+  // Both are REFUSED, because the alternative is a citation that transfers its support to a sentence
+  // no reviewer saw — which is the defect this whole chain exists to prevent. Re-binding is not the
+  // remedy: a judgement is a reading somebody made, and only another reading can replace it.
+  const statementRefusals = checkStatementBindings(
+    (Array.isArray(revised?.citations) ? revised.citations : []) as ReadonlyArray<CitationUse>,
+    locateStatements(sections.map(section => ({ id: section.id, bodyText: section.bodyText }))),
+    judgementsFor(claimRef),
+  )
+  if (statementRefusals.length > 0) {
+    throw new Error(
+      '[E1-format] a citation no longer holds against what the manuscript says: '
+      + statementRefusals.map(refusal => `[${refusal.code}] ${refusal.detail}`).join('; '),
     )
   }
   // AND WHAT EACH SECTION OWED ITS READER. A section that reports the measurement without saying what

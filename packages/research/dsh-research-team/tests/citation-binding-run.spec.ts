@@ -12,7 +12,22 @@ import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-co
 import { runT19B } from '../src/runner/drive.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
-import type { ResearchProseRequest, ResearchProseWriter } from '../src/runner/registry.ts'
+import { FIXED_TS, STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
+import type { ExecCtx, ResearchProseRequest, ResearchProseWriter, RunContext } from '../src/runner/registry.ts'
+import { platoonAdapter } from '../src/runner/study-adapter.ts'
+import { experimentStudy } from '../src/runner/platoon-sim.ts'
+import { EMPTY_CLAIM_MATERIAL } from '../src/runner/redteam-review.ts'
+
+/** A bare step context over one run's artifacts, as the registry's own specs build them. */
+function execCtx(stepId: string): ExecCtx {
+  const runCtx: RunContext = {
+    predictionText: '', claimId: '', claimRef: '', metricKey: '',
+    claimMaterial: { ...EMPTY_CLAIM_MATERIAL },
+    study: experimentStudy(), studyPlan: DEFAULT_PLAN, planSource: 'default',
+    timestamp: FIXED_TS, adapter: platoonAdapter(experimentStudy()),
+  }
+  return { runId: 'citation-binding-run-spec', stepId, attemptId: 1, getInput: () => undefined, runCtx }
+}
 
 /** The Case Pack the deployment ships, which supplies the claim's declared scope and data source. */
 const CASE_PACK_DIR = join(process.cwd(), 'plan/overnight/2026-09-09/case-pack-traffic')
@@ -128,11 +143,14 @@ describe('a run that cites its sources', () => {
   })
 })
 
-describe('a run whose manuscript does not cite what its reference list carries', () => {
-  it('is refused at assembly, naming the uncited entries', async () => {
-    // THE DELIVERED PAPER'S SHAPE, refused: a reference list written beside a body that never cites
-    // it. E1 is the last place both are in hand before the manuscript becomes an artifact, so the run
-    // stops there — with the reason, and without publishing a manuscript that reads as sourced.
+describe('a run whose manuscript cites none of the sources it reviewed', () => {
+  it('is refused where the prose is written, naming every source it left unused', async () => {
+    // THE DELIVERED PAPER'S SHAPE, refused. It used to be refused at E1, because the reference list
+    // was built from the reviewed corpus whatever the body said — so the list could exist beside a
+    // body that never cited it. NOW THE LIST IS DERIVED FROM THE BINDINGS, so an uncited reviewed
+    // source produces no entry, and the defect has to be refused where it happens: `D3-writing`,
+    // before an artifact is written. That is earlier and it names the real problem — the paper failed
+    // to state a position its own evidence establishes.
     const store: ResearchRunStore = new Map()
     // THE SAME SEED THE BROWSER RUN HAD: a caller-supplied plan and the deployment's pack. Without
     // them the run holds at A2's B gate, which is a different stop and would hide the one under test.
@@ -141,10 +159,12 @@ describe('a run whose manuscript does not cite what its reference list carries',
       proseWriter: writerSaying(STATED_WITHOUT_CITING),
       casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
     })
-    const e1 = run.steps.find(step => step.stepId === 'E1-format')
-    expect(e1?.status).toBe('in_progress')
-    expect(e1?.executeError).toContain('citation-entry-uncited')
-    // AND NOTHING WAS PUBLISHED: a run stopped here has no manuscript for a later step to read.
+    const d3 = run.steps.find(step => step.stepId === 'D3-writing')
+    expect(d3?.status).toBe('in_progress')
+    expect(d3?.executeError).toContain('citation-source-uncited')
+    for (const key of REVIEWED_KEYS) expect(d3?.executeError, key).toContain(key)
+    // AND NOTHING WAS PUBLISHED: a run stopped here has no draft, so no manuscript can follow it.
+    expect(getArtifact(store, run.runId, 'draft')).toBeUndefined()
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
   })
 })
@@ -160,7 +180,10 @@ describe('a run that cites a source it never reviewed', () => {
     const run = await runT19B(store, {
       studyPlan: DEFAULT_PLAN,
       proseWriter: writerSaying(
-        'Prior work on this quantity has been reported [@cite-10.1016/j.trb.2024.999999].'
+        // THE REVIEWED SOURCES ARE ALL CITED, so the draft is not refused for leaving one unused —
+        // the scenario under test is the source that was never reviewed.
+        `Prior work on this quantity has been reported ${REVIEWED_KEYS.map(key => `[@${key}]`).join(' ')}`
+        + ' and one further study [@cite-10.1016/j.trb.2024.999999].'
         + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
       ),
       casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
@@ -169,5 +192,52 @@ describe('a run that cites a source it never reviewed', () => {
     expect(e1?.status).toBe('in_progress')
     expect(e1?.executeError).toContain('citation-target-missing')
     expect(e1?.executeError).toContain('citation-unreviewed-source')
+  })
+})
+
+describe('a revision that rewrites a cited sentence', () => {
+  it('is refused at assembly, because the judgement was about the sentence that was there', async () => {
+    // THE REVIEW'S R05, on the production path. `E1-format` assembles the REVISED draft, and the
+    // bindings it carries were made against the text the DRAFT had. A step that rewrites a cited
+    // sentence — which is what D4-rebuttal does — therefore leaves a judgement about a sentence nobody
+    // read, and the citation is refused rather than transferring its support to the new text.
+    //
+    // E1 IS DRIVEN HERE WITH A REAL RUN'S ARTIFACTS AND ONE EDIT: the revised draft is the one the run
+    // produced, with the introduction's cited sentence replaced by a different claim about the same
+    // sources. Nothing else about the run changes, so the refusal can only come from the versions.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store)
+    const revised = getArtifact(store, run.runId, 'revised-draft') as {
+      sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
+      citations: ReadonlyArray<{ citeKey: string }>
+    }
+    const firstKey = revised.citations[0]?.citeKey ?? ''
+    const citing = revised.sections.find(section => section.bodyText.includes(firstKey))
+    expect(citing, 'the run produced no section citing the first reviewed source').toBeDefined()
+
+    const edited = {
+      ...revised,
+      sections: revised.sections.map(section => section.id === citing?.id
+        // THE SAME SOURCES, A DIFFERENT CLAIM ABOUT THEM. This is the edit a rebuttal makes when it
+        // strengthens a literature position, and it is exactly what a slot-based binding survives.
+        ? {
+          ...section,
+          // THE SENTENCE THAT CARRIES THE CITATION is the one rewritten, and it keeps its citations:
+          // the markers stay, the claim about them changes.
+          bodyText: section.bodyText
+            .split(/(?<=[.!?])\s+/u)
+            .map(sentence => sentence.includes(firstKey)
+              ? sentence.replace(/^[^\[]*/u, 'Earlier work settles this question ')
+              : sentence)
+            .join(' '),
+        }
+        : section),
+    }
+    const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
+    const e1Ctx: ExecCtx = {
+      ...execCtx('E1-format'),
+      getInput: slug => (slug === 'revised-draft' ? edited : getArtifact(store, run.runId, slug)),
+    }
+    await expect(entry?.executor(e1Ctx)).rejects.toThrow(/citation-statement-changed/u)
   })
 })

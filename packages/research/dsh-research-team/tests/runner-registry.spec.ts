@@ -408,7 +408,15 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
         channel: 'deterministic',
         write: (request) => {
           requests.push({ context: request.context, instruction: request.instruction })
-          return Promise.resolve({ text: 'The measured change is reported in Table 1.', provider: 'spec', model: 'spec' })
+          // THE INTRODUCTION CITES EVERY REVIEWED SOURCE, because the draft is refused otherwise:
+          // a source somebody reviewed and the paper never cites is a position the paper failed to
+          // state, and D3 refuses it rather than dropping it from the reference list.
+          const keys = (request.context.citations as ReadonlyArray<{ citeKey: string }>)
+            .map(citation => `[@${citation.citeKey}]`).join(' ')
+          const text = request.context.sectionId === 'introduction'
+            ? `Prior work on this quantity is not unanimous ${keys}. The measured change is reported in Table 1.`
+            : 'The measured change is reported in Table 1.'
+          return Promise.resolve({ text, provider: 'spec', model: 'spec' })
         },
       },
     }

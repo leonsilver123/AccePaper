@@ -27,6 +27,9 @@ const SOURCE: SourceRecord = {
 /** A binding that may be recorded: a passage was read in the full text and it supports the sentence. */
 const BINDING: CitationUse = {
   statementId: 'stmt-prior-platooning',
+  // THE VERSION OF THE SENTENCE the judgement below was made about. A binding that carries no version
+  // is one nobody can tell from a judgement about different text.
+  statementSha256: 'b'.repeat(64),
   literatureRef: SOURCE.id,
   citeKey: citeKeyOf(SOURCE),
   location: 'section 3, paragraph 2',

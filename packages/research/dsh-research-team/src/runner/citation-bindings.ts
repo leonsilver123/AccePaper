@@ -24,6 +24,8 @@
 // empty, whose key collides with another's, or whose support rests on an abstract is refused here
 // rather than published as support.
 
+import { createHash } from 'node:crypto'
+
 import { EVIDENCE_CORPUS, assessmentsFor, corpusSource } from './evidence-corpus.ts'
 
 /** How one source stands in relation to the statement it is cited for. */
@@ -90,6 +92,16 @@ export interface SourceRecord {
 export interface CitationUse {
   /** The statement this citation supports, named the way the manuscript names it. */
   readonly statementId: string
+  /**
+   * THE CONTENT VERSION the judgement below was made about: the hash of the statement's text as it
+   * stood when a reviewer read it.
+   *
+   * A JUDGEMENT IS ABOUT A SENTENCE, NOT ABOUT A SLOT. Recording only the statement id made the
+   * judgement survive an edit, because the id names the node and a revision rewrites the text under
+   * it: the same citation then asserted support for a sentence nobody had read. This is what a
+   * revision changes, and what `checkStatementBindings` compares.
+   */
+  readonly statementSha256: string
   /** The retrieved source's own id. */
   readonly literatureRef: string
   /** The stable key the manuscript cites, minted once and never re-derived from the title. */
@@ -98,7 +110,14 @@ export interface CitationUse {
   readonly location: string
   /** The passage itself, quoted. */
   readonly quote: string
-  /** SHA-256 of `quote`, so the passage a judgement was made on can be checked later. */
+  /**
+   * THE EVIDENCE VERSION: SHA-256 of `quote`, the passage the judgement was made on.
+   *
+   * Separate from the statement's content version because the two change for different reasons. A
+   * corpus that corrects or replaces an excerpt changes what the source says without touching the
+   * manuscript, and a judgement made about the old excerpt establishes nothing about the new one —
+   * so this is compared against the evidence as it stands, not against the evidence that was there.
+   */
   readonly quoteSha256: string
   /** How the source stands in relation to the statement. */
   readonly support: CitationSupport
@@ -130,6 +149,14 @@ export type CitationRefusalCode =
   | 'citation-entry-uncited'
   /** A cited source has no reviewed judgement about what it establishes. */
   | 'citation-unreviewed-source'
+  /** A reviewed source no sentence cites, so the paper failed to state a position it holds. */
+  | 'citation-source-uncited'
+  /** A binding names a statement the manuscript no longer carries. */
+  | 'citation-statement-missing'
+  /** A binding was made about a version of the statement the manuscript has since rewritten. */
+  | 'citation-statement-changed'
+  /** The passage a judgement was made on is not the passage the source now holds. */
+  | 'citation-evidence-changed'
 
 /** One refusal, naming what is wrong. */
 export interface CitationRefusal {
@@ -267,22 +294,102 @@ export function reviewedSources(): ReadonlyMap<string, SourceRecord> {
 }
 
 /**
- * The citations a claim version's reviewed sources support, as bindings.
+ * One statement in the manuscript: a node with an identity, a text, and a version of that text.
  *
- * ONE BINDING PER REVIEWED SOURCE, and the binding carries what the reviewer read rather than what the
- * retrieval returned: the excerpt, where it was read from, and the verdict. A source the reviewer
- * judged does NOT support the claim becomes a `contradicted` binding — it is a real citation, and
- * dropping it would leave the manuscript unable to state the position it disagrees with.
+ * IDENTITY, TEXT AND VERSION ARE THREE FACTS, and collapsing them is how a citation comes to assert
+ * support for a sentence nobody read.
  *
- * @param input - the claim sentence the judgements are bound to, and the statement they are for.
- * @returns the bindings, in cite-key order.
+ *   - `statementId` names the NODE. It is minted when the statement is first located and it survives a
+ *     revision, because a reader comparing two drafts needs to see that THIS node's text changed —
+ *     an id derived from the text would read as one statement deleted and another created.
+ *   - `text` is what the node currently says.
+ *   - `textSha256` is the CONTENT VERSION. A support judgement records the version it was made about,
+ *     and `checkStatementBindings` compares the two, so a rewrite invalidates the judgement rather
+ *     than silently transferring it to text nobody has read.
  */
-export function citationUsesOf(input: {
-  readonly claimRef: string
+export interface Statement {
   readonly statementId: string
-}): ReadonlyArray<CitationUse> {
+  /** The section the sentence sits in, for locating it and for a reader's benefit. */
+  readonly sectionId: string
+  readonly text: string
+  readonly textSha256: string
+}
+
+/**
+ * What a reviewer established about one source, BEFORE it is attached to a statement.
+ *
+ * THE JUDGEMENT AND THE ATTACHMENT ARE TWO STEPS. This is what the reviewed corpus holds — the
+ * passage, where it was read, the verdict, who judged it — and it says nothing about where in a
+ * manuscript the source will be cited. The attachment is a separate operation over the written prose,
+ * which is the only order in which "a citation is for a sentence" can be true: a judgement made before
+ * the sentence exists can only be about a slot.
+ */
+export interface SourceJudgement {
+  readonly literatureRef: string
+  readonly citeKey: string
+  readonly location: string
+  readonly quote: string
+  readonly quoteSha256: string
+  readonly support: CitationSupport
+  readonly readScope: CitationReadScope
+  readonly access: CitationAccess
+  readonly judgedBy: string
+}
+
+/** One sentence of a section, as a location candidate. */
+function sentencesWithMarkers(bodyText: string): ReadonlyArray<string> {
+  return bodyText
+    .split(/(?<=[.!?])\s+/u)
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.length > 0 && citedKeysIn(sentence).length > 0)
+}
+
+/**
+ * Where each statement IS, in one manuscript: a sentence that carries a citation marker.
+ *
+ * LOCATING IS NOT IDENTIFYING. This scan finds the sentence a statement currently occupies; it does
+ * not decide what the statement is or whether a judgement about it still holds. The node id is minted
+ * from the section and the sentence's ordinal AMONG CITED SENTENCES, so inserting an uncited sentence
+ * shifts nothing and rewriting a cited one keeps its node — which is what makes "this node's text
+ * changed" visible rather than "this node vanished".
+ *
+ * @param sections - the manuscript's sections, in order.
+ * @returns one statement per cited sentence, in the order a reader meets them.
+ */
+export function locateStatements(
+  sections: ReadonlyArray<{ readonly id: string; readonly bodyText: string }>,
+): ReadonlyArray<Statement> {
+  const statements: Statement[] = []
+  for (const section of sections) {
+    if (section.id === 'references') continue
+    let ordinal = 0
+    for (const sentence of sentencesWithMarkers(section.bodyText)) {
+      ordinal += 1
+      statements.push({
+        statementId: `stmt-${section.id}-${String(ordinal)}`,
+        sectionId: section.id,
+        text: sentence,
+        textSha256: sha256(sentence),
+      })
+    }
+  }
+  return statements
+}
+
+/**
+ * SHA-256 of one piece of text, as the content and evidence versions are computed.
+ *
+ * @param text - the text.
+ * @returns its SHA-256, hex.
+ */
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/** What the reviewed corpus establishes about one claim version's sources, unattached. */
+export function judgementsFor(claimRef: string): ReadonlyArray<SourceJudgement> {
   const sources = reviewedSources()
-  return assessmentsFor(input.claimRef)
+  return assessmentsFor(claimRef)
     .flatMap((assessment) => {
       const source = sources.get(assessment.sourceDoi)
       const corpus = corpusSource(assessment.sourceDoi)
@@ -292,7 +399,6 @@ export function citationUsesOf(input: {
       // refuses a `supported` claim resting on one.
       const readScope: CitationReadScope = corpus.sourceAccess === 'full-text' ? 'full-text' : 'abstract-only'
       return [{
-        statementId: input.statementId,
         literatureRef: source.id,
         citeKey: citeKeyOf(source),
         // WHERE IT WAS READ, as the corpus recorded it: the URI the text was fetched from and the
@@ -307,6 +413,107 @@ export function citationUsesOf(input: {
       }]
     })
     .sort((left, right) => left.citeKey.localeCompare(right.citeKey))
+}
+
+/**
+ * Attach each judgement to the statement that cites its source.
+ *
+ * A JUDGEMENT IS ATTACHED, NEVER INHERITED. The binding this produces records the CONTENT VERSION of
+ * the sentence it was attached to and the EVIDENCE VERSION of the passage it rests on, both read at
+ * this moment — so a later revision changes what the statement says, `checkStatementBindings` sees the
+ * disagreement, and the citation is refused until somebody reads the new sentence. Nothing here
+ * decides that a judgement still holds; it records what it held about.
+ *
+ * @param judgements - what the reviewed corpus establishes about this claim's sources.
+ * @param statements - where the manuscript's cited sentences are.
+ * @returns the bindings, in cite-key order, and the judgements no statement cited.
+ */
+export function bindJudgements(
+  judgements: ReadonlyArray<SourceJudgement>,
+  statements: ReadonlyArray<Statement>,
+): {
+  readonly uses: ReadonlyArray<CitationUse>
+  readonly uncited: ReadonlyArray<SourceJudgement>
+} {
+  const byCiteKey = new Map(judgements.map(judgement => [judgement.citeKey, judgement]))
+  const uses: CitationUse[] = []
+  const cited = new Set<string>()
+  for (const statement of statements) {
+    for (const key of citedKeysIn(statement.text)) {
+      const judgement = byCiteKey.get(key)
+      if (judgement === undefined || cited.has(key)) continue
+      cited.add(key)
+      uses.push({
+        statementId: statement.statementId,
+        statementSha256: statement.textSha256,
+        literatureRef: judgement.literatureRef,
+        citeKey: judgement.citeKey,
+        location: judgement.location,
+        quote: judgement.quote,
+        quoteSha256: judgement.quoteSha256,
+        support: judgement.support,
+        readScope: judgement.readScope,
+        access: judgement.access,
+        judgedBy: judgement.judgedBy,
+      })
+    }
+  }
+  return {
+    uses: uses.sort((left, right) => left.citeKey.localeCompare(right.citeKey)),
+    uncited: judgements.filter(judgement => !cited.has(judgement.citeKey)),
+  }
+}
+
+/**
+ * Whether every binding still holds against the manuscript and the evidence as they stand.
+ *
+ * THE THREE WAYS A JUDGEMENT OUTLIVES WHAT IT WAS MADE ABOUT, and each is refused rather than
+ * repaired: the sentence the binding names is gone; the sentence is there but says something else; or
+ * the passage the judgement rests on is not the passage the source now holds. A re-binding is not the
+ * remedy for any of them — a judgement is a reading somebody made, and the only thing that can replace
+ * it is another reading.
+ *
+ * @param uses - the bindings the manuscript records.
+ * @param statements - where the manuscript's cited sentences are now.
+ * @param judgements - what the reviewed corpus establishes now.
+ * @returns one refusal per stale binding, or an empty list.
+ */
+export function checkStatementBindings(
+  uses: ReadonlyArray<CitationUse>,
+  statements: ReadonlyArray<Statement>,
+  judgements: ReadonlyArray<SourceJudgement>,
+): ReadonlyArray<CitationRefusal> {
+  const byId = new Map(statements.map(statement => [statement.statementId, statement]))
+  const byCiteKey = new Map(judgements.map(judgement => [judgement.citeKey, judgement]))
+  const refusals: CitationRefusal[] = []
+  for (const use of uses) {
+    const statement = byId.get(use.statementId)
+    if (statement === undefined) {
+      refusals.push({
+        code: 'citation-statement-missing',
+        detail: `'${use.citeKey}' is bound to '${use.statementId}', which this manuscript does not`
+          + ' carry — the sentence it was judged against is gone',
+      })
+      continue
+    }
+    if (statement.textSha256 !== use.statementSha256) {
+      refusals.push({
+        code: 'citation-statement-changed',
+        detail: `'${use.citeKey}' was judged against a version of '${use.statementId}' that has since`
+          + ' been rewritten, so the judgement is about a sentence nobody read — the source has to be'
+          + ' re-read against what the manuscript now says',
+      })
+    }
+    const judgement = byCiteKey.get(use.citeKey)
+    if (judgement !== undefined && judgement.quoteSha256 !== use.quoteSha256) {
+      refusals.push({
+        code: 'citation-evidence-changed',
+        detail: `'${use.citeKey}' was judged on a passage the source no longer holds — the evidence`
+          + ' this citation rests on has changed, so the judgement has to be made again',
+      })
+    }
+  }
+  return refusals
 }
 
 /**
@@ -330,14 +537,14 @@ const MAX_QUOTE_LENGTH = 2000
  * @returns one refusal per problem, or an empty list when the binding may be recorded.
  */
 export function checkCitationUse(
-  use: CitationUse,
+  use: SourceJudgement,
   source: SourceRecord | undefined,
 ): ReadonlyArray<CitationRefusal> {
   const refusals: CitationRefusal[] = []
   if (use.quote.trim() === '') {
     refusals.push({
       code: 'citation-no-passage',
-      detail: `'${use.citeKey}' cites ${use.literatureRef} for '${use.statementId}' without quoting`
+      detail: `'${use.citeKey}' cites ${use.literatureRef} without quoting a passage`
         + ' the passage it was read from — a citation nothing can be checked against establishes'
         + ' nothing',
     })
@@ -408,7 +615,9 @@ export function citeKeyOf(source: Pick<SourceRecord, 'id'>): string {
  * @param uses - every binding the manuscript records.
  * @returns one refusal per duplicated key, or an empty list.
  */
-export function checkCitationKeys(uses: ReadonlyArray<CitationUse>): ReadonlyArray<CitationRefusal> {
+export function checkCitationKeys(
+  uses: ReadonlyArray<{ readonly citeKey: string }>,
+): ReadonlyArray<CitationRefusal> {
   const seen = new Set<string>()
   const refusals: CitationRefusal[] = []
   for (const use of uses) {
