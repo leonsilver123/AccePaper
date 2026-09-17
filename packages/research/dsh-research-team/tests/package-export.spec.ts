@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
+import { resolveResearchProfile } from '../src/runner/research-profile.ts'
 import { checkPackagedFiles, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
 
 const created: string[] = []
@@ -300,6 +301,48 @@ describe('a package says whether it is the final one or a draft', () => {
     // The evaluation profile alone keeps it a draft: this is a REAL run under a non-production
     // profile, and no amount of ticking its steps makes its material publishable.
     expect(manifest.checks.find(check => check.code === 'production-evidence')?.passed).toBe(false)
+  })
+})
+
+describe('the metrics a package states its study was conducted under', () => {
+  it('names the required metrics of a simulation study, and the ones it does not have', async () => {
+    // REQUIRED AND NOT-APPLICABLE ARE DIFFERENT FACTS, and the package is where a reader meets them:
+    // a review's metric being absent from a simulation study's package must not read as a gap in the
+    // study. The profile travels in the run's frozen spec, so this is read from the run.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      researchProfile: resolveResearchProfile({ researchType: 'simulation-study' }),
+    })
+    const declared = planRunPackage(store, run, 'evaluation').manifest.declaredMetrics
+    expect(declared?.map(metric => [metric.key, metric.required])).toEqual([
+      ['min-ttc-seconds', true],
+      ['string-stability-index', true],
+      ['citation-coverage', false],
+    ])
+    // The package states what the numbers MEAN, so a reader does not have to know the registry.
+    expect(declared?.[0]?.direction).toBe('higher-is-better')
+    expect(declared?.[0]?.unit).toBe('s')
+    expect(declared?.[0]?.interpretation.length).toBeGreaterThan(40)
+  })
+
+  it('names its own type\'s metric for a literature review', async () => {
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      researchProfile: resolveResearchProfile({ researchType: 'literature-review' }),
+    })
+    const declared = planRunPackage(store, run, 'evaluation').manifest.declaredMetrics
+    expect(declared?.map(metric => [metric.key, metric.required])).toEqual([
+      ['citation-coverage', true],
+      ['min-ttc-seconds', false],
+      ['string-stability-index', false],
+    ])
+  })
+
+  it('states none for a run that recorded no profile, rather than a default', async () => {
+    // A RUN WITH NO PROFILE HAS NO DECLARED METRICS. Filling the field with the shipped default would
+    // attribute a configuration to a run that never recorded one.
+    const { store, run } = await realRun()
+    expect(planRunPackage(store, run, 'evaluation').manifest.declaredMetrics).toBeUndefined()
   })
 })
 

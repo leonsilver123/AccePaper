@@ -91,7 +91,10 @@ import {
   proposalInstruction,
 } from './runner/direction-proposals.ts'
 import { MEASURED_METRIC } from './runner/platoon-sim.ts'
+import { requireMetricDeclaration } from './runner/metrics.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
+import { resolveResearchProfile } from './runner/research-profile.ts'
+import type { JournalProfile, ResearchProfile } from './runner/research-profile.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
 import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
@@ -673,22 +676,17 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   async runPipeline(options: ResearchPipelineOptions = {}): Promise<ResearchRunSnapshot> {
     const store: ResearchRunStore = new Map()
-    const toolDeps = this.hostToolDeps()
-    const proseWriter = this.hostProseWriter()
-    const casePackInputs = this.hostCasePackInputs()
-    const stepTimeoutMs = this.hostStepTimeoutMs()
+    // ONE RESOLUTION, SHARED WITH {@link startRun}. This used to hand-list the same deployment readers
+    // `driveOptions` resolves, which is the duplication that list was extracted to remove: a reader
+    // added to one entry and not the other produced two studies under different configurations, and
+    // the run recorded nothing about which one it was. `evidenceProfile` is read back out below for
+    // the snapshot, from the same resolution.
     const evidenceProfile = this.hostEvidenceProfile()
-    const revisionRounds = this.hostRevisionRounds()
     const run = await runT19B(store, {
-      evidenceProfile,
-      ...(revisionRounds !== undefined ? { revisionRounds } : {}),
+      ...this.driveOptions(),
       ...(options.domainDirection !== undefined ? { domainDirection: options.domainDirection } : {}),
       ...(options.studyPlan !== undefined ? { studyPlan: options.studyPlan } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
-      ...(toolDeps !== undefined ? { toolDeps } : {}),
-      ...(proseWriter !== undefined ? { proseWriter } : {}),
-      ...(casePackInputs !== undefined ? { casePackInputs } : {}),
-      ...(stepTimeoutMs !== undefined ? { timeoutMs: stepTimeoutMs } : {}),
       // Persist as the run goes. Saving only when it finished lost every completed step to a
       // process death — including the steps that cost model calls — and the snapshot store's own
       // lock cannot compensate for a checkpoint that never happened.
@@ -761,6 +759,28 @@ export class ResearchTeamService extends TypertRemoteService {
   private hostEvidenceProfile(): EvidenceProfile {
     const research = this.ctx.get('research') as { evidenceProfile?: EvidenceProfile } | undefined
     return research?.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE
+  }
+
+  /**
+   * The research profile this deployment declared, resolved once per run.
+   *
+   * Read off the research engine the way the evidence profile is, because the research type and the
+   * journal are deployment facts recorded in `cordis.yml` and never request fields: a client must not
+   * be able to declare its own run a literature review and so change which metrics the manuscript is
+   * judged against. Resolution is where a misconfiguration FAILS — an unknown type throws at the start
+   * of the run, before anything is created — and its result travels into the run's frozen spec.
+   *
+   * @returns the resolved profile.
+   * @throws {Error} when the deployment names a type this build does not know, or a rule with no source.
+   */
+  private hostResearchProfile(): ResearchProfile {
+    const research = this.ctx.get('research') as
+      | { researchType?: string; journal?: JournalProfile }
+      | undefined
+    return resolveResearchProfile({
+      ...(research?.researchType === undefined ? {} : { researchType: research.researchType }),
+      ...(research?.journal === undefined ? {} : { journal: research.journal }),
+    })
   }
 
   /**
@@ -1429,6 +1449,14 @@ export class ResearchTeamService extends TypertRemoteService {
    * @returns the resolved tool deps, prose writer, case pack, timeout, profile and revision bound.
    */
   private driveOptions(): DriveOptions {
+    // THE STUDY'S OWN METRIC IS CHECKED BEFORE ANY RUN USES IT. The registry says what
+    // `min-ttc-seconds` IS — its unit, and which way is better — and the study states the same two
+    // fields again where it measures the quantity. Two declarations of one metric is a drift the
+    // types cannot see, and a drifted study would report a value every later reader takes under the
+    // registry's semantics: milliseconds compared as seconds, or a fall in time-to-collision written
+    // up as an improvement. It is refused here, where the run's configuration is resolved — before
+    // the run exists.
+    requireMetricDeclaration(MEASURED_METRIC)
     const toolDeps = this.hostToolDeps()
     const proseWriter = this.hostProseWriter()
     const casePackInputs = this.hostCasePackInputs()
@@ -1436,6 +1464,7 @@ export class ResearchTeamService extends TypertRemoteService {
     const revisionRounds = this.hostRevisionRounds()
     return {
       evidenceProfile: this.hostEvidenceProfile(),
+      researchProfile: this.hostResearchProfile(),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),

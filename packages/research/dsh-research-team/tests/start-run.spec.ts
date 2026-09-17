@@ -99,6 +99,8 @@ async function boot(options: {
       readonly channel: 'llm' | 'deterministic'
       write(request: unknown): Promise<{ text: string; provider: string; model: string }>
     }
+    /** The research type this deployment is configured as. */
+    researchType?: string
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   }
   directoryEntries(name: string): ReadonlyArray<string>
@@ -132,6 +134,7 @@ async function boot(options: {
       readonly channel: 'llm' | 'deterministic'
       write(request: unknown): Promise<{ text: string; provider: string; model: string }>
     }
+    researchType?: string
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   } = {}
   if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
@@ -1018,6 +1021,59 @@ describe('a late arrival cannot rewrite what has already been published', () => 
       const view = (await host.service.listRevisions({ runId: started.runId }))
         .find(entry => entry.requestId === open.requestId)
       expect(view?.candidates).toEqual([])
+    } finally {
+      await host.dispose()
+    }
+  })
+})
+
+describe('the research profile a run is conducted under', () => {
+  it('is resolved at the start and frozen into the run, so reconfiguring does not change it', async () => {
+    // WHAT DRIFT WOULD COST: a deployment switched from a simulation study to a literature review
+    // while a study is under way would change which metrics that study has and which venue it is
+    // written for — mid-run, with nothing on the run saying so. The profile therefore travels in the
+    // spec, the same way the plan does, and the run's own file is what a restart reads.
+    const root = snapshotRoot()
+    const first = await boot({ snapshotDirectory: root })
+    first.engine.researchType = 'literature-review'
+    let runId = ''
+    try {
+      runId = (await first.service.startRun({ commandId: 'command-profile' })).runId
+      await untilStopped(first.service, runId)
+    } finally {
+      await first.dispose()
+    }
+
+    const specOf = (): { researchProfile?: { researchType: string; metrics: { required: ReadonlyArray<{ key: string }> } } } =>
+      (JSON.parse(readFileSync(join(root, runId, 'research-run-snapshot.json'), 'utf8')) as {
+        run: { spec: { researchProfile?: { researchType: string; metrics: { required: ReadonlyArray<{ key: string }> } } } }
+      }).run.spec
+
+    // FROZEN AS CONFIGURED: the review's metric, and not the simulation study's.
+    const frozen = specOf().researchProfile
+    expect(frozen?.researchType).toBe('literature-review')
+    expect(frozen?.metrics.required.map(metric => metric.key)).toEqual(['citation-coverage'])
+
+    // AND A LATER CONFIGURATION DOES NOT MOVE IT. A second deployment on the same directory is
+    // configured differently, which is exactly what a reconfiguration looks like from the run's side.
+    const second = await boot({ snapshotDirectory: root })
+    second.engine.researchType = 'simulation-study'
+    try {
+      await second.service.openStoredRun({ runId })
+      expect(specOf().researchProfile?.researchType).toBe('literature-review')
+    } finally {
+      await second.dispose()
+    }
+  })
+
+  it('refuses a research type this build does not know, at the start of the run', async () => {
+    // MISCONFIGURATION FAILS WHERE IT CAN STILL BE FIXED, not at the step that happens to read it.
+    const root = snapshotRoot()
+    const host = await boot({ snapshotDirectory: root })
+    host.engine.researchType = 'field-trial'
+    try {
+      await expect(host.service.startRun({ commandId: 'command-bad-profile' }))
+        .rejects.toThrow(/not a research type this build knows/)
     } finally {
       await host.dispose()
     }

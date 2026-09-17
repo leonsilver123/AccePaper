@@ -17,6 +17,7 @@ import type {
 import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import type { CasePackRunInput } from './case-pack.ts'
 import type { StudyPlan } from './study-plan.ts'
+import type { ResearchProfile } from './research-profile.ts'
 import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } from './registry.ts'
 
 /** Per-artifact producer evidence for one step. */
@@ -75,6 +76,15 @@ export interface DriveOptions {
    * {@link DriveOptions.domainDirection} replacing its direction.
    */
   readonly studyPlan?: StudyPlan
+  /**
+   * The research type, the venue profile and the metrics this run is conducted under.
+   *
+   * FROZEN INTO THE RUN'S SPEC by the driver, so a deployment reconfigured while a study is under way
+   * does not change what that study is. Absent means the deployment stated none, and the driver's
+   * default (`simulation-study`) is used — which is a configuration, not a silent fallback: the
+   * service resolves it before the run starts.
+   */
+  readonly researchProfile?: ResearchProfile
   /**
    * Milliseconds one step may run, overriding the per-step value the registry declares.
    *

@@ -140,6 +140,25 @@ export interface RunPackageManifest {
    * the package contains, so the package states them without anyone having to run a separate tool.
    */
   readonly qualityFindings: ReadonlyArray<PaperQualityFinding>
+  /**
+   * What the metrics in this package mean, and which of them the run's own type required.
+   *
+   * The registry is the deployment's declaration of each metric — its unit, which way is better, and
+   * what a movement means — and the run froze the profile it was driven under, so this is READ from
+   * the run rather than looked up now: a package exported after the deployment was reconfigured still
+   * states the metrics its study was actually conducted under. `required: false` is NOT "missing".
+   * It is a metric that belongs to another research type, and a view that collapsed the two would
+   * report a literature review as failing to measure a traffic quantity it never had.
+   *
+   * Absent when the run recorded no profile, which a run driven without one does.
+   */
+  readonly declaredMetrics?: ReadonlyArray<{
+    readonly key: string
+    readonly unit: string
+    readonly direction: string
+    readonly required: boolean
+    readonly interpretation: string
+  }>
   readonly note: string
 }
 
@@ -214,6 +233,59 @@ function metricOf(
   const changePct = typeof measured?.variantImprovementPct === 'number' ? measured.variantImprovementPct : undefined
   if (typeof name !== 'string' || direction === undefined || changePct === undefined) return undefined
   return { name, direction, changePct }
+}
+
+/**
+ * Whether a value read back from a record is an array of records.
+ *
+ * A predicate rather than `Array.isArray` at each call site: that built-in narrows to `any[]` whatever
+ * the value's declared type was, which would make every field read off an element an unchecked
+ * `any` — on a value that came off disk.
+ *
+ * @param value - the value read from the record.
+ * @returns whether every element is a record.
+ */
+function isRecordArray(value: unknown): value is ReadonlyArray<Record<string, unknown>> {
+  return Array.isArray(value)
+    && value.every((entry: unknown) => typeof entry === 'object' && entry !== null && !Array.isArray(entry))
+}
+
+/**
+ * The metrics the run was conducted under, read from the profile it froze into its own spec.
+ *
+ * READ FROM THE RUN, NEVER RESOLVED NOW. The deployment's configuration can change between the run
+ * and the export — that is what freezing the profile into the spec prevents — so a package that
+ * looked the profile up again would describe a study under metrics its run never had. The shape is
+ * checked rather than assumed because the spec is a durable record read back from disk.
+ *
+ * @param store - the run store.
+ * @param runId - the run the package is for.
+ * @returns one entry per declared metric, or undefined when the run recorded no usable profile.
+ */
+function declaredMetricsOf(
+  store: ResearchRunStore,
+  runId: string,
+): RunPackageManifest['declaredMetrics'] {
+  const spec = getRunSnapshot(store, runId).spec
+  const metrics = (spec['researchProfile'] as { readonly metrics?: unknown } | undefined)?.metrics
+  const required = isRecordArray((metrics as { required?: unknown } | undefined)?.required)
+    ? (metrics as { required: ReadonlyArray<Record<string, unknown>> }).required
+    : undefined
+  const notApplicable = isRecordArray((metrics as { notApplicable?: unknown } | undefined)?.notApplicable)
+    ? (metrics as { notApplicable: ReadonlyArray<Record<string, unknown>> }).notApplicable
+    : undefined
+  if (required === undefined || notApplicable === undefined) return undefined
+  const declared = [
+    ...required.map(definition => ({ definition, required: true })),
+    ...notApplicable.map(definition => ({ definition, required: false })),
+  ].flatMap(({ definition, required: isRequired }) => {
+    const { key, unit, direction, interpretation } = definition
+    return typeof key === 'string' && typeof unit === 'string'
+      && typeof direction === 'string' && typeof interpretation === 'string'
+      ? [{ key, unit, direction, required: isRequired, interpretation }]
+      : []
+  })
+  return declared.length === 0 ? undefined : declared
 }
 
 /** A JSON file body: sanitized, pretty-printed, newline-terminated. */
@@ -396,6 +468,8 @@ export function planRunPackage(
     ...(metric === undefined ? {} : { metric }),
   })
 
+  const declaredMetrics = declaredMetricsOf(store, runId)
+
   const manifest: RunPackageManifest = {
     runId,
     // Read from the RUN, not derived from the files: the revision is what the artifacts in this
@@ -421,6 +495,7 @@ export function planRunPackage(
     checks,
     ...(approval === undefined ? {} : { approval }),
     qualityFindings,
+    ...(declaredMetrics === undefined ? {} : { declaredMetrics }),
     note:
       'Paths are relative to this package root. `sha256` is over the written bytes. The manifest '
       + 'records no absolute directory and no credential. `state` is `final` only when every entry '

@@ -462,6 +462,10 @@ function runSpecOf(plan: StudyPlan, planSource: 'caller' | 'default', opts: Driv
     studyPlan: plan,
     planSource,
     evidenceProfile: opts.evidenceProfile ?? DEFAULT_EVIDENCE_PROFILE,
+    // THE RESEARCH PROFILE IS FROZEN WITH THE RUN, not read again later: a deployment that is
+    // reconfigured while a study is under way must not change which metrics that study has or which
+    // venue it is being written for. It travels in the spec for the same reason the plan does.
+    ...(opts.researchProfile === undefined ? {} : { researchProfile: opts.researchProfile }),
     ...(opts.timeoutMs !== undefined ? { stepTimeoutMs: opts.timeoutMs } : {}),
   }
 }
