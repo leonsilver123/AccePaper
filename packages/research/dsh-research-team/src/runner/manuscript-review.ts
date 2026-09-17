@@ -179,6 +179,25 @@ function quantitiesIn(text: string, units: ReadonlySet<string>): ReadonlyArray<n
 const DECLARED_COUNT_RANGE = 20
 
 /**
+ * The labels a sentence uses to hand a statement to a source.
+ *
+ * Both forms the pipeline sees: the draft cites with `[@cite-key]` markers, and E1 renders those as
+ * the numbers the reference list assigned (`[3]`). A sentence carrying one is stating what a source
+ * says; a sentence carrying none is stating what the run found.
+ */
+const CITED_IN_SENTENCE = /\[@[^[\]\s]+\]|\[[0-9,\s–-]+\]/u
+
+/**
+ * The sentences of a section body, in order.
+ *
+ * @param text - the section's prose.
+ * @returns one entry per sentence.
+ */
+function sentencesOf(text: string): ReadonlyArray<string> {
+  return text.split(/(?<=[.!?])\s+/u).filter(sentence => sentence.trim().length > 0)
+}
+
+/**
  * Every number the run's own evidence can account for.
  *
  * The record's six quantities in both their rounded and their raw form, the threshold the claim
@@ -350,12 +369,28 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
     // this check reads the sections that state results, and the check that matters for a reference
     // list is `red-citation`, which compares what the prose cites against what the list holds.
     if (section.id === 'references') continue
-    for (const [index, value] of quantitiesIn(withoutCitations(section.bodyText), units).entries()) {
-      if (accountable.has(value)) continue
-      // The findings name the section and the value, so a reader can find the sentence. The
-      // ordinal is not a quotation: quoting the sentence would put the manuscript's own text into
-      // the audit trail, and the number is what a reviewer needs to look for.
-      untraceable.push(`${section.id}#${String(index + 1)}=${String(value)}`)
+    // A NUMBER A SENTENCE ATTRIBUTES TO A SOURCE IS THAT SOURCE'S, NOT THE RUN'S. A paper positions
+    // itself in its literature, and the literature states magnitudes: the real run that produced this
+    // rule was refused for `70`, from "an improvement appears only above a 70 % penetration rate
+    // [@cite-10.1155/2017/3082781]" — a number the sentence hands to the source it names, in a
+    // manuscript whose own finding it reports correctly. Refusing it forbids citing numbers at all,
+    // which is what cost the previous runs.
+    //
+    // THE COST, stated: a fabricated magnitude can ride inside a cited sentence. That failure has a
+    // home — the C channel's threshold question and the quality baseline's `sources-support-statements`
+    // reviewer item both ask whether the source says what the sentence claims — and this check's
+    // question is a different one: is every number the RUN states its own.
+    let ordinal = 0
+    for (const sentence of sentencesOf(section.bodyText)) {
+      if (CITED_IN_SENTENCE.test(sentence)) continue
+      for (const value of quantitiesIn(withoutCitations(sentence), units)) {
+        ordinal += 1
+        if (accountable.has(value)) continue
+        // The findings name the section and the value, so a reader can find the sentence. The
+        // ordinal is not a quotation: quoting the sentence would put the manuscript's own text into
+        // the audit trail, and the number is what a reviewer needs to look for.
+        untraceable.push(`${section.id}#${String(ordinal)}=${String(value)}`)
+      }
     }
   }
   if (untraceable.length > 0) {

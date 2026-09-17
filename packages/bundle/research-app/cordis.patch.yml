@@ -114,7 +114,11 @@
         prose:
           kind: llm
           provider: deepseek-official
-          model: deepseek-v4-pro
+          # THE FLASH ROUTE. This deployment writes its prose with the cheaper model: the research
+          # steps ask for structured, evidence-bound text rather than for open-ended reasoning, and a
+          # run issues one call per section — so the cost of the pro route is paid many times over
+          # for text whose quality is judged by the gates downstream, not by the model's own reach.
+          model: deepseek-v4-flash
           # Milliseconds one write may wait for its loop to go idle. D3-writing drafts every
           # section in ONE step — one call per section, issued together — so the ceiling has to
           # cover the slowest of them under that concurrency, not a single call. At the 120 s
@@ -175,4 +179,4 @@
 #        prose:
 #          kind: llm
 #          provider: deepseek-official
-#          model: deepseek-v4-pro
+#          model: deepseek-v4-flash

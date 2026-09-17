@@ -183,6 +183,42 @@ describe('a clean manuscript passes every check', () => {
     expect(positionOf(input, 'red-stat')).toBe('support')
   })
 
+  it('does not read a magnitude the sentence hands to a cited source as the run’s own', () => {
+    // THE FOURTH THING A REAL RUN TAUGHT THIS CHECK, and the second one to cost a model run. The
+    // run's introduction positioned itself in its literature — "an improvement appears only above a
+    // 70 % penetration rate [@cite-10.1155/2017/3082781]" — and the check read `70` as a number the
+    // run never measured. Refusing it forbids citing magnitudes at all, which is what a paper does.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'introduction',
+          heading: 'Introduction',
+          bodyText:
+            'A third study reports that an improvement appears only above a 70 % penetration rate'
+            + ' [@cite-10.1155/2017/3082781]. That threshold was read from an abstract.',
+        },
+      ],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('support')
+  })
+
+  it('still refuses the same magnitude when no citation claims it', () => {
+    // THE OTHER DIRECTION, and the reason the rule is "handed to a source" rather than "a
+    // percentage in a paragraph that also cites something": the sentence below states the number
+    // as its own finding and cites nothing, so it must be one the run measured.
+    const input = cleanInput({
+      sections: [
+        {
+          id: 'introduction',
+          heading: 'Introduction',
+          bodyText: 'A third study reports that an improvement appears only above a 70 % penetration rate.',
+        },
+      ],
+    })
+    expect(positionOf(input, 'red-stat')).toBe('refute')
+    expect(findingsOf(input, 'red-stat')).toContain('70')
+  })
+
   it('still counts a quantity that carries its unit', () => {
     // The cost of that rule, stated: a bare integer above the count range is not checked. A number
     // with a unit still is, which is what the shipped study's sections state.

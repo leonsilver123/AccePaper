@@ -148,7 +148,10 @@ describe.skipIf(PYTHON === undefined)('the formats a submission actually needs, 
     expect(text).toContain('A manuscript for a journal')
     expect(text).toContain('The introduction states the claim.')
     expect(text).toContain('The measured comparison.')
-  })
+    // PANDOC IS SPAWNED HERE and the suite runs its files in parallel with other gate processes: at
+    // the 5 s default this case was measured failing under load and passing alone, which is a defect
+    // in the spec rather than in the writer.
+  }, 120_000)
 
   it('writes LaTeX source carrying the same sections and the same figure', async () => {
     const compiler = await PandocCompiler.probe({ executable: 'pandoc', timeoutMs: 120_000 })
@@ -186,7 +189,7 @@ describe.skipIf(PYTHON === undefined)('the formats a submission actually needs, 
     expect(result.compiled.assets.embedded).toContain('Figure 1')
     expect(result.compiled.assets.dropped).toEqual([])
     expect(result.compiled.files.map(file => file.path)).toContain('assets/figure-1.png')
-  })
+  }, 120_000)
 
   it('carries BOTH floats — the data figure and the drawn roadmap — into one DOCX', async () => {
     // THE SECOND FLOAT IS THE ONE THAT USED TO GO MISSING. A roadmap the deployment's provider drew
