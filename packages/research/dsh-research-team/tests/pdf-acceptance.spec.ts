@@ -251,7 +251,15 @@ describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floa
     // case that would have caught it: `floatsDropped` named `Figure 2` for every format.
     const provider = await MatplotlibProvider.probe({ executable: DRAWER ?? 'python', timeoutMs: 300_000 })
     expect(provider).toBeDefined()
-    const compiler = await PandocCompiler.probe({ executable: 'pandoc', timeoutMs: 120_000 })
+    // THE ENGINE TOO, when this machine has one: E1 compiles FOUR formats under such a deployment
+    // (the three deliverables plus the PDF), and the deployment that stopped inside E1 — a real run,
+    // 2026-09-18 — is the only place that combination was ever exercised. A compile case that left
+    // the engine out would keep not covering it.
+    const compiler = await PandocCompiler.probe({
+      executable: 'pandoc',
+      ...(ENGINE === undefined ? {} : { latexEngine: ENGINE }),
+      timeoutMs: 180_000,
+    })
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, {
       // The real library for the floats and the real toolchain for the compile: neither is stubbed,
@@ -274,6 +282,8 @@ describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floa
       }
     }
     expect(manuscript.compilation.tool).toBe('pandoc')
+    expect(compiler.formats).toContain('docx')
+    if (ENGINE !== undefined) expect(compiler.formats).toContain('pdf')
     expect(manuscript.compilation.refusals).toEqual([])
     // BOTH FLOATS, IN BOTH FORMATS THAT NEED A RASTER. HTML takes the SVG either way; LaTeX and DOCX
     // can only carry a picture, which is what the provider's raster is for.

@@ -22,7 +22,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // THE SEAM IS SATISFIED STRUCTURALLY, the way the prose channel is: this package does not import the
 // research-team package, which would invert the dependency direction between them (`core` ← `tools` ←
@@ -98,6 +98,36 @@ export type EngineRunner = (invocation: {
 const defaultEngineRunner: EngineRunner = async ({ executable, workDir, texPath, timeoutMs }) => {
   const result = await runIn(executable, ['-interaction=batchmode', '-halt-on-error', texPath], '', timeoutMs, workDir)
   return result
+}
+
+/**
+ * Why a LaTeX engine failed, read from the transcript it wrote.
+ *
+ * BATCH MODE IS WHY THIS EXISTS. The engine is run with `-interaction=batchmode`, so it prints its
+ * banner and nothing else: the reason it stopped — a missing package, a malformed table, an
+ * unicode character it cannot set — goes to `<jobname>.log`. A real deployment's first PDF refused
+ * with `exited 1: This is pdfTeX … entering extended mode`, which names neither the file nor the
+ * problem; the same run's log said `File 'footnote.sty' not found`. The engine's own words are the
+ * only useful part of this message, so they are what it carries.
+ *
+ * @param workDir - the directory the engine ran in.
+ * @param texPath - the source it was given.
+ * @param result - what the engine printed on its own streams.
+ * @returns the transcript's error lines, or the engine's own output when there is no transcript.
+ */
+function engineFailureOf(
+  workDir: string,
+  texPath: string,
+  result: { readonly stdout: string; readonly stderr: string },
+): string {
+  const job = basename(texPath).replace(/\.tex$/u, '')
+  const log = join(workDir, `${job}.log`)
+  const transcript = existsSync(log) ? readFileSync(log, 'utf8') : ''
+  // `!` BEGINS A TeX ERROR and the lines after it are the context; the last `!` is the fatal one.
+  const errors = transcript.split(/\r?\n/u).filter(line => line.startsWith('!'))
+  if (errors.length > 0) return errors.slice(-3).join(' ')
+  const printed = result.stderr.trim() === '' ? result.stdout.trim() : result.stderr.trim()
+  return printed === '' ? `it wrote no reason (see ${log})` : printed
 }
 
 /** How the compiler is configured: which executable, and how long it may take. */
@@ -350,10 +380,7 @@ export class PandocCompiler {
           timeoutMs: this.timeoutMs,
         })
         if (run_.code !== 0) {
-          throw new Error(
-            `'${engine}' exited ${String(run_.code)}: `
-            + (run_.stderr.trim() === '' ? run_.stdout.trim() : run_.stderr.trim()),
-          )
+          throw new Error(`'${engine}' exited ${String(run_.code)}: ${engineFailureOf(work, texPath, run_)}`)
         }
         const target = join(work, 'manuscript.pdf')
         // AN ENGINE THAT WROTE NOTHING IS THE SAME FAILURE AS ONE THAT WROTE THE WRONG THING, and both
