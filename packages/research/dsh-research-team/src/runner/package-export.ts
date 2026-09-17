@@ -58,6 +58,14 @@ export interface PackageFile {
   /** Path relative to the package root, with forward slashes. */
   readonly path: string
   readonly content: string
+  /**
+   * How {@link content} is encoded.
+   *
+   * A compiled figure or a PDF is BYTES, and writing base64 text where a PNG belongs produces a file
+   * that looks written and is not the asset. `base64` means the writer decodes; `utf8` (the default)
+   * means it encodes.
+   */
+  readonly encoding?: 'utf8' | 'base64'
 }
 
 /** One written file, with what was checked about it after the write. */
@@ -178,14 +186,10 @@ export interface RunPackageManifest {
  * what this run actually wrote, instead of being asserted about a name.
  */
 const NUMBER_SOURCES: Readonly<Record<string, string>> = {
+  'figure-plan.json': 'figure-plan (the plan each figure was drawn from)',
   'experiment-tables.md': 'mvp-results + baseline-results (same measurement the figures use)',
   'figures/figure-1.svg': 'mvp-results',
   'roadmap.md': 'figure-plan',
-}
-
-/** SHA-256 of one string, lower-case hex. */
-function digestOf(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex')
 }
 
 /**
@@ -417,6 +421,19 @@ export function planRunPackage(
       if (typeof content === 'string' && content.length > 0) files.push({ path, content: `${content.replace(/\n+$/u, '')}\n` })
     }
   }
+  // AND THE BYTES E1 PRODUCED: a figure the compiled document embeds. Trailing whitespace is not
+  // trimmed here — that rule is about text, and trimming base64 would corrupt the asset.
+  // THE ASSETS LIVE WITH THE COMPILE THAT PRODUCED THEM (`compilation.assets`): they are outputs of
+  // the same step, and a second home for them would be a second thing to keep in step.
+  const assets = (manuscript as { compilation?: { assets?: unknown } } | undefined)?.compilation?.assets
+  if (Array.isArray(assets)) {
+    for (const entry of assets) {
+      const asset = entry as { path?: unknown; base64?: unknown }
+      if (typeof asset.path === 'string' && typeof asset.base64 === 'string' && asset.base64.length > 0) {
+        files.push({ path: asset.path, content: asset.base64, encoding: 'base64' })
+      }
+    }
+  }
 
   files.push({ path: 'steps.json', content: jsonFile(run.steps.map(stepRecord)) })
   files.push({
@@ -449,6 +466,19 @@ export function planRunPackage(
     }),
   })
   files.push({
+    // WHAT THE FIGURES WERE DRAWN FROM. The presentation plan states the question each figure answers,
+    // the record its values came from and the canvas it was drawn on; with the rendered file and the
+    // measured values this package already carries, the figure is reproducible rather than merely
+    // present — and a reader can see which float the compile could not embed.
+    path: 'figure-plan.json',
+    content: jsonFile({
+      plan: artifactRecord(store, runId, 'figure-plan') ?? null,
+      note: 'The figures this package carries, the question each answers, and the record its values'
+        + ' came from. `compilation` on the manuscript artifact names the floats a compiled document'
+        + ' could not embed.',
+    }),
+  })
+  files.push({
     path: 'experiment.json',
     content: jsonFile({
       method: method ?? null,
@@ -473,6 +503,25 @@ export function planRunPackage(
     ]),
   })
 
+  // The compile the run recorded, read off the manuscript artifact: which tool compiled it, and which
+  // floats the compiled document does NOT carry.
+  const compilation = (manuscript as {
+    compilation?: {
+      tool?: unknown
+      floatsDropped?: ReadonlyArray<{ label?: unknown; reason?: unknown }>
+      refusals?: unknown
+    }
+  } | undefined)?.compilation
+  const compilationFacts = compilation === undefined
+    ? { tool: null, dropped: [] as ReadonlyArray<string> }
+    : {
+      tool: typeof compilation.tool === 'string' ? compilation.tool : null,
+      dropped: (compilation.floatsDropped ?? []).flatMap((entry) => {
+        if (typeof entry.label !== 'string') return []
+        const reason = typeof entry.reason === 'string' ? entry.reason : 'not embedded'
+        return [`${entry.label} (${reason})`]
+      }),
+    }
   const written = new Set(files.map(file => file.path))
   // THE ARTIFACT VERSIONS THIS PACKAGE IS A READING OF. Recorded from the run's registry at plan
   // time, so a reader — and the `artifacts-current` check below — can tell whether the run has moved
@@ -490,6 +539,7 @@ export function planRunPackage(
     store, runId, evidenceProfile, [...written, 'run-summary.md'],
     options.saveError,
     { read: artifactRefs.map(entry => `${entry.slug}@${entry.ref.version}`), moved: movedSince },
+    compilationFacts,
   )
   const checks = checkFinalPackage(facts)
   const state = finalPackageStateOf(checks)
@@ -702,12 +752,15 @@ function writePackageFiles(
   for (const file of plan.files) {
     const target = join(directory, file.path)
     mkdirSync(dirname(target), { recursive: true })
-    writeFileSync(target, file.content, 'utf8')
+    writeFileSync(target, file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : file.content)
     const size = statSync(target).size
     if (size === 0) {
       throw new Error(`[run-package] ${file.path} was written empty — refusing to publish a package with a hole in it`)
     }
-    written.push({ path: file.path, bytes: size, sha256: digestOf(file.content) })
+    // THE DIGEST IS OVER THE BYTES THAT LANDED, read back from disk rather than recomputed from the
+    // string: a base64 asset and its digest must describe the same file, and hashing the encoded form
+    // here would make every asset's digest wrong.
+    written.push({ path: file.path, bytes: size, sha256: createHash('sha256').update(readFileSync(target)).digest('hex') })
   }
   const manifest: RunPackageManifest = { ...plan.manifest, files: written }
   writeFileSync(join(directory, 'run-manifest.json'), jsonFile(manifest), 'utf8')

@@ -31,8 +31,22 @@ export type CompileFormat =
 export type DocumentBlock =
   /** Prose, with the citation markers the writer emitted still in it. */
   | { readonly kind: 'prose'; readonly text: string }
-  /** A rendered figure, carried as its own SVG bytes. */
-  | { readonly kind: 'figure'; readonly label: string; readonly caption: string; readonly svg: string }
+  /**
+   * A rendered figure, carried as the bytes the run produced.
+   *
+   * BOTH RENDERINGS, because the formats need different ones: HTML embeds the SVG it was drawn as, and
+   * LaTeX — which has no SVG support — embeds the raster the SAME tool produced from the same spec. A
+   * figure that arrived without its raster can be embedded in HTML and not in LaTeX, and the compile
+   * says which rather than dropping it silently.
+   */
+  | {
+    readonly kind: 'figure'
+    readonly label: string
+    readonly caption: string
+    readonly svg: string
+    /** The PNG bytes, base64, when the producing tool emitted one. */
+    readonly pngBase64?: string
+  }
   /** A table, carried as the renderer's own Markdown (a native table, not an image). */
   | { readonly kind: 'table'; readonly label: string; readonly caption: string; readonly markdown: string }
   /** A diagram, carried as its Mermaid source. */
@@ -68,10 +82,30 @@ export interface ManuscriptDocument {
   readonly references: ReadonlyArray<DocumentReference>
 }
 
-/** What a compiler is asked to render. */
+/** What a compiler is asked to render, and what the result is for. */
 export interface CompileRequest {
   readonly document: ManuscriptDocument
   readonly format: CompileFormat
+  /**
+   * Whether the result is a working draft or something to hand a reader as a submission.
+   *
+   * THE DIFFERENCE IS WHAT A MISSING ASSET COSTS. A draft may carry a document whose diagram is still
+   * source rather than a rendered figure — a reader of a draft can see that — while a submission that
+   * does so is claiming to be the paper. `submission` refuses any float that could not be embedded;
+   * `draft` embeds what it can and RECORDS what it could not, which is what keeps a half-rendered
+   * document from being reported as a finished one.
+   */
+  readonly mode: 'draft' | 'submission'
+}
+
+/** One file a compile produced besides the document itself — a figure the document embeds. */
+export interface CompiledAsset {
+  /** Path relative to the compiled document, e.g. `assets/figure-1.png`. */
+  readonly path: string
+  /** The float the asset belongs to, so the document and its assets can be reconciled by id. */
+  readonly label: string
+  /** base64 of the bytes. Kept as text so it survives JSON, the manifest and the wire unchanged. */
+  readonly base64: string
 }
 
 /** What one compile produced. */
@@ -80,8 +114,23 @@ export interface CompiledDocument {
   /** The file's content, and the name to write it under. */
   readonly fileName: string
   readonly content: string
+  /**
+   * How {@link content} is encoded.
+   *
+   * A PDF is bytes and a LaTeX file is text, and reading one as the other is how a `manuscript.pdf`
+   * that is really LaTeX gets written. `base64` means the content is bytes, and a writer must decode
+   * it rather than encode it.
+   */
+  readonly encoding: 'utf8' | 'base64'
   /** Which tool produced it, and which version, so a package can name what rendered it. */
   readonly tool: string
+  /** The floats this compile embedded, by label, and the ones it could not. */
+  readonly assets: {
+    readonly embedded: ReadonlyArray<string>
+    readonly dropped: ReadonlyArray<{ readonly label: string; readonly reason: string }>
+  }
+  /** The files the document embeds, to be written beside it. */
+  readonly files: ReadonlyArray<CompiledAsset>
 }
 
 /** The compile seam. A deployment supplies one; this package never spawns a process itself. */
@@ -103,6 +152,8 @@ export type CompileRefusalCode =
   | 'compile-citation-unresolved'
   /** The document carries no sections, so there is nothing a compiler could render. */
   | 'compile-nothing-to-render'
+  /** A float the document carries cannot be embedded in the requested format. */
+  | 'compile-asset-unembeddable'
 
 /** One refusal, naming what is missing. */
 export interface CompileRefusal {
@@ -173,6 +224,17 @@ export function checkCompileRequest(
         + ` (it produces ${compiler.formats.join(', ') || 'nothing'})`,
     })
   }
+  // WHAT THE FORMAT CANNOT CARRY, WHEN THE RESULT IS MEANT TO BE THE PAPER. LaTeX has no SVG support
+  // and neither LaTeX nor HTML can turn a diagram's source into a figure, so a submission carrying
+  // them would be claiming to be a document whose figures are there. A draft lists them instead.
+  const unembeddable = unembeddableFloats(request.document, request.format)
+  if (request.mode === 'submission' && unembeddable.length > 0) {
+    refusals.push({
+      code: 'compile-asset-unembeddable',
+      detail: `this document cannot be submitted as '${request.format}': `
+        + unembeddable.map(entry => `${entry.label} (${entry.reason})`).join('; '),
+    })
+  }
   const known = new Set(request.document.references.map(reference => reference.citeKey))
   const unresolved = citedKeysOf(request.document).filter(key => !known.has(key))
   if (unresolved.length > 0) {
@@ -226,6 +288,42 @@ export async function compileManuscript(
       }],
     }
   }
+}
+
+/**
+ * The floats a format cannot embed, with the reason for each.
+ *
+ * A FIGURE NEEDS A RENDERING THE FORMAT UNDERSTANDS (HTML takes the SVG, LaTeX takes the raster) and a
+ * DIAGRAM NEEDS A STATIC RENDERING NOBODY HAS PRODUCED: a Mermaid block is source, and a document that
+ * prints that source under the caption `Figure 2` has a float the reader cannot see. Reported by label
+ * so a document and its assets can be reconciled by id rather than by count.
+ *
+ * @param document - the document.
+ * @param format - the format it is compiled to.
+ * @returns one entry per float that cannot be embedded, or an empty list.
+ */
+export function unembeddableFloats(
+  document: ManuscriptDocument,
+  format: CompileFormat,
+): ReadonlyArray<{ readonly label: string; readonly reason: string }> {
+  const entries: Array<{ label: string; reason: string }> = []
+  for (const section of document.sections) {
+    for (const block of section.blocks) {
+      if (block.kind === 'figure' && format !== 'html' && block.pngBase64 === undefined) {
+        entries.push({
+          label: block.label,
+          reason: `'${format}' cannot embed an SVG and this figure carries no raster rendering`,
+        })
+      }
+      if (block.kind === 'diagram') {
+        entries.push({
+          label: block.label,
+          reason: 'a diagram is carried as its own source and no static rendering was produced for it',
+        })
+      }
+    }
+  }
+  return entries
 }
 
 /**

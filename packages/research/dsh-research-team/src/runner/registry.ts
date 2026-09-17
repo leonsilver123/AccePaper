@@ -2404,6 +2404,8 @@ interface FigurePlanEntry {
   readonly title?: unknown
   /** The rendered SVG, for a data figure. */
   readonly svg?: unknown
+  /** The PNG bytes, base64, when the producing tool emitted a raster of the same canvas. */
+  readonly pngBase64?: unknown
   /** The rendered diagram source, for a roadmap. */
   readonly content?: unknown
   /** The diagram format, for a roadmap. */
@@ -2611,6 +2613,10 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       // it, so the manuscript holds the figure the tool actually rendered
       // instead of pointing at one.
       svg: figure.svg.content,
+      // THE RASTER THE SAME TOOL PRODUCED FROM THE SAME SPEC. HTML embeds the SVG; LaTeX has no SVG
+      // support and embeds this. Without it a document compiled to LaTeX or PDF would carry a figure
+      // the reader cannot see, which is the loss the compile now refuses rather than reports.
+      pngBase64: figure.png.base64,
     },
     {
       kind: 'three-line-table',
@@ -3443,6 +3449,9 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // Kept separately as well as inline: the package writes each part as its own file with its
   // own source, so the figure's provenance never stands in for the table's or the roadmap's.
   let figureSvg = ''
+  // The raster the figure tool produced for the same spec, carried so a LaTeX or PDF document can
+  // embed the figure rather than drop it.
+  let figurePngBase64 = ''
   let roadmapMermaid = ''
   // NUMBERED, CAPTIONED, AND LINKED — the paper shapes. Before this the data figure was pushed as
   // raw inline SVG with no number and no caption, and the roadmap as an unlabelled mermaid block, so
@@ -3461,6 +3470,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   for (const entry of floats) {
     if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
       figureSvg = entry.svg
+      if (typeof entry.pngBase64 === 'string') figurePngBase64 = entry.pngBase64
       figureBlocks.push(figureBlock({
         label: entry.label,
         title: entry.title,
@@ -3575,6 +3585,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           label: floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1',
           caption: floats.find(entry => entry.kind === 'data-figure')?.title ?? '',
           svg: figureSvg,
+          ...(figurePngBase64 === '' ? {} : { pngBase64: figurePngBase64 }),
         }]
         : []),
       ...(tableMarkdown === undefined
@@ -3600,12 +3611,31 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ? []
         : [{ citeKey: entry.citeKey, entry: entry.formatted, number: index + 1 }]),
   })
-  const compiled: Array<{ readonly path: string; readonly content: string }> = []
+  const compiled: Array<{ readonly path: string; readonly content: string; readonly encoding?: 'utf8' | 'base64' }> = []
   const compileRefusals: string[] = []
+  // WHICH FLOATS THE COMPILED DOCUMENT ACTUALLY CARRIES, per format: a figure that could not be
+  // embedded is a figure the reader will not see, and the artifact says so rather than leaving it to
+  // be inferred from the presence of a file.
+  const embeddedFloats: Record<string, ReadonlyArray<string>> = {}
+  const droppedFloats: Array<{ readonly label: string; readonly reason: string; readonly format: string }> = []
   for (const format of ['html', 'latex'] as const) {
-    const result = await compileManuscript({ document, format }, ctx.documentCompiler)
+    // A DRAFT, at this point in the run: the manuscript this step assembles has not been approved, so
+    // what it compiles is a working document. A float that cannot be embedded is recorded here and
+    // REFUSED when a submission-grade compile is asked for at export time.
+    const result = await compileManuscript({ document, format, mode: 'draft' }, ctx.documentCompiler)
     if (result.ok) {
-      compiled.push({ path: result.compiled.fileName, content: result.compiled.content })
+      compiled.push({
+        path: result.compiled.fileName,
+        content: result.compiled.content,
+        encoding: result.compiled.encoding,
+      })
+      // THE ASSETS THE DOCUMENT EMBEDS travel beside it, as bytes, so the compiled file is buildable
+      // outside this run and the figures can be reconciled by their labels rather than by a count.
+      for (const asset of result.compiled.files) {
+        compiled.push({ path: asset.path, content: asset.base64, encoding: 'base64' })
+      }
+      embeddedFloats[format] = result.compiled.assets.embedded
+      droppedFloats.push(...result.compiled.assets.dropped.map(entry => ({ ...entry, format })))
       continue
     }
     // NOT A FAILED STEP: the manuscript this run produced is complete without a compiled form, and a
@@ -3614,6 +3644,16 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     compileRefusals.push(...result.refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`))
   }
   const pkg = nonEmptyPackageFiles({
+    // The compiled DOCUMENTS are text, so they belong with the other text files.
+    ...Object.fromEntries(compiled
+      .filter(file => file.encoding !== 'base64')
+      .map(file => [
+        file.path,
+        {
+          content: file.content,
+          source: `${ctx.documentCompiler?.tool ?? 'no compiler'} (compiled from the document model)`,
+        },
+      ])),
     'manuscript.md': {
       content: assembled.markdown,
       source: 'assembleManuscript(revised-draft + venue scope + references)',
@@ -3654,6 +3694,15 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           tool: ctx.documentCompiler?.tool ?? null,
           formats: ctx.documentCompiler?.formats ?? [],
           compiled: compiled.map(file => file.path),
+          // THE ASSETS, AS BYTES. A figure the compiled document embeds is not text, and a package
+          // that carried it as base64 text would ship a file that looks written and is not the asset.
+          assets: compiled
+            .filter(file => file.encoding === 'base64')
+            .map(file => ({ path: file.path, base64: file.content })),
+          // WHAT IS IN THE COMPILED DOCUMENT AND WHAT IS NOT. A float that could not be embedded is
+          // named with its reason; a submission-grade compile refuses when this list is not empty.
+          floatsEmbedded: embeddedFloats,
+          floatsDropped: droppedFloats,
           refusals: compileRefusals,
         },
         venueName,

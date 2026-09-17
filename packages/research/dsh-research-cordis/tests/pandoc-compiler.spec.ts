@@ -18,7 +18,7 @@ const DOCUMENT = {
     blocks: [
       { kind: 'prose' as const, text: 'The quantity fell [@cite-W1].' },
       { kind: 'equation' as const, label: 'Desired gap', latex: 's^{*} = s_{0} + v T' },
-      { kind: 'figure' as const, label: 'Figure 1', caption: 'The comparison.', svg: '<svg width="10" height="10"></svg>' },
+      { kind: 'figure' as const, label: 'Figure 1', caption: 'The comparison.', svg: '<svg width="10" height="10"></svg>', pngBase64: 'iVBORw0KGgo=' },
     ],
   }],
   references: [{ citeKey: 'cite-W1', entry: 'Chen, Y. Safe and stable. 2026.', number: 1 }],
@@ -32,7 +32,7 @@ describe('a deployment with pandoc', () => {
       expect(compiler.formats).toEqual([])
       return
     }
-    const html = await compiler.compile({ document: DOCUMENT, format: 'html' })
+    const html = await compiler.compile({ document: DOCUMENT, format: 'html', mode: 'draft' })
     expect(html.fileName).toBe('manuscript.html')
     // THE CITATION CARRIES THE NUMBER THE MANUSCRIPT ASSIGNED, not the key: the numbering is E1's.
     expect(html.content).toContain('[1]')
@@ -40,7 +40,7 @@ describe('a deployment with pandoc', () => {
     // THE FIGURE IS THE SVG THE TOOL RENDERED, inline, so the file reads with the network off.
     expect(html.content).toContain('<svg')
     expect(html.content).toContain('<math')
-    const tex = await compiler.compile({ document: DOCUMENT, format: 'latex' })
+    const tex = await compiler.compile({ document: DOCUMENT, format: 'latex', mode: 'draft' })
     expect(tex.fileName).toBe('manuscript.tex')
     expect(tex.content).toContain('\\documentclass')
     expect(tex.content).toContain('s^{*}')
@@ -53,14 +53,14 @@ describe('a format this deployment cannot produce', () => {
     // No LaTeX engine is named, so `pdf` is not among the formats on ANY machine — the refusal is
     // about what the deployment can do, and it is the same answer whether pandoc is present or not.
     expect(compiler.formats).not.toContain('pdf')
-    await expect(compiler.compile({ document: DOCUMENT, format: 'pdf' }))
+    await expect(compiler.compile({ document: DOCUMENT, format: 'pdf', mode: 'draft' }))
       .rejects.toThrow(/cannot produce 'pdf'/u)
   })
 
   it('refuses when the executable does not exist, rather than claiming a format', async () => {
     const compiler = await PandocCompiler.probe({ executable: 'pandoc-that-is-not-installed' })
     expect(compiler.formats).toEqual([])
-    await expect(compiler.compile({ document: DOCUMENT, format: 'html' }))
+    await expect(compiler.compile({ document: DOCUMENT, format: 'html', mode: 'draft' }))
       .rejects.toThrow(/cannot produce 'html'/u)
   })
 })

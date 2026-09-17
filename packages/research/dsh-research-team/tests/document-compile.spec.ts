@@ -42,7 +42,10 @@ function stubCompiler(formats: ReadonlyArray<CompileFormat> = ['html', 'latex'])
         format: request.format,
         fileName: '',
         content: `<document>${request.document.title}</document>`,
+        encoding: 'utf8' as const,
         tool: 'stub@1',
+        assets: { embedded: [], dropped: [] },
+        files: [],
       } satisfies CompiledDocument)
     },
   }
@@ -60,7 +63,7 @@ describe('what a document cites', () => {
 
 describe('a compile a deployment can honour', () => {
   it('is accepted, and the file name is the format', async () => {
-    const result = await compileManuscript({ document: document(), format: 'html' }, stubCompiler())
+    const result = await compileManuscript({ document: document(), format: 'html', mode: 'draft' }, stubCompiler())
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.compiled.fileName).toBe('manuscript.html')
@@ -72,7 +75,7 @@ describe('a compile a deployment can honour', () => {
     // sources cannot be resolved is a document whose argument cannot be checked, so it is refused —
     // naming every unresolved key rather than the first.
     const refusals = checkCompileRequest(
-      { document: document(['cite-W1', 'cite-W9']), format: 'html' },
+      { document: document(['cite-W1', 'cite-W9']), format: 'html', mode: 'draft' },
       stubCompiler(),
     )
     expect(refusals.map(refusal => refusal.code)).toEqual(['compile-citation-unresolved'])
@@ -82,13 +85,13 @@ describe('a compile a deployment can honour', () => {
 
 describe('a compile a deployment cannot honour', () => {
   it('is refused when the deployment configured no compiler', () => {
-    const refusals = checkCompileRequest({ document: document(), format: 'html' }, undefined)
+    const refusals = checkCompileRequest({ document: document(), format: 'html', mode: 'draft' }, undefined)
     expect(refusals.map(refusal => refusal.code)).toEqual(['compile-compiler-missing'])
   })
 
   it('is refused when the compiler cannot produce the format, naming what it can', () => {
     // NO LATEX ENGINE ON THIS DEPLOYMENT: the refusal says so rather than producing an empty PDF.
-    const refusals = checkCompileRequest({ document: document(), format: 'pdf' }, stubCompiler(['html']))
+    const refusals = checkCompileRequest({ document: document(), format: 'pdf', mode: 'draft' }, stubCompiler(['html']))
     expect(refusals.map(refusal => refusal.code)).toEqual(['compile-format-unavailable'])
     expect(refusals[0]?.detail).toContain("'stub' on this deployment cannot produce 'pdf'")
     expect(refusals[0]?.detail).toContain('it produces html')
@@ -96,7 +99,7 @@ describe('a compile a deployment cannot honour', () => {
 
   it('is refused when the document carries no sections', () => {
     const refusals = checkCompileRequest(
-      { document: { ...document(), sections: [] }, format: 'html' },
+      { document: { ...document(), sections: [] }, format: 'html', mode: 'draft' },
       stubCompiler(),
     )
     expect(refusals.map(refusal => refusal.code)).toEqual(['compile-nothing-to-render'])
@@ -108,14 +111,14 @@ describe('a compile a deployment cannot honour', () => {
       formats: ['html'],
       compile() { return Promise.reject(new Error('pandoc: unrecognized option')) },
     }
-    const result = await compileManuscript({ document: document(), format: 'html' }, failing)
+    const result = await compileManuscript({ document: document(), format: 'html', mode: 'draft' }, failing)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.refusals[0]?.detail).toContain('unrecognized option')
   })
 
   it('reports both a missing engine and a missing compile seam at once', () => {
-    const refusals = checkCompileRequest({ document: document(), format: 'pdf' }, stubCompiler(['html']))
+    const refusals = checkCompileRequest({ document: document(), format: 'pdf', mode: 'draft' }, stubCompiler(['html']))
     expect(refusals).toHaveLength(1)
   })
 })

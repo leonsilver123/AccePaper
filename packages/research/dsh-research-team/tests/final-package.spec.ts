@@ -28,6 +28,7 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     declaredFiles: ['manuscript.md', 'experiment-tables.md'],
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
     artifactRefs: { read: ['formatted-manuscript@1'], moved: [] },
+    compilation: { tool: null, dropped: [] },
     saveError: undefined,
     ...overrides,
   }
@@ -167,5 +168,27 @@ describe('the approval a package carries', () => {
     expect(finalPackageApprovalOf(approval('request_changes'))).toBeUndefined()
     expect(finalPackageApprovalOf(approval('rejected'))).toBeUndefined()
     expect(finalPackageApprovalOf(undefined)).toBeUndefined()
+  })
+})
+
+describe('a package whose compiled document is missing a figure', () => {
+  it('is refused as final, naming the float it does not carry', () => {
+    // A SUBMISSION WHOSE FIGURES ARE MISSING IS NOT THE PAPER: the compiled document is what a journal
+    // receives, and a diagram nobody rendered is a figure the reader will not see. The condition is
+    // read from what the run's compile recorded, so it holds without a second compile.
+    const checks = checkFinalPackage(readyFacts({
+      compilation: { tool: 'pandoc', dropped: ['Figure 2 (no static rendering)'] },
+    }))
+    const check = checks.find(entry => entry.code === 'compiled-document-complete')
+    expect(check?.passed).toBe(false)
+    expect(check?.detail).toContain('Figure 2')
+    expect(finalPackageStateOf(checks)).toBe('draft')
+  })
+
+  it('passes for a deployment that compiles nothing, which claims no compiled document', () => {
+    const checks = checkFinalPackage(readyFacts({ compilation: { tool: null, dropped: [] } }))
+    expect(checks.find(entry => entry.code === 'compiled-document-complete')?.detail)
+      .toContain('compiles no document')
+    expect(finalPackageStateOf(checks)).toBe('final')
   })
 })

@@ -33,6 +33,7 @@ export type FinalPackageCheckCode =
   | 'approval-current'
   | 'required-files-present'
   | 'artifacts-current'
+  | 'compiled-document-complete'
   | 'run-saved'
 
 /** One condition a final package must meet, with what the run recorded about it. */
@@ -83,6 +84,17 @@ export interface FinalPackageFacts {
   readonly artifactRefs: {
     readonly read: ReadonlyArray<string>
     readonly moved: ReadonlyArray<string>
+  }
+  /**
+   * What the run's compile produced, as the artifact recorded it.
+   *
+   * `dropped` names the floats the compiled document does NOT carry — a figure LaTeX could not embed,
+   * a diagram nobody rendered — because a submission whose figures are missing is not the paper, while
+   * a deployment that compiles nothing states that instead (see the check).
+   */
+  readonly compilation: {
+    readonly tool: string | null
+    readonly dropped: ReadonlyArray<string>
   }
   /** The run's last write to its snapshot, when it failed. */
   readonly saveError: string | undefined
@@ -165,6 +177,21 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
           : `these declared files are not in the package: ${missingFiles.join(', ')}`,
     },
     {
+      // A SUBMISSION WHOSE FIGURES ARE MISSING IS NOT THE PAPER. The compiled document is what a
+      // journal receives, and a float it could not embed — a diagram nobody rendered, a figure with no
+      // raster — is a figure the reader will not see. A deployment that compiles nothing is not held
+      // to this: its manuscript is complete as Markdown and its artifact says it was not compiled,
+      // which is a different fact from a document that claims to carry a figure it lost.
+      code: 'compiled-document-complete',
+      passed: facts.compilation.tool === null || facts.compilation.dropped.length === 0,
+      detail: facts.compilation.tool === null
+        ? 'this deployment compiles no document, so no compiled document is claimed'
+        : facts.compilation.dropped.length === 0
+          ? `'${facts.compilation.tool}' embedded every float the manuscript carries`
+          : `the compiled document does not carry: ${facts.compilation.dropped.join(', ')}`
+            + ' — a submission whose figures are missing is not the paper',
+    },
+    {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
       // package describes: a later step, a revision, a re-run or a hand edit replaces an artifact the
       // package was built from, and the manifest still carries the older one's digest. The check
@@ -245,6 +272,7 @@ export function finalPackageFactsOf(
   packagedFiles: ReadonlyArray<string>,
   saveError: string | undefined,
   artifactRefs: { readonly read: ReadonlyArray<string>; readonly moved: ReadonlyArray<string> },
+  compilation: { readonly tool: string | null; readonly dropped: ReadonlyArray<string> },
 ): FinalPackageFacts {
   const snapshot = getRunSnapshot(store, runId)
   const definitions = getStepDefinitions()
@@ -266,6 +294,7 @@ export function finalPackageFactsOf(
     declaredFiles: declared,
     packagedFiles,
     artifactRefs,
+    compilation,
     saveError,
   }
 }
