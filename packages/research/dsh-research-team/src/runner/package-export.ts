@@ -15,7 +15,7 @@
 // it was written to; `sanitizeForExport` strips anything that looks like a secret.
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { getArtifact, getAuditHistory, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import { readinessOfRun } from './submission-readiness.ts'
@@ -77,6 +77,13 @@ export interface RunPackageManifest {
    * artifacts the export names are the ones this revision holds.
    */
   readonly projectRevision: number
+  /**
+   * When this reading was taken, ISO-8601.
+   *
+   * It is the actual time of the export. A package is a state plus the moment it was read, and a
+   * manifest that carried a fixed value could not answer "is this the package I made after the
+   * approval, or the one from the drive?" — which is the whole reason both numbers are here.
+   */
   readonly generatedAt: string
   readonly files: ReadonlyArray<PackagedFile>
   /** Per-step outcome, so the package states how each product was produced. */
@@ -218,7 +225,19 @@ export function planRunPackage(
   store: ResearchRunStore,
   run: PackageRunFacts,
   evidenceProfile: EvidenceProfile,
-  options: { readonly mode: 'draft' | 'final'; readonly saveError?: string } = { mode: 'draft' },
+  options: {
+    readonly mode: 'draft' | 'final'
+    readonly saveError?: string
+    /**
+     * When this reading of the run was taken.
+     *
+     * Stated by the caller so a test can pin it; an export that states none is stamped with the
+     * clock. It used to be the EPOCH — `new Date(0)` — which the contract above says it is not: a
+     * manifest reading `1970-01-01T00:00:00.000Z` told every reader that the package was generated
+     * before the study existed.
+     */
+    readonly generatedAt?: string
+  } = { mode: 'draft' },
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
   const readiness: SubmissionReadiness = readinessOfRun(store, runId, evidenceProfile)
@@ -331,7 +350,7 @@ export function planRunPackage(
     // package belong to, and a reader comparing two packages needs it to tell whether they read
     // the same study or two states of it.
     projectRevision: getRunSnapshot(store, runId).revision,
-    generatedAt: new Date(0).toISOString(),
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
     files: [],
     steps: run.steps.map(stepRecord),
     // Only paths that are IN this package. A run that stopped before E1 has no tables, no figure
@@ -427,6 +446,59 @@ export function writeRunPackage(
   const manifest: RunPackageManifest = { ...plan.manifest, files: written }
   writeFileSync(join(directory, 'run-manifest.json'), jsonFile(manifest), 'utf8')
   return manifest
+}
+
+/** One file's state against what a manifest says about it. */
+export interface PackagedFileCheck {
+  readonly path: string
+  /** `ok` means present, the stated number of bytes, and the stated digest. */
+  readonly status: 'ok' | 'missing' | 'bytes-differ' | 'digest-differs'
+  readonly expectedBytes: number
+  readonly expectedSha256: string
+  /** What is on disk now; absent when the file is not there at all. */
+  readonly observedBytes?: number
+  readonly observedSha256?: string
+}
+
+/**
+ * Compare a written package on disk with the manifest that names it.
+ *
+ * WHY THIS IS CODE AND NOT A READING DISCIPLINE. A manifest lists byte counts and digests, and a
+ * package is only what it says it is while those still hold — a file edited, a file dropped when the
+ * directory was copied somewhere tidier, or a manifest carried beside files from another export all
+ * produce a directory that READS like a package and verifies as nothing. One pass over the manifest
+ * makes "verify this package" one call rather than a habit.
+ *
+ * A file whose bytes differ but whose length matches is reported as a DIGEST difference and never as
+ * ok: the byte count is the cheap check, and the digest is the one that means something.
+ *
+ * @param directory - the package root.
+ * @param manifest - the manifest as it stands; its `files` are the entries checked.
+ * @returns one entry per manifest entry, in the manifest's order.
+ */
+export function checkPackagedFiles(
+  directory: string,
+  manifest: Pick<RunPackageManifest, 'files'>,
+): ReadonlyArray<PackagedFileCheck> {
+  return manifest.files.map((file) => {
+    const target = join(directory, file.path)
+    if (statSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
+      return { path: file.path, status: 'missing', expectedBytes: file.bytes, expectedSha256: file.sha256 }
+    }
+    const bytes = readFileSync(target)
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const observed = { observedBytes: bytes.length, observedSha256: digest }
+    if (digest === file.sha256) {
+      return { path: file.path, status: 'ok', expectedBytes: file.bytes, expectedSha256: file.sha256, ...observed }
+    }
+    return {
+      path: file.path,
+      status: bytes.length === file.bytes ? 'digest-differs' : 'bytes-differ',
+      expectedBytes: file.bytes,
+      expectedSha256: file.sha256,
+      ...observed,
+    }
+  })
 }
 
 /**

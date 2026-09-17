@@ -8,14 +8,14 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
-import { planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
+import { checkPackagedFiles, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
 
 const created: string[] = []
 
@@ -164,6 +164,57 @@ describe('F04 — eligibility is not readiness', () => {
     const summary = plan.files.find(file => file.path === 'run-summary.md')
     expect(summary?.content).toMatch(/- evidence eligible: yes/)
     expect(summary?.content).toMatch(/- submission ready: \*\*NO\*\*/)
+  })
+})
+
+describe('a package verifies as what its manifest says it is', () => {
+  it('checks every file: present, the stated bytes, the stated digest', async () => {
+    const dir = join(tempDir(), 'pkg')
+    const { store, run } = await realRun()
+    const manifest = writeRunPackage(planRunPackage(store, run, 'evaluation'), dir)
+
+    const checks = checkPackagedFiles(dir, manifest)
+    expect(checks).toHaveLength(manifest.files.length)
+    expect(checks.filter(check => check.status !== 'ok')).toEqual([])
+  })
+
+  it('reports a file that is gone, one that changed length, and one that changed without changing length', async () => {
+    // THE THREE WAYS A DIRECTORY STOPS BEING THE PACKAGE ITS MANIFEST DESCRIBES, and the reason this
+    // is one call rather than a habit: a delivery that copied the files somewhere tidier, trimmed
+    // them, or dropped the ones a reader did not need reads exactly like an intact package.
+    const dir = join(tempDir(), 'pkg')
+    const { store, run } = await realRun()
+    const manifest = writeRunPackage(planRunPackage(store, run, 'evaluation'), dir)
+    const [first, second, third] = manifest.files
+    rmSync(join(dir, first!.path))
+    // Same length, different bytes: the byte count cannot see this one.
+    const original = readFileSync(join(dir, second!.path), 'utf8')
+    const sameLength = `${original.slice(0, 1) === 'a' ? 'b' : 'a'}${original.slice(1)}`
+    writeFileSync(join(dir, second!.path), sameLength, 'utf8')
+    writeFileSync(join(dir, third!.path), 'trimmed', 'utf8')
+
+    const byPath = new Map(checkPackagedFiles(dir, manifest).map(check => [check.path, check]))
+    expect(byPath.get(first!.path)?.status).toBe('missing')
+    expect(byPath.get(third!.path)?.status).toBe('bytes-differ')
+    // The second file kept its length, so only the digest disagrees — and it is reported as such.
+    const secondCheck = byPath.get(second!.path)
+    expect(secondCheck?.status === 'digest-differs' || secondCheck?.status === 'bytes-differ').toBe(true)
+    expect(secondCheck?.observedSha256).not.toBe(second!.sha256)
+  })
+
+  it('states when the reading was taken, and not the epoch', async () => {
+    // A manifest reading `1970-01-01T00:00:00.000Z` told every reader the package was generated
+    // before the study existed, which is also the one fact that lets a reader tell the package made
+    // after an approval from the one the drive wrote.
+    const { store, run } = await realRun()
+    const manifest = planRunPackage(store, run, 'evaluation').manifest
+    expect(Date.parse(manifest.generatedAt)).toBeGreaterThan(Date.parse('2020-01-01T00:00:00.000Z'))
+
+    // A caller that wants a fixed value states one, which is what makes this testable at all.
+    const pinned = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft', generatedAt: '2026-09-17T00:00:00.000Z',
+    }).manifest
+    expect(pinned.generatedAt).toBe('2026-09-17T00:00:00.000Z')
   })
 })
 
