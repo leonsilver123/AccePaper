@@ -26,8 +26,8 @@ import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from 
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
 import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
-import { reviewPaperQuality } from './paper-quality.ts'
-import type { PaperQualityFinding } from './paper-quality.ts'
+import { reportPaperQuality } from './paper-quality.ts'
+import type { PaperQualityReport } from './paper-quality.ts'
 import { metricsForStudy } from './metrics.ts'
 
 /**
@@ -141,14 +141,19 @@ export interface RunPackageManifest {
    */
   readonly approval?: FinalPackageApproval
   /**
-   * What the quality baseline found in this manuscript.
+   * What the quality baseline found in this manuscript, and what it could not judge.
    *
    * Carried in the manifest because a package is what a reader receives: a list of files and digests
    * says nothing about whether the manuscript inside refers to its own figures or positions itself in
-   * its own bibliography. The findings are computed here, from the run's records and the manuscript
-   * the package contains, so the package states them without anyone having to run a separate tool.
+   * its own bibliography. The report is computed here, from the run's records and the manuscript the
+   * package contains, so the package states it without anyone having to run a separate tool.
+   *
+   * THE COVERAGE TRAVELS WITH THE FINDINGS. An empty `findings` list is the output of a handful of
+   * exact comparisons, and it reads as a verdict on the paper: `checks` says which rules could read
+   * this manuscript and which could not, `needsDomainReview` says what no rule here judges, and
+   * `summary` states what the report is rather than how good the paper is.
    */
-  readonly qualityFindings: ReadonlyArray<PaperQualityFinding>
+  readonly quality: PaperQualityReport
   /**
    * The artifact versions this package is a reading of.
    *
@@ -584,7 +589,7 @@ export function planRunPackage(
   // THE BASELINE RUNS WHERE THE PACKAGE IS BUILT, which is the one place that holds the manuscript,
   // the objects it carries and the metric the run registered, all at once.
   const metric = metricOf(baselineArtifact, claim)
-  const qualityFindings = reviewPaperQuality({
+  const quality = reportPaperQuality({
     sections: Array.isArray(draftArtifact?.sections)
       ? (draftArtifact.sections as ReadonlyArray<{ id: string; heading: string; bodyText: string }>)
       : [],
@@ -623,7 +628,7 @@ export function planRunPackage(
     state,
     checks,
     ...(approval === undefined ? {} : { approval }),
-    qualityFindings,
+    quality,
     artifactRefs: artifactRefs.map(entry => ({ slug: entry.slug, version: entry.ref.version })),
     ...(declaredMetrics === undefined ? {} : { declaredMetrics }),
     note:

@@ -1371,6 +1371,9 @@ export class ResearchTeamService extends TypertRemoteService {
   // A REMOTE METHOD ANSWERS OVER THE WIRE, where every call is a promise, and the package is written
   // from state this process already holds — there is nothing here to await, and an artificial
   // `await` added to look busy would be a statement about the wire that is not true of this body.
+  // The directive is needed under the full lint config; the staged config leaves the rule off, which
+  // is why a staged run reports it as unused. (Same reason and same shape as the provider's `stream`.)
+  // oxlint-disable-next-line typescript/require-await -- a Remote method is async by contract
   async exportRunPackageNow(request: {
     readonly runId: string
     readonly mode: 'draft' | 'final'

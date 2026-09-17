@@ -79,6 +79,103 @@ export interface PaperQualityInput {
   readonly metric?: QualityMetric
 }
 
+/** What one rule could say about one manuscript. */
+export type QualityCheckOutcome =
+  /** The rule read material it could judge, and found nothing. */
+  | 'no-defect-found'
+  | 'defect-found'
+  /** The rule had nothing to read: this manuscript does not carry what the rule asks about. */
+  | 'not-applicable'
+  /** The rule did not run at all, because the run produced nothing for it to read. */
+  | 'not-executed'
+
+/**
+ * One rule, and what it could say about this manuscript.
+ *
+ * WHY THIS EXISTS. `qualityFindings: []` means one thing and reads as another: it is the output of a
+ * handful of exact comparisons, and a reader takes it for a verdict on the paper. It is not — a rule
+ * that could not run and a rule that ran and found nothing produce the same empty list, and the
+ * second is the only one that says anything. This is the list that tells them apart.
+ */
+export interface QualityCheck {
+  readonly code: PaperQualityFindingCode
+  /** The question this rule asks of the manuscript. */
+  readonly asks: string
+  readonly outcome: QualityCheckOutcome
+  /** Why it could not answer, when it could not. */
+  readonly reason?: string
+}
+
+/**
+ * A question no rule here can answer, and who has to.
+ *
+ * THE BASELINE'S BOUNDARY, STATED RATHER THAN LEFT TO BE INFERRED FROM AN EMPTY LIST. Each of these
+ * takes a reader: the checks here compare the manuscript against the run's own records, and none of
+ * them knows whether a claim is worth testing, whether a method suits a question, or whether a cited
+ * source actually says what the sentence claims.
+ */
+export interface QualityReviewItem {
+  /** Stable id, so a reviewer's answer can be recorded against it. */
+  readonly id: string
+  /** What has to be judged, as the question a domain reviewer answers. */
+  readonly asks: string
+}
+
+/** What the baseline could and could not judge about one manuscript. */
+export interface PaperQualityReport {
+  readonly findings: ReadonlyArray<PaperQualityFinding>
+  /** One entry per rule, whatever it could say. Never shorter than {@link QUALITY_RULES}. */
+  readonly checks: ReadonlyArray<QualityCheck>
+  /** What no rule here can judge; see {@link QualityReviewItem}. */
+  readonly needsDomainReview: ReadonlyArray<QualityReviewItem>
+  /**
+   * One sentence stating what this report IS.
+   *
+   * NEVER "the paper is good". An empty finding list is the output of the checks that could run, and
+   * this sentence says how many that was, how many could not run, and how many questions are left to
+   * a reviewer — so a reader of a package cannot take the empty list for a verdict.
+   */
+  readonly summary: string
+}
+
+/** Every rule this baseline has, in the order their findings are reported. */
+export const QUALITY_RULES: ReadonlyArray<{ readonly code: PaperQualityFindingCode; readonly asks: string }> = [
+  {
+    code: 'uncited-object',
+    asks: 'does the text refer to every figure, table and equation the document carries',
+  },
+  {
+    code: 'unrendered-object',
+    asks: 'does every object the text refers to exist in the document',
+  },
+  {
+    code: 'no-literature-position',
+    asks: 'does a document that carries a bibliography use it in its text',
+  },
+  {
+    code: 'unsupported-statement',
+    asks: 'does every statement about prior work carry a citation',
+  },
+  {
+    code: 'metric-misread',
+    asks: 'does a sentence quoting the measured change describe its direction correctly',
+  },
+]
+
+/**
+ * What a domain reviewer has to judge, and no rule here can.
+ *
+ * These are the questions the baseline's own header names as out of scope. They are listed as data
+ * rather than as prose so a review can be recorded against them one by one.
+ */
+export const DOMAIN_REVIEW_ITEMS: ReadonlyArray<QualityReviewItem> = [
+  { id: 'claim-worth-testing', asks: 'is this claim worth testing, and is the result interesting' },
+  { id: 'method-suits-question', asks: 'does the method actually answer the question the paper asks' },
+  { id: 'sources-support-statements', asks: 'does each cited source say what the sentence citing it claims' },
+  { id: 'figure-legibility', asks: 'are the figures legible, well-scaled and consistent with the prose' },
+  { id: 'hedging-matches-evidence', asks: 'does the prose claim no more than the measurement supports' },
+]
+
 /** Statements about the literature, as verbs that claim a source rather than a result. */
 const LITERATURE_CLAIM = new RegExp(
   [
@@ -206,6 +303,99 @@ export function reviewPaperQuality(input: PaperQualityInput): ReadonlyArray<Pape
   }
 
   return findings
+}
+
+/**
+ * Run every rule, and report what each of them could say.
+ *
+ * THE PRODUCTION ENTRY POINT. {@link reviewPaperQuality} answers "what is wrong"; this answers "what
+ * is wrong, and how much of the paper anything here actually looked at" — which is the question a
+ * reader of an empty finding list is really asking.
+ *
+ * @param input - the manuscript, the objects it carries, and the metric it reports.
+ * @returns the findings, one entry per rule with its outcome, the questions left to a reviewer, and
+ *   a summary that states what the report is rather than how good the paper is.
+ */
+export function reportPaperQuality(input: PaperQualityInput): PaperQualityReport {
+  const findings = reviewPaperQuality(input)
+  const found = new Set(findings.map(finding => finding.code))
+  const sectionBodies = input.sections.filter(
+    section => section.id !== 'references' && section.heading.toLowerCase() !== 'references',
+  )
+  // Whether any sentence quotes the change the run measured. A misreading rule with nothing to quote
+  // has not judged the prose; it had nothing to read, which is a different fact from agreement.
+  const quotesMeasuredChange =
+    input.metric !== undefined
+    && sectionBodies.some(section =>
+      sentencesOf(section.bodyText).some(sentence =>
+        [...sentence.matchAll(PERCENT)].some(match =>
+          Math.abs(Math.abs(Number.parseFloat(match[1] ?? '')) - Math.abs(input.metric?.changePct ?? 0)) < 0.05)))
+  const objects = input.crossReferences.cited.length + input.crossReferences.uncited.length
+
+  /** The outcome one rule reached, and why when it could not answer. */
+  const outcomeOf = (
+    code: PaperQualityFindingCode,
+  ): { readonly outcome: QualityCheckOutcome; readonly reason?: string } => {
+    if (found.has(code)) return { outcome: 'defect-found' }
+    if (input.sections.length === 0) {
+      return { outcome: 'not-executed', reason: 'the run holds no draft, so nothing was read' }
+    }
+    if (code === 'uncited-object' || code === 'unrendered-object') {
+      return objects === 0 && input.floatsNotRendered.length === 0
+        ? {
+          outcome: 'not-applicable',
+          reason: 'the document carries no figure, table or equation for the rule to check',
+        }
+        : { outcome: 'no-defect-found' }
+    }
+    if (code === 'no-literature-position') {
+      return input.referenceCount === 0
+        ? {
+          outcome: 'not-applicable',
+          reason: 'the document carries no bibliography, so "cites nothing" cannot be told from'
+            + ' "has nothing to cite"',
+        }
+        : { outcome: 'no-defect-found' }
+    }
+    if (code === 'metric-misread') {
+      if (input.metric === undefined) {
+        return { outcome: 'not-applicable', reason: 'the run registered no metric to read against' }
+      }
+      return quotesMeasuredChange
+        ? { outcome: 'no-defect-found' }
+        : {
+          outcome: 'not-applicable',
+          reason: 'no sentence states the change the run measured, so the rule had no claim to read',
+        }
+    }
+    return sectionBodies.length === 0
+      ? { outcome: 'not-applicable', reason: 'the draft carries no section this rule reads' }
+      : { outcome: 'no-defect-found' }
+  }
+
+  const checks = QUALITY_RULES.map((rule) => {
+    const reached = outcomeOf(rule.code)
+    return {
+      code: rule.code,
+      asks: rule.asks,
+      outcome: reached.outcome,
+      ...(reached.reason === undefined ? {} : { reason: reached.reason }),
+    }
+  })
+  const silent = checks.filter(check => check.outcome !== 'no-defect-found' && check.outcome !== 'defect-found')
+  const read = checks.length - silent.length
+  return {
+    findings,
+    checks,
+    needsDomainReview: DOMAIN_REVIEW_ITEMS,
+    summary: findings.length > 0
+      ? `${String(findings.length)} defect(s) in ${String(read)} check(s) that could read this`
+        + ` manuscript, ${String(silent.length)} that could not, and ${String(DOMAIN_REVIEW_ITEMS.length)}`
+        + ' question(s) for a domain reviewer'
+      : `no defect found by the ${String(read)} check(s) that could read this manuscript;`
+        + ` ${String(silent.length)} check(s) could not run, and ${String(DOMAIN_REVIEW_ITEMS.length)}`
+        + ' question(s) need a domain reviewer',
+  }
 }
 
 /**

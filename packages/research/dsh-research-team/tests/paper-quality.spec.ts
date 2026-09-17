@@ -15,7 +15,10 @@ import { describe, expect, it } from 'vitest'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
-import { reviewPaperQuality, type PaperQualityInput } from '../src/runner/paper-quality.ts'
+import {
+  DOMAIN_REVIEW_ITEMS, QUALITY_RULES, reportPaperQuality, reviewPaperQuality,
+} from '../src/runner/paper-quality.ts'
+import type { PaperQualityInput } from '../src/runner/paper-quality.ts'
 
 /** A SECOND TASK: the same study, a claim that commits to a decrease. Synthetic, test-owned. */
 const DECREASE_PACK_DIR = fileURLToPath(new URL('./fixtures/case-pack-decrease', import.meta.url))
@@ -304,5 +307,83 @@ describe('the shipped run, read by the baseline', () => {
     // The baseline is a critique, not a pass mark: it never returns an empty finding list as proof of
     // quality, and this run's own objects are what it is reading.
     expect(Array.isArray(findings)).toBe(true)
+  })
+})
+
+describe('the result is reported with what could be read', () => {
+  // THE REVIEW'S R04. `qualityFindings: []` is the output of a handful of exact comparisons, and a
+  // reader takes it for a verdict on the paper. The three states it collapses are different facts —
+  // a rule that read the manuscript and found nothing, one that had nothing to read, and one that
+  // never ran — and a domain reviewer's questions are not this baseline's silence either.
+
+  it('says which rules read the manuscript and which had nothing to read', () => {
+    const report = reportPaperQuality(cleanInput())
+    expect(report.findings).toEqual([])
+    expect(report.checks.map(check => check.code))
+      .toEqual(QUALITY_RULES.map(rule => rule.code))
+    const byCode = new Map(report.checks.map(check => [check.code, check]))
+    // READ: the fixture cites every object it carries, and its one statement about prior work is
+    // sourced.
+    expect(byCode.get('uncited-object')?.outcome).toBe('no-defect-found')
+    expect(byCode.get('unsupported-statement')?.outcome).toBe('no-defect-found')
+    // NOT APPLICABLE, and each says why: this fixture carries no bibliography, and its Metric sentence
+    // quotes the change — so the difference below is a difference in what was READ, not in agreement.
+    expect(byCode.get('no-literature-position')?.outcome).toBe('not-applicable')
+    expect(byCode.get('no-literature-position')?.reason).toContain('no bibliography')
+  })
+
+  it('separates a manuscript that agrees from one the misreading rule could not read', () => {
+    // THE DIFFERENCE THIS UNIT EXISTS FOR. Both reports have no findings; one had a sentence quoting
+    // the measured change to read, and the other did not.
+    const agreed = reportPaperQuality(cleanInput())
+    const unread = reportPaperQuality(cleanInput({
+      sections: [{ id: 'results', heading: 'Results', bodyText: 'The variant is compared in Figure 1.' }],
+      crossReferences: { cited: ['Figure 1'], uncited: [] },
+    }))
+    expect(agreed.findings).toEqual([])
+    expect(unread.findings).toEqual([])
+    expect(agreed.checks.find(check => check.code === 'metric-misread')?.outcome).toBe('no-defect-found')
+    const silent = unread.checks.find(check => check.code === 'metric-misread')
+    expect(silent?.outcome).toBe('not-applicable')
+    expect(silent?.reason).toContain('no sentence states the change')
+    // ...and the summaries differ, so a reader of a package cannot read the two the same way.
+    expect(agreed.summary).not.toBe(unread.summary)
+  })
+
+  it('reports a rule that never ran as not-executed, distinct from one that read nothing', () => {
+    const empty = reportPaperQuality(cleanInput({ sections: [], crossReferences: { cited: [], uncited: [] } }))
+    for (const check of empty.checks) {
+      expect(check.outcome).toBe('not-executed')
+      expect(check.reason).toContain('no draft')
+    }
+    expect(empty.summary).toContain('0 check(s) that could read')
+  })
+
+  it('names the questions a domain reviewer has to answer, whatever the checks found', () => {
+    const clean = reportPaperQuality(cleanInput())
+    const defective = reportPaperQuality(cleanInput({
+      crossReferences: { cited: [], uncited: ['Figure 1', 'Table 1'] },
+    }))
+    // THE BASELINE'S BOUNDARY IS NOT A FINDING COUNT. Every item here takes a reader — whether the
+    // claim is worth testing, whether a source says what the sentence claims — and it is reported
+    // whether or not the exact comparisons found anything.
+    expect(clean.needsDomainReview).toEqual(DOMAIN_REVIEW_ITEMS)
+    expect(defective.needsDomainReview).toEqual(DOMAIN_REVIEW_ITEMS)
+    for (const item of clean.needsDomainReview) {
+      expect(item.id.length).toBeGreaterThan(0)
+      expect(item.asks.endsWith('?') || item.asks.length > 0).toBe(true)
+    }
+  })
+
+  it('states what the report is, never that the paper is good', () => {
+    const clean = reportPaperQuality(cleanInput())
+    const defective = reportPaperQuality(cleanInput({ floatsNotRendered: ['Figure 3'] }))
+    expect(clean.summary).toContain('no defect found by the')
+    expect(clean.summary).toContain('could not run')
+    expect(clean.summary).toContain('domain reviewer')
+    expect(defective.summary).toContain('1 defect(s)')
+    // The word a reader would take as a verdict is absent from both.
+    expect(clean.summary.toLowerCase()).not.toContain('the paper is')
+    expect(defective.summary.toLowerCase()).not.toContain('the paper is')
   })
 })

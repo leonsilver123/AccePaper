@@ -261,8 +261,19 @@ describe('the package states what the quality baseline found', () => {
     const { store, run } = await realRun()
     const manifest = planRunPackage(store, run, 'evaluation').manifest
 
-    expect(Array.isArray(manifest.qualityFindings)).toBe(true)
-    expect(manifest.qualityFindings).toEqual([])
+    expect(Array.isArray(manifest.quality.findings)).toBe(true)
+    expect(manifest.quality.findings).toEqual([])
+    // ...AND THE EMPTY LIST TRAVELS WITH WHAT PRODUCED IT. On its own it reads as a verdict on the
+    // paper; the checks say which rules could read this manuscript, the summary says what the report
+    // is, and the questions left to a reviewer are named rather than implied by the silence.
+    expect(manifest.quality.checks.map(check => check.code)).toEqual([
+      'uncited-object', 'unrendered-object', 'no-literature-position', 'unsupported-statement',
+      'metric-misread',
+    ])
+    expect(manifest.quality.checks.filter(check => check.outcome === 'defect-found')).toEqual([])
+    expect(manifest.quality.needsDomainReview.length).toBeGreaterThan(0)
+    expect(manifest.quality.summary).toContain('no defect found by the')
+    expect(manifest.quality.summary).toContain('need a domain reviewer')
   })
 })
 
