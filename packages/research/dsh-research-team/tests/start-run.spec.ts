@@ -35,6 +35,9 @@ const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const ACCEPT_FIXTURE = join(
   repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'accept-restart', 'accept-and-exit.ts',
 )
+const APPROVE_FIXTURE = join(
+  repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'approve-restart', 'approve-and-exit.ts',
+)
 const CRASH_FIXTURE = join(
   repoRoot, 'packages', 'research', 'dsh-research-team', 'tests', 'fixtures', 'start-crash', 'start-and-die.ts',
 )
@@ -91,6 +94,11 @@ async function boot(options: {
     snapshotDirectory?: string
     /** Where the deployment writes packages; set by a spec that exports one. */
     packageDirectory?: string
+    /** The deployment's prose route, installed by a spec that revises a manuscript. */
+    proseWriter?: {
+      readonly channel: 'llm' | 'deterministic'
+      write(request: unknown): Promise<{ text: string; provider: string; model: string }>
+    }
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   }
   directoryEntries(name: string): ReadonlyArray<string>
@@ -120,6 +128,10 @@ async function boot(options: {
   const engine: {
     snapshotDirectory?: string
     packageDirectory?: string
+    proseWriter?: {
+      readonly channel: 'llm' | 'deterministic'
+      write(request: unknown): Promise<{ text: string; provider: string; model: string }>
+    }
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   } = {}
   if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
@@ -954,6 +966,101 @@ describe('the final package is exported by asking for one', () => {
         .rejects.toThrow(/holds no run/)
     } finally {
       await second.dispose()
+    }
+  })
+})
+
+describe('a decision a person made survives the process that took it', () => {
+  it('reads back as an approval that still covers the manuscript, until the manuscript moves', async () => {
+    // TWO OPPOSITE FAILURES, ONE TEST. An approval a restart forgets asks the person to decide again;
+    // an approval that outlives what it approved lets a manuscript nobody read be published under a
+    // decision about another one. The decision is taken in its OWN PROCESS, and this spec reads what
+    // survives — the run's own record, and what the export operation makes of it.
+    const root = snapshotRoot()
+    const packages = mkdtempSync(join(tmpdir(), 'dsh-approve-packages-'))
+    roots.push(packages)
+    const decided = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )
+    expect(decided.stderr).not.toMatch(/approve-and-exit: /)
+    expect(decided.status).toBe(0)
+    // The fixture prints one JSON line; startup output precedes it.
+    const lines = decided.stdout.trim().split(/\r?\n/u)
+    const receipt = JSON.parse(lines[lines.length - 1] ?? '{}') as {
+      runId: string
+      status: string
+      decision: string
+      persisted: boolean
+    }
+    expect(receipt.decision).toBe('approved')
+    expect(receipt.status).toBe('passed')
+    expect(receipt.persisted).toBe(true)
+
+    const next = await boot({ snapshotDirectory: root })
+    next.engine.packageDirectory = packages
+    try {
+      // NOT FORGOTTEN: the gate is still passed in the new process, and the run is loadable at all.
+      const snapshot = await next.service.runSnapshot({ runId: receipt.runId })
+      expect(snapshot?.steps.find(step => step.stepId === 'E2-submit')?.status).toBe('passed')
+
+      // A PACKAGE IS WRITTEN FROM THE STATE IN MEMORY, so the new deployment takes the study back
+      // first — the same act a page performs before it can decide anything about it.
+      await next.service.openStoredRun({ runId: receipt.runId })
+
+      // AND THE DECISION REACHES THE PACKAGE DECISION: `approval-recorded` and `approval-current`
+      // hold, which is what "the approval still binds the version it was made about" means in the
+      // operation a person actually asks. The only unmet condition is the evidence profile.
+      const first = await next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'draft' })
+      const checks = new Map((first.checks ?? []).map(check => [check.code, check.passed]))
+      expect(checks.get('approval-recorded')).toBe(true)
+      expect(checks.get('approval-current')).toBe(true)
+      expect([...(first.checks ?? [])].filter(check => !check.passed).map(check => check.code))
+        .toEqual(['production-evidence'])
+
+      // NOW MOVE THE MANUSCRIPT, the way a person accepting a revision would: the approval was made
+      // about the version E1 wrote, and this is a different one. The binding is only real if the
+      // check notices — otherwise `approval-current` is a field that always says yes.
+      next.engine.proseWriter = {
+        channel: 'deterministic',
+        write: () => Promise.resolve({
+          text: 'Rewritten by this deployment deterministic route; no model was called.',
+          provider: 'fixture',
+          model: 'fixture',
+        }),
+      }
+      const request = await next.service.requestRevision({
+        requestId: 'request-after-approval',
+        runId: receipt.runId,
+        stepId: 'E2-submit',
+        instruction: 'tighten the claim so it matches what was measured',
+      })
+      const generated = await next.service.generateCandidate({
+        runId: receipt.runId, requestId: request.requestId, candidateId: '',
+      })
+      const candidateId = generated.candidates[0]?.candidateId ?? ''
+      const reviewed = await next.service.reviewCandidate({
+        runId: receipt.runId, requestId: request.requestId, candidateId,
+      })
+      expect(reviewed.reviews[0]?.passed).toBe(true)
+      await next.service.acceptCandidate({
+        runId: receipt.runId,
+        requestId: request.requestId,
+        candidateId,
+        expectedRevision: request.projectRevision,
+        expectedManuscriptVersion: request.manuscriptVersion,
+      })
+
+      const second = await next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'draft' })
+      const moved = new Map((second.checks ?? []).map(check => [check.code, check.passed]))
+      expect(moved.get('approval-recorded')).toBe(true)
+      // THE APPROVAL IS STILL ON RECORD AND NO LONGER ABOUT THIS MANUSCRIPT.
+      expect(moved.get('approval-current')).toBe(false)
+      const stale = (second.checks ?? []).find(check => check.code === 'approval-current')
+      expect(stale?.detail).toContain('another version')
+    } finally {
+      await next.dispose()
     }
   })
 })
