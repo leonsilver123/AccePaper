@@ -3531,7 +3531,15 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // be inferred from the presence of a file.
   const embeddedFloats: Record<string, ReadonlyArray<string>> = {}
   const droppedFloats: Array<{ readonly label: string; readonly reason: string; readonly format: string }> = []
-  for (const format of ['html', 'latex'] as const) {
+  // PDF IS COMPILED WHEN THE DEPLOYMENT CAN PRODUCE ONE, and only then: `formats` is the compiler's
+  // own probe, so a machine with no LaTeX engine is not asked for a PDF it would refuse. The document
+  // is the SAME one the HTML and the LaTeX were rendered from, so the three formats cannot describe
+  // different manuscripts — and the PDF is what a referee receives, which is why leaving it out of the
+  // run's own artifacts made "the deployment has an engine" unverifiable from a package.
+  const compileFormats = (ctx.documentCompiler?.formats ?? []).includes('pdf')
+    ? (['html', 'latex', 'pdf'] as const)
+    : (['html', 'latex'] as const)
+  for (const format of compileFormats) {
     // A DRAFT, at this point in the run: the manuscript this step assembles has not been approved, so
     // what it compiles is a working document. A float that cannot be embedded is recorded here and
     // REFUSED when a submission-grade compile is asked for at export time.
