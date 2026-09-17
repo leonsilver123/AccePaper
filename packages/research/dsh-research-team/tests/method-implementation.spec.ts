@@ -149,9 +149,15 @@ describe('a plan naming an implementation this runner lacks is refused', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('supports exactly the implementation whose outputs it can produce', () => {
-    // "Supported" is a claim about this process: one entry, and it names the artifact it fills.
-    expect(SUPPORTED_IMPLEMENTATIONS).toHaveLength(1)
+  it('supports the implementations whose outputs it can produce, and names the artifact each fills', () => {
+    // "Supported" is a claim about this process. It used to hold ONE entry — the platoon study — and
+    // the count is no longer the point: what each entry must do is name the artifact it fills, so a
+    // listed implementation is one whose outputs this runner can actually produce.
+    expect(SUPPORTED_IMPLEMENTATIONS.length).toBeGreaterThanOrEqual(1)
+    for (const implementation of SUPPORTED_IMPLEMENTATIONS) {
+      expect(implementation.outputs, implementation.id).toEqual(['mvp-results'])
+      expect(implementation.version.length, implementation.id).toBeGreaterThan(0)
+    }
     expect(IDM_PLATOON_IMPLEMENTATION.outputs).toEqual(['mvp-results'])
   })
 })

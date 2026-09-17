@@ -96,12 +96,13 @@ export function sectionEvidenceFor(sectionId: string, input: SectionEvidenceInpu
       // The numbers, with the unit the study declares, so a section cannot state one without the
       // other.
       unit: input.metricUnit,
-      baseline: record.measured.baselineMinTtcSeconds,
-      variant: record.measured.variantMinTtcSeconds,
+      baseline: record.measured.baseline,
+      variant: record.measured.variant,
       changePct: record.measured.improvementPct,
-      baselineRatePct: record.measured.baselineTtcRatePct,
-      variantRatePct: record.measured.variantTtcRatePct,
-      stringStabilityIndex: record.measured.stringStabilityIndex,
+      // WHATEVER ELSE THIS IMPLEMENTATION MEASURED, spread under its own names: a section that may
+      // state the band rate does so because the study reported one, not because this file knows the
+      // shipped study's field list.
+      ...record.measured.values,
       // WHICH code produced them. A Methods section that names a different version from this one
       // describes an experiment nobody ran, which is what this field is here to make visible.
       ruleVersion: record.ruleVersion,

@@ -51,9 +51,9 @@ function cleanInput(overrides: Partial<ManuscriptReviewInput> = {}): ManuscriptR
         // THE PROSE NAMES THE FLOATS THE MANUSCRIPT CARRIES: a draft that carries a float no sentence
         // refers to is refused, and this fixture is the manuscript that passes every check.
         bodyText: 'The comparison is drawn in Figure 1 and its two values are listed in Table 1.'
-          + ` The homogeneous platoon held ${String(RECORD.measured.baselineMinTtcSeconds)} s of`
+          + ` The homogeneous platoon held ${String(RECORD.measured.baseline)} s of`
           + ' minimum time-to-collision and the mixed platoon'
-          + ` ${String(RECORD.measured.variantMinTtcSeconds)} s, a change of ${String(NUMBER)}%.`,
+          + ` ${String(RECORD.measured.variant)} s, a change of ${String(NUMBER)}%.`,
       },
       { id: 'conclusion', heading: 'Conclusion', bodyText: 'The mixed platoon lowers the platoon minimum time-to-collision under the declared disturbance.' },
     ],

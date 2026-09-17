@@ -187,13 +187,14 @@ function accountableNumbers(input: ManuscriptReviewInput, record: MeasuredOutcom
     accountable.add(Math.abs(input.commitment.thresholdPct))
   }
   if (record !== undefined) {
+    // EVERY NUMBER THE RUN MEASURED, whatever the study was: the metric's two arms, the change, and
+    // whatever else its implementation reported. The reader no longer knows which study's quantities
+    // these are, which is the point — a queueing study's numbers are accounted for the same way.
     for (const value of [
-      record.baselineMinTtcSeconds,
-      record.variantMinTtcSeconds,
+      record.baseline,
+      record.variant,
       record.improvementPct,
-      record.baselineTtcRatePct,
-      record.variantTtcRatePct,
-      record.stringStabilityIndex,
+      ...Object.values(record.values),
     ]) {
       accountable.add(value)
       accountable.add(Math.abs(value))
@@ -345,8 +346,9 @@ function reviewManuscriptNumbers(input: ManuscriptReviewInput, record: MeasuredO
       check: 'is every number in the manuscript one the run measured?',
       found:
         `numbers the run's record does not account for: ${untraceable.join(', ')} — the record holds `
-        + `${record.baselineMinTtcSeconds}, ${record.variantMinTtcSeconds} (s), `
-        + `${record.improvementPct} (%) and ${record.stringStabilityIndex}`,
+        + `${String(record.baseline)} and ${String(record.variant)} (${record.unit}), a change of `
+        + `${String(record.improvementPct)}% (${record.metricKey}), and `
+        + Object.keys(record.values).join(', '),
       position: 'refute',
     })
   } else {

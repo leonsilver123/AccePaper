@@ -21,6 +21,12 @@
 import type { StudyPlan } from './study-plan.ts'
 import type { MeasuredMetric } from './prediction-gate.ts'
 import {
+  LATENCY_EQUATIONS,
+  LATENCY_INPUTS,
+  LATENCY_METRIC,
+  LATENCY_RULE_VERSION,
+} from './service-latency-sim.ts'
+import {
   DECLARED_VEHICLE_CLASSES,
   EXPERIMENT_RULE_VERSION,
   MEASURED_METRIC,
@@ -115,9 +121,47 @@ export const IDM_PLATOON_IMPLEMENTATION: MethodImplementation = {
   outputs: ['mvp-results'],
 }
 
+/**
+ * A SECOND STUDY: request coalescing against tail latency on a single server.
+ *
+ * IT IS HERE TO BE A DIFFERENT STUDY, not a variation of the first: another domain, another metric
+ * in another unit with the OPPOSITE direction, a different data shape — a trace of arrivals rather
+ * than two compositions — and its own equations. A pipeline whose second study is the first one's
+ * claim reversed is not a capability, which is what the review of the first delivery said.
+ *
+ * Its parameters and equations are read out of `service-latency-sim.ts`'s own constants, the same
+ * discipline as the platoon study: the Method section describes the code that ran because there is
+ * no second copy of the numbers to describe.
+ */
+export const LATENCY_COALESCING_IMPLEMENTATION: MethodImplementation = {
+  id: 'service-latency-coalescing',
+  version: LATENCY_RULE_VERSION,
+  algorithm: 'Single-server queue over a declared arrival trace, with and without request coalescing',
+  citation: 'Kleinrock (1975), Queueing Systems, Volume 1: Theory',
+  parameters: { ...LATENCY_INPUTS },
+  varied: [
+    {
+      field: 'coalescingWindowMs',
+      baseline: 0,
+      variant: LATENCY_INPUTS.coalescingWindowMs,
+      unit: 'ms',
+    },
+    {
+      field: 'maxBatch',
+      baseline: 1,
+      variant: LATENCY_INPUTS.maxBatch,
+      unit: 'requests',
+    },
+  ],
+  equations: LATENCY_EQUATIONS.map(equation => ({ ...equation })),
+  metric: LATENCY_METRIC,
+  outputs: ['mvp-results'],
+}
+
 /** Every implementation this process can run. */
 export const SUPPORTED_IMPLEMENTATIONS: ReadonlyArray<MethodImplementation> = [
   IDM_PLATOON_IMPLEMENTATION,
+  LATENCY_COALESCING_IMPLEMENTATION,
 ]
 
 /**

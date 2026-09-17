@@ -1016,7 +1016,7 @@ function bodyTextFor(
     case 'method':
       return `Both platoons are run with the SAME car-following model — the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), integrated at a fixed ${inputs.stepSeconds.toFixed(2)} s step — and differ only in composition: the baseline is HV-HV-HV and the variant is HV-AV-HV. The Case Pack declares, for each class, its reaction delay, its desired headway and its deceleration limit: the human vehicle reacts in ${hv.reactionDelaySeconds.toFixed(2)} s and wants a ${hv.desiredHeadwaySeconds.toFixed(1)} s headway; the autonomous vehicle reacts in ${av.reactionDelaySeconds.toFixed(2)} s and wants a ${av.desiredHeadwaySeconds.toFixed(1)} s headway. The look-ahead horizon is NOT declared by the pack — this study derives it as ${av.lookAheadHorizonSeconds.toFixed(2)} s, the vehicle's own reaction delay. Reaction time is applied as a real delay: a follower evaluates its leader's state as it was that delay earlier, and a vehicle with a horizon extrapolates that observed state forward over it. The leader's speed follows a declared periodic disturbance of ±${inputs.freeFlowAmplitudeMps.toFixed(1)} m/s at a ${inputs.disturbancePeriodSeconds.toFixed(1)} s period, which is the perturbation the string-stability literature uses to test whether a disturbance grows or decays down a platoon. The equations this section states (${named('equation')}) are the model's own, and the parameters they carry are the ones the Case Pack declares.`
     case 'experiments':
-      return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baselineMinTtcSeconds.toFixed(2)} s for the homogeneous platoon and ${measured.variantMinTtcSeconds.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${measured.baselineTtcRatePct.toFixed(2)}% and ${measured.variantTtcRatePct.toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
+      return `Both platoons were run over ${inputs.measurementSeconds.toFixed(0)} s after a ${inputs.warmupSeconds.toFixed(0)} s warm-up, and the minimum time-to-collision (Minderhoud & Bovy 2001) was read from the simulated trajectories: ${measured.baseline.toFixed(2)} s for the homogeneous platoon and ${measured.variant.toFixed(2)} s for the platoon carrying the autonomous vehicle, a change of ${measured.improvementPct.toFixed(2)}%. Neither platoon entered the pack's declared TTC<1.5s band (${(measured.values['baselineTtcRatePct'] ?? 0).toFixed(2)}% and ${(measured.values['variantTtcRatePct'] ?? 0).toFixed(2)}% of vehicle-time), which bounds what that band could have shown.`
     case 'results':
       return `The comparison the claim is about is drawn in ${named('figure')} and its two values are listed in ${named('table')}; ${named('figure 2') === '' ? 'the research roadmap' : named('figure 2')} shows how the study reaches it. The measurement is that `
         + `${outcomeSentence(argumentPlan, measured)}. The claim is bounded to steady free flow; the boundary probe and the ablations are reported separately, and no published-SOTA comparison is asserted.`
@@ -2488,8 +2488,8 @@ function d1RecordsOf(
   // skipped — and the difference is visible on the artifact rather than hidden in the control flow.
   return new Map([['recomputed-measurement', {
     measured: {
-      baselineMinTtcSeconds: measured.baselineSeconds,
-      variantMinTtcSeconds: measured.variantSeconds,
+      baseline: measured.baselineSeconds,
+      variant: measured.variantSeconds,
     },
   }]])
 }
@@ -2505,8 +2505,8 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // never disagree with the verdict it illustrates. "The same" is now a record the run
   // holds, not a re-measurement: see `result-version.ts`.
   const outcome = measureOutcomeWithSource(ctx)
-  const measuredBaseline = outcome.measured.baselineMinTtcSeconds
-  const measuredVariant = outcome.measured.variantMinTtcSeconds
+  const measuredBaseline = outcome.measured.baseline
+  const measuredVariant = outcome.measured.variant
   // The caption says what the measurement did to the claim, derived the same way the argument plan
   // derives it — a figure of a refuted claim and a figure of a supported one do not have the same
   // caption, and the caption is what a reader who skips the text reads.
@@ -2523,8 +2523,11 @@ async function d1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // how the delivered paper came to carry floats no sentence refers to.
   const presentationPlan = shippedPresentationPlan({
     sourceSlug: d1SourceSlugOf(ctx),
-    baselineKey: 'measured.baselineMinTtcSeconds',
-    variantKey: 'measured.variantMinTtcSeconds',
+    // THE RECORD'S OWN KEYS, which are the metric's two arms rather than the shipped study's field
+    // names: the figure reconciliation refused these values until they were named the way the record
+    // holds them, and that refusal is what a stale key looks like.
+    baselineKey: 'measured.baseline',
+    variantKey: 'measured.variant',
     baselineSeconds: measuredBaseline,
     variantSeconds: measuredVariant,
     metricUnit: planOf(ctx).metric.unit,
@@ -3293,8 +3296,8 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // the SAME measurements the experiment produced — read off the run's record, so the
   // table and the prose cannot come from two different computations.
   const e1Outcome = measureOutcomeWithSource(ctx)
-  const measuredBaseline = e1Outcome.measured.baselineMinTtcSeconds
-  const measuredVariant = e1Outcome.measured.variantMinTtcSeconds
+  const measuredBaseline = e1Outcome.measured.baseline
+  const measuredVariant = e1Outcome.measured.variant
   const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
   const invocation = await invoker.invoke(
     'three-line-table',

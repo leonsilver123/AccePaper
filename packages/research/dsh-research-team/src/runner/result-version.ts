@@ -17,18 +17,33 @@
 // claim is the C gate's question, and whether they are correct is nobody's yet.
 
 import { createHash } from 'node:crypto'
-import { EXPERIMENT_RULE_VERSION } from './platoon-sim.ts'
+import { EXPERIMENT_RULE_VERSION, MEASURED_METRIC } from './platoon-sim.ts'
 import type { PlatoonComparison } from './platoon-sim.ts'
 
-/** The measured quantities one run reports, rounded as the pipeline reports them. */
+/**
+ * What one run measured, as the metric it measured and the two arms' values.
+ *
+ * THE RECORD NAMES ITS METRIC. It used to be six fixed fields — `baselineMinTtcSeconds`,
+ * `stringStabilityIndex` — which made every consumer of a result depend on THIS study's quantity: a
+ * study of queueing latency has no time-to-collision and could not report one. The metric identity
+ * travels with the numbers now (`metricKey`, `unit`, `direction`), the two arms' values are
+ * `baseline`/`variant`, and whatever else the implementation measured is in `values` under the names
+ * the implementation gave it.
+ *
+ * A SECOND STUDY IS THEREFORE A SECOND IMPLEMENTATION, not a rewrite of every reader.
+ */
 export interface MeasuredOutcome {
-  readonly baselineMinTtcSeconds: number
-  readonly variantMinTtcSeconds: number
-  /** Change in the variant relative to the baseline, %. Positive means the AV helped. */
+  /** The quantity, as the deployment's registry declares it. */
+  readonly metricKey: string
+  readonly unit: string
+  readonly direction: 'higher-is-better' | 'lower-is-better'
+  /** The metric's value in each arm, in the metric's own unit. */
+  readonly baseline: number
+  readonly variant: number
+  /** Change in the variant relative to the baseline, %, signed in the metric's units. */
   readonly improvementPct: number
-  readonly baselineTtcRatePct: number
-  readonly variantTtcRatePct: number
-  readonly stringStabilityIndex: number
+  /** Every other quantity the implementation reported, under its own name. */
+  readonly values: Readonly<Record<string, number>>
 }
 
 /** Where a number came from. `result-version` is the run's record; `recomputed` is a fresh run. */
@@ -62,25 +77,35 @@ function round2(value: number): number {
  */
 export function measuredFromComparison(comparison: PlatoonComparison): MeasuredOutcome {
   return {
-    baselineMinTtcSeconds: round2(comparison.baseline.minTtcSeconds),
-    variantMinTtcSeconds: round2(comparison.variant.minTtcSeconds),
+    metricKey: MEASURED_METRIC.key,
+    unit: MEASURED_METRIC.unit,
+    direction: MEASURED_METRIC.direction,
+    // THE METRIC IS THE MINIMUM TIME-TO-COLLISION, so the two arms' values ARE those numbers; the
+    // band rate and the stability index are what else this implementation reported.
+    baseline: round2(comparison.baseline.minTtcSeconds),
+    variant: round2(comparison.variant.minTtcSeconds),
     improvementPct: round2(comparison.relativeImprovementPct),
-    baselineTtcRatePct: round2(comparison.baseline.ttcLt1_5RatePct),
-    variantTtcRatePct: round2(comparison.variant.ttcLt1_5RatePct),
-    stringStabilityIndex: round2(comparison.variant.stringStabilityIndex),
+    values: {
+      baselineTtcRatePct: round2(comparison.baseline.ttcLt1_5RatePct),
+      variantTtcRatePct: round2(comparison.variant.ttcLt1_5RatePct),
+      stringStabilityIndex: round2(comparison.variant.stringStabilityIndex),
+    },
   }
 }
 
 /** SHA-256 over a measured outcome and the rule version that produced it. */
 function hashOf(measured: MeasuredOutcome, ruleVersion: string): string {
+  // SORTED, so the hash depends on the values rather than on the order an implementation happened to
+  // write them — two records of the same measurement must hash the same however they were built.
   const text = [
     ruleVersion,
-    measured.baselineMinTtcSeconds,
-    measured.variantMinTtcSeconds,
+    measured.metricKey,
+    measured.unit,
+    measured.direction,
+    measured.baseline,
+    measured.variant,
     measured.improvementPct,
-    measured.baselineTtcRatePct,
-    measured.variantTtcRatePct,
-    measured.stringStabilityIndex,
+    ...Object.keys(measured.values).sort().map(key => `${key}=${String(measured.values[key])}`),
   ].join('|')
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
@@ -124,16 +149,24 @@ export function readResultVersion(value: unknown): ResultVersion | undefined {
   const measured = record['measured']
   if (measured === null || typeof measured !== 'object' || Array.isArray(measured)) return undefined
   const numbers = measured as Record<string, unknown>
-  const keys = [
-    'baselineMinTtcSeconds',
-    'variantMinTtcSeconds',
-    'improvementPct',
-    'baselineTtcRatePct',
-    'variantTtcRatePct',
-    'stringStabilityIndex',
-  ] as const
-  for (const key of keys) {
+  // THE METRIC IDENTITY AND THE TWO ARMS ARE REQUIRED; the rest of the measurements are whatever the
+  // implementation reported, and a record whose `values` is not a record of finite numbers is not one
+  // this reader can hand to a consumer that adds them up.
+  const required = ['baseline', 'variant', 'improvementPct'] as const
+  for (const key of required) {
     if (typeof numbers[key] !== 'number' || !Number.isFinite(numbers[key])) return undefined
+  }
+  const extra = numbers['values']
+  if (extra === null || typeof extra !== 'object' || Array.isArray(extra)) return undefined
+  const values: Record<string, number> = {}
+  for (const [key, value] of Object.entries(extra as Record<string, unknown>)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+    values[key] = value
+  }
+  const unit = numbers['unit']
+  const direction = numbers['direction']
+  if (typeof unit !== 'string' || (direction !== 'higher-is-better' && direction !== 'lower-is-better')) {
+    return undefined
   }
   if (typeof record['contentHash'] !== 'string' || typeof record['ruleVersion'] !== 'string') return undefined
   return {
@@ -144,12 +177,13 @@ export function readResultVersion(value: unknown): ResultVersion | undefined {
     metricKey: typeof record['metricKey'] === 'string' ? record['metricKey'] : '',
     source: 'simulation',
     measured: {
-      baselineMinTtcSeconds: numbers['baselineMinTtcSeconds'] as number,
-      variantMinTtcSeconds: numbers['variantMinTtcSeconds'] as number,
+      metricKey: typeof record['metricKey'] === 'string' ? record['metricKey'] : '',
+      unit,
+      direction,
+      baseline: numbers['baseline'] as number,
+      variant: numbers['variant'] as number,
       improvementPct: numbers['improvementPct'] as number,
-      baselineTtcRatePct: numbers['baselineTtcRatePct'] as number,
-      variantTtcRatePct: numbers['variantTtcRatePct'] as number,
-      stringStabilityIndex: numbers['stringStabilityIndex'] as number,
+      values,
     },
   }
 }

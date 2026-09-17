@@ -20,6 +20,7 @@
 
 import { INPUT_LIMITS } from '@deepseek-ai/dsh-research-tools'
 import { SUPPORTED_IMPLEMENTATIONS, resolveImplementation } from './implementations.ts'
+import type { MethodImplementation } from './implementations.ts'
 import type { MeasuredMetric, PredictionCommitment } from './prediction-gate.ts'
 import { claimRejectionOf, commitmentFrom } from './prediction-gate.ts'
 import { MEASURED_METRIC } from './platoon-sim.ts'
@@ -241,6 +242,56 @@ function resolvePlanImplementation(
   const [only] = matching
   if (only === undefined) return { ok: false, reason: `no implementation can measure '${metricKey}'` }
   return { ok: true, implementationId: only.id }
+}
+
+/**
+ * The quantity a plan declares, or undefined when it declares none.
+ *
+ * A PLAN CARRIES ITS METRIC, which is what lets the runner ask "can I measure what this plan is
+ * about" instead of "is this plan about the one quantity I measure". The shipped caller passes the
+ * metric explicitly; a caller that does not know which study it is looking at reads it here.
+ *
+ * @param value - the plan as it arrived.
+ * @returns the declared key, or undefined.
+ */
+export function declaredMetricKeyOf(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const metric = (value as Record<string, unknown>)['metric']
+  if (metric === null || typeof metric !== 'object') return undefined
+  const key = (metric as Record<string, unknown>)['key']
+  return typeof key === 'string' && key.length > 0 ? key : undefined
+}
+
+/**
+ * The implementation that measures the quantity a plan declares.
+ *
+ * THE GENERIC ENTRY, for a caller that does not already know which study it is holding: the plan says
+ * what it is about, and this resolves that to a study this process can run. A quantity no
+ * implementation measures is REFUSED here rather than run as something else — which is the same
+ * refusal the explicit entry makes, reached from the plan's own declaration.
+ *
+ * @param value - the plan as it arrived.
+ * @returns the implementation, or the refusal naming what this runner has.
+ */
+export function implementationForPlan(
+  value: unknown,
+): { readonly ok: true; readonly implementation: MethodImplementation } | { readonly ok: false; readonly reason: string } {
+  const key = declaredMetricKeyOf(value)
+  if (key === undefined) {
+    return { ok: false, reason: 'the plan declares no metric, so nothing says what it would measure' }
+  }
+  const matching = SUPPORTED_IMPLEMENTATIONS.filter(candidate => candidate.metric.key === key)
+  if (matching.length === 0) {
+    return {
+      ok: false,
+      reason:
+        `the plan measures '${key}', which no implementation this runner has can measure`
+        + ` (available: ${SUPPORTED_IMPLEMENTATIONS.map(candidate => candidate.metric.key).join(', ')})`,
+    }
+  }
+  const [only] = matching
+  if (only === undefined) return { ok: false, reason: `no implementation can measure '${key}'` }
+  return { ok: true, implementation: only }
 }
 
 export function requirePlan(

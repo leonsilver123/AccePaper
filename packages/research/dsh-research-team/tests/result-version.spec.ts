@@ -78,7 +78,7 @@ describe('the result record', () => {
     // reader of either sees the same experiment.
     const round2 = (value: number | undefined): number | undefined =>
       value === undefined ? undefined : Math.round(value * 100) / 100
-    expect(record?.measured.baselineMinTtcSeconds).toBe(round2(mvp?.observed?.baselineMinTtcSeconds))
+    expect(record?.measured.baseline).toBe(round2(mvp?.observed?.baselineMinTtcSeconds))
     expect(record?.measured.improvementPct).toBe(round2(mvp?.observed?.improvementPct))
   })
 
@@ -158,9 +158,9 @@ describe('an exhibit reports the record, not the study its caller is holding', (
     const table = plan?.figures?.find(figure => figure.kind === 'three-line-table')?.tableMarkdown
     expect(table).toBeDefined()
     // Both of the record's numbers, and not the numbers the step's own study would have produced.
-    expect(table).toContain(record?.measured.variantMinTtcSeconds.toFixed(2))
-    expect(table).toContain(record?.measured.baselineMinTtcSeconds.toFixed(2))
-    expect(record?.measured.variantMinTtcSeconds).not.toBe(record?.measured.baselineMinTtcSeconds)
+    expect(table).toContain(record?.measured.variant.toFixed(2))
+    expect(table).toContain(record?.measured.baseline.toFixed(2))
+    expect(record?.measured.variant).not.toBe(record?.measured.baseline)
   })
 })
 
