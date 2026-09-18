@@ -162,6 +162,63 @@ const FIXTURE_DEPS: ResearchToolDeps = {
 }
 
 /** Retrieval channel selection as it arrives from the plugin's `cordis.yml` config. */
+/**
+ * The literature library whose sources a run may cite.
+ *
+ * SEPARATE FROM {@link LiteratureChannel}, AND THE SEPARATION IS THE POINT. One switch used to decide
+ * both "what A1 searches for the landscape" and "which sources the manuscript may cite", so pointing a
+ * run at a curated library for CITATION also replaced its SEARCH source. Measured 2026-09-19: a run
+ * whose literature channel was a 27-item take-over collection, studying platoon time-to-collision,
+ * found nothing at all — A1 passes a research direction as the topic and the collection's filter
+ * demanded every word of it — and the empty corpus surfaced four steps later as a held references
+ * section and a blocked D3. The configuration was right; the coupling was wrong.
+ *
+ * NOTHING HERE IS REQUIRED TO BE A SEARCH SOURCE. A deployment names a library it can cite from and a
+ * catalogue it searches with, independently, and the two may be the same library or different ones.
+ * A deployment that also wants the collection AS its landscape source sets
+ * `literatureSearch.kind: 'zotero'`, which reuses these same fields.
+ *
+ * A LIBRARY THAT CANNOT BE READ YIELDS NO SOURCES. It never falls back to the checked-in corpus: a run
+ * that silently cites a repository instead of the library it was pointed at has published a
+ * bibliography nobody asked for.
+ */
+export interface SourceLibraryConfig {
+  /** The local API's origin, e.g. `http://127.0.0.1:23119/api`. */
+  readonly apiBase: string
+  /** The library as the local endpoint addresses it: `users/0` for the signed-in user. */
+  readonly localLibraryPath: string
+  /** The MCP client's namespace for the Zotero server, e.g. `zotero`. */
+  readonly mcpServerName: string
+  readonly timeoutMs?: number
+  readonly pageSize?: number
+  /** The venue to record for an item whose own record states none. */
+  readonly fallbackVenue?: string
+  /**
+   * Which registry this run draws its citable sources from.
+   *
+   * Absent means `zotero`: a deployment that named a library as its evidence, and drawing on the
+   * checked-in corpus as well would put sources in the bibliography that it never pointed at.
+   */
+  readonly sourceRegistryMode?: SourceRegistryMode
+  /**
+   * The items this deployment designates as sources its runs may cite, each with the page its evidence
+   * is read from and the key its bibliographic entry carries.
+   *
+   * A run cites what is here and nothing else, so an item that could not be read leaves the run with
+   * fewer sources than it named — or none — rather than with a corpus from somewhere else.
+   */
+  readonly citedItems?: ReadonlyArray<CitedItem>
+  /**
+   * How long the registration waits for this deployment's MCP client to register the library's tools,
+   * in milliseconds.
+   *
+   * A DEPLOYMENT SETTING, not a constant: how long a server takes to answer `tools/list` is a fact
+   * about the machine and the server. The bound exists so that a deployment which mounts no such
+   * server reports `metadata-tool-missing` rather than hanging its boot.
+   */
+  readonly sourceToolWaitMs?: number
+}
+
 export type LiteratureChannel =
   | {
     /** Search the synthetic corpus this package ships; no network is reached. */
@@ -183,45 +240,9 @@ export type LiteratureChannel =
      * request parameter, so a caller cannot widen the read to another library or another address.
      */
     readonly kind: 'zotero'
-    /** The local API's origin, e.g. `http://127.0.0.1:23119/api`. */
-    readonly apiBase: string
-    /** The library as the local endpoint addresses it: `users/0` for the signed-in user. */
-    readonly localLibraryPath: string
-    /** The collection whose members are this deployment's corpus. */
+    /** The collection whose members are this deployment's corpus for the landscape search. */
     readonly collectionKey: string
-    /** The MCP client's namespace for the Zotero server, e.g. `zotero`. */
-    readonly mcpServerName: string
-    readonly timeoutMs?: number
-    readonly pageSize?: number
-    /** The venue to record for an item whose own record states none. */
-    readonly fallbackVenue?: string
-    /**
-     * Which registry this run draws its citable sources from.
-     *
-     * Absent means `zotero`: a deployment that configured this channel named a library as its
-     * evidence, and drawing on the checked-in corpus as well would put sources in the bibliography
-     * that this deployment never pointed at.
-     */
-    readonly sourceRegistryMode?: SourceRegistryMode
-    /**
-     * The items this deployment designates as sources its runs may cite, each with the page its
-     * evidence is read from and the key its bibliographic entry carries.
-     *
-     * A run cites what is here and nothing else, so an item that could not be read leaves the run with
-     * fewer sources than it named — or none — rather than with a corpus from somewhere else.
-     */
-    readonly citedItems?: ReadonlyArray<CitedItem>
-    /**
-     * How long the registration waits for this deployment's MCP client to register the library's
-     * tools, in milliseconds.
-     *
-     * A DEPLOYMENT SETTING, not a constant: how long a server takes to answer `tools/list` is a fact
-     * about the machine and the server, and a deployment whose servers start slowly needs a longer
-     * window than one whose servers are already warm. The bound exists so that a deployment which
-     * mounts no such server reports `metadata-tool-missing` rather than hanging its boot.
-     */
-    readonly sourceToolWaitMs?: number
-  }
+  } & SourceLibraryConfig
 
 /** Bibliographic-resolver selection, configured the same way as the channel above. */
 export type CitationChannel =

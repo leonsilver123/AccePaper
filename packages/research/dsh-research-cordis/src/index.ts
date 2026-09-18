@@ -49,6 +49,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchToolsPlugin } from './tools.ts'
+import type { SourceLibraryConfig } from './tools.ts'
 import { createDeterministicAdapter } from './deterministic-llm.ts'
 import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
@@ -228,6 +229,18 @@ export interface Config {
    * separates fixture from live evidence.
    */
   readonly literatureSearch?: LiteratureChannel
+  /**
+   * The library whose sources a run may cite, when this deployment cites from one.
+   *
+   * INDEPENDENT OF {@link Config.literatureSearch}. That field says what A1 searches for the
+   * landscape; this one says what the manuscript may cite. Setting them from one switch made pointing
+   * a run at a curated library for CITATION also replace its SEARCH source, which emptied the corpus
+   * of a run that was configured correctly — see {@link SourceLibraryConfig}.
+   *
+   * A deployment that also wants the library AS its landscape source sets
+   * `literatureSearch.kind: 'zotero'` and may leave this absent: the channel's own fields supply it.
+   */
+  readonly sourceLibrary?: SourceLibraryConfig
   /**
    * Bibliographic-resolver channel for the citation identity chain. Omitted (or
    * `'fixture'`), citations resolve against the fixture; `'openalex'` resolves them
@@ -658,32 +671,35 @@ export class ResearchEngine extends Service {
     // THE LIBRARY IS KEPT, not only wrapped: the registration read below needs the provider itself
     // to read the metadata and the page of each designated item, which the adapter does not expose.
     const channel = config.literatureSearch
-    const zotero = channel?.kind === 'zotero'
-      ? new ZoteroProvider(
+    // ONE LIBRARY, TWO WAYS TO NAME IT. A deployment that names `sourceLibrary` gets the provider and
+    // the registrations from it whether or not the search channel is Zotero; one that only sets
+    // `literatureSearch.kind: 'zotero'` keeps the fields it already states there.
+    const library: SourceLibraryConfig | undefined = config.sourceLibrary
+      ?? (channel?.kind === 'zotero' ? channel : undefined)
+    const zotero = library === undefined
+      ? undefined
+      : new ZoteroProvider(
         {
-          apiBase: channel.apiBase,
-          localLibraryPath: channel.localLibraryPath,
-          mcpServerName: channel.mcpServerName,
-          ...(channel.timeoutMs === undefined ? {} : { timeoutMs: channel.timeoutMs }),
-          ...(channel.pageSize === undefined ? {} : { pageSize: channel.pageSize }),
+          apiBase: library.apiBase,
+          localLibraryPath: library.localLibraryPath,
+          mcpServerName: library.mcpServerName,
+          ...(library.timeoutMs === undefined ? {} : { timeoutMs: library.timeoutMs }),
+          ...(library.pageSize === undefined ? {} : { pageSize: library.pageSize }),
         },
         (url, init) => fetch(url, { signal: init.signal }),
         // READ LAZILY: the loader starts entries concurrently, so `tools` may not exist yet when this
         // constructor runs, and a port that resolved it once would be permanently undefined.
         {
           get: (name: string) => (ctx.get('tools') as {
-            get?: (toolName: string) => { execute(args: unknown, exec: { signal: AbortSignal }): Promise<unknown> } | undefined
+            get?: (toolName: string) => { execute(args: unknown, exec: { readonly signal: AbortSignal }): Promise<unknown> } | undefined
           } | undefined)?.get?.(name),
         },
       )
-      : undefined
-    this.sourceRegistryMode = channel?.kind === 'zotero' ? channel.sourceRegistryMode ?? 'zotero' : 'curated'
+    this.sourceRegistryMode = library?.sourceRegistryMode ?? (library === undefined ? 'curated' : 'zotero')
     this.zoteroProvider = zotero
-    this.citedItems = channel?.kind === 'zotero' ? channel.citedItems ?? [] : []
-    this.zoteroServerName = channel?.kind === 'zotero' ? channel.mcpServerName : undefined
-    this.sourceToolWaitMs = channel?.kind === 'zotero'
-      ? channel.sourceToolWaitMs ?? DEFAULT_SOURCE_TOOL_WAIT_MS
-      : DEFAULT_SOURCE_TOOL_WAIT_MS
+    this.citedItems = library?.citedItems ?? []
+    this.zoteroServerName = library?.mcpServerName
+    this.sourceToolWaitMs = library?.sourceToolWaitMs ?? DEFAULT_SOURCE_TOOL_WAIT_MS
     this.toolDeps = buildToolDeps(
       channel,
       config.citationResolver,
@@ -691,7 +707,7 @@ export class ResearchEngine extends Service {
         ? undefined
         : new ZoteroLiteratureAdapter(zotero, {
           collectionKey: channel.collectionKey,
-          ...(channel.fallbackVenue === undefined ? {} : { fallbackVenue: channel.fallbackVenue }),
+          ...(library?.fallbackVenue === undefined ? {} : { fallbackVenue: library.fallbackVenue }),
         }),
     )
     this.sessionCwd = resolveWorkspace(config.workspace)

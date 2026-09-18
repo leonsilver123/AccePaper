@@ -130,6 +130,8 @@ interface Built {
 async function buildEngine(options: {
   readonly registerToolsAfterMs?: number
   readonly waitMs: number
+  /** Names the library through `sourceLibrary` instead of through the search channel. */
+  readonly separateFromSearch?: boolean
 }): Promise<Built> {
   const host = await import('@deepseek-ai/' + 'dsh-system-prompt') as { default: new (ctx: Context) => unknown }
   const tools = await import('@deepseek-ai/' + 'dsh-tools') as { default: new (ctx: Context) => unknown }
@@ -142,18 +144,20 @@ async function buildEngine(options: {
   // that waits for `tools` — so an engine built with `new` never starts one, and the first version of
   // this spec read `registeredSources: []` with no failures: "not asked yet" looking exactly like
   // "nothing registered", which is the confusion this whole unit is about.
-  await ctx.plugin(ResearchEngine, {
-    literatureSearch: {
-      kind: 'zotero',
-      apiBase: library.base,
-      localLibraryPath: 'users/0',
-      collectionKey: 'ILFASAAE',
-      mcpServerName: 'zotero',
-      sourceRegistryMode: 'zotero',
-      citedItems: [{ itemKey: ITEM_KEY, page: 1, bibtexKey: 'rocheWhatHappensWhen2020' }],
-      sourceToolWaitMs: options.waitMs,
-    },
-  } as never)
+  const libraryConfig = {
+    apiBase: library.base,
+    localLibraryPath: 'users/0',
+    mcpServerName: 'zotero',
+    sourceRegistryMode: 'zotero',
+    citedItems: [{ itemKey: ITEM_KEY, page: 1, bibtexKey: 'rocheWhatHappensWhen2020' }],
+    sourceToolWaitMs: options.waitMs,
+  }
+  await ctx.plugin(ResearchEngine, (options.separateFromSearch === true
+    // THE SEARCH SOURCE AND THE CITABLE LIBRARY ARE DIFFERENT QUESTIONS. This deployment searches a
+    // catalogue and cites a curated library — which is the arrangement the single `literatureSearch`
+    // switch could not express, and whose absence emptied a correctly-configured run.
+    ? { literatureSearch: { kind: 'openalex' }, sourceLibrary: libraryConfig }
+    : { literatureSearch: { kind: 'zotero', collectionKey: 'ILFASAAE', ...libraryConfig } }) as never)
 
   const engine = (ctx as Context & { research: ResearchEngine }).research
   if (options.registerToolsAfterMs !== undefined) {
@@ -187,6 +191,19 @@ describe('reading the designated sources when the MCP client is still starting',
     expect(engine.registeredSources[0]?.identity).toBe('zotero:user:17529257:UA5MIGG3')
     // And the evidence travelled with it, at the version the stub stated.
     expect(engine.registeredSources[0]?.evidence?.sourceVersion).toBe('3408')
+  }, 20_000)
+
+  it('registers the source when the library is configured apart from the search channel', async () => {
+    // THE DECOUPLING ITSELF. A1 searches a catalogue; the manuscript cites the curated library. Before
+    // this, naming a library for citation also replaced what A1 searched, and a run that was configured
+    // correctly found nothing.
+    const { engine, stop } = await buildEngine({
+      registerToolsAfterMs: 0, waitMs: 5_000, separateFromSearch: true,
+    })
+    built.push({ engine, stop })
+    await engine.sourceRegistration
+    expect(engine.registrationFailures.join(' | ')).toBe('')
+    expect(engine.registeredSources[0]?.identity).toBe('zotero:user:17529257:UA5MIGG3')
   }, 20_000)
 
   it('gives up and names the missing tool when no client ever registers one', async () => {
