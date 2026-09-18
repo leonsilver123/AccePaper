@@ -110,6 +110,34 @@ export interface AppliedRevision {
    * number could not tell which.
    */
   readonly awaitingVerification: ReadonlyArray<string>
+  /**
+   * Verifications this round could not accept, each with the reason.
+   *
+   * A REFUSED READING IS NOT A CLOSED ISSUE. An abstention, a decision reached on nothing read, and a
+   * report about a body that has moved are all recorded here while their issue stays exactly where it
+   * was — so the round's own record shows a debt rather than a closure nobody performed.
+   */
+  readonly refusals?: ReadonlyArray<{ readonly code: string; readonly issueId: string; readonly detail: string }>
+  /**
+   * The verifications this round accepted, as the host recorded them.
+   *
+   * THE CALL EVIDENCE. Each names the execution that produced it, the session it ran in and the rules
+   * it was given, all minted by the host — so "an independent reading happened" is answerable from the
+   * run's own record rather than from a model's account of itself.
+   */
+  readonly verifications?: ReadonlyArray<{
+    readonly issueId: string
+    readonly verdict: string
+    readonly basis: string
+    readonly evidenceRead: ReadonlyArray<string>
+    readonly targetRefs: ReadonlyArray<{ readonly sectionId: string; readonly contentHash: string }>
+    readonly verifierExecutionId: string
+    readonly verifierSessionId: string
+    readonly verifierInstructionsVersion: string
+    readonly verifierRoute: { readonly provider: string; readonly model?: string }
+    readonly sharesAuthorRoute: boolean
+    readonly verifiedAt: string
+  }>
 }
 
 /**
@@ -239,6 +267,10 @@ export function applyRevision(
     changes,
     patchedSections: [...patched],
     openIssues: outcomes.filter(outcome => outcome.disposition === 'open').map(outcome => outcome.issueId),
+    // No refusals and no verifications: a round that applied patches has produced candidates for a
+    // reader, and whether a reader accepts them is settled later, by `verifyResolution`.
+    refusals: [],
+    verifications: [],
     awaitingVerification: outcomes
       .filter(outcome => outcome.disposition === 'pending-verification')
       .map(outcome => outcome.issueId),

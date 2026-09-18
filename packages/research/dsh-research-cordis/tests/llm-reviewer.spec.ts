@@ -104,7 +104,11 @@ async function reviewerOver(script: Entry[]) {
   ;(ctx as unknown as { llm: { registerAdapter: (p: string[], a: unknown) => void } })
     .llm.registerAdapter(['spec-review'], adapter)
   const reviewer = new LlmReviewer(ctx, {
-    provider: 'spec-review', model: 'spec-model', cwd: CWD, policyVersion: 'rules-1',
+    provider: 'spec-review',
+    model: 'spec-model',
+    cwd: CWD,
+    policyVersion: 'rules-1',
+    instructionsVersion: 'revision-review-spec-1',
   })
   return { reviewer, adapter }
 }
@@ -149,8 +153,8 @@ describe('a sentence read against the passage that was read for it', () => {
     expect(assessment.citeKey).toBe('cite-W1')
     // THE READER IS BOUND WITH ITS RULES, not with a timestamp: two verdicts the same day are two
     // verdicts, and a replaced reader invalidates its predecessor's.
-    expect(assessment.assessorVersion).toBe('llm:spec-review/spec-model@rules-1')
-    expect(assessment.judgedBy).toBe('llm:spec-review/spec-model')
+    expect(assessment.assessorVersion).toBe('llm-reviewer:spec-review/spec-model@rules-1')
+    expect(assessment.judgedBy).toBe('llm-reviewer:spec-review/spec-model')
     expect(assessment.judgedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u)
   })
 
@@ -193,9 +197,12 @@ describe('a sentence read against the passage that was read for it', () => {
 })
 
 describe('a revision read against the issue it was written for', () => {
-  it('records the decision in the route’s own name', async () => {
+  it('returns the decision and what was read, and NO identity', async () => {
     const { reviewer, adapter } = await reviewerOver([
-      reply('VERDICT: rejected\nBASIS: the section still reports the old baseline.'),
+      reply(
+        'VERDICT: rejected\nBASIS: the section still reports the old baseline.'
+        + '\nREAD: the concern; the change; the section as it now stands',
+      ),
     ])
     const verification = await reviewer.verify({
       issue: {
@@ -221,11 +228,13 @@ describe('a revision read against the issue it was written for', () => {
 
     expect(verification.verdict).toBe('rejected')
     expect(verification.basis).toContain('old baseline')
-    expect(verification.issueId).toBe('d4-issue-1')
-    // THE ROUTE, WHICH IS WHAT THE INDEPENDENCE CHECK COMPARES. A role label here would let one model
-    // certify its own reply by being called something else.
-    expect(verification.verifiedBy).toBe('llm:spec-review/spec-model')
-    expect(verification.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u)
+    expect(verification.evidenceRead).toEqual([
+      'the concern', 'the change', 'the section as it now stands',
+    ])
+    // NO IDENTITY AND NO TIMESTAMP ARE THE READER'S TO STATE. The host that started the execution
+    // records which one it was, in which session, under which rules — a reader that could name itself
+    // could forge a name, and a check against a self-reported one is a check a renamed reader passes.
+    expect(Object.keys(verification).sort()).toEqual(['basis', 'evidenceRead', 'verdict'])
   })
 
   it('refuses a decision this pipeline does not know', async () => {
@@ -251,7 +260,7 @@ describe('who the reviewer is', () => {
     const reviewer = new LlmReviewer(ctx, {
       provider: 'deepseek-official', model: 'deepseek-v4-flash', cwd: CWD,
     })
-    expect(reviewer.id).toBe('llm:deepseek-official/deepseek-v4-flash')
+    expect(reviewer.id).toBe('llm-reviewer:deepseek-official/deepseek-v4-flash')
     // No policy version stated means the id alone, which is still a version — a verdict bound to the
     // reader and nothing else.
     expect(reviewer.policyVersion).toBeUndefined()

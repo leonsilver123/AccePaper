@@ -75,13 +75,21 @@ const journal = process.argv.includes('--venue-rules-read')
  */
 const standInVerifier = {
   id: 'fixture:reviewer',
-  verify(input: { readonly issue: { readonly issueId: string } }) {
+  // THE ROLE, THE RULES AND THE ROUTE ARE THE VERIFIER'S TO DECLARE, and the runner refuses a
+  // verifier that claims the author's role or the author's rules. What it no longer refuses is a
+  // shared MODEL: the host mints the execution and the session, so a single-model deployment is a
+  // decision it is allowed to make, recorded as a shared-bias note on every reading.
+  role: 'revision-verifier' as const,
+  instructionsVersion: 'fixture-revision-review-1',
+  route: { provider: 'fixture' },
+  verify() {
     return Promise.resolve({
-      issueId: input.issue.issueId,
       verdict: 'verified' as const,
       basis: 'accepted by the fixture stand-in; no reading was performed',
-      verifiedBy: 'fixture:reviewer',
-      verifiedAt: new Date(0).toISOString(),
+      // IT READ NOTHING, AND SAYS SO. A stand-in that claimed to have judged the revision would be
+      // the failure this fixture exists to avoid, and a decision on an empty reading is refused — so
+      // the fixture names what it looked at, which is the answer it was handed.
+      evidenceRead: ['the concern and the answer, as the fixture was given them'],
     })
   },
 }

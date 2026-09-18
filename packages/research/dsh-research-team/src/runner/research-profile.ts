@@ -5,12 +5,17 @@
 // document. Neither belongs in the other: a traffic metric is not a rule, and a word limit is not a
 // research type.
 //
-// A JOURNAL RULE IS ONLY A RULE IF SOMEBODY READ IT. The plan behind this module is explicit — the
-// venue's author guide was not obtained, so its word limits, figure specifications and reference style
-// are UNKNOWN, and an unknown must not become a default. Every rule therefore carries the source it
-// came from, and a rule without one is refused rather than accepted: a profile that could state a
-// rule it did not verify is a profile that would silently enforce somebody's guess. An empty profile
-// is the honest state of a venue nobody has read yet, and it is what `TRC_PROFILE` is.
+// A JOURNAL RULE IS ONLY A RULE IF SOMEBODY READ IT. Every rule carries the page it came from, the
+// date it was read and the article type it applies to, and a rule without a source is refused rather
+// than accepted: a profile that could state a rule it did not verify would silently enforce somebody's
+// guess on every manuscript.
+//
+// THREE FINDINGS, AND THE DIFFERENCE BETWEEN THEM IS THE POINT. `verified` — the guide was read and
+// states this. `not_specified` — the guide was READ and requires nothing, which is a finding rather
+// than a gap. `unknown` — nobody has read the guide for this subject, which is what a venue whose
+// guide could not be obtained leaves behind, and the only state that refuses a submission. TRC was in
+// the third state until 2026-09-18, when the user obtained the official text; its rules are now read
+// from it, and `unreadRulesFor` keeps the third state expressible for the next venue.
 
 import { METRIC_REGISTRY, metricsFor } from './metrics.ts'
 import type { MetricDefinition, ResearchType } from './metrics.ts'
@@ -28,46 +33,166 @@ export interface JournalRule {
   /** The article type this applies to, as the guide names it. */
   readonly articleType: string
   /**
-   * Whether the rule's content was established, or only its existence.
+   * What reading the guide established about this rule.
    *
-   * A rule is never `'verified'` because it seems obvious: a manuscript is published under the rules
-   * that were read, and a limit somebody remembers is a guess wearing the venue's name.
+   * `'verified'` — somebody read the requirement and `condition` states it in the guide's own terms.
+   * `'unknown'` — the guide has not been read for this, usually because it could not be obtained.
+   * `'not_specified'` — THE GUIDE WAS READ AND STATES NO REQUIREMENT. That is a finding, not a gap:
+   * the user's guidance of 2026-09-18 requires it rather than leaving an unread rule to look the same
+   * as a venue that has no rule. A rule is never `'verified'` because it seems obvious.
    */
-  readonly verification: 'verified' | 'unknown'
-  /** The condition a manuscript must meet, or what attempting the page produced. */
+  readonly verification: 'verified' | 'unknown' | 'not_specified'
+  /** The condition a manuscript must meet, what attempting the page produced, or why nothing is stated. */
   readonly detail: string
+  /** Where in the guide this was read — a heading, so a reader can check the rule against its sentence. */
+  readonly readAt?: string
 }
+
+/**
+ * The official guide these rules were read from, and the date they were read.
+ *
+ * ONE HOME FOR THE SOURCE: every rule in {@link TRC_PROFILE} cites it, so a reader checking a rule
+ * against its sentence goes to one place — the retrieved text, preserved with its own provenance at
+ * `plan/venue/trc-guide-for-authors.md`. Two rules read from two copies of a guide are two rules.
+ */
+const GUIDE =
+  'https://www.sciencedirect.com/journal/transportation-research-part-c-emerging-technologies/publish/guide-for-authors'
+
+/** The date the guide above was read; see {@link GUIDE}. */
+const READ_ON = '2026-09-18'
 
 /** A venue's requirements, as far as anyone has verified them. */
 export interface JournalProfile {
   readonly id: string
   readonly name: string
-  /** The verified rules. Empty means nobody has read the guide — not that there are no rules. */
+  /**
+   * The rules, as far as this deployment has read them.
+   *
+   * AN EMPTY LIST MEANS NOBODY HAS READ THE GUIDE — not that the venue requires nothing, which is a
+   * different finding and is recorded per rule as `not_specified`.
+   */
   readonly rules: ReadonlyArray<JournalRule>
 }
 
 /**
- * Transportation Research Part C: the questions its guide answers, none of them read.
+ * Transportation Research Part C, as its official guide states it.
  *
- * MEASURED, 2026-09-18, FROM THIS HOST. Three official pages were attempted — ScienceDirect's
- * `…/publish/guide-for-authors` and `…/about/author-information`, and Elsevier's
- * `…/journals/…/guide-for-authors` — and every one answered HTTP 403 with a JavaScript challenge body
- * (1.2 MB) rather than the guide. So the rules are recorded as what they govern, each `unknown`, with
- * the page that would state it and what the attempt produced. Listing them is not defaulting them: an
- * unknown rule is refused at publication, while an omitted one is a rule nobody misses.
+ * READ ON 2026-09-18, after this repository's own fetchers were refused three times: ScienceDirect's
+ * `…/publish/guide-for-authors` and `…/about/author-information` and Elsevier's
+ * `…/journals/…/guide-for-authors` each answered HTTP 403 with a JavaScript challenge body (1.2 MB)
+ * rather than the guide. The user obtained the text from a browser and it is preserved with its source,
+ * date and SHA-256 at `plan/venue/trc-guide-for-authors.md`; each rule below names the heading it was
+ * read under, so it can be checked against its own sentence.
+ *
+ * READ FOR THE `Research Paper` ARTICLE TYPE. The guide states different criteria for an Overview
+ * Article, and a review is a different research workflow rather than a relabelling of this one.
  */
 export const TRC_PROFILE: JournalProfile = {
   id: 'trc',
   name: 'Transportation Research Part C: Emerging Technologies',
-  rules: unreadRulesFor(
-    'https://www.sciencedirect.com/journal/transportation-research-part-c-emerging-technologies/publish/guide-for-authors',
-    '2026-09-18',
-    'the official guide answered HTTP 403 with a JavaScript challenge body, not the page',
-  ),
+  rules: [
+    {
+      id: 'abstract-length',
+      statement: 'the abstract does not exceed 250 words',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'concise and factual, does not exceed 250 words; it states the purpose, the procedures, the main findings with their statistical significance where applicable, and the principal conclusions, and it stands alone',
+      readAt: 'Abstract',
+    },
+    {
+      id: 'keywords',
+      statement: '1 to 7 English keywords',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: '1 to 7 keywords for indexing, in English, avoiding multi-word keys built with "and" or "of"',
+      readAt: 'Keywords',
+    },
+    {
+      id: 'highlights',
+      statement: '3 to 5 bullet points, each at most 85 characters including spaces',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'REQUIRED at submission, as a separate editable file whose name contains "highlights"',
+      readAt: 'Highlights',
+    },
+    {
+      id: 'graphical-abstract',
+      statement: 'encouraged, not required',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'not_specified',
+      detail: 'the guide ENCOURAGES a graphical abstract and states no requirement to provide one, so a manuscript without it is not refused; preferred files are TIFF, EPS, PDF or MS Office',
+      readAt: 'Graphical abstract',
+    },
+    {
+      id: 'reference-style',
+      statement: 'the journal applies its own reference style at proof stage',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: "the guide names no style for the author to apply and states that the journal's style is"
+        + ' applied after acceptance, at proof stage; every citation must appear in the reference list'
+        + ' and vice versa, and a CSL template is available for reference managers',
+      readAt: 'References',
+    },
+    {
+      id: 'figures-and-tables',
+      statement: 'editable source files; at least 300 dpi for halftones, 1000 dpi for line art',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'artwork in separate files with a caption each; halftone minimum 300 dpi (single column 1063 px, full page 2244 px), line art 1000 dpi (3543 / 7480 px); tables and equations as editable text, numbered consecutively, tables cited in the text and free of vertical rules',
+      readAt: 'Figures, images and other artwork; Tables; Math formulae',
+    },
+    {
+      id: 'manuscript-file',
+      statement: 'editable Word (.doc/.docx) or LaTeX (.tex) source; a PDF is not acceptable',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'editable source files for the entire submission including figures and tables; Word in a single-column layout, double-column only for LaTeX; sections numbered 1, 1.1, 1.1.1',
+      readAt: 'Submission checklist; Preparing your manuscript',
+    },
+    {
+      id: 'declarations',
+      statement: 'competing interests, and a declaration of generative AI use, are required',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'the declarations tool must always be completed; a Declaration of generative AI and AI-assisted technologies section is required where such tools were used in preparation, and acknowledgements go in a separate section directly before the reference list',
+      readAt: 'Declaration of competing interests; Declaration of generative AI use; Acknowledgements',
+    },
+    {
+      id: 'anonymity',
+      statement: 'single anonymized review - the manuscript is NOT anonymized by the author',
+      source: GUIDE,
+      accessedAt: READ_ON,
+      articleType: 'Research Paper',
+      verification: 'verified',
+      detail: 'the journal follows a SINGLE anonymized review process, in which the reviewers are not identified to the authors; the author names and affiliations stay on the title page, so removing them would be the error here rather than the requirement',
+      readAt: 'Peer review',
+    },
+  ],
 }
 
 /**
  * The requirements every journal's guide states, none of them read.
+ *
+ * THE STATE A GUIDE THAT COULD NOT BE OBTAINED IS IN, kept because a venue whose rules nobody has read
+ * must be distinguishable from one whose rules were read and state nothing, and because the refusal it
+ * produces names what to go and read. `TRC_PROFILE` no longer uses it: the official guide was obtained
+ * on 2026-09-18 and its rules are recorded above.
  *
  * @param source - the official page that states them.
  * @param accessedAt - the date that page was attempted, ISO 8601.

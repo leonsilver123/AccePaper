@@ -471,57 +471,93 @@ describe('a revision round that leaves a concern open', () => {
 })
 
 describe('who counts as a second reader', () => {
-  it('refuses a verification from the route that wrote the answers', async () => {
-    // THE AUTHOR OF A MODEL-WRITTEN REPLY IS THE ROUTE THAT WROTE IT. This deployment's writer states
-    // `test-provider/test-model`, so a reviewer configured on that same route is refused — one model
-    // reading its own reply is not a second reader, and a verifier identity that named the ROLE
-    // rather than the route would have let it certify itself.
-    //
-    // The step FAILS rather than settling the issues nominally: a run whose reviewer was the author
-    // has not been reviewed, and reporting it as reviewed is the defect the pipeline review named.
+  it('accepts one model holding both roles, because the EXECUTIONS are what differ', async () => {
+    // THE USER'S RULING OF 2026-09-18, on the production path: "a different model may not substitute
+    // for these conditions, and the same model must not be refused for being the same model". The
+    // staged writer states `test-provider/test-model` and this reviewer reads on that same route, so
+    // they share it — and the reading is still valid, because the host started it as its own
+    // execution, in its own session, under the reviewer's own rules.
     const reply = [
       'CONCERN: The results section states no comparison.',
       'SECTION: results',
       'RESPONSE: The comparison is stated.',
       'PATCH: The comparison against this study baseline is stated in Table 1.',
-    ].join('\n')
-    const store: ResearchRunStore = new Map()
-    const run = await runT19B(store, {
-      studyPlan: DEFAULT_PLAN,
-      proseWriter: stagedWriter([reply, reply]),
-      casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
-      resolutionVerifier: {
-        id: 'the same model, called a reviewer',
+    ].join(String.fromCharCode(10))
+    const { rebuttal } = await revisedRun([reply, reply], { verifier: acceptingReviewer() })
+    // THE ROUND WAS READ AND THE READING WAS ACCEPTED. The first round's patch was applied, a reader
+    // answered it, and the cycle took a second reading because the deployment's policy requires two.
+    const audit = (rebuttal?.['verificationAudit'] ?? []) as ReadonlyArray<{
+      readonly issueId: string
+      readonly verdict: string
+      readonly evidenceRead: ReadonlyArray<string>
+      readonly verifierExecutionId: string
+      readonly verifierSessionId: string
+      readonly verifierInstructionsVersion: string
+      readonly sharesAuthorRoute: boolean
+    }>
+    expect(audit.length).toBeGreaterThan(0)
+    expect(audit[0]?.verdict).toBe('verified')
+    expect(audit[0]?.evidenceRead.length).toBeGreaterThan(0)
+    // AND THE SHARED ROUTE IS ON THE RECORD, where a reader can weigh it: a single model writing and
+    // reviewing is a shared-bias risk, which is a fact to state rather than a gate to close.
+    expect(audit[0]?.sharesAuthorRoute).toBe(true)
+    // THE CALL EVIDENCE IS THE HOST'S: an execution and a session it minted, and the reviewer's own
+    // rules version — not a name the model supplied.
+    expect(audit[0]?.verifierExecutionId).toMatch(/^verify-/u)
+    expect(audit[0]?.verifierSessionId).toMatch(/^research-verify-/u)
+    expect(audit[0]?.verifierInstructionsVersion).toBe('revision-review-1')
+    // NO ROLE OR INDEPENDENCE REFUSAL WAS RAISED: the step completed and produced its artifact.
+    expect(rebuttal?.['stoppedBecause']).not.toBeUndefined()
+  })
+
+  it('refuses a verifier that cannot say what it read', async () => {
+    // "未读必要证据不得关闭问题." A `verified` with nothing behind it is not a reading, and the issue
+    // it would have closed stays pending — the round's record shows a debt rather than a closure
+    // nobody performed.
+    const reply = [
+      'CONCERN: The results section states no comparison.',
+      'SECTION: results',
+      'RESPONSE: The comparison is stated.',
+      'PATCH: The comparison against this study baseline is stated in Table 1.',
+    ].join(String.fromCharCode(10))
+    const { rebuttal } = await revisedRun([reply, reply], {
+      verifier: {
+        id: 'a-reader-that-read-nothing',
+        role: 'revision-verifier',
+        instructionsVersion: 'revision-review-1',
+        route: { provider: 'test-provider', model: 'test-model' },
         verify: input => Promise.resolve({
-          issueId: input.issue.issueId,
           verdict: 'verified' as const,
-          basis: 'I wrote it and it looks right',
-          verifiedBy: 'llm:test-provider/test-model',
-          verifiedAt: new Date(0).toISOString(),
-        }),
+          basis: 'looks right to me',
+          evidenceRead: [],
+          issueId: input.issue.issueId,
+        } as never),
       },
     })
-    const d4 = run.steps.find(step => step.stepId === 'D4-rebuttal')
-    expect(d4?.status).toBe('in_progress')
-    expect(d4?.executeError).toMatch(/verification-not-independent/u)
-    expect(d4?.executeError).toMatch(/cannot certify itself/u)
-    // NOTHING WAS SETTLED ON A READING THAT WAS NOT ONE. The rebuttal artifact is absent, so no
-    // downstream step can report these concerns as answered.
-    expect(getArtifact(store, run.runId, 'rebuttal')).toBeUndefined()
+    expect(rebuttal?.['awaitingVerification']).toEqual(['d4-issue-1'])
+    expect(rebuttal?.['openIssues']).toEqual([])
   })
 })
 
-/** A reader that accepts every pending revision, attributed to somebody the author is not. */
+/**
+ * A reader that accepts every pending revision, on the SAME route the staged writer uses.
+ *
+ * The shared route is deliberate: this deployment runs one model, and the user's ruling of 2026-09-18
+ * is that this must not be refused. What makes it a second reader is that the host started it as its
+ * own execution, in its own session, under the reviewer's own rules.
+ */
 function acceptingReviewer(): ResolutionVerifier {
   return {
     id: 'spec-reviewer',
+    role: 'revision-verifier',
+    instructionsVersion: 'revision-review-1',
+    route: { provider: 'test-provider', model: 'test-model' },
     verify(input) {
       return Promise.resolve({
-        issueId: input.issue.issueId,
         verdict: 'verified' as const,
         basis: 'the results section now states the comparison',
-        verifiedBy: 'spec-reviewer',
-        verifiedAt: new Date(0).toISOString(),
+        evidenceRead: ['the concern', 'the change', 'the section as it now stands'],
+        issueId: input.issue.issueId,
       })
     },
   }

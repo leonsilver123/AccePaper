@@ -141,6 +141,16 @@ export type ProseChannel =
     readonly template?: string
   }
 
+/**
+ * The review rules a deployment that states none is held to.
+ *
+ * A DEFAULT HERE IS NOT A CLAIM ABOUT THE RULES: it names the version so a verification can say which
+ * instructions it was taken under, and the alternative — an absent version — is what the runner
+ * refuses, because two roles are distinct tasks by their instructions. A deployment that changes what
+ * it asks its reviewer to do states its own version.
+ */
+export const DEFAULT_REVIEW_INSTRUCTIONS_VERSION = 'revision-review-1'
+
 /** Route the deterministic prose provider registers on when a deployment names none. */
 export const DETERMINISTIC_PROSE_PROVIDER = 'research-deterministic'
 
@@ -314,10 +324,11 @@ export interface Config {
    * its sentences were not assessed and its revisions were not verified, which is a state a reader can
    * see, and `checkFinalPackage` refuses the package a journal would receive.
    *
-   * THE SAME MODEL ON BOTH SIDES IS NOT INDEPENDENCE. `verifier` must name a different route from
-   * `prose`, because D4 compares the verifier's identity with the author's and refuses a verification
-   * by whoever wrote the answer. A deployment that points both at one model gets a refused
-   * verification rather than a nominal one.
+   * ONE MODEL MAY HOLD BOTH ROLES. What D4 requires is that the two executions differ — different
+   * execution identity, different session, their own rules — because those are what make the reading
+   * stand apart from the revision. Whether they share a provider and model is RECORDED on every
+   * verification as a shared-bias note; it is not a refusal, and a deployment that runs on one model
+   * is making a decision it is allowed to make.
    */
   readonly review?: ReviewChannel
 }
@@ -327,7 +338,7 @@ export interface Config {
  */
 export interface ReviewChannel {
   /** The reader that judges one citing sentence against the source it cites. */
-  readonly assessor?: LlmReviewerConfig
+  readonly assessor?: Omit<LlmReviewerConfig, 'instructionsVersion'>
   /** The reader that decides whether a revision answers the issue it was written for. */
   readonly verifier?: LlmReviewerConfig
   /**
@@ -631,8 +642,16 @@ export class ResearchEngine extends Service {
     // this at its prose route gets a refused verification rather than a nominal one — see
     // {@link Config.review}.
     const review = config.review
-    const reviewerFor = (row: LlmReviewerConfig | undefined): LlmReviewer | undefined =>
-      row === undefined ? undefined : new LlmReviewer(ctx, { ...row, cwd: this.sessionCwd })
+    const reviewerFor = (row: (Omit<LlmReviewerConfig, 'instructionsVersion'> & { readonly instructionsVersion?: string }) | undefined): LlmReviewer | undefined =>
+      row === undefined
+        ? undefined
+        : new LlmReviewer(ctx, {
+          // THE VERIFIER MUST STATE ITS RULES; the assessor's are already versioned by
+          // `policyVersion`, and its verdicts are cached against that.
+          instructionsVersion: row.instructionsVersion ?? DEFAULT_REVIEW_INSTRUCTIONS_VERSION,
+          ...row,
+          cwd: this.sessionCwd,
+        })
     this.statementAssessor = reviewerFor(review?.assessor)
     this.resolutionVerifier = reviewerFor(review?.verifier)
     // REFUSED HERE, where the value enters, rather than where the review cycle would read it: a floor

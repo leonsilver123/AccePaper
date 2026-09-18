@@ -71,7 +71,7 @@
 // (declared dependency). No tools src is modified. All core engine functions used
 // here come from the public `@deepseek-ai/dsh-research-core` entry.
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 
 import { CASE_PACK_INPUT_SLUGS } from './case-pack.ts'
@@ -173,6 +173,7 @@ import { assessStatements, checkStatementSupport } from './statement-support.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
 import type { StatementAssessment } from './statement-support.ts'
 import { verifyPending, verifyResolution } from './resolution-verifier.ts'
+import type { ExecutionIdentity, ResolutionVerifier as ResolutionVerifierPort } from './resolution-verifier.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
 import { DEFAULT_REVIEW_POLICY, reviewSatisfaction } from './review-policy.ts'
 import type { ReviewPolicy, ReviewedRound } from './review-policy.ts'
@@ -909,19 +910,59 @@ function proseRouteOf(result: { readonly provider: string; readonly model: strin
 }
 
 /**
- * The model route that produced a prose result, as an identity.
+ * The execution that WROTE the answers, as this side records it.
  *
- * ONE SPELLING, SO TWO SIDES CAN BE COMPARED. A verification is refused when its `verifiedBy` equals
- * the author's id, and the author of a model-written reply is the route that wrote it. Writing the
- * route any other way here — with a role prefix, say — would make a model's reading of its own answer
- * look independent, which is the one thing that check exists to catch.
+ * MINTED HERE, and that is the point: `resolution-verifier.ts` compares executions, so an identity a
+ * model could state for itself would be worthless — a verifier that named its own would pass any
+ * check written against the name. The id and the session are this run's; the route is recorded beside
+ * them so a reader can see whether a single model wrote and reviewed, which is a shared-bias risk the
+ * user's ruling says to RECORD rather than to refuse.
  *
  * @param result - what the prose write resolved with.
- * @returns the route, spelled the way `LlmReviewer` spells its own id.
+ * @returns the author's execution identity for this round.
  */
-function llmRoute(result: { readonly provider: string; readonly model: string }): string {
-  return `llm:${result.provider}/${result.model}`
+function modelExecution(result: { readonly provider: string; readonly model: string }): ExecutionIdentity {
+  return {
+    executionId: `author-${randomUUID()}`,
+    // THE AUTHOR'S OWN SESSION: the prose writer creates one per call, and this names the same run
+    // the answers were written in. A verifier handed this session would be continuing the author's
+    // own defence of the revision, which is the condition `verification-same-session` refuses.
+    sessionId: `research-prose-${randomUUID()}`,
+    role: 'prose-author',
+    instructionsVersion: AUTHOR_INSTRUCTIONS_VERSION,
+    provider: result.provider,
+    model: result.model,
+  }
 }
+
+/**
+ * An execution identity for a round whose answers the built-in text wrote.
+ *
+ * The fixture route runs no model, so the identity says so: it names the fixture as the writer, and a
+ * verifier sharing nothing with it is the ordinary case rather than a diversity question.
+ *
+ * @param producer - what wrote the answers.
+ * @param instructionsVersion - the rules the author was given.
+ * @returns the author's execution identity for this round.
+ */
+function fixtureExecution(producer: string, instructionsVersion: string): ExecutionIdentity {
+  return {
+    executionId: `${producer}-${randomUUID()}`,
+    sessionId: `${producer}-session-${randomUUID()}`,
+    role: 'prose-author',
+    instructionsVersion,
+    provider: 'fixture',
+  }
+}
+
+/**
+ * The version of the instructions the AUTHORING role is given.
+ *
+ * A string, not a date: "the same rules" is what makes two executions the same task, and two runs on
+ * one day are two runs. A deployment that changes what it asks its author to do changes this, and
+ * verifications taken under the old rules stop matching the ones the new author produces.
+ */
+const AUTHOR_INSTRUCTIONS_VERSION = 'd4-author-instructions-1'
 
 /**
  * The research this run carries.
@@ -3084,12 +3125,16 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let points: ReadonlyArray<RebuttalPoint> = []
   let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
-  // WHO WROTE THE ANSWERS, which is what a verification is checked against for independence. The
-  // ROUTE when a model wrote them, not the step's role name: a verifier configured on the same model
-  // would otherwise pass the independence check by being called something else, and one model reading
-  // its own reply is not a second reader.
-  let authorId = D4_PRODUCER
+  // WHO WROTE THE ANSWERS, as this side records it. An EXECUTION — its own id, its own session, the
+  // role it occupied and the version of the instructions it was given — because those are what a
+  // verification has to differ from. The model is recorded too, and only as a shared-bias note:
+  // a deployment that writes and verifies on one model is making a decision it is allowed to make.
+  let author: ExecutionIdentity = fixtureExecution('fixture:rebuttal', 'deterministic-fixture-v1')
   let applied = applyRevision(sections, [])
+  // THE CYCLE'S READINGS, not the last round's. A round that closes everything it found produces no
+  // verifications at all, so an audit taken from the final `applied` would report "nobody read this"
+  // about a revision that was read twice.
+  const verifications: Array<NonNullable<AppliedRevision['verifications']>[number]> = []
   // HOW MANY ROUNDS THIS TOOK, AND WHY IT STOPPED. One round is not a revision cycle: a concern the
   // applier refused — written against another version, changing nothing, or conflicting with another
   // patch — used to end there, with the round number hard-coded to 1 and nothing to try again.
@@ -3177,8 +3222,9 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     )
     applied = await appliedWithVerification(
       ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
-      new Map(applied.sections.map(section => [section.id, section.bodyText])), authorId,
+      new Map(applied.sections.map(section => [section.id, section.bodyText])), author,
     )
+    verifications.push(...applied.verifications ?? [])
     // The fixture path writes its issues once; one round IS its whole cycle, and it is recorded as
     // one rather than pretending a model was asked again.
     // A ROUND IS NOT "CLOSED" BECAUSE IT APPLIED PATCHES. The stop condition reads what is still
@@ -3249,7 +3295,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       }))
       rebuttalSource = proseLabelling(writer).source
       rebuttalRoute = proseRouteOf(analysis)
-      if (rebuttalSource === 'model') authorId = llmRoute(analysis)
+      if (rebuttalSource === 'model') author = modelExecution(analysis)
 
       // The basis each patch is written against is THIS round's body, not the draft's.
       const currentBodies = new Map(current.map(section => [section.id, section.bodyText]))
@@ -3259,8 +3305,9 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       )
       applied = await appliedWithVerification(
         ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(currentBodies.get(issue.sectionId) ?? '') })),
-        new Map(applied.sections.map(section => [section.id, section.bodyText])), authorId,
+        new Map(applied.sections.map(section => [section.id, section.bodyText])), author,
       )
+      verifications.push(...applied.verifications ?? [])
       // NO PROGRESS IS MEASURED BY SECTION, NOT BY ISSUE ID. A round numbers its issues from one, so
       // `d4-issue-1` names a different concern in every round — comparing ids would call two rounds
       // that failed on the SAME sections "progress" and spend the budget re-asking. What repeated
@@ -3342,6 +3389,9 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // reader, and a record that showed only `openIssues: []` would read as three answered
         // concerns — the reading the review of 2026-09-18 refused.
         awaitingVerification: applied.awaitingVerification,
+        // THE READINGS THEMSELVES, so "an independent reading happened" is answerable from the run's
+        // own record: each names the execution, the session and the rules the host minted for it.
+        verificationAudit: verifications,
         // THE CYCLE'S OWN RECORD, so a reader can see whether the author was asked once or as many
         // times as the configuration allows, and whether the last round stopped because it closed
         // everything or because asking again could not change anything.
@@ -4039,35 +4089,46 @@ function carriedAssessments(ctx: ExecCtx): ReadonlyArray<StatementAssessment> {
  *
  * THE INDEPENDENT READ, and the reason a revision no longer closes its own issues. Without a verifier
  * the round's issues stay `pending-verification`: applying a patch and arguing for no change are both
- * things the AUTHOR did, and neither answers the concern it was written for. With one, each pending
- * issue is read by somebody else — a verification naming the author is refused outright rather than
- * recorded, because an answer that certifies itself is the defect this replaced.
+ * things the AUTHOR did, and neither answers the concern it was written for.
+ *
+ * WHO THE TWO EXECUTIONS ARE IS THE HOST'S TO SAY. This function mints the verifier's identity and
+ * hands it, with the author's, to `verifyPending`, which builds each record from what the host knows.
+ * A verifier cannot name itself, so renaming one changes nothing; what is compared is the execution,
+ * the session and the rules version — not the model, which is recorded as a shared-bias note.
  *
  * @param ctx - the D4 execution context.
  * @param applied - what the round did to the manuscript.
  * @param issues - the round's issues, as raised.
  * @param revisedBodies - the section bodies as they now stand.
- * @param authorId - who wrote the answers, so a verification by that same source is refused.
+ * @param author - the execution that wrote the answers, as this side recorded it.
  * @returns the revision with its outcomes settled as far as they can be.
- * @throws {Error} when a verification is not independent, or names an issue nothing left pending.
+ * @throws {Error} when a refusal is a defect in the deployment rather than in one reading.
  */
 async function appliedWithVerification(
   ctx: ExecCtx,
   applied: AppliedRevision,
   issues: ReadonlyArray<RevisionIssue>,
   revisedBodies: ReadonlyMap<string, string>,
-  authorId: string,
+  author: ExecutionIdentity,
 ): Promise<AppliedRevision> {
   const verifier = ctx.resolutionVerifier
   if (verifier === undefined) return applied
-  const verifications = await verifyPending(applied.outcomes, verifier, {
-    issues, changes: applied.changes, revisedBodies,
+  const identity = verifierIdentityOf(verifier)
+  const { verifications, fatal } = await verifyPending(applied.outcomes, verifier, {
+    issues, changes: applied.changes, revisedBodies, identity, author,
+    now: () => new Date().toISOString(),
   })
-  const settled = verifyResolution(applied.outcomes, verifications, authorId)
-  if (settled.refusals.length > 0) {
+  const settled = verifyResolution(applied.outcomes, verifications, author, revisedBodies)
+  // A READING THAT FAILED IS NOT A DEPLOYMENT THAT FAILED. A verifier that decided on nothing read,
+  // or reported on a body that has moved, is refused — and its issue stays exactly where it was, so
+  // the round's record shows a debt rather than a closure. The three codes in `fatal` are different:
+  // they mean this deployment's review is not the two-role review it claims, and a run that carried
+  // on would be publishing a reading that never stood apart from the revision.
+  const stopped = [...fatal, ...settled.fatal]
+  if (stopped.length > 0) {
     throw new Error(
-      `[D4-rebuttal] [${settled.refusals[0]?.code ?? 'verification-not-independent'}] `
-      + settled.refusals.map(refusal => refusal.detail).join('; '),
+      `[D4-rebuttal] [${stopped[0]?.code ?? 'verification-not-independent'}] `
+      + stopped.map(refusal => refusal.detail).join('; '),
     )
   }
   return {
@@ -4077,6 +4138,34 @@ async function appliedWithVerification(
     awaitingVerification: settled.outcomes
       .filter(outcome => outcome.disposition === 'pending-verification')
       .map(outcome => outcome.issueId),
+    refusals: settled.refusals,
+    // WHAT WAS READ, BY WHOM, UNDER WHICH RULES. Accepted readings only: a refused one changed nothing
+    // and is recorded as the refusal it is.
+    verifications: verifications.filter(verification => settled.outcomes.some(outcome =>
+      outcome.issueId === verification.issueId
+      && (outcome.disposition === 'answered' || outcome.disposition === 'open'))),
+  }
+}
+
+/**
+ * The execution the host starts for one round of verification.
+ *
+ * MINTED HERE, NOT ASKED FOR. Every field is a fact this side holds: the id is random and unique, the
+ * session is its own — so the verifier never continues the author's session — and the rules version
+ * comes from the verifier's own declaration. The route is recorded because a reader needs to see
+ * whether the two executions shared a model, which is a risk note and not a decision.
+ *
+ * @param verifier - the deployment's verifier.
+ * @returns the identity the verifications of this round are recorded under.
+ */
+function verifierIdentityOf(verifier: ResolutionVerifierPort): ExecutionIdentity {
+  return {
+    executionId: `verify-${randomUUID()}`,
+    sessionId: `research-verify-${randomUUID()}`,
+    role: verifier.role,
+    instructionsVersion: verifier.instructionsVersion,
+    provider: verifier.route.provider,
+    ...verifier.route.model === undefined ? {} : { model: verifier.route.model },
   }
 }
 

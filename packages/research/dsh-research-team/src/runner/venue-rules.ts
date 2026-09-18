@@ -57,7 +57,9 @@ export function checkVenueRules(profile: JournalProfile | undefined): ReadonlyAr
       unverified: [],
     }]
   }
-  const unverified = profile.rules.filter(rule => rule.verification !== 'verified')
+  // `not_specified` IS NOT A GAP. A guide that was read and states no requirement for a subject has
+  // answered the question; only a rule nobody read leaves the submission measured against nothing.
+  const unverified = profile.rules.filter(rule => rule.verification === 'unknown')
   if (unverified.length === 0) return []
   return [{
     code: 'journal-rules-unverified',

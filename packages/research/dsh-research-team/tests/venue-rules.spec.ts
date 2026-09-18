@@ -1,10 +1,12 @@
 /**
  * May this manuscript be published under the rules that were read?
  *
- * THE GAP THIS RECORDS IS THE ONE THE PLAN NAMES: the official TRC guide could not be read from this
- * host, and the honest response is a record that says so — not a word limit somebody remembers. A rule
- * is `'verified'` when someone read it at its source on a stated date, and `'unknown'` otherwise, and
- * a manuscript is published under the rules that were read.
+ * THE GAP THIS CLOSED IS THE ONE THE PLAN NAMES, and on 2026-09-18 it was closed: the official TRC
+ * guide could not be read from this host, and the honest response was a record that said so rather
+ * than a word limit somebody remembered. The user then obtained the official text, so `TRC_PROFILE`
+ * now records what it states. The three states remain, and the distinction between them is the point:
+ * `'verified'` — read, with the condition in the guide's own terms; `'not_specified'` — read, and the
+ * guide requires nothing; `'unknown'` — nobody has read it, which is the only one that blocks.
  */
 import { describe, expect, it } from 'vitest'
 import { checkVenueRules } from '../src/runner/venue-rules.ts'
@@ -29,41 +31,34 @@ function profile(rules: ReadonlyArray<JournalRule>): JournalProfile {
   return { id: 'a-venue', name: 'A Journal', rules }
 }
 
-describe('the guide this host could not read', () => {
+describe('a guide that could not be obtained', () => {
   it('is recorded as the questions it answers, every one unknown', () => {
-    // THE QUESTIONS, NOT ANSWERS. These are what every journal's guide states, and recording them as
-    // questions is what makes the gap visible: a filled-in word limit would be a guess wearing the
-    // journal's name, and an omitted one is a rule nobody misses.
-    expect(TRC_PROFILE.rules.length).toBeGreaterThan(0)
-    expect(TRC_PROFILE.rules.every(rule => rule.verification === 'unknown')).toBe(true)
-    expect(TRC_PROFILE.rules.map(rule => rule.id)).toContain('abstract-length')
-    expect(TRC_PROFILE.rules.map(rule => rule.id)).toContain('reference-style')
-    for (const rule of TRC_PROFILE.rules) {
-      // WHERE IT WOULD BE STATED AND WHAT THE ATTEMPT PRODUCED, so a reader can go and read it rather
-      // than take this record's word for the gap.
-      expect(rule.source).toContain('guide-for-authors')
-      expect(rule.accessedAt).toBe('2026-09-18')
-      expect(rule.detail).toContain('403')
-      // The article type is part of the rule, and this record does not know it either: a journal
-      // states different limits for a review than for a research paper.
-      expect(rule.articleType).toContain('unstated')
-    }
-  })
-
-  it('refuses a submission under it, naming every unread requirement', () => {
-    const refusals = checkVenueRules(TRC_PROFILE)
-    expect(refusals).toHaveLength(1)
-    expect(refusals[0]?.code).toBe('journal-rules-unverified')
-    expect(refusals[0]?.detail).toContain('have not been established')
-    expect(refusals[0]?.detail).toContain('published under the rules that were read')
-    expect(refusals[0]?.unverified).toContain('abstract-length')
-  })
-
-  it('is built from the page and the finding, so the record carries its own evidence', () => {
-    const rules = unreadRulesFor('https://example.invalid/guide-for-authors', '2026-01-01', 'the page timed out')
+    // THE QUESTIONS, NOT ANSWERS. `unreadRulesFor` is the state a guide nobody could fetch is in —
+    // TRC was in it until 2026-09-18, when the user obtained the official text. It is kept because a
+    // venue whose rules nobody has read must stay distinguishable from one whose rules were read and
+    // state nothing, and because the refusal it produces names what to go and read.
+    const rules = unreadRulesFor(
+      'https://example.invalid/guide-for-authors', '2026-01-01', 'the page timed out',
+    )
     expect(rules.length).toBe(8)
+    expect(rules.every(rule => rule.verification === 'unknown')).toBe(true)
     expect(rules.every(rule => rule.source.includes('example.invalid'))).toBe(true)
     expect(rules.every(rule => rule.detail === 'the page timed out')).toBe(true)
+    expect(rules.every(rule => rule.articleType.includes('unstated'))).toBe(true)
+    expect(checkVenueRules({ id: 'a', name: 'A Journal', rules })[0]?.code)
+      .toBe('journal-rules-unverified')
+  })
+})
+
+describe('the guide that was read', () => {
+  it('is satisfied, with nothing left unread and one finding of "not specified"', () => {
+    // THE SHIPPED PROFILE, AFTER THE OFFICIAL TEXT WAS OBTAINED. Every rule is either `verified` —
+    // read, with the condition in the guide's own terms — or `not_specified`, which is also a
+    // finding: the guide was read for that subject and requires nothing. Neither is a gap, so the
+    // submission is not refused on this condition.
+    expect(checkVenueRules(TRC_PROFILE)).toEqual([])
+    expect(TRC_PROFILE.rules.filter(rule => rule.verification === 'unknown')).toEqual([])
+    expect(TRC_PROFILE.rules.some(rule => rule.verification === 'not_specified')).toBe(true)
   })
 })
 
@@ -85,7 +80,7 @@ describe('a run that carries no venue profile', () => {
   })
 })
 
-describe('a guide that was read', () => {
+describe('a rule set the caller names', () => {
   it('is satisfied when every rule was established', () => {
     expect(checkVenueRules(profile([readRule('abstract-length'), readRule('reference-style')]))).toEqual([])
   })

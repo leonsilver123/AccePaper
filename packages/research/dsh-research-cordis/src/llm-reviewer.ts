@@ -21,11 +21,13 @@
  * verdict this pipeline knows is a FAILURE, never a silent "supported", because the whole point of the
  * seam is that a sentence nobody could read is different from a sentence that was read and holds.
  *
- * THE SAME MODEL ON BOTH SIDES IS NOT INDEPENDENCE. An answer verified by the reader that wrote it is
- * not verified, and D4 enforces that by comparing the verifier's id with the author's — which is the
- * route, `llm:<provider>/<model>`, on both sides. A deployment that configures this reviewer on the
- * route its prose writer uses gets a REFUSED verification rather than a nominal one; give the reviewer
- * row its own model, or leave it unconfigured and let the issues stay pending.
+ * IT DOES NOT SAY WHO IT IS. A verdict carries the decision and what was read, and NOT an identity:
+ * the host that starts the execution records which execution it was, in which session, under which
+ * rules. A reader that could name itself could forge one, and a check written against a self-reported
+ * name is a check a renamed reader passes. What makes two roles independent is the host's
+ * record — different execution, different session, its own instructions — not the model behind them;
+ * the model is recorded so a reader can see whether one model wrote and reviewed, which is a
+ * shared-bias risk rather than a refusal.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -91,17 +93,31 @@ export interface RevisionIssueLike {
   readonly requiresTextChange: boolean
 }
 
-/** Structural twin of the runner's `ResolutionVerification`. */
-export interface VerificationLike {
-  readonly issueId: string
+/**
+ * Structural twin of the runner's `ResolutionVerdict`.
+ *
+ * NO IDENTITY AND NO TIMESTAMP. The host that started the read records which execution it was, in
+ * which session, under which rules, and when — a reader that supplied those could certify itself, and
+ * a reader that cannot supply them cannot be renamed past the check.
+ */
+export interface VerdictLike {
   readonly verdict: string
   readonly basis: string
-  readonly verifiedBy: string
-  readonly verifiedAt: string
+  /** What the reader actually read; a decision reached on nothing read is refused by the runner. */
+  readonly evidenceRead: ReadonlyArray<string>
 }
 
 /** The model route a {@link LlmReviewer} reads on, and what its verdicts are bound to. */
 export interface LlmReviewerConfig extends Pick<LlmProseWriterConfig, 'provider' | 'model' | 'cwd' | 'idleTimeoutMs'> {
+  /**
+   * The version of the REVIEW rules this reviewer applies.
+   *
+   * REQUIRED, because the role is the instructions: the runner refuses a verification taken under the
+   * author's own version, so a reviewer that did not state one could not be told apart from the writer
+   * it is checking. A deployment that changes what it asks its reviewer to do changes this, and
+   * verifications taken under the old rules stop matching the new ones.
+   */
+  readonly instructionsVersion: string
   /**
    * The version of the rules this reviewer applies, when the deployment holds them.
    *
@@ -114,8 +130,14 @@ export interface LlmReviewerConfig extends Pick<LlmProseWriterConfig, 'provider'
 /** The verdicts a sentence's citation may be given. Anything else is refused. */
 const SUPPORTS: ReadonlyArray<string> = ['supported', 'contradicted', 'partial', 'unrelated']
 
-/** The two decisions a revision's issue may be given. Anything else is refused. */
-const VERDICTS: ReadonlyArray<string> = ['verified', 'rejected']
+/**
+ * The decisions a revision's issue may be given. Anything else is refused.
+ *
+ * `abstained` IS A DECISION, and the third one exists because a reader that could not get what it
+ * needed must be able to say so: without it, the only replies available are "answered" and "not
+ * answered", and a reader short of evidence would have to guess at one of them.
+ */
+const VERDICTS: ReadonlyArray<string> = ['verified', 'rejected', 'abstained']
 
 /**
  * One labelled field out of a reply, or undefined when the reply does not state it.
@@ -238,10 +260,14 @@ function verifyPrompt(input: {
     instruction: [
       'A reviewer raised a concern about a manuscript and the author answered it. Decide whether the',
       'answer settles the concern — the concern as raised, not a related one.',
-      'Reply with exactly these two lines and nothing else:',
+      'Reply with exactly these three lines and nothing else:',
       `VERDICT: <one of ${VERDICTS.join(' | ')}>`,
       'BASIS: <one sentence naming what decides it>',
+      'READ: <what you read, separated by semicolons — the concern, the change, the section as it',
+      'now stands, and any evidence you consulted>',
       '`verified` means the concern is answered. `rejected` means it is still owed an answer.',
+      '`abstained` means you could not get what the decision needs; an issue is never closed without'
+        + ' something read, so abstain rather than guess.',
       'An answer that explains why no change was needed can settle a concern; judge whether the',
       'explanation holds, and send it back when the manuscript still carries the problem.',
     ].join('\n'),
@@ -267,15 +293,20 @@ function verifyPrompt(input: {
  */
 export class LlmReviewer {
   /**
-   * What this reviewer is, for the record.
+   * What this reviewer is, for the record — and NOT what makes it independent.
    *
-   * THE ROUTE, not a role label. The runner compares this with the identity of whoever wrote the
-   * answer it is being asked about, so a name that distinguished the two ROLES would let one model
-   * verify its own reply by being called something else. The route is what has to differ.
+   * The host mints the execution id, the session and the rules version of every verification this
+   * class produces; this string is a label a reader can recognise, and nothing is decided on it.
    */
   readonly id: string
   /** The rules version this reviewer's verdicts are bound to; see {@link LlmReviewerConfig}. */
   readonly policyVersion: string | undefined
+  /** The restricted role this reviewer occupies; the runner refuses any other. */
+  readonly role = 'revision-verifier' as const
+  /** The version of the rules it applies, recorded on every verification it produces. */
+  readonly instructionsVersion: string
+  /** What serves it, so the record can say whether it shared the author's model. */
+  readonly route: { readonly provider: string; readonly model: string }
   private readonly writer: LlmProseWriter
 
   /**
@@ -283,8 +314,13 @@ export class LlmReviewer {
    * @param config - the route this reviewer reads on, and where its sessions run.
    */
   constructor(ctx: Context, config: LlmReviewerConfig) {
-    this.id = `llm:${config.provider}/${config.model}`
+    this.id = `llm-reviewer:${config.provider}/${config.model}`
     this.policyVersion = config.policyVersion
+    // THE RULES VERSION IS REQUIRED, and that is the point: two roles are distinct tasks by their
+    // INSTRUCTIONS, so a reviewer that does not say which rules it applies cannot be told apart from
+    // the author. `policyVersion` stays for the assessment cache, which reuses verdicts by version.
+    this.instructionsVersion = config.instructionsVersion
+    this.route = { provider: config.provider, model: config.model }
     // THE PROSE CHANNEL'S OWN MACHINERY, told it is an LLM route: the reader sends a request like
     // any other and inherits the loop's failure handling. `channel` is not a claim about what this
     // class produces — nothing labels an assessment with it — but the writer refuses to be built
@@ -342,26 +378,31 @@ export class LlmReviewer {
    * Decide whether one revision answers the issue it was written for.
    *
    * @param input - the issue as raised, the change it produced, and the body as it now stands.
-   * @returns the verification, which may reject the answer with its reason.
+   * @returns the verdict, what it rests on, and what was read — never an identity.
    * @throws {Error} when the request fails or the reply states no usable verdict.
    */
   async verify(input: {
     readonly issue: RevisionIssueLike
     readonly change?: SectionChangeLike
     readonly revisedBody?: string
-  }): Promise<VerificationLike> {
+  }): Promise<VerdictLike> {
     const prompt = verifyPrompt(input)
     const result = await this.writer.write({
       stepId: `verify:${input.issue.issueId}`,
       instruction: prompt.instruction,
       context: prompt.context,
     })
+    const verdict = vocabularyField(result.text, 'VERDICT', VERDICTS, `verify:${input.issue.issueId}`)
+    // WHAT WAS READ, NAMED BY THE READER AND CHECKED BY THE RUNNER. A `verified` or a `rejected` with
+    // nothing behind it is refused there, so an abstention is the only honest reply for a reader that
+    // could not get what the decision needs — which is why it is one of the three verdicts.
+    const read = fieldOf(result.text, 'READ') ?? ''
     return {
-      issueId: input.issue.issueId,
-      verdict: vocabularyField(result.text, 'VERDICT', VERDICTS, `verify:${input.issue.issueId}`),
+      verdict,
       basis: requiredField(result.text, 'BASIS', `verify:${input.issue.issueId}`),
-      verifiedBy: this.id,
-      verifiedAt: new Date().toISOString(),
+      evidenceRead: read === ''
+        ? []
+        : read.split(';').map(piece => piece.trim()).filter(piece => piece.length > 0),
     }
   }
 }

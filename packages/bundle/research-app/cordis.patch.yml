@@ -150,22 +150,29 @@
           # may be asked, and reading one number for the other is how "at most two" became "one round
           # that closed everything is enough".
           minimumRounds: 2
-          # THE VERIFIER IS NOT NAMED, and that is a decision with a cost, stated here rather than
-          # left to be discovered. Verification must be INDEPENDENT: D4 compares the verifier's
-          # identity with the route that wrote the answers, and refuses a verification by the same
-          # route — one model reading its own reply is not a second reader, whatever the row is
-          # called. This deployment writes its prose on `deepseek-v4-flash` above, so naming that same
-          # route here would make D4 refuse every verification and fail the step. Give the reviewer
-          # its own route and add it:
+          # THE VERIFIER, ON THE SAME MODEL THIS DEPLOYMENT WRITES WITH.
           #
-          #        verifier:
-          #          provider: <provider>
-          #          model: <a model this deployment does not write with>
+          # A SECOND MODEL IS NOT WHAT MAKES A READING INDEPENDENT. The user's ruling of 2026-09-18:
+          # a different model may not substitute for the conditions that do, and the same model must
+          # not be refused for being the same model. What D4 requires is that the two EXECUTIONS
+          # differ — the host mints a distinct execution id and a distinct session for the reading,
+          # the verifier applies its own rules version (`instructionsVersion`), it cannot edit the
+          # paper and the author cannot close an issue — and it binds each verdict to the section
+          # bodies the host handed over, so a report about a manuscript that has since moved is
+          # refused rather than applied. Whether the two share a provider and model is RECORDED on
+          # every verification as a shared-bias note.
           #
-          # Until then the run LEAVES EVERY REVISION PENDING: `awaitingVerification` is non-empty, the
-          # review is unsatisfied, and `checkFinalPackage` refuses the package a journal would receive
-          # while still exporting the draft. That is the honest state — nobody read the answers — and
-          # it is not a state a relabelled profile can make go away.
+          # An earlier version of this file required a different route here. That was a restriction
+          # the implementation had added, not a condition of the design, and it made a single-model
+          # deployment unable to verify anything.
+          verifier:
+            provider: deepseek-official
+            model: deepseek-v4-flash
+            # THE VERSION OF THE REVIEW RULES. Two roles are distinct tasks by their INSTRUCTIONS,
+            # so a verifier that did not say which rules it applies could not be told apart from the
+            # author it is checking. Change this when what the reviewer is asked for changes; the
+            # readings taken under the old rules stop matching the new ones.
+            instructionsVersion: revision-review-1
         # The Case Pack this deployment runs against: the seven versioned JSON files that
         # supply the research question, the central claim, the experiment configuration and
         # its scenario parameters. They are synthetic fixture content and carry that label
