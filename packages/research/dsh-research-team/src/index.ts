@@ -1458,12 +1458,10 @@ export class ResearchTeamService extends TypertRemoteService {
    * @throws {Error} when this process holds no such run, and when a final package is refused.
    */
   @Remote('exportRunPackage')
-  // A REMOTE METHOD ANSWERS OVER THE WIRE, where every call is a promise, and the package is written
-  // from state this process already holds — there is nothing here to await, and an artificial
-  // `await` added to look busy would be a statement about the wire that is not true of this body.
-  // The directive is needed under the full lint config; the staged config leaves the rule off, which
-  // is why a staged run reports it as unused. (Same reason and same shape as the provider's `stream`.)
-  // oxlint-disable-next-line typescript/require-await -- a Remote method is async by contract
+  // IT AWAITS FOR REAL SINCE 2026-09-18: the bibliography is rendered before anything is written, and
+  // the registration read is awaited before a run starts. Until then this body had nothing to await
+  // and carried a `require-await` directive saying so; the directive is gone because the reason for
+  // it is, and a lint suppression that outlives its cause hides the next one.
   async exportRunPackageNow(request: {
     readonly runId: string
     readonly mode: 'draft' | 'final'
