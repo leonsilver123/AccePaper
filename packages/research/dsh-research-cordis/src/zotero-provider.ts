@@ -30,6 +30,8 @@
 // between the two reads would otherwise be recorded as a mixture of two revisions. The chain re-reads
 // a bounded number of times and then refuses, rather than claiming a snapshot it does not have.
 
+import { createHash } from 'node:crypto'
+
 import { checkBibtexEntry, literatureIdOf } from './zotero-bibliography.ts'
 import type {
   BibtexRefusal, LiteratureId, ParsedCitation, ZoteroItemFacts,
@@ -94,6 +96,8 @@ export interface ZoteroItemRecord {
     readonly publicationTitle?: string
     readonly volume?: string
     readonly pages?: string
+    /** The item's abstract, when it has one; the corpus filter reads it and nothing else does. */
+    readonly abstractNote?: string
     readonly creators?: ReadonlyArray<{
       readonly creatorType?: string
       readonly lastName?: string
@@ -116,6 +120,8 @@ export type ZoteroReadFailureCode =
   | 'bibtex-refused'
   /** The item moved between two reads and stayed moved. */
   | 'version-moved'
+  /** The text tool answered nothing: no attachment, a page past the end, or a read that failed. */
+  | 'passage-unreadable'
 
 /** One refusal, naming what failed and where. */
 export interface ZoteroReadFailure {
@@ -150,6 +156,45 @@ export interface ZoteroSource {
   readonly citation: ParsedCitation
   /** How each part was read, so a reader can tell which route answered. */
   readonly readBy: { readonly metadata: 'local-api-json'; readonly bibliography: 'mcp-bibtex' }
+}
+
+/**
+ * A passage of a source's full text, with where it was read and what version it is.
+ *
+ * THE LOCATION IS PART OF THE EVIDENCE. A quote that cannot be traced to an attachment and a place
+ * in it is a sentence somebody typed; `where` names the attachment and the page or span the text came
+ * from, and `contentSha256` is the version of THAT text, so a later edit to the file invalidates a
+ * judgement made from it exactly as a rewritten manuscript sentence invalidates its citation.
+ */
+export interface ZoteroPassage {
+  readonly literatureId: LiteratureId
+  readonly itemKey: string
+  /** The attachment the text was read from, as Zotero keys it. */
+  readonly attachmentKey?: string
+  /** Where in the source the text is, in the words the read tool used. */
+  readonly where: string
+  readonly text: string
+  /** SHA-256 of `text`, as read. */
+  readonly contentSha256: string
+  /** How it was read, so a reader can tell a full text from a page. */
+  readonly readBy: 'mcp-fulltext' | 'mcp-pdf-pages'
+}
+
+/** How much of a source to read. */
+export interface PassageRequest {
+  /** A 1-indexed page, when one page is wanted rather than the whole text. */
+  readonly page?: number
+}
+
+/** A candidate from the configured collection, as the roster read it. */
+export interface CollectionHit {
+  readonly itemKey: string
+  readonly literatureId: LiteratureId
+  readonly title: string
+  readonly year?: number
+  readonly venue?: string
+  readonly doi?: string
+  readonly authors: ReadonlyArray<string>
 }
 
 /** A `fetch`-shaped function; injected so the read is testable without a library. */
@@ -211,15 +256,23 @@ export class ZoteroProvider {
         + `?format=json&limit=${String(this.pageSize)}&start=${String(start)}&itemType=-attachment`
       const read = await this.getJson(url, signal)
       if (!read.ok) {
-        // NOT AN EMPTY PAGE. A page that did not arrive says nothing about the items on it, so the
-        // read reports truncation and the caller never sees a short list as the collection.
+        // NOT AN EMPTY PAGE, AND NOT ONE FAILURE EITHER. A first page that did not arrive means
+        // nothing was read at all — the library is unreachable, which is a different fact from a
+        // collection that was partly read. A later page failing leaves the items it holds unknown, so
+        // THAT is a truncation and says how much was read.
         return {
           ok: false,
-          failure: {
-            code: 'collection-truncated',
-            detail: `page ${String(page + 1)} of '${collectionKey}' did not arrive (${read.detail}); the`
-              + ` ${String(keys.length)} key(s) already read are not the collection`,
-          },
+          failure: page === 0
+            ? {
+              code: 'endpoint-unreadable',
+              detail: `'${collectionKey}' could not be read at all: the first page did not arrive`
+                + ` (${read.detail})`,
+            }
+            : {
+              code: 'collection-truncated',
+              detail: `page ${String(page + 1)} of '${collectionKey}' did not arrive (${read.detail});`
+                + ` the ${String(keys.length)} key(s) already read are not the collection`,
+            },
         }
       }
       const items = read.value
@@ -316,6 +369,120 @@ export class ZoteroProvider {
         code: 'version-moved',
         detail: `'${itemKey}' moved on each of ${String(REREAD_ATTEMPTS)} reads, so no single version of it`
           + ' was read as both its metadata and its entry',
+      },
+    }
+  }
+
+  /**
+   * Read the configured collection as candidates, filtered by the query's topic.
+   *
+   * THE FILTER IS LOCAL AND SAYS SO. A Zotero collection is a curated corpus, not a search index:
+   * there is no relevance ranking to consult, so the topic is matched against each item's title and
+   * abstract and the match is reported as what it is — a keyword filter over a list the deployment
+   * chose, not a literature search. `total` counts the items that matched before the cap.
+   *
+   * @param query - the topic to filter by and how many hits to return.
+   * @param signal - cancellation from the caller.
+   * @returns the candidates and how many matched, or why the collection could not be read.
+   */
+  async readCandidates(
+    query: { readonly topic: string; readonly collectionKey: string; readonly maxResults?: number },
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly hits: ReadonlyArray<CollectionHit>; readonly total: number }
+    | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const collection = await this.readCollection(query.collectionKey, signal)
+    if (!collection.ok) return collection
+    const matched: CollectionHit[] = []
+    for (const key of collection.collection.keys) {
+      const record = await this.readItemRecord(key, signal)
+      // A KEY THAT CANNOT BE READ IS NOT SKIPPED SILENTLY: the corpus would come back smaller, which
+      // is the same value a corpus that never had the item produces.
+      if (!record.ok) return { ok: false, failure: record.failure }
+      if (!matchesTopic(record.value, query.topic)) continue
+      matched.push(hitOf(record.value))
+    }
+    const capped = query.maxResults === undefined ? matched : matched.slice(0, query.maxResults)
+    return { ok: true, hits: capped, total: matched.length }
+  }
+
+  /**
+   * Read a source's text, whole or one page of it.
+   *
+   * @param itemKey - the item whose text is wanted.
+   * @param request - a page, when one page is wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the passage with where it came from and its version, or why it could not be read.
+   */
+  async readPassage(
+    itemKey: string,
+    request: PassageRequest = {},
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly passage: ZoteroPassage } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const record = await this.readItemRecord(itemKey, signal)
+    if (!record.ok) return record
+    const page = request.page
+    const name = page === undefined
+      ? `mcp__${this.config.mcpServerName}__zotero_get_item_fulltext`
+      : `mcp__${this.config.mcpServerName}__zotero_read_pdf_pages`
+    const tool = this.tools.get(name)
+    if (tool === undefined) {
+      return {
+        ok: false,
+        failure: {
+          code: 'metadata-tool-missing',
+          detail: `this deployment registers no '${name}', so the text of '${itemKey}' cannot be read`
+            + ' over the route the deployment chose',
+        },
+      }
+    }
+    const timeout = AbortSignal.timeout(this.timeoutMs)
+    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    let result: unknown
+    try {
+      // THE ARGUMENT NAMES ARE THE TOOLS' OWN, measured 2026-09-18: the page route takes
+      // `item_key` and `start_page` — the ITEM, not the attachment, and an inclusive start with an
+      // optional `end_page`. A call with the wrong names is not a refusal the caller can act on; it
+      // is five validation errors from a server.
+      result = await tool.execute(
+        page === undefined
+          ? { item_key: itemKey }
+          : { item_key: itemKey, start_page: page, end_page: page },
+        { signal: combined },
+      )
+    } catch (error) {
+      // A MISSING ATTACHMENT ARRIVES HERE, and it is a different fact from an empty one: the tool
+      // says there is no PDF to read, and this read reports that rather than an empty passage.
+      return {
+        ok: false,
+        failure: {
+          code: 'passage-unreadable',
+          detail: `'${itemKey}': ${error instanceof Error ? error.message : String(error)}`,
+        },
+      }
+    }
+    const text = toolText(result)
+    if (text === undefined || text.trim() === '') {
+      return {
+        ok: false,
+        failure: {
+          code: 'passage-unreadable',
+          detail: `the text tool answered with nothing readable for '${itemKey}'`
+            + (page === undefined ? '' : ` page ${String(page)}`),
+        },
+      }
+    }
+    return {
+      ok: true,
+      passage: {
+        literatureId: literatureIdOf(
+          { type: record.value.library.type === 'group' ? 'group' : 'user', id: libraryIdOf(record.value.library) },
+          itemKey,
+        ),
+        itemKey,
+        where: page === undefined ? 'the whole text, as the tool returned it' : `page ${String(page)}`,
+        text,
+        contentSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+        readBy: page === undefined ? 'mcp-fulltext' : 'mcp-pdf-pages',
       },
     }
   }
@@ -484,6 +651,52 @@ function factsOf(record: ZoteroItemRecord): ZoteroItemFacts {
     title: record.data.title ?? '',
     ...(yearMatch === null ? {} : { year: Number(yearMatch[1]) }),
     ...(record.data.DOI === undefined || record.data.DOI === '' ? {} : { doi: record.data.DOI }),
+  }
+}
+
+/**
+ * Whether an item's title or abstract mentions the topic's words.
+ *
+ * A LOCAL FILTER OVER A CURATED LIST, not a relevance search; see {@link ZoteroProvider.readCandidates}.
+ * Every word of the topic must appear somewhere in the two fields — a sentence's words are not all
+ * keywords, and matching ANY of them would return the whole collection for a topic like "the effect
+ * of a change on the system".
+ *
+ * @param record - one item record.
+ * @param topic - the topic as the query states it.
+ * @returns whether the item mentions it.
+ */
+function matchesTopic(record: ZoteroItemRecord, topic: string): boolean {
+  const haystack = `${record.data.title ?? ''} ${record.data.abstractNote ?? ''}`.toLowerCase()
+  const words = topic.toLowerCase().split(/[^a-z0-9]+/u).filter(word => word.length > 3)
+  if (words.length === 0) return true
+  return words.every(word => haystack.includes(word))
+}
+
+/**
+ * One item record as a candidate.
+ *
+ * @param record - the record.
+ * @returns the candidate, carrying the identity the read minted.
+ */
+function hitOf(record: ZoteroItemRecord): CollectionHit {
+  const yearMatch = /(\d{4})/u.exec(record.data.date ?? '')
+  return {
+    itemKey: record.key,
+    literatureId: literatureIdOf(
+      { type: record.library.type === 'group' ? 'group' : 'user', id: libraryIdOf(record.library) },
+      record.key,
+    ),
+    title: record.data.title ?? '',
+    ...(yearMatch === null ? {} : { year: Number(yearMatch[1]) }),
+    ...(record.data.publicationTitle === undefined ? {} : { venue: record.data.publicationTitle }),
+    ...(record.data.DOI === undefined || record.data.DOI === '' ? {} : { doi: record.data.DOI }),
+    authors: (record.data.creators ?? []).flatMap((creator): string[] => {
+      if (typeof creator.name === 'string' && creator.name !== '') return [creator.name]
+      const parts = [creator.lastName, creator.firstName]
+        .filter((part): part is string => typeof part === 'string' && part !== '')
+      return parts.length === 0 ? [] : [parts.join(', ')]
+    }),
   }
 }
 

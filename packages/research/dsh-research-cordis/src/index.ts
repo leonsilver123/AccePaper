@@ -54,6 +54,8 @@ import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import { LlmReviewer, type LlmReviewerConfig } from './llm-reviewer.ts'
 import { MatplotlibProvider } from './matplotlib-provider.ts'
+import { ZoteroProvider } from './zotero-provider.ts'
+import { ZoteroLiteratureAdapter } from './zotero-literature-adapter.ts'
 import { PandocCompiler } from './pandoc-compiler.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
 import {
@@ -590,7 +592,38 @@ export class ResearchEngine extends Service {
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'research')
     this.requireResearchTools = config.requireResearchTools ?? false
-    this.toolDeps = buildToolDeps(config.literatureSearch, config.citationResolver)
+    // THE ZOTERO CORPUS, WHEN THE DEPLOYMENT NAMES ONE. The provider is built here because it needs
+    // two host services the pure assembler has no access to: `fetch` for the local JSON API and the
+    // `tools` registry for the MCP metadata route. The registry is read LAZILY — the loader starts
+    // entries concurrently, so `tools` may not exist yet when this constructor runs, and a port that
+    // resolved it once would be permanently undefined.
+    this.toolDeps = buildToolDeps(
+      config.literatureSearch,
+      config.citationResolver,
+      config.literatureSearch?.kind === 'zotero'
+        ? new ZoteroLiteratureAdapter(
+          new ZoteroProvider(
+            {
+              apiBase: config.literatureSearch.apiBase,
+              localLibraryPath: config.literatureSearch.localLibraryPath,
+              mcpServerName: config.literatureSearch.mcpServerName,
+              ...config.literatureSearch.timeoutMs === undefined ? {} : { timeoutMs: config.literatureSearch.timeoutMs },
+              ...config.literatureSearch.pageSize === undefined ? {} : { pageSize: config.literatureSearch.pageSize },
+            },
+            (url, init) => fetch(url, { signal: init.signal }),
+            {
+              get: (name: string) => (ctx.get('tools') as {
+                get?: (toolName: string) => { execute(args: unknown, exec: { signal: AbortSignal }): Promise<unknown> } | undefined
+              } | undefined)?.get?.(name),
+            },
+          ),
+          {
+            collectionKey: config.literatureSearch.collectionKey,
+            ...config.literatureSearch.fallbackVenue === undefined ? {} : { fallbackVenue: config.literatureSearch.fallbackVenue },
+          },
+        )
+        : undefined,
+    )
     this.sessionCwd = resolveWorkspace(config.workspace)
     this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
     this.packageDirectory = resolveCasePackDirectory(config.packageDirectory, this.sessionCwd)

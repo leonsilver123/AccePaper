@@ -31,6 +31,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MockCitationResolverAdapter } from '@deepseek-ai/dsh-research-core'
+import type { LiteratureSearchAdapter } from '@deepseek-ai/dsh-research-tools'
+
 import { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
 import { OpenAlexCitationResolver } from './openalex-citation-resolver.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
@@ -169,6 +171,29 @@ export type LiteratureChannel =
     /** Contact address OpenAlex asks for ("polite pool"); improves reliability. */
     readonly mailto?: string
   }
+  | {
+    /**
+     * Answer from a Zotero collection this deployment assembled.
+     *
+     * NOT A SEARCH CHANNEL: the corpus is the list somebody put in the collection, and the topic is
+     * matched against titles and abstracts as a local filter. Every field here is a deployment
+     * setting — an endpoint, the library it addresses, and which collection is the corpus — never a
+     * request parameter, so a caller cannot widen the read to another library or another address.
+     */
+    readonly kind: 'zotero'
+    /** The local API's origin, e.g. `http://127.0.0.1:23119/api`. */
+    readonly apiBase: string
+    /** The library as the local endpoint addresses it: `users/0` for the signed-in user. */
+    readonly localLibraryPath: string
+    /** The collection whose members are this deployment's corpus. */
+    readonly collectionKey: string
+    /** The MCP client's namespace for the Zotero server, e.g. `zotero`. */
+    readonly mcpServerName: string
+    readonly timeoutMs?: number
+    readonly pageSize?: number
+    /** The venue to record for an item whose own record states none. */
+    readonly fallbackVenue?: string
+  }
 
 /** Bibliographic-resolver selection, configured the same way as the channel above. */
 export type CitationChannel =
@@ -192,14 +217,30 @@ export type CitationChannel =
  *
  * @param channel - the configured retrieval channel, or undefined for the fixture.
  * @param citation - the configured citation-resolver channel, or undefined for the fixture.
+ * @param zotero - the adapter for a `zotero` channel, which the engine builds because it needs the
+ *   host's `tools` service for the metadata route. Required when `channel` names that kind: the
+ *   assembly throws rather than falling back to the fixture corpus.
  * @returns the dependency graph handed to every tool invocation.
  */
 export function buildToolDeps(
   channel: LiteratureChannel | undefined,
-  citation: CitationChannel | undefined = undefined,
+  citation?: CitationChannel,
+  zotero?: LiteratureSearchAdapter,
 ): ResearchToolDeps {
   const deps: ResearchToolDeps = {
     ...FIXTURE_DEPS,
+    // THE ADAPTER IS BUILT BY THE ENGINE, not here: it needs the host's `tools` service for the
+    // metadata route, and this module assembles pure dependencies. A channel that names a Zotero
+    // corpus and arrives without its adapter is a wiring defect and is refused by name rather than
+    // falling back to the fixture corpus — which would answer every query from synthetic records
+    // while the artifact said the deployment read its own library.
+    ...(channel?.kind === 'zotero'
+      ? zotero === undefined
+        ? (() => { throw new Error(
+          '[research] the zotero literature channel has no adapter: the engine builds it from the'
+          + ' host tool registry, so this is a wiring defect and not a missing dependency') })()
+        : { literatureAdapter: zotero }
+      : {}),
     ...(channel?.kind === 'openalex'
       ? {
         literatureAdapter: new OpenAlexLiteratureAdapter(

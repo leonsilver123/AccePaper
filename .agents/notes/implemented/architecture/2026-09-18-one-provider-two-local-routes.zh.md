@@ -18,6 +18,9 @@ P18-07 需要一条真实文献库接到证据链后面。MCP server 把集合�
 - **集合读取要么完整，要么不算集合。** 一直翻到短页为止 —— 那是 API 自己说「没有了」的方式 —— 结果报告 `pagesRead`、`reported`、`complete`。某一页失败则以 `collection-truncated` 拒绝，并点名已经读到的东西，因为「少了几条的参考文献表」和「本来就没有那几条的语料」看起来一模一样。空集合是正常的 `ok`，是另一个值。
 - **一个来源要么在同一个版本上被读完，要么不算读过。** JSON 读出条目的 `version`；BibTeX 是那次调用时库里的内容生成的。链路读元数据、读条目、再读一次元数据，有限次重试后以 `version-moved` 拒绝 —— 两个修订不是一个快照，把它们记成一个，等于把一条引用和一个从不在同一时刻存在的版本配在一起。
 - **缺工具就点名，不绕开。** 没有注册 `mcp__<server>__zotero_get_item_metadata` 时以 `metadata-tool-missing` 失败。用条目自己的字段拼一个条目，会被当成 Zotero 的产物呈现，而没有任何地方记下「没有生成器跑过」。
+- **集合就是流水线的语料，走 A1 已经在读的那道缝。** `src/zotero-literature-adapter.ts` 在 provider 之上实现 `LiteratureSearchAdapter`，于是流水线不必再学第二种接收文献的方式 —— 而主题是按**本地关键词过滤**匹配标题与摘要的，结论自己的措辞就这么说：把它读成一次检索的调用方会以为语料被检索过，而实际上只是被筛过。
+- **不能引用的条目会让这次读取停下。** 没有 DOI 的记录进不了引用身份链。目录检索在成千上万条里跳过这类记录是合理的；而一个几十条的**策展**集合是有人攒起来的语料，所以结论是 `unavailable` 并点名这些条目与补救办法，而不是一个 hits 比集合成员还少的 `ok`。
+- **一个证据段落带着它读自哪里、以及它的版本。** `readPassage` 返回文本、读自的页码或范围、读取它的路线，以及这段文本的 SHA-256 —— 于是基于某个段落的判断就像引用之于句子那样绑定在那个段落上，文件后来被改了就会让它失效。
 - **每种拒绝各有自己的码。** `endpoint-unreadable`、`collection-truncated`、`metadata-tool-missing`、`bibtex-refused`（带书目拒绝明细）、`version-moved`。Zotero 没运行会以 `endpoint-unreadable` 带上原因到达，因此永远不会被读成空集合。
 
 ## 考虑过的替代方案
@@ -32,9 +35,12 @@ P18-07 需要一条真实文献库接到证据链后面。MCP server 把集合�
 
 - **`tests/zotero-provider.spec.ts`**（12 条）用脚本化的 `fetch` 与工具注册表：两页读到短页（并断言游标与页大小）；空集合是正常结果；第二页失败以 truncated 拒绝；非列表 body 被拒；来源记录 API 返回的 library 对象与 `zotero:user:1234567:UA5MIGG3`；每次都变的 version 被拒；稳定 version 被接受；DOI 冲突以 `bibtex-doi-mismatch` 拒绝；缺工具被点名；工具失败以不可解析拒绝；两个库的同 key 条目被分开；citeKey 改名后来源身份不变。
 - **活的那条路线是单独实测的** —— `ILFASAAE` 里 27 条、`UA5MIGG3` 的 BibTeX 经产品自己的 client —— 这些用例**不**代替它。对着真实文献库读集合、读全文或指定页、以及判断某句是否被证据段落支持，仍然是各自的验收。
-- **这里还没有的。** 运行路径上还没有消费方：它尚未接进 A1-landscape，Zotero 身份也还没绑到 core 的 `CitationRef` 或引用登记处。那一步才让「句子、引用与 `.bib` 共用一个身份」可端到端断言，它是下一个单元。
+- **`tests/zotero-corpus.spec.ts`**（12 条）钉住分发的那一半：集合作成语料回答且身份进到 hit；`total` 在上限之前计数；读不到的库与被截断的集合都报 `unavailable` 而不是小语料；没有 DOI 的语料条目被点名拒绝；venue-tier 过滤被拒；空集合是普通的 `ok`；段落连同位置与哈希被记录；空读取被拒；缺工具被点名。
+- **2026-09-18 对着用户指定的文献库实测**：经产品自己的 MCP client 注册 62 个工具；集合**完整**读出（28 个 key，一页，`complete`）；一个来源在**同一个版本**上读出（`zotero:user:17529257:UA5MIGG3` @v3408），条目键为 `rocheWhatHappensWhen2020`，作者被还原（`Thüring, Manfred`）；全文读出（65，074 字符，带哈希）。分页路线返回了服务器的五个校验错误 —— 参数名就是这样被查明是 `item_key` 与 `start_page` 的；调用已按实测 schema 改正，但**尚未**重新实测，因为 Zotero Desktop 在运行途中停止了应答。
+- **而那一次中断本身就是证据。** 会话中途本地 API 开始拒绝连接；每个方法都带原因报 `endpoint-unreadable`，没有一个报成空语料 —— 正是指引要求的那条失败路径，由一次非计划内的中断走到，而不是由夹具走到。
+- **这里还没有的。** Zotero 身份还没绑到 core 的 `CitationRef` 或引用登记处 —— hit 带着它，但下游还没有东西读那个字段。绑上它才让「句子、引用与 `.bib` 共用一个身份」可端到端断言，那是下一个单元。对着真实文献库读某一页文本、以及判断某句是否被某个段落支持，仍然是各自的验收。
 
 ## 文件
 
-- `packages/research/dsh-research-cordis/src/zotero-provider.ts`（新增）。
-- 用例：`packages/research/dsh-research-cordis/tests/zotero-provider.spec.ts`（新增）。
+- `packages/research/dsh-research-cordis/src/zotero-provider.ts`（新增）、`src/zotero-literature-adapter.ts`（新增）、`src/tools.ts`（`LiteratureChannel` 增加 `zotero` 变体；`buildToolDeps` 接收该 adapter）、`src/index.ts`（引擎从部署配置构造它，并**惰性**读 `ctx.tools` —— loader 是并发启动各 entry 的）。
+- 用例：`packages/research/dsh-research-cordis/tests/zotero-provider.spec.ts`（新增）、`tests/zotero-corpus.spec.ts`（新增）。
