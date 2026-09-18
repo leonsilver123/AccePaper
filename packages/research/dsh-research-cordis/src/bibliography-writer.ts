@@ -74,7 +74,12 @@ export class CitationJsBibliographyWriter implements BibliographyWriterLike {
    * @returns the file's text, with one entry per citation key.
    */
   write(entries: ReadonlyArray<BibliographyEntryLike>): Promise<string> {
-    return Promise.resolve(renderBibtex(entries.map(citationOf)))
+    // ONE TRAILING NEWLINE, AND EXACTLY ONE. The underlying writer ends its output with a blank line,
+    // which is a well-formed `.bib` and fails this repository's own byte-level rule for a text file —
+    // so the file is normalized HERE, where the text is produced, rather than by every caller that
+    // writes one. An empty entry list renders to an empty string rather than to a lone newline.
+    const rendered = renderBibtex(entries.map(citationOf)).replace(/\n+$/u, '')
+    return Promise.resolve(rendered === '' ? '' : `${rendered}\n`)
   }
 }
 

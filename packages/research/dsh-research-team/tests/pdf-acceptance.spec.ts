@@ -362,5 +362,9 @@ describe.skipIf(ENGINE === undefined || PYTHON === undefined)('the PDF a real en
     const all = pages.map(page => page.text).join('\n')
     expect(all).toContain('Method')
     expect(all).toContain('second section states the method')
-  })
+    // TWO PROCESS SPAWNS — pandoc, then the engine — which do not fit the default budget. The case
+    // above carries the same budget for the same reason; this one ran on the default for as long as it
+    // happened to finish inside it, and failed the moment a neighbouring suite made the machine busy.
+    // A case that passes only while the box is quiet is a defect in the case, not in its neighbour.
+  }, 300_000)
 })

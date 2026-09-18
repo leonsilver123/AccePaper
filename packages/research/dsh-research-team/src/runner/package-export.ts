@@ -540,7 +540,10 @@ export function planRunPackage(
   // cited sources — the previous export produced only the first, so "the manuscript cites these
   // works" could not be handed to anything.
   if (options.bibliography !== undefined && options.bibliography.trim() !== '') {
-    files.push({ path: 'bibliography.bib', content: `${options.bibliography.replace(/\n+$/u, '')}\n` })
+    // WRITTEN AS THE WRITER RENDERED IT. The trailing-newline rule belongs to the writer — it is where
+    // the text is produced — and normalizing it here as well would leave two places that have to agree
+    // about the ending of a file neither of them owns.
+    files.push({ path: 'bibliography.bib', content: options.bibliography })
   }
   files.push({
     // WHAT THE FIGURES WERE DRAWN FROM. The presentation plan states the question each figure answers,
