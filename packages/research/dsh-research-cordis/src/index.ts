@@ -158,12 +158,13 @@ export type ProseChannel =
 export const DEFAULT_REVIEW_INSTRUCTIONS_VERSION = 'revision-review-1'
 
 /**
- * How long the registration waits for the MCP client to finish registering the library's tools.
+ * How long the registration waits when the deployment names no window.
  *
  * BOUNDED, because the wait is for a signal that may never come: a deployment that mounts no Zotero
- * server must end up reporting `metadata-tool-missing` rather than hanging the boot.
+ * server must end up reporting `metadata-tool-missing` rather than hanging the boot. A deployment
+ * whose servers start slowly raises it through `literatureSearch.sourceToolWaitMs`.
  */
-const MCP_TOOL_WAIT_MS = 30_000
+const DEFAULT_SOURCE_TOOL_WAIT_MS = 30_000
 
 /** How often the registration looks for those tools while it waits. */
 const MCP_TOOL_POLL_MS = 250
@@ -635,6 +636,8 @@ export class ResearchEngine extends Service {
   private readonly citedItems: ReadonlyArray<CitedItem>
   /** The MCP namespace the library's tools are registered under, when a library was configured. */
   private readonly zoteroServerName: string | undefined
+  /** How long the registration waits for those tools, from the deployment's own configuration. */
+  private readonly sourceToolWaitMs: number
 
   /** Set at the commit point of the deterministic route's registration. */
   private proseReady = false
@@ -678,6 +681,9 @@ export class ResearchEngine extends Service {
     this.zoteroProvider = zotero
     this.citedItems = channel?.kind === 'zotero' ? channel.citedItems ?? [] : []
     this.zoteroServerName = channel?.kind === 'zotero' ? channel.mcpServerName : undefined
+    this.sourceToolWaitMs = channel?.kind === 'zotero'
+      ? channel.sourceToolWaitMs ?? DEFAULT_SOURCE_TOOL_WAIT_MS
+      : DEFAULT_SOURCE_TOOL_WAIT_MS
     this.toolDeps = buildToolDeps(
       channel,
       config.citationResolver,
@@ -835,7 +841,7 @@ export class ResearchEngine extends Service {
     // TYPE-ONLY import of it pulls that package's whole source tree into this program (measured: the
     // build fails with `not under rootDir`). Polling a service this package already reads needs no
     // cross-package declaration, and the deadline is what keeps a missing server from hanging boot.
-    const deadline = Date.now() + MCP_TOOL_WAIT_MS
+    const deadline = Date.now() + this.sourceToolWaitMs
     while (!present() && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, MCP_TOOL_POLL_MS))
     }

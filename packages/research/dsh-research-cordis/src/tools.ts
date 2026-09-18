@@ -211,6 +211,16 @@ export type LiteratureChannel =
      * fewer sources than it named — or none — rather than with a corpus from somewhere else.
      */
     readonly citedItems?: ReadonlyArray<CitedItem>
+    /**
+     * How long the registration waits for this deployment's MCP client to register the library's
+     * tools, in milliseconds.
+     *
+     * A DEPLOYMENT SETTING, not a constant: how long a server takes to answer `tools/list` is a fact
+     * about the machine and the server, and a deployment whose servers start slowly needs a longer
+     * window than one whose servers are already warm. The bound exists so that a deployment which
+     * mounts no such server reports `metadata-tool-missing` rather than hanging its boot.
+     */
+    readonly sourceToolWaitMs?: number
   }
 
 /** Bibliographic-resolver selection, configured the same way as the channel above. */
