@@ -54,7 +54,7 @@ Root commands are in `AGENTS.md`. The research packages carry no config of their
 ./node_modules/.bin/vitest run packages/research/dsh-research-core/tests/state-machine.spec.ts
 ```
 
-`pnpm` has been broken on this Windows host (a corepack shim; `AGENTS.md` and the handoff both call it out), so `./node_modules/.bin/<tool>` is the reliable form. Two research runners sit deliberately outside vitest and must be invoked by hand: `dsh-research-cordis/tests/prod-import-smoke.mjs` (plain Node against built `lib/`) and `dsh-research-cordis/scripts/repro-check.mjs`.
+`pnpm` needed a shim on this Windows host and no longer does: the command was absent from `PATH` rather than broken, and `corepack enable` cannot write the Node install directory here (`EPERM` on `F:\node`), so forwarding shims `pnpm` / `pnpm.cmd` live in `%APPDATA%\npm` — a directory already on `PATH` for Git Bash and Windows shells. Measured 2026-09-18: `pnpm install`, `pnpm run <script>` and `pnpm --filter <pkg> exec` all work. `./node_modules/.bin/<tool>` remains the form that needs no shim. Two research runners sit deliberately outside vitest and must be invoked by hand: `dsh-research-cordis/tests/prod-import-smoke.mjs` (plain Node against built `lib/`) and `dsh-research-cordis/scripts/repro-check.mjs`.
 
 Specs import `../src/*.ts` directly, never package names. `dsh-research-web/tests/researchview-component.dom.spec.ts` needs its `// @vitest-environment jsdom` pragma. On Windows the root config drops bash-requiring suites; no research package is on that list.
 
