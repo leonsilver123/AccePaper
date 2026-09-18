@@ -219,6 +219,15 @@ export interface SourceLibraryConfig {
   readonly sourceToolWaitMs?: number
 }
 
+/**
+ * Where A1-landscape searches for the field it maps.
+ *
+ * THIS IS THE SEARCH QUESTION, NOT THE CITATION ONE. What a run may CITE is
+ * {@link SourceLibraryConfig}, and the two are separate on purpose: naming a library to cite from
+ * used to replace the search source as well, which emptied the corpus of a run that was configured
+ * correctly. A deployment that wants one library for both states it in both places — or sets
+ * `kind: 'zotero'` here, whose variant carries the same fields.
+ */
 export type LiteratureChannel =
   | {
     /** Search the synthetic corpus this package ships; no network is reached. */
