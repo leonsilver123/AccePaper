@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/research/dsh-research-cordis/README.md
-README.md: 23273a16872dedb577df4e1ac7e7cdbf4d50b027
-README.zh.md: dfa2839876fb14f7942b3da9624f26b1fa3569a4
+README.md: 641abd49e223e8900bd7ca48d3d1ec83444865be
+README.zh.md: 37a60cb74e3ab16590faf6bd3f4b2f1c026eec8e
