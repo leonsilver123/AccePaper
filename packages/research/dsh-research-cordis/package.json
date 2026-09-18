@@ -24,6 +24,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@citation-js/core": "0.8.2",
+    "@citation-js/plugin-bibtex": "0.8.2",
     "@deepseek-ai/dsh-research-core": "workspace:^",
     "@deepseek-ai/dsh-research-tools": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^"
@@ -34,10 +36,10 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/schemastery": "workspace:^",
     "@deepseek-ai/dsh-research-core": "workspace:^",
     "@deepseek-ai/dsh-research-tools": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",
+    "@deepseek-ai/schemastery": "workspace:^",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
