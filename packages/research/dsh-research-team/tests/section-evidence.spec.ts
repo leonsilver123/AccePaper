@@ -24,6 +24,7 @@ import { runT19B } from '../src/runner/drive.ts'
 import { sectionEvidenceFor } from '../src/runner/section-evidence.ts'
 import type { SectionEvidenceInput } from '../src/runner/section-evidence.ts'
 import { readinessOfRun, submissionReadinessOf } from '../src/runner/submission-readiness.ts'
+import type { ManuscriptFacts } from '../src/runner/final-package.ts'
 import { resultVersionOf } from '../src/runner/result-version.ts'
 import { comparePlatoons, experimentStudy } from '../src/runner/platoon-sim.ts'
 import { IDM_PLATOON_IMPLEMENTATION } from '../src/runner/implementations.ts'
@@ -183,6 +184,32 @@ describe('the driven draft records what each section was written from', () => {
   })
 })
 
+/**
+ * The facts a readiness decision reads, for a run whose steps all passed.
+ *
+ * `unfinishedSteps` is DERIVED from the statuses the case supplies, because that is the fact the
+ * decision reads and a case that stated both could state them inconsistently.
+ *
+ * @param input - the step statuses, and the facts this case varies.
+ * @returns the facts the decision reads.
+ */
+function manuscriptFacts(input: {
+  readonly steps: ReadonlyArray<{ readonly stepId: string; readonly status: string }>
+  readonly refusedSections?: ReadonlyArray<string>
+}): ManuscriptFacts {
+  return {
+    profile: 'production',
+    manuscriptProduced: true,
+    unfinishedSteps: input.steps
+      .filter(step => step.status !== 'passed')
+      .map(step => `${step.stepId} (${step.status})`),
+    refusedSections: input.refusedSections ?? [],
+    openIssues: [],
+    staleApproval: undefined,
+    compilation: { tool: null, dropped: [] },
+  }
+}
+
 describe('a refused section makes the run not ready', () => {
   const allPassed = getStepDefinitions().map(definition => ({
     stepId: definition.id,
@@ -191,11 +218,13 @@ describe('a refused section makes the run not ready', () => {
   }))
 
   it('is ready only when every section had its evidence', () => {
-    expect(submissionReadinessOf('production', allPassed, true, []).ready).toBe(true)
+    expect(submissionReadinessOf(manuscriptFacts({ steps: allPassed })).ready).toBe(true)
   })
 
   it('is not ready when a section was refused, and says which', () => {
-    const readiness = submissionReadinessOf('production', allPassed, true, ['method', 'results'])
+    const readiness = submissionReadinessOf(
+      manuscriptFacts({ steps: allPassed, refusedSections: ['method', 'results'] }),
+    )
     expect(readiness.ready).toBe(false)
     expect(readiness.reason).toContain('method, results')
     // The manuscript exists and every gate closed. The hole is the reason, and nothing here may
@@ -249,7 +278,9 @@ describe('a refused section makes the run not ready', () => {
       status: 'passed',
       humanGate: definition.humanGate,
     }))
-    const readiness = submissionReadinessOf('production', allPassed, true, ['references'])
+    const readiness = submissionReadinessOf(
+      manuscriptFacts({ steps: allPassed, refusedSections: ['references'] }),
+    )
     expect(readiness.ready).toBe(false)
     expect(readiness.reason).toContain('references')
   })

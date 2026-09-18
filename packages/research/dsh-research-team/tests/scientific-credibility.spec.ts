@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 import { getArtifact, getStepDefinitions, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import { submissionReadinessOf } from '../src/runner/submission-readiness.ts'
+import type { ManuscriptFacts } from '../src/runner/final-package.ts'
 
 /** One offline run of the shipped pipeline, which is where all of these facts come from. */
 async function shippedRun(): Promise<{ store: ResearchRunStore; runId: string }> {
@@ -128,16 +129,42 @@ describe('a mechanism is attributed by removing it', () => {
   })
 })
 
+/**
+ * The facts a readiness decision reads, for a run whose steps all passed.
+ *
+ * `unfinishedSteps` is DERIVED from the statuses the case supplies, because that is the fact the
+ * decision reads and a case that stated both could state them inconsistently.
+ *
+ * @param input - the step statuses, and the facts this case varies.
+ * @returns the facts the decision reads.
+ */
+function manuscriptFacts(input: {
+  readonly steps: ReadonlyArray<{ readonly stepId: string; readonly status: string }>
+  readonly refusedSections?: ReadonlyArray<string>
+}): ManuscriptFacts {
+  return {
+    profile: 'production',
+    manuscriptProduced: true,
+    unfinishedSteps: input.steps
+      .filter(step => step.status !== 'passed')
+      .map(step => `${step.stepId} (${step.status})`),
+    refusedSections: input.refusedSections ?? [],
+    openIssues: [],
+    staleApproval: undefined,
+    compilation: { tool: null, dropped: [] },
+  }
+}
+
 describe('evidence that is missing blocks the manuscript', () => {
   it('refuses to call a manuscript ready when a section was refused for want of evidence', () => {
     // THE ALTERNATIVE IS FABRICATION: a section filled from the built-in sentences reads as complete,
     // which is the failure the pipeline is built against. The rule is the same one the manifest and
     // the page read, so this asserts the rule rather than restating it.
     const steps = getStepDefinitions().map(definition => ({ stepId: definition.id, status: 'passed' }))
-    const ready = submissionReadinessOf('production', steps, true)
+    const ready = submissionReadinessOf(manuscriptFacts({ steps }))
     expect(ready.ready).toBe(true)
 
-    const refused = submissionReadinessOf('production', steps, true, ['results'])
+    const refused = submissionReadinessOf(manuscriptFacts({ steps, refusedSections: ['results'] }))
     expect(refused.ready).toBe(false)
     expect(refused.reason).toContain('results')
     expect(refused.reason).toContain('refused to write it')

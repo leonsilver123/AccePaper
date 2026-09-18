@@ -152,9 +152,15 @@ describe('a provider that drew a figure', () => {
   })
 })
 
-// THE TIMEOUT IS THE TEST'S, not the product's: the shipped default is 30 seconds, which a cold
-// matplotlib import under a full parallel suite can exceed — measured as a flaky failure that passed
-// whenever the file ran alone.
+/**
+ * The budget for a case that imports the REAL library, which a cold import under a full parallel
+ * suite can take longer than the suite's 5 s default to do.
+ *
+ * THE TIMEOUT IS THE TEST'S, not the product's: the shipped default is 30 seconds and is unchanged.
+ * MEASURED TWICE — 2026-09-18 the chart case timed out at 5022 ms while the same file passed alone.
+ * A budget that only holds when nothing else is running is a defect in the case, not a slow library.
+ */
+const REAL_LIBRARY_TIMEOUT_MS = 60_000
 describe.skipIf(PYTHON === undefined || PROVIDER === undefined)('the provider, against the real library', () => {
   it('draws a chart the machine actually rendered', async () => {
     const provider = PROVIDER
@@ -174,14 +180,14 @@ describe.skipIf(PYTHON === undefined || PROVIDER === undefined)('the provider, a
     expect(drawn?.svg).toContain('</svg>')
     expect(drawn?.pngBase64.startsWith(PNG_BASE64_PREFIX)).toBe(true)
     expect((drawn?.svg.length ?? 0)).toBeGreaterThan(1000)
-  })
+  }, REAL_LIBRARY_TIMEOUT_MS)
 
   it('draws a roadmap the machine actually rendered', async () => {
     const provider = PROVIDER
     const drawn = await provider?.renderDiagramRequest(DIAGRAM)
     expect(drawn?.svg).toContain('<svg')
     expect(drawn?.pngBase64.startsWith(PNG_BASE64_PREFIX)).toBe(true)
-  })
+  }, REAL_LIBRARY_TIMEOUT_MS)
 
   it('reports the library version it probed', () => {
     expect(PROVIDER?.toolVersion).toMatch(/^\d+\.\d+/u)

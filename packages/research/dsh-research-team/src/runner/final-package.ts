@@ -16,11 +16,20 @@
 // WHAT A CHECK IS. One condition, what was observed, and whether it holds. They are computed from the
 // run's own records — its step statuses, its registry, its approval, its last write — and never from
 // a caller's claim about them.
+//
+// ONE DEFINITION OF READY, IN TWO SCOPES. Seven of the conditions below are about the MANUSCRIPT: is
+// the evidence the kind that may carry a submission, was there a manuscript, did every step close,
+// does it have every section, is any concern still open, does the compiled document carry its floats,
+// has it had the review the deployment requires. Five are about the DELIVERY: is there an approval,
+// does it still cover what the run holds, will the package carry the files the manuscript declares,
+// does the package describe the state the run is in, is that state on disk. `checkManuscript`
+// evaluates the first seven and `submissionReadinessOf` reports them as the manifest's
+// `submissionReady`; `checkFinalPackage` evaluates all twelve. They are the SAME function, so a run
+// cannot be ready in the manifest and refused as a package for a reason about the paper — which is
+// the disagreement this file and `submission-readiness.ts` used to be able to produce.
 
 import { approvalStalenessOf, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ApprovalRecord, EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
-import { openIssuesOf } from './submission-readiness.ts'
-import type { OpenIssue } from './submission-readiness.ts'
 
 /** Why a final package was refused, or why it may be written. */
 export type FinalPackageCheckCode =
@@ -61,32 +70,50 @@ export interface FinalPackageApproval {
   readonly targets: ReadonlyArray<{ readonly artifactId: string; readonly version: number; readonly contentHash: string }>
 }
 
-/** Everything the checks read, gathered from the run rather than asserted by a caller. */
-export interface FinalPackageFacts {
+/** One concern a revision round did not close, with the reason the applier gave. */
+export interface OpenIssue {
+  readonly issueId: string
+  readonly sectionId: string
+  readonly reason: string
+}
+
+/**
+ * The issues a revision round left open.
+ *
+ * A round that closed every concern it raised says so with an empty list; a round that left one open
+ * says which and why, and the rebuttal artifact already carries both. Read here rather than
+ * summarised, because "3 issues" is not something a reader can act on and "the patch for `results`
+ * was written against a different version" is.
+ *
+ * @param rebuttal - the `rebuttal` artifact, when the run produced one.
+ * @returns the open issues, in the order the round recorded them.
+ */
+export function openIssuesOf(rebuttal: unknown): ReadonlyArray<OpenIssue> {
+  if (rebuttal === null || typeof rebuttal !== 'object') return []
+  const outcomes = (rebuttal as { issues?: unknown }).issues
+  if (!Array.isArray(outcomes)) return []
+  return outcomes.flatMap((outcome): OpenIssue[] => {
+    if (outcome === null || typeof outcome !== 'object') return []
+    const record = outcome as { issueId?: unknown; sectionId?: unknown; disposition?: unknown; reason?: unknown }
+    if (record.disposition !== 'open') return []
+    return [{
+      issueId: typeof record.issueId === 'string' ? record.issueId : 'unknown issue',
+      sectionId: typeof record.sectionId === 'string' ? record.sectionId : 'unknown section',
+      reason: typeof record.reason === 'string' ? record.reason : 'no reason recorded',
+    }]
+  })
+}
+
+/** Everything the conditions about the MANUSCRIPT read, gathered from the run. */
+export interface ManuscriptFacts {
   readonly profile: EvidenceProfile
   readonly manuscriptProduced: boolean
   /** Steps that have not reached `passed`, as `id (status)`. */
   readonly unfinishedSteps: ReadonlyArray<string>
   readonly refusedSections: ReadonlyArray<string>
   readonly openIssues: ReadonlyArray<OpenIssue>
-  /** The approval on the human gate, when one was made. */
-  readonly approval: ApprovalRecord | undefined
   /** The first artifact that moved after an approved decision, when one did. */
   readonly staleApproval: string | undefined
-  /** Files the run's own manuscript declares, and which of them the package will carry. */
-  readonly declaredFiles: ReadonlyArray<string>
-  readonly packagedFiles: ReadonlyArray<string>
-  /**
-   * The artifact versions this package was read from, and which of them the run has moved past.
-   *
-   * AN EXPORT IS A READING OF ONE STATE. A later step, a revision, a re-run or a hand edit moves an
-   * artifact the package was built from, and a package that still called itself final would be
-   * attesting to a document the run no longer holds. `moved` is empty when every ref still stands.
-   */
-  readonly artifactRefs: {
-    readonly read: ReadonlyArray<string>
-    readonly moved: ReadonlyArray<string>
-  }
   /**
    * What the run's compile produced, as the artifact recorded it.
    *
@@ -107,23 +134,42 @@ export interface FinalPackageFacts {
    * for the fact: the review policy's own evaluation, made where the rounds were taken.
    */
   readonly review?: { readonly satisfied: boolean; readonly reason: string }
+}
+
+/** Everything the checks read, gathered from the run rather than asserted by a caller. */
+export interface FinalPackageFacts extends ManuscriptFacts {
+  /** The approval on the human gate, when one was made. */
+  readonly approval: ApprovalRecord | undefined
+  /** Files the run's own manuscript declares, and which of them the package will carry. */
+  readonly declaredFiles: ReadonlyArray<string>
+  readonly packagedFiles: ReadonlyArray<string>
+  /**
+   * The artifact versions this package was read from, and which of them the run has moved past.
+   *
+   * AN EXPORT IS A READING OF ONE STATE. A later step, a revision, a re-run or a hand edit moves an
+   * artifact the package was built from, and a package that still called itself final would be
+   * attesting to a document the run no longer holds. `moved` is empty when every ref still stands.
+   */
+  readonly artifactRefs: {
+    readonly read: ReadonlyArray<string>
+    readonly moved: ReadonlyArray<string>
+  }
   /** The run's last write to its snapshot, when it failed. */
   readonly saveError: string | undefined
 }
 
 /**
- * Judge one run's package against every condition a final package must meet.
+ * The conditions about the MANUSCRIPT, in the order a reader meets them.
  *
- * EVERY CHECK RUNS, rather than stopping at the first failure: the page states all of them beside the
- * export control, and a reader deciding what to do next needs the whole list — a run can be under the
- * evaluation profile AND unapproved, and fixing one does not reveal the other.
+ * THE MANUSCRIPT'S OWN READINESS, and the one definition of it. `submissionReadinessOf` reports
+ * whether these all hold; `checkFinalPackage` adds the conditions about the delivery to them. A run
+ * therefore cannot be ready here and refused as a package for a reason about the paper.
  *
- * @param facts - what the run recorded.
+ * @param facts - what the run records about its manuscript.
  * @returns one entry per condition, in a fixed order.
  */
-export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<FinalPackageCheck> {
-  const missingFiles = facts.declaredFiles.filter(path => !facts.packagedFiles.includes(path))
-  const checks: FinalPackageCheck[] = [
+export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPackageCheck> {
+  return [
     {
       code: 'production-evidence',
       passed: facts.profile === 'production',
@@ -153,7 +199,8 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
       detail: facts.refusedSections.length === 0
         ? 'the manuscript carries every section the pipeline writes'
         : `the manuscript has no ${facts.refusedSections.join(', ')} section: the run held none of`
-          + ' the evidence that section is written from, and the pipeline refused to fill it in',
+          + ' the evidence that section is written from, and the pipeline refused to write it rather'
+          + ' than fill it in',
     },
     {
       code: 'no-open-issues',
@@ -163,29 +210,15 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
         : `the revision left ${facts.openIssues.map(issue => `${issue.issueId} on '${issue.sectionId}'`).join('; ')} open`,
     },
     {
-      code: 'approval-recorded',
-      passed: facts.approval?.decision === 'approved',
-      detail: facts.approval === undefined
-        ? 'the human gate has no decision on record: a final package is the one a person approved'
-        : facts.approval.decision === 'approved'
-          ? `approved by ${facts.approval.principalId}`
-          : `the human gate recorded '${facts.approval.decision}': only an approval makes a package final`,
-    },
-    {
+      // AN APPROVAL BINDS THE DOCUMENT THAT WAS IN FRONT OF THE PERSON. This is the one home for that
+      // fact: the check says it here, and readiness reports the same sentence rather than a second
+      // wording that could drift from it.
       code: 'approval-current',
       passed: facts.staleApproval === undefined,
       detail: facts.staleApproval === undefined
         ? 'the approval still covers the artifacts the run holds'
-        : `the approval is about another version: ${facts.staleApproval}`,
-    },
-    {
-      code: 'required-files-present',
-      passed: facts.declaredFiles.length > 0 && missingFiles.length === 0,
-      detail: facts.declaredFiles.length === 0
-        ? 'the run\'s manuscript declares no package files, so there is nothing to check for presence'
-        : missingFiles.length === 0
-          ? `every file the manuscript declares is in the package (${facts.declaredFiles.length})`
-          : `these declared files are not in the package: ${missingFiles.join(', ')}`,
+        : `an approved step's inputs changed after the decision: ${facts.staleApproval}. The approval`
+          + ' was given for the revision that was in front of the person, and this is not it',
     },
     {
       // A SUBMISSION WHOSE FIGURES ARE MISSING IS NOT THE PAPER. The compiled document is what a
@@ -217,6 +250,63 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
           ? facts.review.reason
           : `${facts.review.reason} — the manuscript may be exported as the draft it is and not as`
             + ' the paper a journal receives',
+    },
+  ]
+}
+
+/**
+ * The order a package's conditions are reported in.
+ *
+ * FIXED, AND NOT DERIVED FROM THE TWO GROUPS ABOVE. `finalPackageRefusalOf` names the FIRST unmet
+ * condition, so a reader's next action depends on this order; assembling by group would silently
+ * reorder it. The list is the order this file has always reported, with the manuscript's conditions
+ * where they have always sat among the delivery's.
+ */
+const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
+  'production-evidence',
+  'manuscript-produced',
+  'every-step-closed',
+  'no-refused-sections',
+  'no-open-issues',
+  'approval-recorded',
+  'approval-current',
+  'required-files-present',
+  'compiled-document-complete',
+  'review-complete',
+  'artifacts-current',
+  'run-saved',
+]
+
+/**
+ * Judge one run's package against every condition a final package must meet.
+ *
+ * EVERY CHECK RUNS, rather than stopping at the first failure: the page states all of them beside the
+ * export control, and a reader deciding what to do next needs the whole list — a run can be under the
+ * evaluation profile AND unapproved, and fixing one does not reveal the other.
+ *
+ * @param facts - what the run recorded.
+ * @returns one entry per condition, in a fixed order.
+ */
+export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<FinalPackageCheck> {
+  const missingFiles = facts.declaredFiles.filter(path => !facts.packagedFiles.includes(path))
+  const delivery: ReadonlyArray<FinalPackageCheck> = [
+    {
+      code: 'approval-recorded',
+      passed: facts.approval?.decision === 'approved',
+      detail: facts.approval === undefined
+        ? 'the human gate has no decision on record: a final package is the one a person approved'
+        : facts.approval.decision === 'approved'
+          ? `approved by ${facts.approval.principalId}`
+          : `the human gate recorded '${facts.approval.decision}': only an approval makes a package final`,
+    },
+    {
+      code: 'required-files-present',
+      passed: facts.declaredFiles.length > 0 && missingFiles.length === 0,
+      detail: facts.declaredFiles.length === 0
+        ? 'the run\'s manuscript declares no package files, so there is nothing to check for presence'
+        : missingFiles.length === 0
+          ? `every file the manuscript declares is in the package (${facts.declaredFiles.length})`
+          : `these declared files are not in the package: ${missingFiles.join(', ')}`,
     },
     {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
@@ -254,7 +344,17 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
           + ' disk describes a study that a restart would not find',
     },
   ]
-  return checks
+  const byCode = new Map<FinalPackageCheckCode, FinalPackageCheck>(
+    [...checkManuscript(facts), ...delivery].map(check => [check.code, check]),
+  )
+  return FINAL_PACKAGE_CHECK_ORDER.flatMap((code) => {
+    const check = byCode.get(code)
+    // A CONDITION WITH NO CHECK IS A DEFECT IN THIS FILE, not a package that passes: every code is
+    // either in `checkManuscript` or in `delivery`, and a missing one would leave the order quietly
+    // short. Stated rather than skipped.
+    if (check === undefined) throw new Error(`[final-package] no check was built for '${code}'`)
+    return [check]
+  })
 }
 
 /**
@@ -303,6 +403,7 @@ export function finalPackageApprovalOf(approval: ApprovalRecord | undefined): Fi
  * @param profile - the deployment's evidence profile.
  * @param packagedFiles - the paths the package will carry.
  * @param saveError - the run's last write failure, when one was reported.
+ * @param artifactRefs - the artifact versions this package was read from, and which have moved.
  * @returns the facts, or a reason they could not be read.
  */
 export function finalPackageFactsOf(
@@ -312,37 +413,108 @@ export function finalPackageFactsOf(
   packagedFiles: ReadonlyArray<string>,
   saveError: string | undefined,
   artifactRefs: { readonly read: ReadonlyArray<string>; readonly moved: ReadonlyArray<string> },
-  compilation: { readonly tool: string | null; readonly dropped: ReadonlyArray<string> },
 ): FinalPackageFacts {
   const snapshot = getRunSnapshot(store, runId)
   const definitions = getStepDefinitions()
   const humanGate = definitions.find(definition => definition.humanGate)
-  const manuscript = snapshot.registry['formatted-manuscript']
-  const declared = declaredPackageFilesOf(store, runId)
+  return {
+    ...manuscriptFactsOf(store, runId, profile),
+    // THE ONE FACT THE MANUSCRIPT'S CONDITIONS DO NOT READ: whether a person decided. Read off the
+    // registry rather than from the caller, like every other fact here.
+    approval: humanGate === undefined ? undefined : snapshot.steps[humanGate.id]?.approval,
+    declaredFiles: declaredPackageFilesOf(store, runId),
+    packagedFiles,
+    artifactRefs,
+    saveError,
+  }
+}
+
+/**
+ * Read every fact about the MANUSCRIPT off one run.
+ *
+ * THE ONE PLACE THESE ARE GATHERED. `submissionReadinessOf` and `checkFinalPackage` both start from
+ * this, so the manifest's `submissionReady` and the final package's conditions are decided from the
+ * same reads as well as by the same function.
+ *
+ * @param store - the run store, still live at this point.
+ * @param runId - the run being read.
+ * @param profile - the deployment's evidence profile.
+ * @returns what the run recorded about its manuscript.
+ * @throws {Error} when the store holds no such run.
+ */
+export function manuscriptFactsOf(
+  store: ResearchRunStore,
+  runId: string,
+  profile: EvidenceProfile,
+): ManuscriptFacts {
+  const snapshot = getRunSnapshot(store, runId)
+  const definitions = getStepDefinitions()
   return {
     profile,
-    manuscriptProduced: manuscript !== undefined,
+    manuscriptProduced: snapshot.registry['formatted-manuscript'] !== undefined,
     unfinishedSteps: definitions
       .filter(definition => (snapshot.steps[definition.id]?.status ?? 'pending') !== 'passed')
       .map(definition => `${definition.id} (${snapshot.steps[definition.id]?.status ?? 'pending'})`),
     refusedSections: refusedSectionsOf(store, runId),
     openIssues: openIssuesOf(readArtifact(store, runId, 'rebuttal')),
-    ...(() => {
-      const recorded = (readArtifact(store, runId, 'rebuttal') as
-        { review?: { satisfied?: unknown; reason?: unknown } } | undefined)?.review
-      return recorded === undefined || typeof recorded.satisfied !== 'boolean'
-        ? {}
-        : { review: { satisfied: recorded.satisfied, reason: String(recorded.reason ?? '') } }
-    })(),
-    approval: humanGate === undefined ? undefined : snapshot.steps[humanGate.id]?.approval,
     staleApproval: definitions
       .map(definition => approvalStalenessOf(store, runId, definition.id))
       .find(reason => reason !== undefined),
-    declaredFiles: declared,
-    packagedFiles,
-    artifactRefs,
-    compilation,
-    saveError,
+    compilation: compilationOf(store, runId),
+    ...reviewOf(store, runId),
+  }
+}
+
+/**
+ * What the run's compile produced, as the manuscript artifact recorded it.
+ *
+ * A DEPLOYMENT THAT NAMED NO COMPILER RECORDS `tool: null`, which the check reads as "no compiled
+ * document is claimed" — a different fact from a document that lost a float. Each dropped entry is
+ * reported WITH the compiler's reason, because "Figure 2" is not something a reader can act on and
+ * "Figure 2 (a diagram is carried as its own source…)" is.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @returns the tool that compiled, and the floats it did not carry.
+ */
+function compilationOf(
+  store: ResearchRunStore,
+  runId: string,
+): { readonly tool: string | null; readonly dropped: ReadonlyArray<string> } {
+  const value = readArtifact(store, runId, 'formatted-manuscript')
+  if (value === null || typeof value !== 'object') return { tool: null, dropped: [] }
+  const recorded = (value as { compilation?: unknown }).compilation
+  if (recorded === null || typeof recorded !== 'object') return { tool: null, dropped: [] }
+  const { tool, floatsDropped } = recorded as { tool?: unknown; floatsDropped?: unknown }
+  return {
+    tool: typeof tool === 'string' ? tool : null,
+    dropped: Array.isArray(floatsDropped)
+      ? floatsDropped.flatMap((entry): string[] => {
+        const { label, reason } = (entry ?? {}) as { label?: unknown; reason?: unknown }
+        if (typeof label !== 'string') return []
+        return [`${label} (${typeof reason === 'string' ? reason : 'not embedded'})`]
+      })
+      : [],
+  }
+}
+
+/** The review state the run recorded, when its rebuttal artifact carries one. */
+function reviewOf(
+  store: ResearchRunStore,
+  runId: string,
+): { readonly review?: { readonly satisfied: boolean; readonly reason: string } } {
+  const recorded = (readArtifact(store, runId, 'rebuttal') as
+    { review?: { satisfied?: unknown; reason?: unknown } } | undefined)?.review
+  if (recorded === undefined || typeof recorded.satisfied !== 'boolean') return {}
+  // A REASON THAT IS NOT A STRING IS NOT ONE THIS CHECK MAY RENDER: `String(value)` would print
+  // `[object Object]` into a refusal a reader is supposed to act on, so it is reported as the absence
+  // it is. The writer is this package, so a non-string here is a defect in the artifact, not input.
+  const reason = recorded.reason
+  return {
+    review: {
+      satisfied: recorded.satisfied,
+      reason: typeof reason === 'string' ? reason : 'the record states no reason',
+    },
   }
 }
 

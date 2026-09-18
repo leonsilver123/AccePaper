@@ -1213,7 +1213,7 @@ describe('a decision a person made survives the process that took it', () => {
       // THE APPROVAL IS STILL ON RECORD AND NO LONGER ABOUT THIS MANUSCRIPT.
       expect(moved.get('approval-current')).toBe(false)
       const stale = (second.checks ?? []).find(check => check.code === 'approval-current')
-      expect(stale?.detail).toContain('another version')
+      expect(stale?.detail).toContain('changed after the decision')
     } finally {
       await next.dispose()
     }

@@ -115,7 +115,7 @@ describe('a final package is what every condition holds', () => {
       'approval-current',
     )
     expect(check.passed).toBe(false)
-    expect(check.detail).toContain('another version')
+    expect(check.detail).toContain('changed after the decision')
     expect(check.detail).toContain('moved from version 3 to version 4')
   })
 

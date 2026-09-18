@@ -52,6 +52,7 @@ import { buildToolDeps, type CitationChannel, type LiteratureChannel, researchTo
 import { createDeterministicAdapter } from './deterministic-llm.ts'
 import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
+import { LlmReviewer, type LlmReviewerConfig } from './llm-reviewer.ts'
 import { MatplotlibProvider } from './matplotlib-provider.ts'
 import { PandocCompiler } from './pandoc-compiler.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
@@ -304,6 +305,39 @@ export interface Config {
    * until the same sections are still open, whichever comes first.
    */
   readonly revisionRounds?: number
+  /**
+   * The reader-side channel: who decides the two judgements this pipeline refuses to make itself.
+   *
+   * ABSENT BY DEFAULT, for the same reason the prose channel is: whether a deployment's reviewer can
+   * read a sentence against a passage, and a revision against the issue it answers, is a fact about
+   * that deployment. A deployment that names none is not silently un-reviewed — the run records that
+   * its sentences were not assessed and its revisions were not verified, which is a state a reader can
+   * see, and `checkFinalPackage` refuses the package a journal would receive.
+   *
+   * THE SAME MODEL ON BOTH SIDES IS NOT INDEPENDENCE. `verifier` must name a different route from
+   * `prose`, because D4 compares the verifier's identity with the author's and refuses a verification
+   * by whoever wrote the answer. A deployment that points both at one model gets a refused
+   * verification rather than a nominal one.
+   */
+  readonly review?: ReviewChannel
+}
+
+/**
+ * The reader-side channel: who decides the two judgements the pipeline refuses to make itself.
+ */
+export interface ReviewChannel {
+  /** The reader that judges one citing sentence against the source it cites. */
+  readonly assessor?: LlmReviewerConfig
+  /** The reader that decides whether a revision answers the issue it was written for. */
+  readonly verifier?: LlmReviewerConfig
+  /**
+   * How many COMPLETE readings a manuscript must have had before it may be published.
+   *
+   * Omitted, the runner's own default applies (two). A deployment that requires one reading is making
+   * a decision it is allowed to make, and one that requires two must not be satisfied by one — which
+   * is why this is a policy the run carries rather than a number the review cycle counts against.
+   */
+  readonly minimumRounds?: number
 }
 
 /**
@@ -504,6 +538,28 @@ export class ResearchEngine extends Service {
    * output may be submitted.
    */
   readonly evidenceProfile: EvidenceProfile
+  /**
+   * The sentence-level reviewer this deployment named, or undefined when it named none.
+   *
+   * Public for the same reason {@link ResearchEngine.proseWriter} is: the runner-side service reads it
+   * and hands it to the steps that assess, so one deployment-level choice governs whether a sentence's
+   * citation was read against that sentence. Undefined is a state the run records — sentences not
+   * assessed — rather than a check that quietly does not happen.
+   */
+  readonly statementAssessor: LlmReviewer | undefined
+  /**
+   * The revision verifier this deployment named, or undefined when it named none.
+   *
+   * Public for the same reason {@link ResearchEngine.statementAssessor} is: the service reads it and
+   * hands it to D4, which leaves every issue `pending-verification` when it is absent — a debt a
+   * reader can see, rather than a concern that closed because a patch applied.
+   */
+  readonly resolutionVerifier: LlmReviewer | undefined
+  /**
+   * How much review this deployment requires, when it says, else undefined so the runner's default
+   * applies. Public for the same reason {@link ResearchEngine.revisionRounds} is.
+   */
+  readonly reviewPolicy: { readonly minimumRounds: number } | undefined
 
   /**
    * The deterministic provider to register at load, when the deployment selected that
@@ -569,6 +625,25 @@ export class ResearchEngine extends Service {
     } else {
       this.proseWriter = undefined
     }
+    // THE READER-SIDE CHANNEL. Built here from the same `sessionCwd` the prose writer uses, so a
+    // reviewer session runs where the deployment said rather than wherever the process happens to be.
+    // The route is what the verification's independence is decided on, so a deployment that points
+    // this at its prose route gets a refused verification rather than a nominal one — see
+    // {@link Config.review}.
+    const review = config.review
+    const reviewerFor = (row: LlmReviewerConfig | undefined): LlmReviewer | undefined =>
+      row === undefined ? undefined : new LlmReviewer(ctx, { ...row, cwd: this.sessionCwd })
+    this.statementAssessor = reviewerFor(review?.assessor)
+    this.resolutionVerifier = reviewerFor(review?.verifier)
+    // REFUSED HERE, where the value enters, rather than where the review cycle would read it: a floor
+    // below one is a misconfiguration that reads as "the manuscript needed no reading at all".
+    const minimumRounds = review?.minimumRounds
+    if (minimumRounds !== undefined && (!Number.isSafeInteger(minimumRounds) || minimumRounds < 1)) {
+      throw new Error(
+        `[research] \`review.minimumRounds\` must be a positive integer, got ${String(minimumRounds)}`,
+      )
+    }
+    this.reviewPolicy = minimumRounds === undefined ? undefined : { minimumRounds }
     // THE PROBE DECIDES WHAT THIS DEPLOYMENT CAN PRODUCE. It runs once, here, so a machine without a
     // LaTeX engine is known before any run asks for a PDF — and the absence is a property of the
     // deployment rather than a compile that fails later.

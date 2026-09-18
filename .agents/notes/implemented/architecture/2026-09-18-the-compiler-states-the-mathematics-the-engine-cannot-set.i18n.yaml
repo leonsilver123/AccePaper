@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-18-the-compiler-states-the-mathematics-the-engine-cannot-set.md
+2026-09-18-the-compiler-states-the-mathematics-the-engine-cannot-set.md: fd6c5fc1bbe1561f38dbde8dc648cdd048b369e9
+2026-09-18-the-compiler-states-the-mathematics-the-engine-cannot-set.zh.md: 98686bc485f25a6520d8febd7c70fcedfdbefaa4

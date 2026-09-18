@@ -522,25 +522,6 @@ export function planRunPackage(
     ]),
   })
 
-  // The compile the run recorded, read off the manuscript artifact: which tool compiled it, and which
-  // floats the compiled document does NOT carry.
-  const compilation = (manuscript as {
-    compilation?: {
-      tool?: unknown
-      floatsDropped?: ReadonlyArray<{ label?: unknown; reason?: unknown }>
-      refusals?: unknown
-    }
-  } | undefined)?.compilation
-  const compilationFacts = compilation === undefined
-    ? { tool: null, dropped: [] as ReadonlyArray<string> }
-    : {
-      tool: typeof compilation.tool === 'string' ? compilation.tool : null,
-      dropped: (compilation.floatsDropped ?? []).flatMap((entry) => {
-        if (typeof entry.label !== 'string') return []
-        const reason = typeof entry.reason === 'string' ? entry.reason : 'not embedded'
-        return [`${entry.label} (${reason})`]
-      }),
-    }
   const written = new Set(files.map(file => file.path))
   // THE ARTIFACT VERSIONS THIS PACKAGE IS A READING OF. Recorded from the run's registry at plan
   // time, so a reader — and the `artifacts-current` check below — can tell whether the run has moved
@@ -558,7 +539,6 @@ export function planRunPackage(
     store, runId, evidenceProfile, [...written, 'run-summary.md'],
     options.saveError,
     { read: artifactRefs.map(entry => `${entry.slug}@${entry.ref.version}`), moved: movedSince },
-    compilationFacts,
   )
   const checks = checkFinalPackage(facts)
   const state = finalPackageStateOf(checks)

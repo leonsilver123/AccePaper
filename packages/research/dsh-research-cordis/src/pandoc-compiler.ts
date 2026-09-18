@@ -34,6 +34,9 @@ import { basename, join } from 'node:path'
 /** One format a compiler can produce. */
 type CompileFormat = 'html' | 'latex' | 'docx' | 'pdf'
 
+/** The formats pandoc writes through LaTeX, whose source is the only one that needs TeX mathematics. */
+const TEX_FORMATS: ReadonlyArray<CompileFormat> = ['latex', 'pdf']
+
 /** One block of the document model. */
 type DocumentBlock =
   | { readonly kind: 'prose'; readonly text: string }
@@ -203,18 +206,80 @@ function runIn(
   })
 }
 
-/** One block as the Markdown pandoc reads, so the model's structure reaches the renderer. */
-function blockMarkdown(block: DocumentBlock, numbers: ReadonlyMap<string, number>): string {
+/**
+ * A mathematical character, as the body of the TeX command that sets it.
+ *
+ * A PAPER STATES MATHEMATICS IN ITS PROSE, and an engine is a fact about the deployment: pdfLaTeX
+ * cannot set a Unicode mathematical symbol in text mode, so a run whose deployment names one refused
+ * a manuscript for writing "Δ" in a sentence (measured, 2026-09-18) — the model had written the
+ * mathematics of its own study correctly and the toolchain could not set it. The remedy is not to
+ * strip the character (that would change what the paper says) nor to ask the model to write around
+ * its toolchain; it is for the COMPILER to state the character as the mathematics it is.
+ *
+ * THE SET IS EXPLICIT AND SHORT. Every entry is a character whose meaning is mathematical and whose
+ * LaTeX is unambiguous; anything else is left exactly as the manuscript wrote it, so a compiler that
+ * does not know a symbol still sets the text rather than inventing a rendering for it.
+ */
+const TEX_MATH: Readonly<Record<string, string>> = {
+  'Δ': '\\Delta', 'δ': '\\delta', 'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma',
+  'λ': '\\lambda', 'μ': '\\mu', 'σ': '\\sigma', 'τ': '\\tau', 'θ': '\\theta',
+  'ρ': '\\rho', 'φ': '\\phi', 'π': '\\pi', 'η': '\\eta', 'ε': '\\epsilon',
+  '×': '\\times', '±': '\\pm', '≈': '\\approx', '≤': '\\leq', '≥': '\\geq',
+  '→': '\\to', '∞': '\\infty', '∑': '\\sum', '∝': '\\propto', '∈': '\\in',
+  // THE MINUS SIGN A MODEL WRITES IS NOT THE HYPHEN A KEYBOARD HAS. U+2212 is the mathematical one,
+  // and it is what appears in "−38.2 %" when the text is written by something that knows the
+  // difference — which pdfLaTeX then refuses, exactly as it refused Δ.
+  '−': '-', '·': '\\cdot', '≠': '\\neq', '∼': '\\sim', '∂': '\\partial',
+  '∫': '\\int', '∇': '\\nabla', '√': '\\surd', '°': '^{\\circ}',
+}
+
+/**
+ * Text as the LaTeX family can set it: a mathematical character becomes the mathematics it is.
+ *
+ * ONLY THE TEX WRITERS NEED THIS. HTML is UTF-8 and a DOCX is OOXML, so both set these characters as
+ * themselves, out of the font the reader already has; the LaTeX source is the one that carries the
+ * character into a pdfLaTeX run that has no glyph for it.
+ *
+ * `\ensuremath` AND NOT `$…$`. Pandoc's Markdown reader refuses to read `$…$` as mathematics when the
+ * closing `$` is followed by a digit, which is exactly the position a minus sign is in ("−38.2"), so
+ * `$-$38.2` reached the LaTeX source as the literal text `\$-\$38.2` (measured, 2026-09-18). Raw TeX
+ * passes through the reader untouched, sets a symbol in text and in mathematics alike, and needs no
+ * package: `\ensuremath{\Delta}` is the same character the manuscript wrote.
+ *
+ * @param text - the manuscript's text.
+ * @returns the same text, with known mathematical characters stated as TeX mathematics.
+ */
+function asTexMath(text: string): string {
+  return text.replace(/[^\x20-\x7E\n]/gu, (character) => {
+    const latex = TEX_MATH[character]
+    return latex === undefined ? character : `\\ensuremath{${latex}}`
+  })
+}
+
+/**
+ * One block as the Markdown pandoc reads, so the model's structure reaches the renderer.
+ *
+ * @param block - the block.
+ * @param numbers - the reference numbers the prose cites, by cite key.
+ * @param texMath - whether this format is one whose writer needs mathematical characters as TeX.
+ * @returns the block's Markdown.
+ */
+function blockMarkdown(
+  block: DocumentBlock,
+  numbers: ReadonlyMap<string, number>,
+  texMath: boolean,
+): string {
+  const text = (value: string): string => texMath ? asTexMath(value) : value
   switch (block.kind) {
     case 'prose':
-      return block.text.replace(/\[@([^[\]\s]+)\]/gu, (whole: string, key: string) =>
-        numbers.has(key) ? `[${String(numbers.get(key))}]` : whole)
+      return text(block.text.replace(/\[@([^[\]\s]+)\]/gu, (whole: string, key: string) =>
+        numbers.has(key) ? `[${String(numbers.get(key))}]` : whole))
     case 'figure':
-      return `${block.svg}\n\n**${block.label}.** ${block.caption}`
+      return `${block.svg}\n\n**${block.label}.** ${text(block.caption)}`
     case 'table':
-      return `${block.markdown}\n\n**${block.label}.** ${block.caption}`
+      return `${text(block.markdown)}\n\n**${block.label}.** ${text(block.caption)}`
     case 'diagram':
-      return `\`\`\`mermaid\n${block.mermaid}\n\`\`\`\n\n**${block.label}.** ${block.caption}`
+      return `\`\`\`mermaid\n${block.mermaid}\n\`\`\`\n\n**${block.label}.** ${text(block.caption)}`
     case 'equation':
       return `$$${block.latex}$$`
     default:
@@ -348,7 +413,9 @@ export class PandocCompiler {
             if (request.format === 'html') rendered.push(['```mermaid', block.mermaid, '```'].join('\n'))
             continue
           }
-          rendered.push(blockMarkdown(block, numbers))
+          // BOTH TEX FORMATS GO THROUGH ONE PANDOC RUN, so both need the character restated; HTML and
+          // DOCX set it as itself. See `asTexMath`.
+          rendered.push(blockMarkdown(block, numbers, TEX_FORMATS.includes(request.format)))
         }
         blocks.push(`## ${section.heading}`, ...rendered)
       }

@@ -908,6 +908,21 @@ function proseRouteOf(result: { readonly provider: string; readonly model: strin
 }
 
 /**
+ * The model route that produced a prose result, as an identity.
+ *
+ * ONE SPELLING, SO TWO SIDES CAN BE COMPARED. A verification is refused when its `verifiedBy` equals
+ * the author's id, and the author of a model-written reply is the route that wrote it. Writing the
+ * route any other way here — with a role prefix, say — would make a model's reading of its own answer
+ * look independent, which is the one thing that check exists to catch.
+ *
+ * @param result - what the prose write resolved with.
+ * @returns the route, spelled the way `LlmReviewer` spells its own id.
+ */
+function llmRoute(result: { readonly provider: string; readonly model: string }): string {
+  return `llm:${result.provider}/${result.model}`
+}
+
+/**
  * The research this run carries.
  *
  * Every executor reads the study through the run context rather than through module constants.
@@ -3063,6 +3078,11 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let points: ReadonlyArray<RebuttalPoint> = []
   let rebuttalSource: 'model' | 'deterministic' | 'fixture' = 'fixture'
   let rebuttalRoute: Record<string, unknown> = proseRouteOf(undefined)
+  // WHO WROTE THE ANSWERS, which is what a verification is checked against for independence. The
+  // ROUTE when a model wrote them, not the step's role name: a verifier configured on the same model
+  // would otherwise pass the independence check by being called something else, and one model reading
+  // its own reply is not a second reader.
+  let authorId = D4_PRODUCER
   let applied = applyRevision(sections, [])
   // HOW MANY ROUNDS THIS TOOK, AND WHY IT STOPPED. One round is not a revision cycle: a concern the
   // applier refused — written against another version, changing nothing, or conflicting with another
@@ -3151,7 +3171,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     )
     applied = await appliedWithVerification(
       ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
-      new Map(applied.sections.map(section => [section.id, section.bodyText])),
+      new Map(applied.sections.map(section => [section.id, section.bodyText])), authorId,
     )
     // The fixture path writes its issues once; one round IS its whole cycle, and it is recorded as
     // one rather than pretending a model was asked again.
@@ -3223,6 +3243,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       }))
       rebuttalSource = proseLabelling(writer).source
       rebuttalRoute = proseRouteOf(analysis)
+      if (rebuttalSource === 'model') authorId = llmRoute(analysis)
 
       // The basis each patch is written against is THIS round's body, not the draft's.
       const currentBodies = new Map(current.map(section => [section.id, section.bodyText]))
@@ -3232,7 +3253,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       )
       applied = await appliedWithVerification(
         ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(currentBodies.get(issue.sectionId) ?? '') })),
-        new Map(applied.sections.map(section => [section.id, section.bodyText])),
+        new Map(applied.sections.map(section => [section.id, section.bodyText])), authorId,
       )
       // NO PROGRESS IS MEASURED BY SECTION, NOT BY ISSUE ID. A round numbers its issues from one, so
       // `d4-issue-1` names a different concern in every round — comparing ids would call two rounds
@@ -4016,6 +4037,7 @@ function carriedAssessments(ctx: ExecCtx): ReadonlyArray<StatementAssessment> {
  * @param applied - what the round did to the manuscript.
  * @param issues - the round's issues, as raised.
  * @param revisedBodies - the section bodies as they now stand.
+ * @param authorId - who wrote the answers, so a verification by that same source is refused.
  * @returns the revision with its outcomes settled as far as they can be.
  * @throws {Error} when a verification is not independent, or names an issue nothing left pending.
  */
@@ -4024,13 +4046,14 @@ async function appliedWithVerification(
   applied: AppliedRevision,
   issues: ReadonlyArray<RevisionIssue>,
   revisedBodies: ReadonlyMap<string, string>,
+  authorId: string,
 ): Promise<AppliedRevision> {
   const verifier = ctx.resolutionVerifier
   if (verifier === undefined) return applied
   const verifications = await verifyPending(applied.outcomes, verifier, {
     issues, changes: applied.changes, revisedBodies,
   })
-  const settled = verifyResolution(applied.outcomes, verifications, D4_PRODUCER)
+  const settled = verifyResolution(applied.outcomes, verifications, authorId)
   if (settled.refusals.length > 0) {
     throw new Error(
       `[D4-rebuttal] [${settled.refusals[0]?.code ?? 'verification-not-independent'}] `

@@ -367,12 +367,18 @@ describe('a revision round that leaves a concern open', () => {
     // file is asked for the round it belongs to.
     expect(rebuttal?.['awaitingVerification']).toEqual(['d4-issue-1'])
 
-    // Every gate closed and a person approved the package, so readiness has nothing else to report.
+    // Every gate closed and a person approved the package — and the run is STILL NOT READY, because
+    // the answers nobody read are part of what "ready" means. This is the disagreement the pipeline
+    // review named: readiness and the final package were two copies of the conditions, so a run whose
+    // revisions had never been read carried `submissionReady: true` in its manifest while the export
+    // refused it. They are one evaluation now, and this is the case that tells them apart.
     const decide = approvalChannel()
     decide.submit(store, runId, 'E2-submit', 'approved',
       decide.mintPrincipal(runId, 'E2-submit', OPERATOR, 'evt-open-issue'))
 
-    expect(readinessOfRun(store, runId, 'production').ready).toBe(true)
+    const readiness = readinessOfRun(store, runId, 'production')
+    expect(readiness.ready).toBe(false)
+    expect(readiness.reason).toContain('waiting for a reader')
   })
 
   it('stops when another round could not change anything, and leaves the concern open', async () => {
@@ -402,8 +408,11 @@ describe('a revision round that leaves a concern open', () => {
 
     const readiness = readinessOfRun(store, runId, 'production')
     expect(readiness.ready).toBe(false)
-    expect(readiness.reason).toContain('left 1 concern(s) open')
+    // THE SAME SENTENCE THE FINAL PACKAGE REPORTS, because it is the same check: readiness used to
+    // have its own wording for this and could drift from the export's.
+    expect(readiness.reason).toContain('left')
     expect(readiness.reason).toContain("on 'method'")
+    expect(readiness.reason).toContain('open')
   })
 
   it('asks as many times as the deployment configured, and no more', async () => {
@@ -458,6 +467,47 @@ describe('a revision round that leaves a concern open', () => {
     expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'pending-verification' }] })).toEqual([])
     expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'answered' }] })).toEqual([])
     expect(openIssuesOf(undefined)).toEqual([])
+  })
+})
+
+describe('who counts as a second reader', () => {
+  it('refuses a verification from the route that wrote the answers', async () => {
+    // THE AUTHOR OF A MODEL-WRITTEN REPLY IS THE ROUTE THAT WROTE IT. This deployment's writer states
+    // `test-provider/test-model`, so a reviewer configured on that same route is refused — one model
+    // reading its own reply is not a second reader, and a verifier identity that named the ROLE
+    // rather than the route would have let it certify itself.
+    //
+    // The step FAILS rather than settling the issues nominally: a run whose reviewer was the author
+    // has not been reviewed, and reporting it as reviewed is the defect the pipeline review named.
+    const reply = [
+      'CONCERN: The results section states no comparison.',
+      'SECTION: results',
+      'RESPONSE: The comparison is stated.',
+      'PATCH: The comparison against this study baseline is stated in Table 1.',
+    ].join('\n')
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      studyPlan: DEFAULT_PLAN,
+      proseWriter: stagedWriter([reply, reply]),
+      casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
+      resolutionVerifier: {
+        id: 'the same model, called a reviewer',
+        verify: input => Promise.resolve({
+          issueId: input.issue.issueId,
+          verdict: 'verified' as const,
+          basis: 'I wrote it and it looks right',
+          verifiedBy: 'llm:test-provider/test-model',
+          verifiedAt: new Date(0).toISOString(),
+        }),
+      },
+    })
+    const d4 = run.steps.find(step => step.stepId === 'D4-rebuttal')
+    expect(d4?.status).toBe('in_progress')
+    expect(d4?.executeError).toMatch(/verification-not-independent/u)
+    expect(d4?.executeError).toMatch(/cannot certify itself/u)
+    // NOTHING WAS SETTLED ON A READING THAT WAS NOT ONE. The rebuttal artifact is absent, so no
+    // downstream step can report these concerns as answered.
+    expect(getArtifact(store, run.runId, 'rebuttal')).toBeUndefined()
   })
 })
 

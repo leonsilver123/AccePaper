@@ -125,6 +125,47 @@
           # default the step died with `agent loop idle timeout after 120000ms` and the run
           # stopped there.
           idleTimeoutMs: 600000
+        # ── WHO READS WHAT THE MODEL WROTE ─────────────────────────────────────
+        # Two judgements this pipeline refuses to make for itself, and neither is inferred from a
+        # configured channel: whether a sentence's citation supports THAT sentence (rather than the
+        # claim it came from), and whether a revision answers the issue it was written for. Before
+        # this row, a sentence inherited the verdict made about its claim, and an issue closed because
+        # a patch applied — the two defects the pipeline review of 2026-09-18 reproduced.
+        #
+        # THE ASSESSOR IS ENABLED. One call per citing sentence, reading the sentence against the
+        # passage that was actually read. The read scope is taken from the judgement, never asked of
+        # the model, so a verdict cannot claim to rest on a fuller reading than was made. An
+        # assessment that is missing, stale in the sentence, or stale in the passage is refused as
+        # `statement-unassessed`, which is a different fact from a sentence that was read and found
+        # wanting.
+        review:
+          assessor:
+            provider: deepseek-official
+            model: deepseek-v4-flash
+            # Bound to the rules, not to the date: a deployment that changes what its reader is asked
+            # for bumps this and every sentence is re-read rather than re-stamped.
+            policyVersion: sentence-vs-passage-1
+          # HOW MANY COMPLETE READINGS A MANUSCRIPT MUST HAVE HAD. Stated rather than defaulted,
+          # because this is the deployment's floor: `revisionRounds` bounds how many times the AUTHOR
+          # may be asked, and reading one number for the other is how "at most two" became "one round
+          # that closed everything is enough".
+          minimumRounds: 2
+          # THE VERIFIER IS NOT NAMED, and that is a decision with a cost, stated here rather than
+          # left to be discovered. Verification must be INDEPENDENT: D4 compares the verifier's
+          # identity with the route that wrote the answers, and refuses a verification by the same
+          # route — one model reading its own reply is not a second reader, whatever the row is
+          # called. This deployment writes its prose on `deepseek-v4-flash` above, so naming that same
+          # route here would make D4 refuse every verification and fail the step. Give the reviewer
+          # its own route and add it:
+          #
+          #        verifier:
+          #          provider: <provider>
+          #          model: <a model this deployment does not write with>
+          #
+          # Until then the run LEAVES EVERY REVISION PENDING: `awaitingVerification` is non-empty, the
+          # review is unsatisfied, and `checkFinalPackage` refuses the package a journal would receive
+          # while still exporting the draft. That is the honest state — nobody read the answers — and
+          # it is not a state a relabelled profile can make go away.
         # The Case Pack this deployment runs against: the seven versioned JSON files that
         # supply the research question, the central claim, the experiment configuration and
         # its scenario parameters. They are synthetic fixture content and carry that label
