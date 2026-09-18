@@ -10,7 +10,8 @@
 // host channel behind it is created on first use and carries this deployment's registered operator,
 // so the fixture does not build one: a second creation is refused, which is the channel's own rule.
 //
-// argv: `--dir <snapshot root> [--profile production|evaluation] [--review-rounds N] [--verify]`; prints one
+// argv: `--dir <snapshot root> [--profile production|evaluation] [--review-rounds N] [--verify]
+//        [--venue-rules-read]`; prints one
 // JSON line describing the
 // decision, or exits non-zero. The profile is the DEPLOYMENT's, so it is stated here the way a
 // `cordis.yml` states it: a run approved under the production profile is one whose material may be
@@ -41,6 +42,28 @@ const verify = process.argv.includes('--verify')
 /** The number of complete review rounds this deployment requires; absent means the shipped default. */
 const reviewRounds = process.argv.includes('--review-rounds')
   ? Number(argument(process.argv.slice(2), '--review-rounds'))
+  : undefined
+/**
+ * The target journal's requirements, when this deployment is stating it READ the guide.
+ *
+ * THE CONTENT IS THIS FIXTURE'S OWN and every rule says so in its `source`: what is being exercised is
+ * a deployment that has read its guide, not what any journal requires. A4 writes the record for a
+ * guide nobody read — every requirement marked unknown — and a final package is refused on it.
+ */
+const journal = process.argv.includes('--venue-rules-read')
+  ? {
+    id: 'fixture-venue',
+    name: 'The fixture stand-in journal',
+    rules: [{
+      id: 'abstract-length',
+      statement: 'a stand-in rule for the abstract, stated by this fixture',
+      source: 'this fixture - not a journal',
+      accessedAt: '2026-09-18',
+      articleType: 'the article type this fixture invents',
+      verification: 'verified' as const,
+      detail: 'a stand-in, so the case exercises the gate rather than a journal',
+    }],
+  }
   : undefined
 
 /**
@@ -80,6 +103,10 @@ ctx.provide('research', {
   // that a final package requires the revisions to have been READ — without one, the run leaves its
   // issues waiting and the package stays a draft however the evidence profile reads.
   ...(verify ? { resolutionVerifier: standInVerifier } : {}),
+  // THE JOURNAL PROFILE, stated where the RUN is conducted rather than where it is exported: the
+  // driver freezes it into the run's spec, and a later process reads what the run recorded rather than
+  // re-stating the rules it wants to publish under.
+  ...(journal === undefined ? {} : { journal }),
 })
 
 await ctx.plugin(ResearchTeamService, {})

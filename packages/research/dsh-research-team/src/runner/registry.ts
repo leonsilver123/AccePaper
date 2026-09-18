@@ -665,6 +665,7 @@ const D3_PRODUCER = 'fixture:writing'
 const PROSE_REQUEST_VERSION = 'prose-request-v1'
 
 const D4_PRODUCER = 'fixture:rebuttal'
+
 const E1_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`
 
 /**
@@ -1663,6 +1664,11 @@ function a4Executor(ctx: ExecCtx): Record<string, unknown> {
         name: venueName,
         claimRef,
         venueSource,
+        // WHAT THIS VENUE REQUIRES, AND WHETHER ANYBODY HAS READ IT. A submission is measured against
+        // the journal's own guide, and this run has not read one: the record states every requirement
+        // it knows the guide answers, each `unknown`, with the official page it is stated on and what
+        // attempting that page produced. Recording the gap is what `journal-rules-verified` refuses a
+        // final package on — an invented word limit would have read as compliance.
         // The evidence for the choice, so a reader can check it against the corpus.
         evidence: {
           recordsConsidered: hits.length,
@@ -3953,7 +3959,11 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         },
         venueName,
         venueId,
-        venueStyle: `${venueName} template`,
+        // WHAT STYLE WAS APPLIED, SAID WITHOUT OVER-CLAIMING. This used to read
+        // `${venueName} template`, which named a template no run has read; the compiler applies
+        // pandoc's default, and the run's record of what the venue requires is its venue profile.
+        venueStyle: `${venueName} (pandoc default; the journal's own requirements are recorded,
+          not applied — see the run's venue profile)`,
         scopeLine,
         // Which outline sections the assembly replaced, and by what. Empty means the
         // outline's own sections all survive into the manuscript.

@@ -19,10 +19,23 @@ import type { MetricDefinition, ResearchType } from './metrics.ts'
 export interface JournalRule {
   /** Stable id, e.g. `abstract-word-limit`. */
   readonly id: string
-  /** The rule as the venue states it. */
+  /** The rule as the venue states it, or the subject it governs when nobody has read it. */
   readonly statement: string
   /** Where it was read: a URL, and the date it was read. Never empty, never a guess. */
   readonly source: string
+  /** When that page was read, ISO 8601 date. */
+  readonly accessedAt: string
+  /** The article type this applies to, as the guide names it. */
+  readonly articleType: string
+  /**
+   * Whether the rule's content was established, or only its existence.
+   *
+   * A rule is never `'verified'` because it seems obvious: a manuscript is published under the rules
+   * that were read, and a limit somebody remembers is a guess wearing the venue's name.
+   */
+  readonly verification: 'verified' | 'unknown'
+  /** The condition a manuscript must meet, or what attempting the page produced. */
+  readonly detail: string
 }
 
 /** A venue's requirements, as far as anyone has verified them. */
@@ -34,16 +47,60 @@ export interface JournalProfile {
 }
 
 /**
- * Transportation Research Part C, with NO rules.
+ * Transportation Research Part C: the questions its guide answers, none of them read.
  *
- * The author guide has not been obtained, so the venue's word limits, figure specifications, reference
- * style and supplementary-material rules are unknown. Listing them as fields would make every one of
- * them a default, and a default here is a claim about the venue that nobody checked.
+ * MEASURED, 2026-09-18, FROM THIS HOST. Three official pages were attempted — ScienceDirect's
+ * `…/publish/guide-for-authors` and `…/about/author-information`, and Elsevier's
+ * `…/journals/…/guide-for-authors` — and every one answered HTTP 403 with a JavaScript challenge body
+ * (1.2 MB) rather than the guide. So the rules are recorded as what they govern, each `unknown`, with
+ * the page that would state it and what the attempt produced. Listing them is not defaulting them: an
+ * unknown rule is refused at publication, while an omitted one is a rule nobody misses.
  */
 export const TRC_PROFILE: JournalProfile = {
   id: 'trc',
   name: 'Transportation Research Part C: Emerging Technologies',
-  rules: [],
+  rules: unreadRulesFor(
+    'https://www.sciencedirect.com/journal/transportation-research-part-c-emerging-technologies/publish/guide-for-authors',
+    '2026-09-18',
+    'the official guide answered HTTP 403 with a JavaScript challenge body, not the page',
+  ),
+}
+
+/**
+ * The requirements every journal's guide states, none of them read.
+ *
+ * @param source - the official page that states them.
+ * @param accessedAt - the date that page was attempted, ISO 8601.
+ * @param observed - what the attempt produced, so the record carries its own evidence.
+ * @returns one unread rule per subject, in the order a guide states them.
+ */
+export function unreadRulesFor(
+  source: string,
+  accessedAt: string,
+  observed: string,
+): ReadonlyArray<JournalRule> {
+  const subjects: ReadonlyArray<readonly [string, string]> = [
+    ['abstract-length', 'the abstract and its word limit'],
+    ['highlights', 'whether highlights are required, how many, and their character limit'],
+    ['graphical-abstract', 'whether a graphical abstract is required and in what format'],
+    ['reference-style', 'the reference style the journal names and the form of an entry'],
+    ['figures-and-tables', 'how many figures and tables are accepted and in what formats'],
+    ['manuscript-file', 'the LaTeX or Word source the journal accepts, and any template'],
+    ['declarations', 'the required declarations: CRediT, competing interests, data availability'],
+    ['anonymity', 'whether the review is anonymised and what must be removed'],
+  ]
+  return subjects.map(([id, statement]) => ({
+    id,
+    statement,
+    source,
+    accessedAt,
+    // THE ARTICLE TYPE IS PART OF THE RULE, and this record does not know it either: a journal states
+    // different limits for a review than for a research paper, so a rule read without its article
+    // type is a rule that cannot be applied.
+    articleType: 'unstated — the guide was not read',
+    verification: 'unknown' as const,
+    detail: observed,
+  }))
 }
 
 /** The research types this deployment can be configured as, in the order they are tried. */

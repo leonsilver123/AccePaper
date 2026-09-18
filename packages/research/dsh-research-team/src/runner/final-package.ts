@@ -48,6 +48,8 @@ export type FinalPackageCheckCode =
   | 'review-complete'
   /** A document the compile produced is not in the package. */
   | 'deliverables-present'
+  /** The target journal's requirements have not been read, so nothing was checked against them. */
+  | 'journal-rules-verified'
   | 'run-saved'
 
 /** One condition a final package must meet, with what the run recorded about it. */
@@ -160,6 +162,19 @@ export interface FinalPackageFacts extends ManuscriptFacts {
   readonly deliverables: {
     readonly produced: ReadonlyArray<string>
     readonly carried: ReadonlyArray<string>
+  }
+  /**
+   * Whether this manuscript may be published under the rules that were read.
+   *
+   * THE PROFILE IS THE RUN'S OWN, frozen into its spec, and the rules in it state where each was read,
+   * when, for which article type, and whether it was established. `checkVenueRules` is the decision,
+   * taken where the profile lives rather than re-derived here.
+   */
+  readonly journalRules?: {
+    readonly venueName: string
+    readonly established: number
+    readonly total: number
+    readonly unverified: ReadonlyArray<string>
   }
   /**
    * The artifact versions this package was read from, and which of them the run has moved past.
@@ -292,6 +307,7 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'deliverables-present',
   'compiled-document-complete',
   'review-complete',
+  'journal-rules-verified',
   'artifacts-current',
   'run-saved',
 ]
@@ -328,6 +344,26 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
         : missingFiles.length === 0
           ? `every file the manuscript declares is in the package (${facts.declaredFiles.length})`
           : `these declared files are not in the package: ${missingFiles.join(', ')}`,
+    },
+    {
+      // THE LAST QUESTION IS WHETHER THIS IS THE DOCUMENT THE JOURNAL ACCEPTS, and the only honest
+      // answer available is what the run recorded about that journal's guide. A rule nobody read is
+      // not a rule the manuscript satisfies: publishing under it would mean the paper was measured
+      // against nothing while carrying the journal's name. Recorded rules that were READ satisfy
+      // this; a record in which every rule is `unknown` does not, which is the state measured on
+      // 2026-09-18 when three official pages answered HTTP 403 to this host.
+      code: 'journal-rules-verified',
+      passed: facts.journalRules !== undefined && facts.journalRules.unverified.length === 0,
+      detail: facts.journalRules === undefined
+        ? "this run carries no record of the target journal's requirements, so nothing about the"
+          + ' manuscript was checked against them'
+        : facts.journalRules.unverified.length === 0
+          ? `every requirement recorded for '${facts.journalRules.venueName}' was read at its source`
+            + ` (${String(facts.journalRules.established)} of ${String(facts.journalRules.total)})`
+          : `${String(facts.journalRules.unverified.length)} of ${String(facts.journalRules.total)}`
+            + ` requirement(s) for '${facts.journalRules.venueName}' have not been read`
+            + ` (${facts.journalRules.unverified.join(', ')}) — a manuscript is published under the`
+            + ' rules that were read',
     },
     {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
@@ -468,40 +504,47 @@ export function finalPackageFactsOf(
       // is given, so the two cannot disagree about what the package holds.
       carried: packagedFiles,
     },
+    ...journalRulesOf(store, runId),
     artifactRefs,
     saveError,
   }
 }
 
 /**
- * The compiled DOCUMENTS a run produced, as paths.
+ * The journal's requirements as the run's frozen spec carries them.
  *
- * THE ASSETS ARE NOT DELIVERABLES. `compilation.compiled` names everything one compile produced,
- * including the figure a document embeds; subtracting `compilation.assets` leaves the documents
- * themselves, which are what a journal is handed. A deployment that compiled nothing records an
- * empty list and is asked for nothing.
+ * READ FROM THE SPEC, not from an artifact: the profile is resolved once at the start of the run and
+ * frozen, so a deployment reconfigured afterwards cannot change what rules this study was conducted
+ * under — which is the same reason the study plan is read from there.
  *
  * @param store - the run store.
  * @param runId - the run to read.
- * @returns the document paths, in the order the compile produced them.
+ * @returns the record, or nothing when the run carries no profile.
  */
-function compiledDeliverablesOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
-  const value = readArtifact(store, runId, 'formatted-manuscript')
-  if (value === null || typeof value !== 'object') return []
-  const recorded = (value as { compilation?: unknown }).compilation
-  if (recorded === null || typeof recorded !== 'object') return []
-  const { compiled, assets } = recorded as { compiled?: unknown; assets?: unknown }
-  if (!Array.isArray(compiled)) return []
-  const assetPaths = new Set(Array.isArray(assets)
-    ? assets.flatMap((entry): string[] => {
-      const path = (entry as { path?: unknown } | null)?.path
-      return typeof path === 'string' ? [path] : []
-    })
-    : [])
-  return compiled.flatMap((entry): string[] => {
-    if (typeof entry !== 'string') return []
-    return assetPaths.has(entry) ? [] : [entry]
+function journalRulesOf(
+  store: ResearchRunStore,
+  runId: string,
+): { readonly journalRules?: NonNullable<FinalPackageFacts['journalRules']> } {
+  const profile = getRunSnapshot(store, runId).spec['researchProfile'] as
+    { readonly journal?: unknown } | undefined
+  const journal = profile?.journal
+  if (journal === null || typeof journal !== 'object') return {}
+  const { name, rules } = journal as { name?: unknown; rules?: unknown }
+  if (!Array.isArray(rules)) return {}
+  const unverified = rules.flatMap((entry): string[] => {
+    const rule = entry as { id?: unknown; verification?: unknown } | null
+    if (rule === null || typeof rule !== 'object') return []
+    if (rule.verification === 'verified') return []
+    return typeof rule.id === 'string' ? [rule.id] : []
   })
+  return {
+    journalRules: {
+      venueName: typeof name === 'string' ? name : 'the target journal',
+      total: rules.length,
+      established: rules.length - unverified.length,
+      unverified,
+    },
+  }
 }
 
 /**
@@ -571,6 +614,37 @@ function compilationOf(
       })
       : [],
   }
+}
+
+/**
+ * The compiled DOCUMENTS a run produced, as paths.
+ *
+ * THE ASSETS ARE NOT DELIVERABLES. `compilation.compiled` names everything one compile produced,
+ * including the figure a document embeds; subtracting `compilation.assets` leaves the documents
+ * themselves, which are what a journal is handed. A deployment that compiled nothing records an
+ * empty list and is asked for nothing.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @returns the document paths, in the order the compile produced them.
+ */
+function compiledDeliverablesOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
+  const value = readArtifact(store, runId, 'formatted-manuscript')
+  if (value === null || typeof value !== 'object') return []
+  const recorded = (value as { compilation?: unknown }).compilation
+  if (recorded === null || typeof recorded !== 'object') return []
+  const { compiled, assets } = recorded as { compiled?: unknown; assets?: unknown }
+  if (!Array.isArray(compiled)) return []
+  const assetPaths = new Set(Array.isArray(assets)
+    ? assets.flatMap((entry): string[] => {
+      const path = (entry as { path?: unknown } | null)?.path
+      return typeof path === 'string' ? [path] : []
+    })
+    : [])
+  return compiled.flatMap((entry): string[] => {
+    if (typeof entry !== 'string') return []
+    return assetPaths.has(entry) ? [] : [entry]
+  })
 }
 
 /** The review state the run recorded, when its rebuttal artifact carries one. */

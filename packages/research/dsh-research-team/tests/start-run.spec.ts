@@ -28,6 +28,7 @@ import { createRunPersistence } from '@deepseek-ai/dsh-research-core'
 import ResearchTeamService from '../src/index.ts'
 import { APPROVAL_ERROR_CODES, submitApproval } from '../src/approval.ts'
 import type { ResearchRunSnapshot } from '../src/types.ts'
+import type { JournalProfile } from '../src/runner/research-profile.ts'
 import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 
 /** The crash fixture, spawned as a child process the way the process-boundary suite requires. */
@@ -109,14 +110,16 @@ async function boot(options: {
      * profile on the process that exports — as `cordis.yml` does.
      */
     evidenceProfile?: string
-    /** The journal profile this deployment is configured with, when it states one. */
     /** How much review this deployment requires; see {@link DriveOptions.reviewPolicy}. */
     reviewPolicy?: { readonly minimumRounds: number }
-    journal?: {
-      readonly id: string
-      readonly name: string
-      readonly rules: ReadonlyArray<{ readonly id: string; readonly statement: string; readonly source: string }>
-    }
+    /**
+     * The journal profile this deployment is configured with.
+     *
+     * THE PROFILE THE RUN IS CONDUCTED UNDER, read through `resolveResearchProfile`: a deployment that
+     * has read its target journal's guide states the rules it read, and one that has not states none —
+     * which the publication check reads as an unread guide rather than as a venue with no requirements.
+     */
+    journal?: JournalProfile
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   }
   directoryEntries(name: string): ReadonlyArray<string>
@@ -1058,6 +1061,9 @@ describe('the research profile a run is conducted under', () => {
     const root = snapshotRoot()
     const first = await boot({ snapshotDirectory: root })
     first.engine.researchType = 'simulation-study'
+    // THE JOURNAL PROFILE, as this deployment states it read the guide. The source is a stand-in and
+    // says so: what the case exercises is a deployment that has read its guide, not what TRC requires —
+    // no journal's rules are recorded in this repository.
     first.engine.journal = {
       id: 'trc',
       name: 'Transportation Research Part C: Emerging Technologies',
@@ -1065,6 +1071,10 @@ describe('the research profile a run is conducted under', () => {
         id: 'abstract-word-limit',
         statement: "the abstract is limited to the venue's stated maximum",
         source: 'https://example.invalid/author-guide (read 2026-09-17)',
+        accessedAt: '2026-09-17',
+        articleType: 'a stand-in article type, stated by this spec',
+        verification: 'verified',
+        detail: 'a stand-in, so the case exercises the gate rather than a journal',
       }],
     }
     let runId = ''
@@ -1171,8 +1181,13 @@ describe('a decision a person made survives the process that took it', () => {
       // TWO CONDITIONS, AND THE SECOND IS NEW: the evidence profile (this deployment is evaluation)
       // and the review — the offline route takes one round and the default policy requires two. A
       // package written before this condition existed would have called itself final here.
+      // THREE CONDITIONS, AND THE THIRD IS THE JOURNAL'S OWN. The evidence profile (this deployment
+      // is evaluation), the review (the offline route took one round and the default policy requires
+      // two), and the target journal's requirements — which A4 records as the questions its guide
+      // answers, every one unknown, because nobody has read it. A manuscript measured against an
+      // invented word limit would read as compliant while being measured against nothing.
       expect([...(first.checks ?? [])].filter(check => !check.passed).map(check => check.code))
-        .toEqual(['production-evidence', 'review-complete'])
+        .toEqual(['production-evidence', 'review-complete', 'journal-rules-verified'])
 
       // NOW MOVE THE MANUSCRIPT, the way a person accepting a revision would: the approval was made
       // about the version E1 wrote, and this is a different one. The binding is only real if the
@@ -1238,7 +1253,7 @@ describe('a run the production profile published', () => {
       // THE RUN'S OWN POLICY: the offline route takes one revision round, so the deployment that
       // conducts it states one — the review is evaluated where the rounds are taken, and a later
       // process cannot re-state what happened.
-      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production', '--review-rounds', '1', '--verify'],
+      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production', '--review-rounds', '1', '--verify', '--venue-rules-read'],
       { cwd: repoRoot, encoding: 'utf8' },
     )
     expect(decided.stderr).not.toMatch(/approve-and-exit: /)
@@ -1255,6 +1270,10 @@ describe('a run the production profile published', () => {
       // the run stated `production`, and this process must state the same or it refuses its own
       // package as material that may not be published — which is the check doing its job.
       next.engine.evidenceProfile = 'production'
+      // THE JOURNAL'S REQUIREMENTS ARE NOT RESTATED HERE, and that is the point: the process that
+      // CONDUCTED the run stated that it had read its guide (`--venue-rules-read`), A4 wrote that
+      // record onto the venue artifact, and this process reads what the run holds. An export that
+      // could supply the rules itself would let a later process publish under rules the run never had.
       await next.service.openStoredRun({ runId: receipt.runId })
       const written = await next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'final' })
       // EVERY CONDITION, not the state alone: a `final` package whose checks did not all pass would be

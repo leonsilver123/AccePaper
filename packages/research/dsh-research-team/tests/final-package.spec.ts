@@ -32,6 +32,9 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     // NO DELIVERABLES, because this deployment compiles nothing: the case that says "no document is
     // claimed" is the one below, and every other case here moves exactly one condition.
     deliverables: { produced: [], carried: [] },
+    // EVERY RULE READ, because this is the case where every condition holds: the state in which the
+    // journal's requirements were never established is the one the case below moves.
+    journalRules: { venueName: 'A journal', established: 8, total: 8, unverified: [] },
     saveError: undefined,
     ...overrides,
   }
