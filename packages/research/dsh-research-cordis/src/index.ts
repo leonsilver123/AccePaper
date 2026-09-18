@@ -157,6 +157,17 @@ export type ProseChannel =
  */
 export const DEFAULT_REVIEW_INSTRUCTIONS_VERSION = 'revision-review-1'
 
+/**
+ * How long the registration waits for the MCP client to finish registering the library's tools.
+ *
+ * BOUNDED, because the wait is for a signal that may never come: a deployment that mounts no Zotero
+ * server must end up reporting `metadata-tool-missing` rather than hanging the boot.
+ */
+const MCP_TOOL_WAIT_MS = 30_000
+
+/** How often the registration looks for those tools while it waits. */
+const MCP_TOOL_POLL_MS = 250
+
 /** Route the deterministic prose provider registers on when a deployment names none. */
 export const DETERMINISTIC_PROSE_PROVIDER = 'research-deterministic'
 
@@ -622,6 +633,8 @@ export class ResearchEngine extends Service {
   private readonly zoteroProvider: ZoteroProvider | undefined
   /** The items this deployment designates as cited sources. Empty when it named no library. */
   private readonly citedItems: ReadonlyArray<CitedItem>
+  /** The MCP namespace the library's tools are registered under, when a library was configured. */
+  private readonly zoteroServerName: string | undefined
 
   /** Set at the commit point of the deterministic route's registration. */
   private proseReady = false
@@ -664,6 +677,7 @@ export class ResearchEngine extends Service {
     this.sourceRegistryMode = channel?.kind === 'zotero' ? channel.sourceRegistryMode ?? 'zotero' : 'curated'
     this.zoteroProvider = zotero
     this.citedItems = channel?.kind === 'zotero' ? channel.citedItems ?? [] : []
+    this.zoteroServerName = channel?.kind === 'zotero' ? channel.mcpServerName : undefined
     this.toolDeps = buildToolDeps(
       channel,
       config.citationResolver,
@@ -783,9 +797,48 @@ export class ResearchEngine extends Service {
    */
   private async readConfiguredSources(): Promise<void> {
     if (this.zoteroProvider === undefined || this.citedItems.length === 0) return
+    await this.awaitClientTools()
     const read = await readRegistrations(this.zoteroProvider, this.citedItems)
     this.registeredSources = read.registrations
     this.registrationFailures = read.failures
+  }
+
+  /**
+   * Wait until the MCP client has registered the tools the library route calls.
+   *
+   * THE TWO FACTS THIS KEEPS APART. "The client is still starting" and "this deployment mounts no such
+   * server" both look like a missing tool, and the registration used to report the second for the
+   * first: measured on a real 1120 boot (2026-09-18), the engine read the library the moment `tools`
+   * existed, the Zotero server — which spawns a process and answers `tools/list` over stdio — had not
+   * finished, and every designated item came back `metadata-tool-missing`. The deployment was
+   * configured correctly and reported itself as misconfigured.
+   *
+   * `tools/change` IS THE SIGNAL: the runtime emits it when a tool is registered, so this waits for
+   * the names it needs rather than for a number of milliseconds to pass. When the wait runs out the
+   * tools really are absent and the refusal that follows is the true one.
+   *
+   * @returns once the tools are present, or once the wait has run out.
+   */
+  private async awaitClientTools(): Promise<void> {
+    const server = this.zoteroServerName
+    if (server === undefined) return
+    const names = [
+      `mcp__${server}__zotero_get_item_metadata`,
+      `mcp__${server}__zotero_read_pdf_pages`,
+    ]
+    const present = (): boolean => {
+      const tools = this.ctx.get('tools') as { get?: (name: string) => unknown } | undefined
+      return tools?.get !== undefined && names.every(name => tools.get?.(name) !== undefined)
+    }
+    // POLLED RATHER THAN SUBSCRIBED. The runtime does emit `tools/change`, and subscribing would be
+    // the better shape — but that event is declared on Cordis's `Events` by the tools package, and a
+    // TYPE-ONLY import of it pulls that package's whole source tree into this program (measured: the
+    // build fails with `not under rootDir`). Polling a service this package already reads needs no
+    // cross-package declaration, and the deadline is what keeps a missing server from hanging boot.
+    const deadline = Date.now() + MCP_TOOL_WAIT_MS
+    while (!present() && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, MCP_TOOL_POLL_MS))
+    }
   }
 
   async [Service.init](): Promise<void> {
