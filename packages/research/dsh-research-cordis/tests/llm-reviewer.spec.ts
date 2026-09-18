@@ -253,13 +253,18 @@ describe('a revision read against the issue it was written for', () => {
 
 describe('who the reviewer is', () => {
   it('names its route, so a reviewer on the author’s route is caught', () => {
-    // THE IDENTITY IS THE ROUTE ON PURPOSE. D4 refuses a verification whose `verifiedBy` equals the
-    // route that wrote the answer; naming this reader's ROLE instead would make one model's reading
-    // of its own reply pass as an independent one.
+    // THE ID IS A LABEL A READER RECOGNISES, AND NOTHING IS DECIDED ON IT. The host mints the
+    // execution, the session and the rules version of every verification this class produces, so
+    // renaming the reader changes nothing — which is why the id spells the route and says so.
     const ctx = new Context()
     const reviewer = new LlmReviewer(ctx, {
-      provider: 'deepseek-official', model: 'deepseek-v4-flash', cwd: CWD,
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      cwd: CWD,
+      instructionsVersion: 'revision-review-1',
     })
+    expect(reviewer.role).toBe('revision-verifier')
+    expect(reviewer.instructionsVersion).toBe('revision-review-1')
     expect(reviewer.id).toBe('llm-reviewer:deepseek-official/deepseek-v4-flash')
     // No policy version stated means the id alone, which is still a version — a verdict bound to the
     // reader and nothing else.

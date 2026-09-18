@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-18-one-provider-two-local-routes.md
+2026-09-18-one-provider-two-local-routes.md: 05e82eb5ca46d0550df9f7e504008048b9f12c9e
+2026-09-18-one-provider-two-local-routes.zh.md: ea2672a92f80dd376d62991095af2b9438e5d747

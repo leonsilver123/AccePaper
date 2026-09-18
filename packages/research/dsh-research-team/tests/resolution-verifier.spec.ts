@@ -104,7 +104,12 @@ async function round(options: {
   const bodies = options.bodies ?? revisedBodies()
   const { verifications, fatal } = await verifyPending(outcomes, options.verifier ?? verifier(), {
     issues: [issue],
-    changes: [{ sectionId: 'method', beforeHash: bodyHashOf('Both platoons are run.'), afterHash: bodyHashOf('Both platoons are run with the Intelligent Driver Model at a fixed 0.02 s step.') }],
+    changes: [{
+      sectionId: 'method',
+      basisHash: bodyHashOf('Both platoons are run.'),
+      resultHash: bodyHashOf('Both platoons are run with the Intelligent Driver Model at a fixed 0.02 s step.'),
+      changed: true,
+    }],
     revisedBodies: bodies,
     identity: options.reader ?? readerExecution(),
     author: options.author ?? author(),
