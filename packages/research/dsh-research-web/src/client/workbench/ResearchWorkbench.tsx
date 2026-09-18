@@ -11,9 +11,6 @@
  * nothing to report until a run produces something to report.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  ConvViewProps,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ResearchKey } from '../locales.ts'
 import type { ApprovalSubmitter } from '../approval-source.ts'
@@ -21,7 +18,7 @@ import type { RunSummary } from '../../summary.ts'
 import type { WirePlan, WireProposalAnswer } from '../direction-source.ts'
 import type { RunListEntryView } from '../../run-source.ts'
 import { DirectionDialog } from './DirectionDialog.tsx'
-import { selectNextAction, type NextActionKind } from '../../panels.ts'
+import { selectNextAction } from '../../panels.ts'
 import { selectProgress, selectStages, type StageId } from '../../stages.ts'
 import {
   IDLE_CONNECTION, allowsRevisionBoundWrite, isStale, type ConnectionState,
@@ -35,6 +32,7 @@ import { AdversarialPanel } from './AdversarialPanel.tsx'
 import { ApprovalPanel } from './ApprovalPanel.tsx'
 import { QualityPanel } from './QualityPanel.tsx'
 import { RecoveryPanel } from './RecoveryPanel.tsx'
+import { SituationBanner } from './SituationBanner.tsx'
 import { StageNavigation } from './StageNavigation.tsx'
 import { StageWorkspace } from './StageWorkspace.tsx'
 import { RevisionPanel } from './RevisionPanel.tsx'
@@ -42,11 +40,17 @@ import type { RevisionSource } from './RevisionPanel.tsx'
 import css from './ResearchWorkbench.module.css'
 
 /**
- * Props the conversation.view slot contributes to the research entry. `summary`
- * is the injection seam: a host that has a real run summary passes it, and one
- * that has no run passes none, which the view reports as "nothing run yet".
+ * Props the research panel takes, from whichever seat mounts it.
+ *
+ * NO CONVERSATION-VIEW OWNER PROPS, and that is a removal rather than an omission. The panel used to
+ * require them — the `conversation.view` seat supplies a focus request and the two calls that answer it
+ * — but the workbench reads none of the three: it keeps its own selected stage, and the stage strip does
+ * not address a focus identity. Requiring them made the panel mountable in exactly one seat and asked
+ * callers for props nothing used, so the requirement is gone rather than satisfied with a fabricated
+ * focus request. A seat that passes them still typechecks: a component that ignores extra props is
+ * what React does anyway.
  */
-export type ResearchViewProps = ConvViewProps & PropsLocale<'research'> & {
+export type ResearchViewProps = PropsLocale<'research'> & {
   /** The run to render. Omitted means this session has not run anything. */
   readonly summary?: RunSummary
   /**
@@ -149,16 +153,12 @@ const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
 /**
  * The copy for each next action.
  *
- * A record rather than a switch: the union is closed, so a new kind fails to compile here instead of
- * rendering an empty sentence.
+ * THE NEXT ACTION IS THE SITUATION BANNER'S, not a sentence under the orientation block. The record
+ * here mapped a kind to the fragment that block interpolated; the banner now states the step, the check
+ * that stopped it and what the reader is to do, so the fragment had nothing left to say and is gone.
+ * `next.running` survives because the banner itself uses it for a run whose projection names no step in
+ * flight.
  */
-const NEXT_ACTION_KEY: Readonly<Record<NextActionKind, ResearchKey>> = {
-  'not-started': 'next.notStarted',
-  running: 'next.running',
-  'awaiting-human': 'next.awaitingHuman',
-  failed: 'next.failed',
-  complete: 'next.complete',
-}
 
 /**
  * Render the research workbench. Renders the run the host supplied, or the one the
@@ -177,7 +177,17 @@ export function ResearchWorkbench({
   const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const summary = useMemo(() => live ?? injected, [live, injected])
-  const [active, setActive] = useState<WorkbenchTab>('summary')
+  /**
+   * Which detail panel is open, or none.
+   *
+   * NONE IS THE DEFAULT, and that is the simplification. The panel used to open on the summary tab,
+   * whose sixteen step rows, artifact list, gate list and degradation list rendered BELOW the stage
+   * surface that already shows the same steps: the first screen was tens of rows of detail and no
+   * statement of what the reader was meant to do with any of it. The stage surface says where the run
+   * is and the banner above it says what to do; a tab is a question the reader asks, so the page waits
+   * to be asked.
+   */
+  const [active, setActive] = useState<WorkbenchTab | undefined>(undefined)
   // WHERE THE STUDY IS, not where the reader last looked: the stage strip opens on the first stage
   // that is not done, so a page that just loaded shows the work in front of it. A stage the person
   // picked is kept until they pick another, and a run that moves on does not yank the view away.
@@ -290,29 +300,38 @@ export function ResearchWorkbench({
           {isStale(connection) ? ` ${t('connection.stale')}` : ''}
         </p>
       )}
-      <section className={css.intro} data-research-intro="">
-        <h2 className={css.introTitle}>{t('intro.title')}</h2>
-        <p className={css.note}>{t('intro.what')}</p>
-        <h3 className={css.introSubtitle}>{t('intro.how')}</h3>
-        <ol className={css.introSteps}>
-          <li>{t('intro.step1')}</li>
-          <li>{t('intro.step2')}</li>
-          <li>{t('intro.step3')}</li>
-        </ol>
-        {/* What this page is showing: a run that happened, or nothing yet. */}
-        {summary === undefined
-          ? <p className={css.mockNote} data-research-source-note="">{t('intro.noRun')}</p>
-          : (
-            <p className={css.mockNote} data-research-source-note="">
-              {t(`channel.${summary.proseChannel}`)}
-            </p>
-          )}
-        {nextAction !== undefined && (
-          <p className={css.nextAction} data-research-next-action="">
-            {t('intro.next', { action: t(NEXT_ACTION_KEY[nextAction.kind], { count: nextAction.pendingCount }) })}
-          </p>
-        )}
-      </section>
+      {/* 现在该你做什么, FIRST — before the orientation text, because a person arriving at a run that
+          has stopped needs the answer to that question before they need to be told what the pipeline
+          is. It renders nothing for a session that has run nothing, where the orientation block below
+          already says what to press. */}
+      {nextAction !== undefined && <SituationBanner next={nextAction} t={t} />}
+      {/* ORIENTATION IS FOR A PAGE WITH NOTHING ON IT. The "what this is / how to use it" block used to
+          render above every run: six elements of what-the-pipeline-is, pushing the person who came back
+          to read where their run had got to below the fold. A session that has run something does not
+          need telling what a run is, and the block says nothing about the run on screen. */}
+      {summary === undefined && (
+        <section className={css.intro} data-research-intro="">
+          <h2 className={css.introTitle}>{t('intro.title')}</h2>
+          <p className={css.note}>{t('intro.what')}</p>
+          <h3 className={css.introSubtitle}>{t('intro.how')}</h3>
+          <ol className={css.introSteps}>
+            <li>{t('intro.step1')}</li>
+            <li>{t('intro.step2')}</li>
+            <li>{t('intro.step3')}</li>
+          </ol>
+          <p className={css.mockNote} data-research-source-note="">{t('intro.noRun')}</p>
+        </section>
+      )}
+
+      {/* WHETHER THE TEXT CAME FROM A MODEL, said only when the answer is not the obvious one. Every
+          deployment that writes prose routes it through a model, so a badge confirming that is a badge
+          that says nothing; the cases a reader must be told about are the ones where the manuscript is
+          demo text, the built-in sentences, or of unstated origin. */}
+      {summary !== undefined && summary.proseChannel !== 'model' && (
+        <p className={css.mockNote} data-research-source-note="">
+          {t(`channel.${summary.proseChannel}`)}
+        </p>
+      )}
 
       {/* The badge states where the numbers came from. It is rendered only when there are numbers. */}
       {summary !== undefined && (
@@ -346,26 +365,29 @@ export function ResearchWorkbench({
             : ''}
         </span>
       )}
-      {summary !== undefined && summary.projectRevision !== null && (
-        <span className={css.mockBadge} data-research-revision="">
-          {t('run.revision', { revision: String(summary.projectRevision) })}
-        </span>
-      )}
-      {/* WHICH RUN THIS IS, AND WHETHER ANYTHING IS STILL DRIVING IT. Two facts a reader cannot get
-          from the numbers: the id is what they quote when they ask about it, and the execution
-          state is the difference between a study that is working and one that stopped — a run
-          whose steps all read 未开始 looks identical in the panels either way. Unstated stays
-          unstated: a host that names no execution state is not claiming the run has stopped. */}
+      {/* THE RUN'S IDENTITY, one click down. Which revision the page is showing, which run this is, and
+          whether anything is still driving it are facts a reader needs when they ask about a run — and
+          they were three of the six badges this row showed at once, in front of a person who came to
+          find out what to do next. The two that change what a reader may DO — the evidence profile and
+          readiness — stay on the row, and so does anything that is a failure. */}
       {summary !== undefined && (
-        <span className={css.mockBadge} data-research-run-id="">
-          {t('run.id', { runId: summary.runId })}
-        </span>
-      )}
-      {summary !== undefined && summary.execution !== null && (
-        <span className={css.mockBadge} data-research-execution="">
-          {t(`run.execution.${summary.execution}`)}
-          {summary.executionError !== null ? ` — ${summary.executionError}` : ''}
-        </span>
+        <details className={css.runFacts} data-research-run-facts="">
+          <summary>{t('run.facts')}</summary>
+          <p className={css.factsBody}>
+            <span data-research-run-id="">{t('run.id', { runId: summary.runId })}</span>
+            {summary.projectRevision !== null && (
+              <span data-research-revision="">
+                {t('run.revision', { revision: String(summary.projectRevision) })}
+              </span>
+            )}
+            {summary.execution !== null && (
+              <span data-research-execution="">
+                {t(`run.execution.${summary.execution}`)}
+                {summary.executionError !== null ? ` — ${summary.executionError}` : ''}
+              </span>
+            )}
+          </p>
+        </details>
       )}
       {onRun !== undefined && (
         <button

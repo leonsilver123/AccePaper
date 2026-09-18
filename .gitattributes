@@ -5,6 +5,10 @@
 # for cmd.exe), add a `*.bat text eol=crlf` override AFTER this line — the
 # in-repo form stays LF; CRLF becomes checkout-time presentation only.
 * text=auto eol=lf
+# cmd.exe is the one consumer that reads CRLF as the line ending and mishandles a bare LF in a
+# label or a `goto` target. The in-repo form stays LF like every other text file — this is
+# checkout-time presentation only, which is what the header above already prescribes.
+*.cmd text eol=crlf
 *.pdf binary
 # Pairing records are generated from the three confirmed owner-blob pairs.
 # The worktree-local installer registers the fail-closed driver command.

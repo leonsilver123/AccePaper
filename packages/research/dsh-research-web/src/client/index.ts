@@ -1,10 +1,15 @@
 /**
  * Browser (client) half of the research web plugin.
  *
- * Registers the `research` entry into the `conversation.view` slot (id='research',
- * order 20) — a sibling tab of `chat` (order 0) and `trajectory` (order 10).
- * The view renders a fixture/snapshot-driven run summary; it performs no live
- * polling and adds no chat-view behavior, so the existing chat view is untouched.
+ * Registers the `research` entry into the `conversation.view` slot (id='research', order 20): a
+ * session view beside `chat` (order 0) and `trajectory` (order 10), through a seat the HOST CORE
+ * already declares. An earlier revision mounted it in a right-hand `conversation.aside` column, which
+ * needed host-side changes to exist — a slot, a snapshot and a region in the conversation shell. This
+ * plugin does not require the host to know it exists, so it registers where the host already offers
+ * room.
+ *
+ * The panel is driven by a run snapshot and performs no polling of its own; it adds no chat-view
+ * behavior, so the chat beside it is untouched.
  */
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -278,8 +283,7 @@ export const inject = ['slots', 'sessions', 'uiSession', 'uiConversation', 'loca
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-research-web: dictionaries')
-  // Registration-time text (the view tab label) reads through the bound
-  // translate as a thunk, so it follows the active locale without re-registration.
+  // The entry's own display name, read per projection so it follows the active locale.
   const t = ctx.locale.bind(NS)
   /**
    * The host's research namespace, or a refusal naming why there is none.
@@ -556,16 +560,22 @@ export function apply(ctx: Context): void {
   // Resolved per call: a deployment whose trust surface mounts late — or not at all — still
   // gets a working view, and the panel says so when there is nothing to call.
   const approve = buildApprovalSubmitter(() => ctx.get('connection'))
+  // THE PANEL IS A VIEW OF THE SESSION, IN THE SEAT THE HOST ALREADY OFFERS. It used to be mounted in
+  // a right-hand `conversation.aside` seat, which this plugin could only have by ASKING THE HOST CORE
+  // FOR ONE — a new slot, a new `asideRegistered` snapshot and a new region in the conversation
+  // shell, all of them host code that exists for one plugin's layout preference. That is the
+  // dependency this registration removes: `conversation.view` is already a list seat for session
+  // views, so the research layer is self-contained again.
+  //
+  // THE COST, STATED: the panel is a sibling tab of `chat` (order 0) and `trajectory` (order 10)
+  // rather than a column beside them, so a reader switches to it instead of reading it alongside the
+  // conversation. Paying that in the PLUGIN is the point — the alternative paid it in the host.
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'research',
     order: 20,
     locale: NS,
     label: () => t('view.research'),
-    // The `research` entry mounts the T26–T29 workbench: the Summary tab reuses
-    // the T26 run-summary view, and the remaining tabs host the pipeline / figure
-    // / table / roadmap / gate / adversarial / approval / recovery sub-panels.
-    // All panels read the same MOCK fixture/snapshot; no live poll, no chat change.
   }, researchViewWith(run, approve, propose, resume, retrySave, listRuns, openRun, {
     list: listRevisions, request: requestRevision, step: revisionStep,
   }, adoptRun, exportPackage)))

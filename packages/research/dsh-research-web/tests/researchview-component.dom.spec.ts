@@ -81,9 +81,11 @@ afterEach(cleanup)
 
 // ---------------------------------------------------------------------------
 // In-test slot/locale service doubles (the seam; no cordis, no 1120 server).
-// The `conversation.view` slot is a list slot keyed by `id`; the documented
-// guard is that a second registration at the same id/priority throws rather
-// than silently duplicating the tab — this double models exactly that.
+// `conversation.view` is the list slot the panel registers into — the one the
+// host core declares. A seat the host does not declare must fail here, which is
+// what keeps a regression from needing host code to exist again.
+// The documented guard is that a second registration at the same id/priority
+// throws rather than silently duplicating the entry — this double models that.
 // ---------------------------------------------------------------------------
 interface MockCtx {
   ctx: Record<string, unknown>
@@ -94,6 +96,9 @@ interface MockCtx {
 function createMockCtx(): MockCtx {
   const registered: Array<{ name: string; id?: string; disposer: () => void }> = []
   let lastDisposer: (() => void) | null = null
+  // THE SEAT THE HOST DECLARES. `conversation.aside` is deliberately absent: this plugin asks the
+  // host for nothing it does not already offer, so a mock that accepted it would let a regression
+  // back into a seat no host has.
   const declared = new Set<string>(['conversation.view'])
 
   const ctx = {
@@ -205,7 +210,13 @@ describe('research workbench DOM', () => {
     expect(strip).not.toBeNull()
     expect(within(strip as HTMLElement).getAllByRole('button')).toHaveLength(tabLabels.length)
 
-    // Default view is the Summary panel.
+    // NO PANEL UNTIL ONE IS ASKED FOR. The stage surface above the strip says where the run is and the
+    // banner says what to do; a detail panel opened by default is what buried the page under rows the
+    // reader had not asked for.
+    expect(screen.queryByText(/Step progress/)).toBeNull()
+
+    // Ask for the summary panel: it appears, and it is the only one.
+    fireEvent.click(screen.getByRole('button', { name: en['tab.summary'] }))
     expect(screen.getByText(/Step progress/)).toBeTruthy()
 
     // Switch to Pipeline — only the pipeline panel should be visible now.
@@ -238,8 +249,9 @@ describe('research workbench DOM', () => {
     expect(screen.getByText(en['status.blocked'])).toBeTruthy()
     // hold_abstained: gated step frozen on a gate abstention.
     expect(screen.getByText(en['step.holdReason.gate_abstained'])).toBeTruthy()
-    // abstained gate outcome (component A abstained).
-    expect(screen.getByText('component A: abstained')).toBeTruthy()
+    // abstained gate outcome (component A abstained), named by the check rather than by its letter:
+    // `component A` names a slot in the trinity, not a question a researcher can answer.
+    expect(screen.getByText(`${en['gate.component.A']}: ${en['gate.outcome.abstained']}`)).toBeTruthy()
     // degradation note section + message.
     expect(screen.getByText(en['section.degradations'])).toBeTruthy()
     expect(screen.getByText('Mock degradation note for DOM test.')).toBeTruthy()
@@ -261,9 +273,16 @@ describe('research workbench DOM', () => {
   it('renders artifact summaries for a run that produced artifacts', () => {
     renderComp(createElement(ResearchView, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
-    // Fixture artifact slug + its human-readable summary text are both present.
+    // A slug this build has no word for is shown as the record wrote it — still true, and the fixture's
+    // slugs are deliberately not the pipeline's, so this is that path rather than the named one.
     expect(screen.getByText('problem_statement')).toBeTruthy()
-    expect(screen.getByText(/One-paragraph problem statement/)).toBeTruthy()
+    // AND WHO PRODUCED IT, in the reader's words. The line used to be `artifact.summary`, a string the
+    // view composes from the producer's IDENTIFIER — `produced by s01 (attempt 1)` — so the reader was
+    // shown an identifier where a description belongs.
+    const producedBy = en['artifact.producedBy']
+      .replace('{step}', 'Problem framing')
+      .replace('{attempt}', '1')
+    expect(screen.getAllByText(producedBy).length).toBeGreaterThan(0)
   })
 
   // 7. Empty run renders a friendly empty state (no crash / white screen).
@@ -430,7 +449,9 @@ describe('research workbench summary injection', () => {
 
     renderComp(createElement(ResearchWorkbench, { t, summary: run }))
     expect(screen.getByRole('button', { name: en['tab.summary'] })).toBeTruthy()
-    expect(screen.getByText(/Step progress/)).toBeTruthy()
+    // The panel is offered, not opened: a run on screen shows the stage surface and waits to be asked
+    // for the detail (see the default-state case above).
+    expect(screen.queryByText(/Step progress/)).toBeNull()
   })
 })
 
@@ -714,7 +735,10 @@ describe('research workbench orientation', () => {
 
     expect(screen.queryByText(en['intro.noRun'])).toBeNull()
     expect(screen.getByText(en['channel.deterministic'])).toBeTruthy()
-    expect(screen.getByText(en['intro.next'].replace('{action}', en['next.complete']))).toBeTruthy()
+    // WHAT TO DO NEXT is the banner's now. The orientation block used to state it as a fragment for a
+    // reader who was being told what the pipeline is; the banner states it for a reader who is looking
+    // at a run, which is the only reader who has a next action at all.
+    expect(screen.getByText(en['situation.complete'])).toBeTruthy()
   })
 
   it('points at the approval tab when the run is waiting for a person', () => {
@@ -728,8 +752,10 @@ describe('research workbench orientation', () => {
     })
     renderComp(createElement(ResearchWorkbench, { t, summary: waiting }))
 
-    const expected = en['next.awaitingHuman'].replace('{count}', '1')
-    expect(screen.getByText(en['intro.next'].replace('{action}', expected))).toBeTruthy()
+    const expected = en['situation.awaitingHuman'].replace('{count}', '1')
+    expect(screen.getByText(expected)).toBeTruthy()
+    // And the remedy names where the decision is made.
+    expect(screen.getByText(en['situation.remedy.awaitingHuman'])).toBeTruthy()
   })
 })
 

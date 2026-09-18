@@ -7,7 +7,6 @@
  * knowledge of the Host.
  */
 import { useCallback, useMemo } from 'react'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RunSummary } from '../summary.ts'
 import type { ApprovalSubmitter } from './approval-source.ts'
@@ -117,7 +116,9 @@ export type ResearchPackageExportSource = (
  *   record revisions, in which case the tab states that rather than offering inert controls.
  * @param adoptRun - takes a stored study back into the deployment's process. Omitted by a host that
  *   cannot adopt one, in which case a stopped study is readable and not decidable, as before.
- * @returns a conversation-view component that renders the research workbench.
+ * @returns the research panel, mountable in any seat that supplies the `research` locale. It takes
+ *   no owner props: the panel reads the run it follows from its own source, so a seat that supplies
+ *   only the locale mounts it unchanged.
  */
 export function researchViewWith(
   run: ResearchRunSource,
@@ -131,7 +132,7 @@ export function researchViewWith(
   adoptRun?: ResearchRunAdoptSource,
   exportPackage?: ResearchPackageExportSource,
 ) {
-  return function ResearchViewBound(props: ConvViewProps & PropsLocale<'research'>) {
+  return function ResearchViewBound(props: PropsLocale<'research'>) {
     const onRun = useCallback(run, [run])
     // Undefined when this deployment reaches no model: the workbench then starts the default plan
     // instead of opening a dialog it could only fail to fill.
