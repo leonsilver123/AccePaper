@@ -1278,6 +1278,62 @@ describe('ResearchTeamService — the production pipeline entry', () => {
     }
   })
 
+  it('reaches the deployment’s reviewer, and the run still completes to the gate', async () => {
+    // THE DEPLOYMENT BOUNDARY, NOT THE SEAM. `driveOpts` has taken a `statementAssessor` since the
+    // seam was added, and every caller was a spec passing one directly — so a deployment that
+    // configured a reader on its engine was never shown to reach a run. This mounts the service the
+    // way a boot does and puts the reader where a deployment puts it: on `ctx.research`.
+    const host = await bootHost()
+    try {
+      const asked: string[] = []
+      host.ctx.provide('research', {
+        statementAssessor: {
+          id: 'spec-assessor',
+          assess: (input: {
+            statement: { statementId: string; textSha256: string }
+            judgement: { citeKey: string; quoteSha256: string; readScope: string }
+          }) => {
+            asked.push(`${input.statement.statementId} ${input.judgement.citeKey}`)
+            return Promise.resolve({
+              statementId: input.statement.statementId,
+              statementSha256: input.statement.textSha256,
+              citeKey: input.judgement.citeKey,
+              quoteSha256: input.judgement.quoteSha256,
+              assessorVersion: 'spec-assessor',
+              support: 'supported',
+              readScope: input.judgement.readScope,
+              basis: 'the passage states it',
+              judgedBy: 'spec-assessor',
+              judgedAt: '2026-09-18T00:00:00.000Z',
+            })
+          },
+        },
+      })
+
+      const result = await host.service.runPipeline()
+
+      // THE READER WAS REACHED, ONCE PER QUESTION. A question is one sentence against one source, so a
+      // sentence citing three sources is three of them — and the same pair asked twice would be a
+      // second model call for an answer already on the table.
+      expect(asked.length).toBeGreaterThan(0)
+      expect(new Set(asked).size).toBe(asked.length)
+      for (const question of asked) expect(question).toMatch(/^stmt-[a-z]+-\d+ cite-/u)
+
+      // AND THE RUN STILL COMPLETED TO THE GATE. A reader that answers `supported` for every sentence
+      // is what a deployment whose evidence holds looks like, so nothing downstream refused.
+      expect(result.executionError).toBeUndefined()
+      const gated = result.run.steps.filter(step => step.status === 'gated').map(step => step.stepId)
+      expect(gated).toEqual(['E2-submit'])
+      // No verifier is configured, so the revisions wait for a reader and the run is not ready —
+      // readiness reports it, and it is not ready for the undecided gate either.
+      expect(result.submissionReady).toBe(false)
+      expect(result.readinessNote.length).toBeGreaterThan(0)
+      expect(result.artifacts.map(artifact => artifact.slug)).toContain('rebuttal')
+    } finally {
+      await host.dispose()
+    }
+  })
+
   it('returns a fresh run each call (the store does not leak between runs)', async () => {
     const host = await bootHost()
     try {
