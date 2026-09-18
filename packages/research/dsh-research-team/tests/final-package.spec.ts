@@ -29,6 +29,9 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
     artifactRefs: { read: ['formatted-manuscript@1'], moved: [] },
     compilation: { tool: null, dropped: [] },
+    // NO DELIVERABLES, because this deployment compiles nothing: the case that says "no document is
+    // claimed" is the one below, and every other case here moves exactly one condition.
+    deliverables: { produced: [], carried: [] },
     saveError: undefined,
     ...overrides,
   }
@@ -185,10 +188,36 @@ describe('a package whose compiled document is missing a figure', () => {
     expect(finalPackageStateOf(checks)).toBe('draft')
   })
 
+  it('is refused as final when the package does not carry a document the compile produced', () => {
+    // A JOURNAL IS HANDED A DOCUMENT, NOT THE MARKDOWN IT WAS BUILT FROM. `manuscript.md` is in the
+    // package either way, so its presence says nothing about the `.docx` a submission system takes —
+    // and the compiled files are written as BYTES, so they are not among the manuscript's declared
+    // text files and `required-files-present` cannot see them.
+    const checks = checkFinalPackage(readyFacts({
+      compilation: { tool: 'pandoc', dropped: [] },
+      deliverables: {
+        produced: ['manuscript.html', 'manuscript.tex', 'manuscript.docx'],
+        carried: ['manuscript.html', 'manuscript.tex', 'run-summary.md'],
+      },
+    }))
+    const check = checks.find(entry => entry.code === 'deliverables-present')
+    expect(check?.passed).toBe(false)
+    expect(check?.detail).toContain('manuscript.docx')
+    expect(check?.detail).toContain('not only the Markdown')
+    expect(finalPackageStateOf(checks)).toBe('draft')
+    // THE DOCX IS NOT IN `declaredFiles` — that is the whole reason this condition exists — so the
+    // case is only meaningful if the other file condition passes while this one refuses.
+    expect(checks.find(entry => entry.code === 'required-files-present')?.passed).toBe(true)
+  })
+
   it('passes for a deployment that compiles nothing, which claims no compiled document', () => {
     const checks = checkFinalPackage(readyFacts({ compilation: { tool: null, dropped: [] } }))
     expect(checks.find(entry => entry.code === 'compiled-document-complete')?.detail)
       .toContain('compiles no document')
+    // AND IT IS ASKED FOR NO DELIVERABLE EITHER: `produced` is empty because the deployment named no
+    // compiler, which is a different fact from a document that went missing.
+    expect(checks.find(entry => entry.code === 'deliverables-present')?.detail)
+      .toContain('no deliverable is claimed')
     expect(finalPackageStateOf(checks)).toBe('final')
   })
 })

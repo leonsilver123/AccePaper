@@ -135,6 +135,12 @@ describe('planRunPackage', () => {
     expect(Buffer.from(docx?.content ?? '', 'base64').subarray(0, 2).toString('latin1')).toBe('PK')
     expect(figure?.encoding).toBe('base64')
     expect(Buffer.from(figure?.content ?? '', 'base64').subarray(0, 4).toString('latin1')).toBe(String.fromCharCode(137) + 'PNG')
+    // AND THE PACKAGE SAYS IT CARRIES THEM. `manuscript.docx` is not among the manuscript's declared
+    // TEXT files — a DOCX is bytes — so nothing but this condition could tell a package that wrote it
+    // from one that did not, and a journal is handed a document rather than the Markdown behind it.
+    const deliverables = plan.manifest.checks.find(check => check.code === 'deliverables-present')
+    expect(deliverables?.passed, deliverables?.detail).toBe(true)
+    expect(deliverables?.detail).toContain('manuscript.docx')
   })
 
   it('records every driven step with how it was produced, and nothing it did not drive', async () => {

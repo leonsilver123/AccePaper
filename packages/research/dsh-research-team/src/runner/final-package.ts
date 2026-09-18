@@ -20,13 +20,14 @@
 // ONE DEFINITION OF READY, IN TWO SCOPES. Seven of the conditions below are about the MANUSCRIPT: is
 // the evidence the kind that may carry a submission, was there a manuscript, did every step close,
 // does it have every section, is any concern still open, does the compiled document carry its floats,
-// has it had the review the deployment requires. Five are about the DELIVERY: is there an approval,
+// has it had the review the deployment requires. Six are about the DELIVERY: is there an approval,
 // does it still cover what the run holds, will the package carry the files the manuscript declares,
-// does the package describe the state the run is in, is that state on disk. `checkManuscript`
-// evaluates the first seven and `submissionReadinessOf` reports them as the manifest's
-// `submissionReady`; `checkFinalPackage` evaluates all twelve. They are the SAME function, so a run
-// cannot be ready in the manifest and refused as a package for a reason about the paper — which is
-// the disagreement this file and `submission-readiness.ts` used to be able to produce.
+// does it carry the documents the compile produced, does the package describe the state the run is in,
+// is that state on disk. `checkManuscript` evaluates the first seven and `submissionReadinessOf`
+// reports them as the manifest's `submissionReady`; `checkFinalPackage` evaluates all thirteen. They
+// are the SAME function, so a run cannot be ready in the manifest and refused as a package for a
+// reason about the paper — which is the disagreement this file and `submission-readiness.ts` used to
+// be able to produce.
 
 import { approvalStalenessOf, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ApprovalRecord, EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
@@ -45,6 +46,8 @@ export type FinalPackageCheckCode =
   | 'compiled-document-complete'
   /** The manuscript has not had the review the deployment requires. */
   | 'review-complete'
+  /** A document the compile produced is not in the package. */
+  | 'deliverables-present'
   | 'run-saved'
 
 /** One condition a final package must meet, with what the run recorded about it. */
@@ -143,6 +146,21 @@ export interface FinalPackageFacts extends ManuscriptFacts {
   /** Files the run's own manuscript declares, and which of them the package will carry. */
   readonly declaredFiles: ReadonlyArray<string>
   readonly packagedFiles: ReadonlyArray<string>
+  /**
+   * The DOCUMENTS this run's compile produced, and which of them the package carries.
+   *
+   * A JOURNAL IS HANDED A DOCUMENT, not the Markdown it was built from. `manuscript.md` is in the
+   * package either way and its presence proves nothing about the `.docx` a submission system takes —
+   * the compiled files are written as BYTES, so they are not among the manuscript's declared text
+   * files and nothing else here can see whether they arrived.
+   *
+   * `produced` is empty for a deployment that named no compiler, which the check reads as "no
+   * document is claimed" rather than as a document that went missing.
+   */
+  readonly deliverables: {
+    readonly produced: ReadonlyArray<string>
+    readonly carried: ReadonlyArray<string>
+  }
   /**
    * The artifact versions this package was read from, and which of them the run has moved past.
    *
@@ -271,6 +289,7 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'approval-recorded',
   'approval-current',
   'required-files-present',
+  'deliverables-present',
   'compiled-document-complete',
   'review-complete',
   'artifacts-current',
@@ -289,6 +308,8 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
  */
 export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<FinalPackageCheck> {
   const missingFiles = facts.declaredFiles.filter(path => !facts.packagedFiles.includes(path))
+  const missingDeliverables = facts.deliverables.produced
+    .filter(path => !facts.deliverables.carried.includes(path))
   const delivery: ReadonlyArray<FinalPackageCheck> = [
     {
       code: 'approval-recorded',
@@ -334,6 +355,22 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
               + ' package describes the state the decision was taken on'
             : `these artifacts moved after this package was read: ${facts.artifactRefs.moved.join(', ')}`
               + ' — re-export to describe the run as it stands',
+    },
+    {
+      // A JOURNAL IS HANDED A DOCUMENT. The compiled `.docx` and `.pdf` are written as BYTES and so
+      // are not among the manuscript's declared text files: `manuscript.md` is in the package whether
+      // or not the compile succeeded, and a package carrying only the Markdown is not the submission
+      // a deployment that has a compiler promised. A deployment that named none produces no document
+      // and is not held to this.
+      code: 'deliverables-present',
+      passed: missingDeliverables.length === 0,
+      detail: facts.deliverables.produced.length === 0
+        ? 'this deployment compiled no document, so no deliverable is claimed'
+        : missingDeliverables.length === 0
+          ? `the package carries every document the compile produced (${facts.deliverables.produced.join(', ')})`
+          : `the package does not carry ${missingDeliverables.join(', ')}, which this deployment's`
+            + ' compile produced — a journal is handed the compiled document, not only the Markdown it'
+            + ' was built from',
     },
     {
       code: 'run-saved',
@@ -424,9 +461,47 @@ export function finalPackageFactsOf(
     approval: humanGate === undefined ? undefined : snapshot.steps[humanGate.id]?.approval,
     declaredFiles: declaredPackageFilesOf(store, runId),
     packagedFiles,
+    deliverables: {
+      produced: compiledDeliverablesOf(store, runId),
+      // WHAT THE EXPORT SAYS IT WILL WRITE, not what it has written: the checks run before the files
+      // land, so the caller's own list is the fact — and it is the same list `required-files-present`
+      // is given, so the two cannot disagree about what the package holds.
+      carried: packagedFiles,
+    },
     artifactRefs,
     saveError,
   }
+}
+
+/**
+ * The compiled DOCUMENTS a run produced, as paths.
+ *
+ * THE ASSETS ARE NOT DELIVERABLES. `compilation.compiled` names everything one compile produced,
+ * including the figure a document embeds; subtracting `compilation.assets` leaves the documents
+ * themselves, which are what a journal is handed. A deployment that compiled nothing records an
+ * empty list and is asked for nothing.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @returns the document paths, in the order the compile produced them.
+ */
+function compiledDeliverablesOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
+  const value = readArtifact(store, runId, 'formatted-manuscript')
+  if (value === null || typeof value !== 'object') return []
+  const recorded = (value as { compilation?: unknown }).compilation
+  if (recorded === null || typeof recorded !== 'object') return []
+  const { compiled, assets } = recorded as { compiled?: unknown; assets?: unknown }
+  if (!Array.isArray(compiled)) return []
+  const assetPaths = new Set(Array.isArray(assets)
+    ? assets.flatMap((entry): string[] => {
+      const path = (entry as { path?: unknown } | null)?.path
+      return typeof path === 'string' ? [path] : []
+    })
+    : [])
+  return compiled.flatMap((entry): string[] => {
+    if (typeof entry !== 'string') return []
+    return assetPaths.has(entry) ? [] : [entry]
+  })
 }
 
 /**
