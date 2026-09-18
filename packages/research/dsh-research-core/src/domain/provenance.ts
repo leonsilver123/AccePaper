@@ -19,7 +19,17 @@
  * Nothing here is a quality ranking, and no class is a claim that the value is correct. A
  * `production` admission says the class may carry a gate, not that it supports the claim; the
  * gate makes that decision from the evidence itself.
+ *
+ * THREE FURTHER AXES WERE SEPARATED ON 2026-09-18, and this module decides none of them:
+ * {@link Provenance.registry} (where a source was read from), {@link Provenance.acquisition} (how its
+ * record entered the run) and {@link Provenance.review} (what review it has had). They are separate
+ * because each was being inferred from another: "checked into the repository" was being read as
+ * "verified", and "read from a live library" as "less trustworthy". Neither inference holds. What a
+ * source IS and how much of it was read carry the gate, exactly as before; the other three travel for
+ * the audit and for deciding what a review was about.
  */
+
+import type { ReviewStatus, SourceAcquisition, SourceRegistry } from './evidence-binding.ts'
 
 /** What produced a value. The six classes are closed: a producer that fits none of them has no
  *  honest class to declare, and inventing a seventh silently is what this union prevents. */
@@ -94,6 +104,30 @@ export interface Provenance {
   readonly ruleVersion?: string
   /** How much of the source was read; absent when the value was not read from a source. */
   readonly sourceAccess?: SourceAccess
+  /**
+   * Which registry the source was read from; absent when the value was not read from one.
+   *
+   * A REGISTRY, NOT A TRUST LEVEL, and {@link admitAsEvidence} never reads it. Being read from a
+   * version-controlled corpus and being read from a running literature library are two ways of
+   * obtaining the same kind of thing, and a policy that preferred one would be asserting what nobody
+   * checked: a checked-in excerpt is a copy somebody made, and a library entry is what its catalogue
+   * says. Both are `literature`, and whether either supports a claim is what the gate decides.
+   */
+  readonly registry?: SourceRegistry
+  /**
+   * How the record entered the run; absent when it did not enter from a source.
+   *
+   * Kept apart from {@link Provenance.registry} because they vary independently and answer different
+   * questions: a run's reader needs to know whether the sources were re-read THIS run, and the
+   * registry's name does not say that.
+   */
+  readonly acquisition?: SourceAcquisition
+  /**
+   * What review the value has had. NOT read by {@link admitAsEvidence} either: a review is a
+   * statement about specific content at a specific version, so it travels as an
+   * {@link EvidenceBinding} beside the value rather than as a rank on it.
+   */
+  readonly review?: ReviewStatus
   readonly note?: string
 }
 

@@ -25,8 +25,11 @@
 // judgement; nothing here infers one.
 
 import { createHash } from 'node:crypto'
+import { evidenceStalenessOf } from '@deepseek-ai/dsh-research-core'
 import type {
   CitationResolverAdapter,
+  EvidenceBinding,
+  EvidenceStaleness,
   Provenance,
   ResolvedCitationMetadata,
   ResolverOutcome,
@@ -76,6 +79,16 @@ export type SupportVerdict = 'supports' | 'does_not_support'
 export interface SupportAssessment {
   /** The bare DOI of the assessed source. */
   readonly sourceDoi: string
+  /**
+   * The exact evidence this judgement was made from, frozen at the moment it was made.
+   *
+   * A LITERAL, NOT A LOOKUP. Recomputing it from the corpus entry would make every judgement current
+   * by construction, which is the state this field exists to end: a judgement is about words at a
+   * version, and the corpus entry they came from can be edited afterwards. `assessmentsFor` compares
+   * the two, so an excerpt that changes after the review stops carrying the review — instead of
+   * carrying it to a passage nobody read.
+   */
+  readonly evidence: EvidenceBinding
   /**
    * The claim sentence the reviewer read, verbatim.
    *
@@ -225,6 +238,18 @@ export const EVIDENCE_CORPUS: ReadonlyArray<CorpusSource> = [
 export const SUPPORT_ASSESSMENTS: ReadonlyArray<SupportAssessment> = [
   {
     sourceDoi: '10.1109/tits.2026.3727135',
+    evidence: {
+      // THE IDENTITY IS THIS CORPUS'S OWN, and the DOI travels inside it: this registry keys its
+      // records by DOI because each holds one article, which is a fact about THIS corpus rather than a
+      // rule about evidence. A registry with its own item keys mints a different identity, and two
+      // passages of one work are then two records rather than one overwritten one.
+      sourceIdentity: 'curated:10.1109/tits.2026.3727135',
+      sourceVersion: 'arXiv:2409.06884v1',
+      locator: 'https://arxiv.org/html/2409.06884v1',
+      contentSha256: 'e1ebab7ae5685c950cafe4caeec4fadf5eb627401a776a6daca8492717c37ec5',
+      route: 'checked-in-excerpt',
+      ruleVersion: EVIDENCE_CORPUS_RULE_VERSION,
+    },
     claimRef: STUDY_CLAIM_REF,
     claimRefHash: STUDY_CLAIM_HASH,
     verdict: 'supports',
@@ -247,6 +272,14 @@ export const SUPPORT_ASSESSMENTS: ReadonlyArray<SupportAssessment> = [
   },
   {
     sourceDoi: '10.1016/j.trb.2025.103352',
+    evidence: {
+      sourceIdentity: 'curated:10.1016/j.trb.2025.103352',
+      sourceVersion: 'arXiv:2406.11508v1',
+      locator: 'https://arxiv.org/html/2406.11508v1',
+      contentSha256: '7dae11a68f284d89617678d93957043c3e0f5b68617d738031263e94184acb7e',
+      route: 'checked-in-excerpt',
+      ruleVersion: EVIDENCE_CORPUS_RULE_VERSION,
+    },
     claimRef: STUDY_CLAIM_REF,
     claimRefHash: STUDY_CLAIM_HASH,
     verdict: 'does_not_support',
@@ -268,6 +301,14 @@ export const SUPPORT_ASSESSMENTS: ReadonlyArray<SupportAssessment> = [
   },
   {
     sourceDoi: '10.1155/2017/3082781',
+    evidence: {
+      sourceIdentity: 'curated:10.1155/2017/3082781',
+      sourceVersion: 'openalex-record-2026-09-16',
+      locator: 'https://api.openalex.org/works/https://doi.org/10.1155/2017/3082781',
+      contentSha256: '06b7f9c08729dfa00b3006ca5aaa5314a3abf4f312bb835e02bbe163d120fb61',
+      route: 'checked-in-excerpt',
+      ruleVersion: EVIDENCE_CORPUS_RULE_VERSION,
+    },
     claimRef: STUDY_CLAIM_REF,
     claimRefHash: STUDY_CLAIM_HASH,
     verdict: 'does_not_support',
@@ -293,10 +334,103 @@ export function corpusSource(doi: string): CorpusSource | undefined {
   return EVIDENCE_CORPUS.find(source => source.doi === doi)
 }
 
-/** Every assessed source for this claim version, in corpus order. */
+/**
+ * The binding a corpus entry has NOW, to compare a judgement's frozen one against.
+ *
+ * @param source - the corpus entry as it currently stands.
+ * @returns the binding its excerpt and versions describe today.
+ */
+export function corpusBindingOf(source: CorpusSource): EvidenceBinding {
+  return {
+    sourceIdentity: `curated:${source.doi}`,
+    sourceVersion: source.sourceVersion,
+    locator: source.sourceUri,
+    contentSha256: source.excerptHash,
+    route: 'checked-in-excerpt',
+    ruleVersion: EVIDENCE_CORPUS_RULE_VERSION,
+  }
+}
+
+/**
+ * Whether a judgement still describes the evidence, or the corpus moved under it.
+ *
+ * @param assessment - the judgement, with the binding it was made from.
+ * @returns the comparison, or undefined when the corpus holds no such source any more.
+ */
+export function assessmentStalenessOf(assessment: SupportAssessment): EvidenceStaleness | undefined {
+  const source = corpusSource(assessment.sourceDoi)
+  return source === undefined
+    ? undefined
+    : evidenceStalenessOf(assessment.evidence, corpusBindingOf(source))
+}
+
+/**
+ * Every assessment for this claim version whose evidence is still the evidence it judged.
+ *
+ * A JUDGEMENT ABOUT WORDS THAT ARE NO LONGER THERE IS NOT A JUDGEMENT ABOUT THIS CLAIM. It is dropped
+ * rather than re-pointed, because re-pointing would carry a review to a passage nobody read. A run
+ * whose only anchor drops out then has no anchor, which is the correct end: the claim is unsupported
+ * until somebody reads the current text.
+ *
+ * @param claimRef - the claim sentence the run states.
+ * @returns the current assessments, in corpus order.
+ */
 export function assessmentsFor(claimRef: string): ReadonlyArray<SupportAssessment> {
+  return currentAssessments(SUPPORT_ASSESSMENTS, claimRef)
+}
+
+/**
+ * The judgements in one set that are about this claim version and still describe their evidence.
+ *
+ * THE SET IS A PARAMETER so the drop can be exercised without editing a frozen module constant: the
+ * behaviour under test is the filter, and a test that had to mutate `EVIDENCE_CORPUS` to reach it
+ * would be testing the mutation.
+ *
+ * @param all - the judgements to filter.
+ * @param claimRef - the claim sentence the run states.
+ * @returns those that are about it and current, in the order given.
+ */
+export function currentAssessments(
+  all: ReadonlyArray<SupportAssessment>,
+  claimRef: string,
+): ReadonlyArray<SupportAssessment> {
   const hash = claimRefHashOf(claimRef)
-  return SUPPORT_ASSESSMENTS.filter(assessment => assessment.claimRefHash === hash)
+  return all.filter(assessment =>
+    assessment.claimRefHash === hash && assessmentStalenessOf(assessment)?.stale !== true)
+}
+
+/**
+ * Every assessment for this claim version whose evidence has moved, with what moved.
+ *
+ * NAMED RATHER THAN SILENTLY DROPPED: a run that lost its anchor to an edited quotation has to be
+ * able to say so, or the absence reads as "nobody ever reviewed this".
+ *
+ * @param claimRef - the claim sentence the run states.
+ * @returns one entry per stale judgement, in corpus order.
+ */
+export function staleAssessmentsFor(
+  claimRef: string,
+): ReadonlyArray<{ readonly assessment: SupportAssessment; readonly staleness: EvidenceStaleness }> {
+  return staleAmong(SUPPORT_ASSESSMENTS, claimRef)
+}
+
+/**
+ * The judgements in one set whose evidence has moved, with what moved.
+ *
+ * @param all - the judgements to filter.
+ * @param claimRef - the claim sentence the run states.
+ * @returns one entry per stale judgement, in the order given.
+ */
+export function staleAmong(
+  all: ReadonlyArray<SupportAssessment>,
+  claimRef: string,
+): ReadonlyArray<{ readonly assessment: SupportAssessment; readonly staleness: EvidenceStaleness }> {
+  const hash = claimRefHashOf(claimRef)
+  return all.flatMap((assessment) => {
+    if (assessment.claimRefHash !== hash) return []
+    const staleness = assessmentStalenessOf(assessment)
+    return staleness === undefined || !staleness.stale ? [] : [{ assessment, staleness }]
+  })
 }
 
 /**
@@ -357,6 +491,13 @@ export function corpusProvenance(source: CorpusSource): Provenance {
     producer: 'dsh-research-team/evidence-corpus',
     ruleVersion: EVIDENCE_CORPUS_RULE_VERSION,
     sourceAccess: source.sourceAccess,
+    // THE THREE AXES, EACH STATING ONLY ITSELF. `curated` says where the record is read from and
+    // nothing about how far to trust it; the acquisition says whether a run re-read the source, and
+    // it does not; the review is the recorded judgement, which is about the excerpt at its version
+    // and travels beside it rather than ranking the work.
+    registry: 'curated',
+    acquisition: 'retrieved-then-checked-in',
+    review: 'human-reviewed',
     note:
       `excerpt retrieved once by hand and checked in (${source.sourceUri}); a run does not re-fetch `
       + `it. ${source.accessNote}`,

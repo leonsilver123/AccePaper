@@ -195,6 +195,27 @@ export {
   evidenceEligibilityOf,
 } from './domain/provenance.ts'
 
+// Where a source came from, how it was acquired, what review it has had, and which words a judgement
+// was made about. Three separate axes and one binding record; see ./domain/evidence-binding.ts.
+export type {
+  SourceRegistry,
+  SourceAcquisition,
+  ReviewStatus,
+  EvidenceAttachment,
+  EvidenceBinding,
+  EvidenceAxis,
+  EvidenceStaleness,
+} from './domain/evidence-binding.ts'
+export {
+  SOURCE_REGISTRIES,
+  SOURCE_ACQUISITIONS,
+  REVIEW_STATUSES,
+  isSourceRegistry,
+  isSourceAcquisition,
+  isReviewStatus,
+  evidenceStalenessOf,
+} from './domain/evidence-binding.ts'
+
 export type {
   ProjectId,
   ArtifactId,

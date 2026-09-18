@@ -19,19 +19,24 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { admitAsEvidence, getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
+import { admitAsEvidence, evidenceStalenessOf, getStepDefinitionById } from '@deepseek-ai/dsh-research-core'
 import type { EvidenceProfile, StepDefinition } from '@deepseek-ai/dsh-research-core'
 
 import { createRunContext } from '../src/runner/drive.ts'
 import {
   EVIDENCE_CORPUS,
   SUPPORT_ASSESSMENTS,
+  assessmentStalenessOf,
   assessmentsFor,
   claimRefHashOf,
+  corpusBindingOf,
   corpusCitationResolver,
   corpusSource,
+  currentAssessments,
   excerptHashOf,
+  staleAmong,
 } from '../src/runner/evidence-corpus.ts'
+import type { SupportAssessment } from '../src/runner/evidence-corpus.ts'
 import { buildEvidenceAnchors } from '../src/runner/evidence-anchors.ts'
 import { buildStepVerdicts } from '../src/runner/verdict.ts'
 import type { VerdictBuildCtx } from '../src/runner/types.ts'
@@ -213,5 +218,56 @@ describe('a judgement is about one claim sentence, and a reworded claim is a dif
     })).toBeUndefined()
     expect(b?.outcome).toBe('abstained')
     expect(String(b?.evidence)).toContain('DSH_EVIDENCE_NOT_PRODUCTION_GRADE')
+  })
+})
+
+describe('a judgement is about the passage it read, and an edited passage is a different passage', () => {
+  it('holds every recorded judgement against the words it was made from', () => {
+    // THE CURRENCY CHECK, and the reason the bindings are literals. If an excerpt in EVIDENCE_CORPUS is
+    // edited after its review, this fails — which is the moment a human has to read the new text and
+    // judge it again, rather than the moment a review silently starts covering words nobody read.
+    for (const assessment of SUPPORT_ASSESSMENTS) {
+      expect(assessmentStalenessOf(assessment)?.stale, assessment.sourceDoi).toBe(false)
+    }
+  })
+
+  it('drops a judgement whose excerpt changed, and names what moved', () => {
+    const recorded = SUPPORT_ASSESSMENTS[0]
+    if (recorded === undefined) throw new Error('unreachable')
+    // The same judgement, made about a passage that is no longer the one in the corpus.
+    const edited: SupportAssessment = {
+      ...recorded,
+      evidence: { ...recorded.evidence, contentSha256: excerptHashOf('a passage nobody read') },
+    }
+    expect(currentAssessments([edited], recorded.claimRef)).toEqual([])
+    expect(staleAmong([edited], recorded.claimRef)[0]?.staleness.moved).toEqual(['content'])
+    // AND THE CLAIM'S OWN WORDING STILL MATCHES: this drops for the evidence, not for the sentence.
+    expect(edited.claimRefHash).toBe(claimRefHashOf(recorded.claimRef))
+  })
+
+  it('distinguishes a source whose words changed from one the corpus no longer holds', () => {
+    // `undefined` IS NOT `stale`, AND `current` IS NOT `admissible`. A source the corpus stopped
+    // holding cannot be compared at all, so it is reported as uncomparable — and the judgement is not
+    // thereby dropped, because dropping it would say the evidence changed when what happened is that
+    // this corpus no longer speaks about it.
+    const recorded = SUPPORT_ASSESSMENTS[0]
+    if (recorded === undefined) throw new Error('unreachable')
+    const elsewhere: SupportAssessment = { ...recorded, sourceDoi: '10.0000/not-in-the-corpus' }
+    expect(assessmentStalenessOf(elsewhere)).toBeUndefined()
+    expect(currentAssessments([elsewhere], recorded.claimRef)).toEqual([elsewhere])
+    expect(staleAmong([elsewhere], recorded.claimRef)).toEqual([])
+  })
+
+  it('keeps one passage\'s judgement off another passage of the same DOI', () => {
+    // THE OVERWRITE THIS FORBIDS: a work has several attachments and several readings, and an identity
+    // keyed on the DOI alone would let a judgement about one answer for another.
+    const source = corpusSource('10.1109/tits.2026.3727135')
+    if (source === undefined) throw new Error('unreachable')
+    const anotherPassage = corpusBindingOf({ ...source, sourceUri: 'https://example.invalid/other.pdf' })
+    expect(anotherPassage.contentSha256).toBe(corpusBindingOf(source).contentSha256)
+    expect(evidenceStalenessOf(corpusBindingOf(source), anotherPassage).moved).toEqual([])
+    // The LOCATOR is what separates them, so it has to be part of the binding rather than prose
+    // beside it.
+    expect(corpusBindingOf(source).locator).toBe(source.sourceUri)
   })
 })
