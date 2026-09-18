@@ -29,6 +29,16 @@
 // and the BibTeX is generated from whatever the library held when that call ran; an item edited
 // between the two reads would otherwise be recorded as a mixture of two revisions. The chain re-reads
 // a bounded number of times and then refuses, rather than claiming a snapshot it does not have.
+//
+// A TOOL'S REPLY IS NOT THE PAPER. Measured 2026-09-18 against the real library: `read_pdf_pages`
+// answers `# PDF Pages 1-1 of <title>` / `**Item Key:** …` / `**Total pages in PDF:** …` / `## Page 1`
+// and only then the page's own words, and `get_item_fulltext` answers a `*Response size: …*` preamble
+// followed by a `**Type:** / **Item Key:** / **Date:** / **Authors:**` header block, the rendered body,
+// and the reference list. Hashing either reply whole hashes the server's presentation, so this module
+// keeps the reply as an AUDIT RECORD and derives the evidence text from it separately. Where the two
+// cannot be told apart the reply is NOT evidence, and the route that cannot be separated — the
+// full-text rendering — is reachable only as navigation. A page marker does not make a reply clean
+// either: the page route's envelope is stripped by the same rule, and `where` names what was removed.
 
 import { createHash } from 'node:crypto'
 
@@ -70,6 +80,15 @@ const DEFAULT_PAGE_SIZE = 100
 const REREAD_ATTEMPTS = 3
 
 /**
+ * Which revision of this module's reading rules produced a record.
+ *
+ * IT TRAVELS WITH THE RECORD, so evidence read under one set of rules is not silently re-read under
+ * another: an extraction that changes how a reply is split changes what the text means, and a
+ * judgement made from the old split must be recognisable as one.
+ */
+export const ZOTERO_READ_RULE_VERSION = 'zotero-local-read-v1'
+
+/**
  * The library an item belongs to, as the API reports it.
  *
  * THE RETURNED OBJECT IS THE IDENTITY, not the address that was used to reach it: `users/0` is the
@@ -92,6 +111,10 @@ export interface ZoteroItemRecord {
     readonly itemType?: string
     readonly title?: string
     readonly DOI?: string
+    readonly ISBN?: string
+    /** Zotero's free-text field, where a preprint's arXiv id is conventionally recorded. */
+    readonly extra?: string
+    readonly archiveID?: string
     readonly date?: string
     readonly publicationTitle?: string
     readonly volume?: string
@@ -120,8 +143,14 @@ export type ZoteroReadFailureCode =
   | 'bibtex-refused'
   /** The item moved between two reads and stayed moved. */
   | 'version-moved'
-  /** The text tool answered nothing: no attachment, a page past the end, or a read that failed. */
+  /** The text tool answered nothing readable: no attachment, or a read that failed. */
   | 'passage-unreadable'
+  /** The page asked for is not in the attachment, and the tool said so. */
+  | 'passage-out-of-range'
+  /** The tool answered something that is not this page's own words. */
+  | 'passage-unrecognized'
+  /** More than one PDF attachment could have answered, so which one did is not establishable. */
+  | 'passage-unattributable'
 
 /** One refusal, naming what failed and where. */
 export interface ZoteroReadFailure {
@@ -156,34 +185,112 @@ export interface ZoteroSource {
   readonly citation: ParsedCitation
   /** How each part was read, so a reader can tell which route answered. */
   readonly readBy: { readonly metadata: 'local-api-json'; readonly bibliography: 'mcp-bibtex' }
+  readonly ruleVersion: string
+}
+
+/** A file attached to an item, as the local API reports it. */
+export interface ZoteroAttachment {
+  readonly key: string
+  /** The attachment's OWN version, which moves when the file is replaced even if the item does not. */
+  readonly version: number
+  readonly filename?: string
+  readonly contentType?: string
 }
 
 /**
- * A passage of a source's full text, with where it was read and what version it is.
+ * What one tool reply was judged to be.
  *
- * THE LOCATION IS PART OF THE EVIDENCE. A quote that cannot be traced to an attachment and a place
- * in it is a sentence somebody typed; `where` names the attachment and the page or span the text came
- * from, and `contentSha256` is the version of THAT text, so a later edit to the file invalidates a
- * judgement made from it exactly as a rewritten manuscript sentence invalidates its citation.
+ * THE RAW REPLY IS KEPT WHATEVER THIS SAYS. A classification is this module's reading of the reply,
+ * and a reader who disagrees with it has the reply itself to check it against.
+ */
+export type ReplyClassification =
+  /** A page of the source, with the tool's own header removed. */
+  | 'page-text'
+  /** The tool's whole-document rendering, with its own preamble and metadata header still in it. */
+  | 'full-text-rendering'
+  /** The tool reporting that the requested page is not in the file. */
+  | 'out-of-range'
+  /** An error block or an install notice — something the tool wrote, not something the paper says. */
+  | 'error-or-notice'
+  /** The tool answered no text at all. */
+  | 'empty'
+
+/** The tool's reply, kept whole, so any text derived from it can be checked against it. */
+export interface ToolReplyAudit {
+  /** The tool that answered. */
+  readonly tool: string
+  /** The reply exactly as the tool returned it. */
+  readonly raw: string
+  /** SHA-256 over {@link ToolReplyAudit.raw}: the version of the REPLY. */
+  readonly rawSha256: string
+  readonly rawLength: number
+  readonly classification: ReplyClassification
+}
+
+/**
+ * A page of a source, whose text is the page's own words and which may be quoted.
+ *
+ * WHAT MAKES THIS EVIDENCE AND NOT A TOOL'S OUTPUT. `text` is the page's own words with the tool's
+ * envelope removed, and `contentSha256` is over THAT text — not over the reply, which would make the
+ * hash depend on the server's presentation. The reply is kept in {@link ZoteroPassage.audit} so the
+ * removal can be checked.
+ *
+ * AND IT CARRIES EVERY VERSION THE JUDGEMENT DEPENDS ON. `itemVersion` moves when the item's metadata
+ * changes; `attachment.version` moves when the FILE is replaced, which need not move the item; and
+ * `contentSha256` moves when the extracted words change. A judgement made from this page is bound to
+ * all three, because none of them implies the others.
  */
 export interface ZoteroPassage {
   readonly literatureId: LiteratureId
   readonly itemKey: string
-  /** The attachment the text was read from, as Zotero keys it. */
-  readonly attachmentKey?: string
-  /** Where in the source the text is, in the words the read tool used. */
+  /** The library's version for the parent item at the read that produced this passage. */
+  readonly itemVersion: number
+  /** The attachment the words were read from, with its own version. */
+  readonly attachment: ZoteroAttachment
+  /** The 1-indexed page the words are printed on. */
+  readonly page: number
+  /** How many pages the attachment the tool read has, as the tool reported it. */
+  readonly totalPages: number
+  /**
+   * Where in the source the text is, in words a reader can act on.
+   *
+   * It NAMES WHAT WAS REMOVED as well as what is left: a locator that said only "page 4" would leave
+   * a reader unable to tell a stripped page from a page that happened to start with the tool's header.
+   */
   readonly where: string
+  /** The page's own words, with the tool's envelope removed. */
   readonly text: string
-  /** SHA-256 of `text`, as read. */
+  /** SHA-256 over {@link ZoteroPassage.text}, as read. */
   readonly contentSha256: string
-  /** How it was read, so a reader can tell a full text from a page. */
-  readonly readBy: 'mcp-fulltext' | 'mcp-pdf-pages'
+  readonly readBy: 'mcp-pdf-pages'
+  readonly ruleVersion: string
+  readonly audit: ToolReplyAudit
 }
 
-/** How much of a source to read. */
-export interface PassageRequest {
-  /** A 1-indexed page, when one page is wanted rather than the whole text. */
-  readonly page?: number
+/**
+ * The tool's rendering of a whole source, which is NOT evidence.
+ *
+ * WHY THIS IS A SEPARATE TYPE FROM {@link ZoteroPassage} RATHER THAN A FLAG ON IT. The full-text tool
+ * answers a document it composed — a size preamble, a metadata header, the extracted body, the
+ * reference list — and this module cannot tell, in general, where its own composition ends and the
+ * paper begins; a rule that stripped a fixed prefix would be right until the server changed the
+ * prefix. It also carries no page, so nothing quoted from it can be traced to a place in the file.
+ * Under the repository's rule for a reply that cannot be separated, the route stays reachable for
+ * FINDING out what a source says and for NAVIGATING to a passage — and a value of this type cannot be
+ * passed to anything that takes evidence, which is what keeps the restriction structural rather than
+ * a comment somebody has to remember.
+ */
+export interface ZoteroNavigation {
+  readonly literatureId: LiteratureId
+  readonly itemKey: string
+  readonly itemVersion: number
+  /** What the tool returned, in full and unaltered. */
+  readonly rendering: string
+  readonly readBy: 'mcp-fulltext'
+  readonly ruleVersion: string
+  /** What this value may NOT be used for, stated where a caller reading the type will see it. */
+  readonly notEvidence: string
+  readonly audit: ToolReplyAudit
 }
 
 /** A candidate from the configured collection, as the roster read it. */
@@ -194,6 +301,10 @@ export interface CollectionHit {
   readonly year?: number
   readonly venue?: string
   readonly doi?: string
+  /** The item's own ISBN, when it is a book. */
+  readonly isbn?: string
+  /** The arXiv id the item records, when it records one. */
+  readonly arxivId?: string
   readonly authors: ReadonlyArray<string>
 }
 
@@ -214,7 +325,7 @@ export interface ZoteroToolPort {
  * A Zotero library, read over the two local routes and presented as one ledger.
  *
  * @remarks Every method REFUSES rather than degrading: there is no fallback to parsing a tool's
- * rendered text, and no partial collection is ever returned as a whole one.
+ * rendered text as evidence, and no partial collection is ever returned as a whole one.
  */
 export class ZoteroProvider {
   private readonly config: ZoteroProviderConfig
@@ -360,6 +471,7 @@ export class ZoteroProvider {
           version: record.value.version,
           citation: checked.citation,
           readBy: { metadata: 'local-api-json', bibliography: 'mcp-bibtex' },
+          ruleVersion: ZOTERO_READ_RULE_VERSION,
         },
       }
     }
@@ -406,68 +518,116 @@ export class ZoteroProvider {
   }
 
   /**
-   * Read a source's text, whole or one page of it.
+   * Read one page of a source: the words printed on it, with the tool's envelope removed.
    *
-   * @param itemKey - the item whose text is wanted.
-   * @param request - a page, when one page is wanted.
+   * THE PAGE IS NOT OPTIONAL, because evidence needs a locator. The guidance this method answers to
+   * asks for "page or verifiable locator" with every piece of evidence, and a whole-document read
+   * carries none — that is why the whole-document route is {@link ZoteroProvider.readFullText} and
+   * returns a value that is not evidence.
+   *
+   * @param itemKey - the item whose page is wanted.
+   * @param page - the 1-indexed page.
    * @param signal - cancellation from the caller.
-   * @returns the passage with where it came from and its version, or why it could not be read.
+   * @returns the page with what it took to establish it, or why no page was read.
    */
-  async readPassage(
+  async readPage(
     itemKey: string,
-    request: PassageRequest = {},
+    page: number,
     signal?: AbortSignal,
   ): Promise<{ readonly ok: true; readonly passage: ZoteroPassage } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
     const record = await this.readItemRecord(itemKey, signal)
     if (!record.ok) return record
-    const page = request.page
-    const name = page === undefined
-      ? `mcp__${this.config.mcpServerName}__zotero_get_item_fulltext`
-      : `mcp__${this.config.mcpServerName}__zotero_read_pdf_pages`
+    const attachments = await this.readPdfAttachments(itemKey, signal)
+    if (!attachments.ok) return attachments
+    // THE FILE THE WORDS CAME FROM IS PART OF THE EVIDENCE, and this route cannot be told which file
+    // it read: the tool takes the ITEM and picks the attachment itself. One PDF is therefore
+    // establishable; two are not, and guessing would bind the judgement's invalidation to the wrong
+    // file, so the read stops and names them instead.
+    if (attachments.value.length === 0) {
+      return {
+        ok: false,
+        failure: {
+          code: 'passage-unreadable',
+          detail: `'${itemKey}' has no PDF attachment, so it has no pages to read`,
+        },
+      }
+    }
+    if (attachments.value.length > 1) {
+      return {
+        ok: false,
+        failure: {
+          code: 'passage-unattributable',
+          detail: `'${itemKey}' has ${String(attachments.value.length)} PDF attachments`
+            + ` (${attachments.value.map(entry => entry.key).join(', ')}) and the page tool takes the item,`
+            + ' not the attachment, so which file answered cannot be established — give the item one PDF,'
+            + ' or name the attachment in a route that takes one',
+        },
+      }
+    }
+    const attachment = attachments.value[0]
+    if (attachment === undefined) {
+      return { ok: false, failure: { code: 'passage-unreadable', detail: `'${itemKey}': no attachment` } }
+    }
+    if (!Number.isInteger(page) || page < 1) {
+      return {
+        ok: false,
+        failure: { code: 'passage-out-of-range', detail: `page ${String(page)} is not a page number` },
+      }
+    }
+    const name = `mcp__${this.config.mcpServerName}__zotero_read_pdf_pages`
     const tool = this.tools.get(name)
     if (tool === undefined) {
       return {
         ok: false,
         failure: {
           code: 'metadata-tool-missing',
-          detail: `this deployment registers no '${name}', so the text of '${itemKey}' cannot be read`
-            + ' over the route the deployment chose',
+          detail: `this deployment registers no '${name}', so a page of '${itemKey}' cannot be read over`
+            + ' the route the deployment chose',
         },
       }
     }
-    const timeout = AbortSignal.timeout(this.timeoutMs)
-    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    // THE ARGUMENT NAMES ARE THE TOOL'S OWN, measured 2026-09-18: `item_key`, and an inclusive
+    // `start_page`/`end_page`. `start_page` is REQUIRED — a call without it is refused by the server
+    // with a validation error, which is not a refusal a caller can act on.
     let result: unknown
     try {
-      // THE ARGUMENT NAMES ARE THE TOOLS' OWN, measured 2026-09-18: the page route takes
-      // `item_key` and `start_page` — the ITEM, not the attachment, and an inclusive start with an
-      // optional `end_page`. A call with the wrong names is not a refusal the caller can act on; it
-      // is five validation errors from a server.
       result = await tool.execute(
-        page === undefined
-          ? { item_key: itemKey }
-          : { item_key: itemKey, start_page: page, end_page: page },
-        { signal: combined },
+        { item_key: itemKey, start_page: page, end_page: page },
+        { signal: this.combined(signal) },
       )
     } catch (error) {
-      // A MISSING ATTACHMENT ARRIVES HERE, and it is a different fact from an empty one: the tool
-      // says there is no PDF to read, and this read reports that rather than an empty passage.
       return {
         ok: false,
         failure: {
           code: 'passage-unreadable',
-          detail: `'${itemKey}': ${error instanceof Error ? error.message : String(error)}`,
+          detail: `'${itemKey}' page ${String(page)}: ${error instanceof Error ? error.message : String(error)}`,
         },
       }
     }
-    const text = toolText(result)
-    if (text === undefined || text.trim() === '') {
+    const raw = toolText(result)
+    if (raw === undefined || raw.trim() === '') {
+      return { ok: false, failure: { code: 'passage-unreadable', detail: `the text tool answered with nothing readable for '${itemKey}' page ${String(page)}` } }
+    }
+    const audit = auditOf(name, raw)
+    const split = pageTextOf(raw, page)
+    if (!split.ok) {
+      // A REPLY THAT IS NOT THIS PAGE'S WORDS IS NOT EVIDENCE, whatever it says. The measured shapes
+      // that arrive here include an out-of-range notice, a missing-dependency install notice, and a
+      // 404 error block; none of them is the paper, and accepting one would put the server's prose
+      // into an evidence chain under a page number.
       return {
         ok: false,
         failure: {
-          code: 'passage-unreadable',
-          detail: `the text tool answered with nothing readable for '${itemKey}'`
-            + (page === undefined ? '' : ` page ${String(page)}`),
+          code: split.classification === 'out-of-range'
+            ? 'passage-out-of-range'
+            : split.classification === 'empty'
+              // A PAGE THAT EXTRACTED NOTHING MEANS NOTHING READABLE CAME BACK — the same fact the
+              // whole-text route reports, and a different one from a reply this module could not
+              // recognise. Only the second is about the module's reading of the reply.
+              ? 'passage-unreadable'
+              : 'passage-unrecognized',
+          detail: `'${itemKey}' page ${String(page)}: ${split.detail}; the reply began`
+            + ` '${firstLineOf(raw)}'`,
         },
       }
     }
@@ -479,12 +639,139 @@ export class ZoteroProvider {
           itemKey,
         ),
         itemKey,
-        where: page === undefined ? 'the whole text, as the tool returned it' : `page ${String(page)}`,
-        text,
-        contentSha256: createHash('sha256').update(text, 'utf8').digest('hex'),
-        readBy: page === undefined ? 'mcp-fulltext' : 'mcp-pdf-pages',
+        itemVersion: record.value.version,
+        attachment,
+        page,
+        totalPages: split.totalPages,
+        where: `page ${String(page)} of ${String(split.totalPages)} in attachment ${attachment.key}`
+          + ', with the tool\'s \'PDF Pages\' header removed',
+        text: split.text,
+        contentSha256: createHash('sha256').update(split.text, 'utf8').digest('hex'),
+        readBy: 'mcp-pdf-pages',
+        ruleVersion: ZOTERO_READ_RULE_VERSION,
+        audit: { ...audit, classification: 'page-text' },
       },
     }
+  }
+
+  /**
+   * Read a source's whole text as the tool renders it, for finding what to read next.
+   *
+   * NOT EVIDENCE, AND THE RETURN TYPE SAYS SO. See {@link ZoteroNavigation} for why this module does
+   * not separate the tool's rendering from the paper: the reply is a document the server composed,
+   * and a fixed-prefix rule would be correct only until the server changed the prefix.
+   *
+   * @param itemKey - the item to render.
+   * @param signal - cancellation from the caller.
+   * @returns the rendering and what it may be used for, or why nothing was read.
+   */
+  async readFullText(
+    itemKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly navigation: ZoteroNavigation } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const record = await this.readItemRecord(itemKey, signal)
+    if (!record.ok) return record
+    const name = `mcp__${this.config.mcpServerName}__zotero_get_item_fulltext`
+    const tool = this.tools.get(name)
+    if (tool === undefined) {
+      return {
+        ok: false,
+        failure: {
+          code: 'metadata-tool-missing',
+          detail: `this deployment registers no '${name}', so the text of '${itemKey}' cannot be read`
+            + ' over the route the deployment chose',
+        },
+      }
+    }
+    let result: unknown
+    try {
+      result = await tool.execute({ item_key: itemKey }, { signal: this.combined(signal) })
+    } catch (error) {
+      // A MISSING ATTACHMENT ARRIVES HERE, and it is a different fact from an empty one: the tool
+      // says there is no PDF to read, and this read reports that rather than an empty rendering.
+      return {
+        ok: false,
+        failure: {
+          code: 'passage-unreadable',
+          detail: `'${itemKey}': ${error instanceof Error ? error.message : String(error)}`,
+        },
+      }
+    }
+    const raw = toolText(result)
+    if (raw === undefined || raw.trim() === '') {
+      return {
+        ok: false,
+        failure: { code: 'passage-unreadable', detail: `the text tool answered with nothing readable for '${itemKey}'` },
+      }
+    }
+    return {
+      ok: true,
+      navigation: {
+        literatureId: literatureIdOf(
+          { type: record.value.library.type === 'group' ? 'group' : 'user', id: libraryIdOf(record.value.library) },
+          itemKey,
+        ),
+        itemKey,
+        itemVersion: record.value.version,
+        rendering: raw,
+        readBy: 'mcp-fulltext',
+        ruleVersion: ZOTERO_READ_RULE_VERSION,
+        notEvidence:
+          'this is the tool\'s own rendering: its size preamble and metadata header are still in it and no'
+          + ' page or attachment is recorded, so it may locate a passage but may not be quoted or cited',
+        audit: { ...auditOf(name, raw), classification: 'full-text-rendering' },
+      },
+    }
+  }
+
+  /**
+   * One item's PDF attachments, as the local API lists them.
+   *
+   * @param itemKey - the item whose attachments are wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the PDF attachments, or why they could not be listed.
+   */
+  private async readPdfAttachments(
+    itemKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly value: ReadonlyArray<ZoteroAttachment> }
+    | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const url = `${this.config.apiBase}/${this.config.localLibraryPath}/items/${itemKey}/children`
+      + '?format=json&limit=100'
+    const read = await this.getJson(url, signal)
+    if (!read.ok) {
+      return {
+        ok: false,
+        failure: { code: 'endpoint-unreadable', detail: `the attachments of '${itemKey}': ${read.detail}` },
+      }
+    }
+    if (!Array.isArray(read.value)) {
+      return {
+        ok: false,
+        failure: {
+          code: 'endpoint-unreadable',
+          detail: `the attachments of '${itemKey}' answered something that is not a list`,
+        },
+      }
+    }
+    const pdfs = read.value.flatMap((entry): ZoteroAttachment[] => {
+      const child = entry as {
+        readonly key?: unknown
+        readonly version?: unknown
+        readonly data?: { readonly itemType?: unknown; readonly contentType?: unknown; readonly filename?: unknown }
+      } | null
+      if (child === null || typeof child !== 'object') return []
+      if (typeof child.key !== 'string' || typeof child.version !== 'number') return []
+      if (child.data?.itemType !== 'attachment') return []
+      if (child.data.contentType !== 'application/pdf') return []
+      return [{
+        key: child.key,
+        version: child.version,
+        ...(typeof child.data.filename === 'string' ? { filename: child.data.filename } : {}),
+        ...(typeof child.data.contentType === 'string' ? { contentType: child.data.contentType } : {}),
+      }]
+    })
+    return { ok: true, value: pdfs }
   }
 
   /**
@@ -554,11 +841,9 @@ export class ZoteroProvider {
         },
       }
     }
-    const timeout = AbortSignal.timeout(this.timeoutMs)
-    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     let result: unknown
     try {
-      result = await tool.execute({ item_key: itemKey, format: 'bibtex' }, { signal: combined })
+      result = await tool.execute({ item_key: itemKey, format: 'bibtex' }, { signal: this.combined(signal) })
     } catch (error) {
       return {
         ok: false,
@@ -580,9 +865,20 @@ export class ZoteroProvider {
   }
 
   /**
+   * The timeout a tool call or request runs under, combined with the caller's cancellation.
+   *
+   * @param signal - cancellation from the caller, when the caller passed one.
+   * @returns the signal to pass on.
+   */
+  private combined(signal?: AbortSignal): AbortSignal {
+    const timeout = AbortSignal.timeout(this.timeoutMs)
+    return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+  }
+
+  /**
    * GET one URL as JSON.
    *
-   * @param url - the address, built from configuration and a collection key.
+   * @param url - the address, built from configuration and a collection or item key.
    * @param signal - cancellation from the caller.
    * @returns the parsed body and the API's reported total, or why the read failed.
    */
@@ -590,11 +886,9 @@ export class ZoteroProvider {
     url: string,
     signal?: AbortSignal,
   ): Promise<{ readonly ok: true; readonly value: unknown; readonly total?: number } | { readonly ok: false; readonly detail: string }> {
-    const timeout = AbortSignal.timeout(this.timeoutMs)
-    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     let response: Awaited<ReturnType<FetchLike>>
     try {
-      response = await this.fetchImpl(url, { signal: combined })
+      response = await this.fetchImpl(url, { signal: this.combined(signal) })
     } catch (error) {
       // ZOTERO NOT RUNNING ARRIVES HERE, and it is a different fact from an empty collection: the
       // local API is only there while the application is. The reason travels; nothing is inferred.
@@ -674,6 +968,22 @@ function matchesTopic(record: ZoteroItemRecord, topic: string): boolean {
 }
 
 /**
+ * The arXiv id an item records in its own fields, when it records one.
+ *
+ * Zotero has no arXiv field, so a preprint's id is conventionally written in `archiveID` or in
+ * `extra`. Only an id the item states is read: deriving one from a URL would be this module's guess,
+ * and the id is offered to the citation chain as the item's OWN identifier.
+ *
+ * @param data - one item's data.
+ * @returns the id, when the item states one.
+ */
+function arxivIdOf(data: ZoteroItemRecord['data']): string | undefined {
+  const stated = `${data.archiveID ?? ''}\n${data.extra ?? ''}`
+  const match = /(?:arxiv[:\s]*)(\d{4}\.\d{4,5}(?:v\d+)?)/iu.exec(stated)
+  return match?.[1]
+}
+
+/**
  * One item record as a candidate.
  *
  * @param record - the record.
@@ -681,6 +991,7 @@ function matchesTopic(record: ZoteroItemRecord, topic: string): boolean {
  */
 function hitOf(record: ZoteroItemRecord): CollectionHit {
   const yearMatch = /(\d{4})/u.exec(record.data.date ?? '')
+  const arxivId = arxivIdOf(record.data)
   return {
     itemKey: record.key,
     literatureId: literatureIdOf(
@@ -691,6 +1002,8 @@ function hitOf(record: ZoteroItemRecord): CollectionHit {
     ...(yearMatch === null ? {} : { year: Number(yearMatch[1]) }),
     ...(record.data.publicationTitle === undefined ? {} : { venue: record.data.publicationTitle }),
     ...(record.data.DOI === undefined || record.data.DOI === '' ? {} : { doi: record.data.DOI }),
+    ...(record.data.ISBN === undefined || record.data.ISBN === '' ? {} : { isbn: record.data.ISBN }),
+    ...(arxivId === undefined ? {} : { arxivId }),
     authors: (record.data.creators ?? []).flatMap((creator): string[] => {
       if (typeof creator.name === 'string' && creator.name !== '') return [creator.name]
       const parts = [creator.lastName, creator.firstName]
@@ -717,4 +1030,110 @@ function toolText(result: unknown): string | undefined {
     return typeof text === 'string' ? [text] : []
   })
   return parts.length === 0 ? undefined : parts.join('\n')
+}
+
+/**
+ * One tool reply as an audit record.
+ *
+ * @param tool - the tool that answered.
+ * @param raw - the reply, exactly as it arrived.
+ * @returns the record, with the classification left to whoever read the reply.
+ */
+function auditOf(tool: string, raw: string): Omit<ToolReplyAudit, 'classification'> {
+  return {
+    tool,
+    raw,
+    rawSha256: createHash('sha256').update(raw, 'utf8').digest('hex'),
+    rawLength: raw.length,
+  }
+}
+
+/** The first line of a reply, for a refusal that has to name what actually arrived. */
+function firstLineOf(raw: string): string {
+  const line = raw.replace(/^﻿/u, '').split(/\r?\n/u)[0] ?? ''
+  return line.length > 120 ? `${line.slice(0, 120)}…` : line
+}
+
+/** What {@link pageTextOf} found: the page's own words, or why the reply is not them. */
+type PageText =
+  | { readonly ok: true; readonly text: string; readonly totalPages: number }
+  | { readonly ok: false; readonly classification: ReplyClassification; readonly detail: string }
+
+/**
+ * One page out of a `read_pdf_pages` reply, with the tool's own header removed.
+ *
+ * THE RULE IS POSITIVE, NOT A LIST OF THINGS TO STRIP. The reply must be the shape the tool is
+ * measured to produce — a `# PDF Pages <a>-<b> of …` first line naming THIS page, exactly one
+ * `## Page <n>` marker for THIS page, and a `**Total pages in PDF:** <n>` line — and everything after
+ * that marker is the page. A reply that does not match is refused rather than stripped, because a
+ * list of known-bad preambles is wrong the first time the server writes a new one, and the reply that
+ * arrives here when the tool cannot read PDFs at all is an install notice that a stripper would
+ * happily hand on as page text.
+ *
+ * A LEADING BYTE-ORDER MARK IS REMOVED FIRST: the tool's out-of-range notice carries one, measured
+ * 2026-09-18, and a leading `﻿` would otherwise make every pattern miss.
+ *
+ * @param raw - the reply, exactly as the tool returned it.
+ * @param page - the page that was asked for.
+ * @returns the page's words and the attachment's length, or why the reply is not this page.
+ */
+function pageTextOf(raw: string, page: number): PageText {
+  const cleaned = raw.replace(/^﻿/u, '')
+  const lines = cleaned.split(/\r?\n/u)
+  const header = /^# PDF Pages (\d+)-(\d+) of /u.exec(lines[0] ?? '')
+  if (header === null) {
+    const range = /^Start page (\d+) is out of range\. PDF has (\d+) pages \((\d+)-(\d+)\)\.$/u.exec(cleaned.trim())
+    if (range !== null) {
+      return {
+        ok: false,
+        classification: 'out-of-range',
+        detail: `the tool reports that page ${String(page)} is not in the file, which has`
+          + ` ${range[2] ?? '?'} page(s)`,
+      }
+    }
+    return {
+      ok: false,
+      classification: 'error-or-notice',
+      detail: 'the reply does not begin with the page route\'s own header, so it is not a page of the'
+        + ' attachment',
+    }
+  }
+  if (header[1] !== String(page) || header[2] !== String(page)) {
+    return {
+      ok: false,
+      classification: 'error-or-notice',
+      detail: `the reply names pages ${header[1] ?? '?'}-${header[2] ?? '?'} and page ${String(page)} was`
+        + ' asked for',
+    }
+  }
+  const marker = `## Page ${String(page)}`
+  const markers = lines.filter(line => /^## Page \d+$/u.test(line))
+  if (markers.length !== 1 || markers[0] !== marker) {
+    return {
+      ok: false,
+      classification: 'error-or-notice',
+      detail: `the reply carries ${String(markers.length)} page marker(s)`
+        + ` (${markers.join(', ') || 'none'}) where exactly one '${marker}' was expected`,
+    }
+  }
+  const totalLine = lines.find(line => /^\*\*Total pages in PDF:\*\* \d+$/u.test(line))
+  if (totalLine === undefined) {
+    return {
+      ok: false,
+      classification: 'error-or-notice',
+      detail: 'the reply states no total page count, so how long the attachment is cannot be recorded',
+    }
+  }
+  const totalPages = Number(/\d+/u.exec(totalLine)?.[0] ?? '0')
+  const at = lines.indexOf(marker)
+  const text = lines.slice(at + 1).join('\n').replace(/^\n+/u, '')
+  if (text.trim() === '') {
+    return {
+      ok: false,
+      classification: 'empty',
+      detail: `the reply's page ${String(page)} carries no text, which is a page that was not extracted`
+        + ' rather than a page that is blank',
+    }
+  }
+  return { ok: true, text, totalPages }
 }

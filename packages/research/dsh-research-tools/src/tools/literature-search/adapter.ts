@@ -33,17 +33,25 @@ export type LiteratureVenueTier = 'tier1' | 'tier2' | 'tier3'
  *  mock boundary, e.g. 'syn-lit-0001'). */
 export type LiteratureHitId = string & { readonly __brand: 'LiteratureHitId' }
 
-/** Identifier kinds a synthetic hit's {@link LiteratureCitationRef} may carry.
- *  Subset of core's CitationIdKind so the ref stays assignable to CitationRef. */
-export type LiteratureRefKind = 'doi' | 'arxiv'
+/** Identifier kinds a hit's {@link LiteratureCitationRef} may carry. The same
+ *  members as core's CitationIdKind, so the ref stays assignable to CitationRef.
+ *
+ *  WIDENED 2026-09-18 from `'doi' | 'arxiv'`. A DOI is an EXTERNAL identifier and
+ *  not every citable work has one: a book states an ISBN, a standard a number, and
+ *  a work no catalogue matched states none of them, which is what `unknown` is for.
+ *  An adapter that could express only `doi` and `arxiv` had to drop such a work, and
+ *  dropping it is what turns "this adapter cannot name it" into "it may not be cited". */
+export type LiteratureRefKind = 'doi' | 'arxiv' | 'isbn' | 'standard' | 'unknown'
 
 /** Citation reference carried by a hit, shaped like core's CitationRef
  *  (contracts.ts) — structural subset; no core import so this module
  *  type-checks in isolation. */
 export interface LiteratureCitationRef {
   readonly kind: LiteratureRefKind
-  /** The DOI / arXiv id. Values are synthetic (10.1000/synth-* test DOIs /
-   *  month-99 arXiv-style ids), never real identifiers. */
+  /** The DOI / arXiv id / ISBN / standard number, or — under `unknown` — whatever
+   *  identity the source's own registry minted for it. The mock's values are
+   *  synthetic (10.1000/synth-* test DOIs / month-99 arXiv-style ids); an adapter
+   *  over a real registry supplies what that registry states. */
   readonly id: string
   readonly title: string
   readonly authors: readonly string[]

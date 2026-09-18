@@ -10,12 +10,20 @@
 // abstracts as a keyword filter and the outcome says so, because a caller that read this as a search
 // would believe the corpus had been searched rather than filtered.
 //
-// AN ITEM THAT CANNOT BE CITED IS REPORTED, NOT DROPPED. A record with no DOI cannot enter the
-// citation identity chain — the pipeline cites by identifier, and an entry with only a bibliography
-// is a citation nothing downstream can check. A catalogue search legitimately skips such records
-// among thousands; a CURATED collection of tens is a corpus somebody assembled, and an item in it
-// that cannot be cited is a fact about the corpus. So the outcome is `unavailable`, naming the items
-// and what would fix it, rather than an `ok` with fewer hits than the collection holds.
+// A DOI IS NOT A CONDITION OF CITABILITY. This adapter refused records without one until 2026-09-18,
+// on the reasoning that the pipeline cites by identifier. That was wrong twice over: a DOI is an
+// EXTERNAL identifier, not the source's identity — the identity is the library and the item key, and
+// this module already mints it — and a legitimate work without one (a book, a standard, a report, a
+// preprint Zotero never matched) is citable in every style a journal publishes. What the citation
+// chain needs is an identifier it can record and a claimed title and authors it can check, so the ref
+// carries whichever namespace the RECORD ITSELF establishes, and `unknown` with the internal identity
+// when it establishes none. The DOI is still read, and still travels, for external identity,
+// cross-checking and de-duplication — as one identifier among others, never as the key.
+//
+// AN ITEM THAT CANNOT BE IDENTIFIED IS REPORTED, NOT DROPPED. A record with no title is not a source
+// any citation style can name and no identity check can compare against, so it stops the read and is
+// named. That is an IMPLEMENTATION LIMIT — what this adapter currently requires — and the refusal
+// says so rather than presenting it as a rule about what may be cited.
 
 import type {
   LiteratureHit, LiteratureHitId, LiteratureQuery, LiteratureSearchAdapter, LiteratureSearchOutcome,
@@ -78,13 +86,14 @@ export class ZoteroLiteratureAdapter implements LiteratureSearchAdapter {
     if (!read.ok) {
       return { status: 'unavailable', detail: `[${read.failure.code}] ${read.failure.detail}` }
     }
-    const uncitable = read.hits.filter(hit => hit.doi === undefined)
-    if (uncitable.length > 0) {
+    const untitled = read.hits.filter(hit => hit.title.trim() === '')
+    if (untitled.length > 0) {
       return {
         status: 'unavailable',
-        detail: 'these items in the corpus state no DOI, so they cannot enter the citation identity'
-          + ` chain (${uncitable.map(hit => hit.itemKey).join(', ')}) — give each one a DOI, or take it`
-          + ' out of the collection this deployment names as its corpus',
+        detail: 'these items in the corpus state no title, so nothing can name them in a reference list'
+          + ` or check an identity against them (${untitled.map(hit => hit.itemKey).join(', ')}) — give`
+          + ' each one a title, or take it out of the collection this deployment names as its corpus.'
+          + ' This is a limit of what this adapter requires, not a rule about what may be cited',
       }
     }
     return {
@@ -114,12 +123,34 @@ function hitOf(hit: CollectionHit, fallbackVenue: string): LiteratureHit {
     venue: hit.venue ?? fallbackVenue,
     title: hit.title,
     ...(hit.year === undefined ? {} : { year: hit.year }),
-    ref: {
-      kind: 'doi',
-      // The DOI without its resolver prefix, which is the form the citation chain compares.
-      id: (hit.doi ?? '').replace(/^https?:\/\/(dx\.)?doi\.org\//u, ''),
-      title: hit.title,
-      authors: hit.authors,
-    },
+    ref: refOf(hit),
   }
+}
+
+/**
+ * The citation ref for one candidate, in the namespace the RECORD ITSELF establishes.
+ *
+ * THE ORDER IS THE ONE THE NAMESPACES ARE WORTH, not an order of preference for citing: a DOI is
+ * the identifier most catalogues cross-check, an ISBN names a book on its own, and an arXiv id names
+ * a preprint. A record that states none of them is still a source — a report, a working paper, a
+ * dataset — and it is identified by what this run's registry minted for it, which is the same
+ * identity the sentence, the citation and the bibliography share.
+ *
+ * @param hit - the candidate as the provider read it.
+ * @returns the ref, carrying its claimed title and authors so the identity check has something to
+ *   compare against.
+ */
+function refOf(hit: CollectionHit): LiteratureHit['ref'] {
+  const doi = hit.doi?.replace(/^https?:\/\/(dx\.)?doi\.org\//u, '')
+  const identified = doi !== undefined && doi !== ''
+    ? { kind: 'doi' as const, id: doi }
+    : hit.isbn !== undefined && hit.isbn !== ''
+      ? { kind: 'isbn' as const, id: hit.isbn }
+      : hit.arxivId !== undefined && hit.arxivId !== ''
+        ? { kind: 'arxiv' as const, id: hit.arxivId }
+        // NO EXTERNAL NAMESPACE: the source's own identity is the identifier, under `unknown` because
+        // this run established no namespace for it. That is a statement about the identifier, never
+        // about whether the work may be cited.
+        : { kind: 'unknown' as const, id: String(hit.literatureId) }
+  return { kind: identified.kind, id: identified.id, title: hit.title, authors: hit.authors }
 }
