@@ -214,4 +214,25 @@ describe('the revision panel reads the loop from the host', () => {
     const failure = await screen.findByText(new RegExp(en['revision.failed'].split('{')[0]))
     expect(failure.textContent).toContain('no revision root')
   })
+
+  it('says where each request was made, and invents no source for a record that states none', async () => {
+    // A REQUEST TYPED INTO THE CONVERSATION and one made in the panel are the same kind of fact, and the
+    // panel shows them side by side — so it has to say which is which, or a reader cannot tell whether
+    // they have already seen a request or whether somebody else made it. A record written before the
+    // field existed shows no badge: the panel was the only path then, but that is a fact about the
+    // build, not about the record in front of the reader.
+    const source = sourceOf([
+      revision({ requestId: 'req-chat', source: 'conversation' }),
+      revision({ requestId: 'req-before-the-field' }),
+      revision({ requestId: 'req-elsewhere', source: 'somewhere-else' }),
+    ])
+    render(createElement(RevisionPanel, { summary: toRunSummary(SUMMARY), t, revisions: source }))
+
+    expect(await screen.findByText(en['revision.source.conversation'])).toBeTruthy()
+    expect(screen.queryByText(en['revision.source.panel'])).toBeNull()
+    // A source this build was not taught is reported as the record stated it.
+    expect(screen.getByText(en['revision.source.other'].replace('{source}', 'somewhere-else'))).toBeTruthy()
+    // TWO OF THE THREE carry a source; the third carries none and therefore no badge.
+    expect(document.querySelectorAll('[data-research-revision-source]')).toHaveLength(2)
+  })
 })

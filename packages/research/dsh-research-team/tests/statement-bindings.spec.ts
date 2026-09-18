@@ -253,7 +253,7 @@ describe('what a section was asked for is part of the run', () => {
       }>
       proseRequestVersion: string
     }
-    expect(draft.proseRequestVersion).toBe('prose-request-v1')
+    expect(draft.proseRequestVersion).toBe('prose-request-v2')
     const ids = draft.proseRequests.map(entry => entry.sectionId)
     expect(ids).toContain('introduction')
     expect(ids.length).toBeGreaterThan(1)

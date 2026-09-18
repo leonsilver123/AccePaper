@@ -1,6 +1,8 @@
 /** T26 summary panel: the fixture/snapshot run-summary body (MOCK-labelled). */
 import { useState } from 'react'
 import type { PanelProps } from './shared.ts'
+import { stepNameOf } from '../../panels.ts'
+import { artifactName, packageCheckName } from '../record-vocabulary.ts'
 import css from '../ResearchView.module.css'
 
 /**
@@ -54,11 +56,13 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
           <p className={css.note}>{t('humanPending.note')}</p>
           <ul className={css.stepList}>
             {summary.humanPending.map(step => (
-              <li key={step.stepId} className={css.stepRow}>
+              <li key={step.stepId} className={css.stepRow} title={step.stepId}>
                 <span className={css.stepIndex}>{step.index}</span>
                 <span className={css.stepName}>
                   {step.name}
-                  <small>{step.stepId}</small>
+                  {/* WHAT THE STEP IS FOR, not the identifier it is keyed by: the identifier is on the
+                      row's own title, and the sentence is what a reader can act on. */}
+                  {step.purpose !== undefined && <small>{step.purpose}</small>}
                 </span>
                 <span className={css.stepMeta}>
                   <span className={`${css.tag} ${css.humanGate}`}>{t('step.humanGate')}</span>
@@ -96,13 +100,19 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
             // because a required check never ran says exactly that.
             const gate = summary.gates.find(entry => entry.stepId === step.stepId && !entry.passed)
             return (
-              <li key={step.stepId} className={css.stepRow}>
+              <li key={step.stepId} className={css.stepRow} title={step.stepId}>
                 <span className={css.stepIndex}>{step.index}</span>
                 <span className={css.stepName}>
                   {step.name}
-                  <small>{step.stepId} · {t('step.attempt', { n: step.attempt })}{step.humanGate ? ` · ${t('step.humanGate')}` : ''}</small>
+                  {step.purpose !== undefined && <small>{step.purpose}</small>}
                 </span>
                 <span className={css.stepMeta}>
+                  <span className={css.tag}>
+                    {t('step.attempt', { n: step.attempt })}
+                  </span>
+                  {step.humanGate && (
+                    <span className={`${css.tag} ${css.humanGate}`}>{t('step.humanGate')}</span>
+                  )}
                   {step.holdReason !== undefined && (
                     <span className={css.holdReason}>
                       {t(`step.holdReason.${step.holdReason}`)}
@@ -122,7 +132,13 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
                 </span>
                 {gate !== undefined && (
                   <span className={css.note} data-research-step-reason="">
-                    {t('step.gateReason', { component: gate.component, reason: gate.rationale })}
+                    {/* WHICH CHECK, BY NAME. This sentence used to carry the component letter — "check
+                        A did not pass" — which names a slot in the trinity and not a question anybody
+                        can answer. */}
+                    {t('step.gateReason', {
+                      component: t(`gate.component.${gate.component}`),
+                      reason: gate.rationale,
+                    })}
                   </span>
                 )}
               </li>
@@ -143,10 +159,18 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
             <li
               key={artifact.slug}
               className={`${css.artifactRow} ${artifact.invalidated ? css.invalidated : ''}`}
+              title={artifact.slug}
             >
-              <div className={css.slug}>{artifact.slug}</div>
+              {/* WHAT IT IS CALLED, not the slug the registry keys on; the slug is the row's title, so
+                  whoever has to quote it still can. The line under it names the step that produced it —
+                  `artifact.summary` is composed by the view from that step's identifier, so showing it
+                  put an identifier where a description belongs. */}
+              <div className={css.slug}>{artifactName(artifact.slug, t)}</div>
               <div className={css.summary}>
-                {artifact.summary}
+                {t('artifact.producedBy', {
+                  step: stepNameOf(summary, artifact.producerStepId),
+                  attempt: String(artifact.producerAttemptId),
+                })}
                 {artifact.invalidated && ` (${t('artifacts.invalidated')})`}
               </div>
             </li>
@@ -158,9 +182,9 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
         <h3 className={css.sectionTitle}>{t('section.gates')}</h3>
         <ul className={css.gateList}>
           {summary.gates.map((gate, i) => (
-            <li key={`${gate.stepId}-${gate.component}-${i}`} className={css.gateRow}>
+            <li key={`${gate.stepId}-${gate.component}-${i}`} className={css.gateRow} title={gate.stepId}>
               <span className={`${css.tag} ${css[`gate-${gate.outcome}`]}`}>
-                {t('gate.component', { component: gate.component })}: {t(`gate.outcome.${gate.outcome}`)}
+                {t(`gate.component.${gate.component}`)}: {t(`gate.outcome.${gate.outcome}`)}
               </span>
               <div className={css.summary}>{gate.rationale}</div>
             </li>
@@ -173,11 +197,13 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
           <h3 className={css.sectionTitle}>{t('section.abstentions')}</h3>
           <ul className={css.abstentionList}>
             {summary.abstentions.map((a, i) => (
-              <li key={`${a.stepId}-${a.component}-${i}`} className={css.abstentionRow}>
+              <li key={`${a.stepId}-${a.component}-${i}`} className={css.abstentionRow} title={a.stepId}>
                 <span className={`${css.tag} ${css['gate-abstained']}`}>
-                  {a.stepId} · {t('gate.component', { component: a.component })}
+                  {stepNameOf(summary, a.stepId)} · {t(`gate.component.${a.component}`)}
                 </span>
                 <div className={css.summary}>
+                  {/* THE REASON CODE IS AN AUDIT CODE, and it is labelled as one: `DSH_GATE_…` is what
+                      an engineer searches the log for, not an explanation a researcher reads. */}
                   {t('abstention.reason', { code: a.reasonCode })} · {a.recordedAt}
                 </div>
               </li>
@@ -194,7 +220,7 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
               <li key={i} className={css.degradationRow}>
                 <span className={`${css.tag} ${css['s-gated']}`}>
                   {t(`degradation.kind.${d.kind}`)}
-                  {d.stepId !== undefined ? ` · ${d.stepId}` : ''}
+                  {d.stepId !== undefined ? ` · ${stepNameOf(summary, d.stepId)}` : ''}
                 </span>
                 <div className={css.summary}>{d.message}</div>
               </li>
@@ -254,7 +280,9 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
                   <ul className={css.list} data-research-package-checks="">
                     {deliverable.checks?.map(check => (
                       <li key={check.code} className={css.row} data-research-package-check={check.code}>
-                        <span className={css.name}>{check.code}</span>
+                        {/* WHICH CONDITION, IN THE READER'S WORDS. `no-refused-sections` is the answer
+                            to a question about their manuscript, and the code alone is a key. */}
+                        <span className={css.name}>{packageCheckName(check.code, t)}</span>
                         <span className={css.note}>
                           {check.passed ? t('deliverables.checkPassed') : check.detail}
                         </span>

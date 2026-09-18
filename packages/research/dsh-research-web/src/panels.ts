@@ -36,6 +36,27 @@ export function classifyArtifact(artifact: ArtifactView): ArtifactKind {
   return 'other'
 }
 
+/**
+ * A step's own name, by the identifier the run records.
+ *
+ * THE READER IS GIVEN THE NAME, NOT THE IDENTIFIER. Every panel that has to say which step something
+ * belongs to used to print the identifier — `D3-writing`, `s01` — which is the one word about a step a
+ * researcher cannot read. The name comes from the run's own catalogue, so this is a lookup and not a
+ * second list of steps that could drift from it.
+ *
+ * An identifier with no step behind it is returned as itself: a run whose projection does not carry a
+ * step still has to be able to show what its artifacts say they came from.
+ *
+ * @param summary - the run whose catalogue to read.
+ * @param stepId - the identifier to name.
+ * @returns the step's name, or the identifier when the run names no step for it.
+ */
+export function stepNameOf(summary: RunSummary, stepId: string): string {
+  const step = summary.steps.find(candidate => candidate.stepId === stepId)
+  if (step === undefined) return stepId
+  return step.name.trim().length > 0 ? step.name : stepId
+}
+
 /** One phase-grouped pipeline slice consumed by the Pipeline panel. */
 export interface PipelinePhaseSlice {
   readonly phase: Phase
@@ -97,6 +118,8 @@ export interface AdversarialSlice {
     readonly index: number
     readonly name: string
     readonly status: StepView['status']
+    /** What the step is for, when the host named it: the reader's sentence, not the identifier. */
+    readonly purpose?: string
   }>
   /** Component-A gate verdicts recorded on the run. */
   readonly gates: ReadonlyArray<{
@@ -105,10 +128,18 @@ export interface AdversarialSlice {
     readonly outcome: GateHistoryEntry['outcome']
     readonly rationale: string
   }>
-  /** Artifacts produced by the adversarial-touched steps. */
+  /**
+   * Artifacts produced by the adversarial-touched steps.
+   *
+   * IT HANDS OVER WHO PRODUCED EACH ONE rather than a sentence about it: this module is locale-free by
+   * design (see the file header), so the view supplies the words. The string it used to carry was the
+   * one the view composes from the producer's IDENTIFIER (`produced by s05 (attempt 1)`), which put an
+   * identifier where a description belongs.
+   */
   readonly artifacts: ReadonlyArray<{
     readonly slug: string
-    readonly summary: string
+    readonly producerStepId: string
+    readonly producerAttemptId: number
   }>
   /** Component-A gate-abstention freeze records. */
   readonly abstentions: ReadonlyArray<AbstentionRecord>
@@ -136,6 +167,7 @@ export function selectAdversarial(summary: RunSummary): AdversarialSlice {
         index: step.index,
         name: step.name,
         status: step.status,
+        ...(step.purpose === undefined ? {} : { purpose: step.purpose }),
       })),
     gates: summary.gates
       .filter(gate => gate.component === 'A')
@@ -147,7 +179,11 @@ export function selectAdversarial(summary: RunSummary): AdversarialSlice {
       })),
     artifacts: summary.artifacts
       .filter(artifact => adversarialStepIds.has(artifact.producerStepId))
-      .map(artifact => ({ slug: artifact.slug, summary: artifact.summary })),
+      .map(artifact => ({
+        slug: artifact.slug,
+        producerStepId: artifact.producerStepId,
+        producerAttemptId: artifact.producerAttemptId,
+      })),
     abstentions: summary.abstentions.filter(record => record.component === 'A'),
   }
 }
@@ -170,13 +206,121 @@ export function selectArtifacts(
 }
 
 /** What a reader of the run on screen should do next. */
-export type NextActionKind = 'not-started' | 'running' | 'awaiting-human' | 'failed' | 'complete'
+export type NextActionKind =
+  | 'not-started'
+  | 'running'
+  | 'awaiting-human'
+  | 'blocked'
+  | 'failed'
+  | 'complete'
 
-/** The next action, and the counts its sentence needs. */
-export interface NextAction {
-  readonly kind: NextActionKind
-  /** Steps waiting for a human decision; 0 unless `kind` is `awaiting-human`. */
-  readonly pendingCount: number
+/**
+ * The checklists the engine's own review runs, as it names them.
+ *
+ * A CLOSED UNION, so the page cannot render a check name it has no words for: the record's raw
+ * identifier is kept inside {@link StepBlocker.evidence} either way, and `'unknown'` is a stated
+ * answer rather than a missing one. The engine may gain a check; a page that invented a translation
+ * for an identifier it does not know would be describing a question nobody asked.
+ */
+export type KnownCheckId = 'red-method' | 'red-stat' | 'red-citation' | 'red-claim'
+
+const KNOWN_CHECKS: ReadonlySet<string> = new Set<KnownCheckId>([
+  'red-method', 'red-stat', 'red-citation', 'red-claim',
+])
+
+/**
+ * Why a step's own check refused it.
+ *
+ * A READER NEEDS THE REASON, NOT THE VERDICT. The word `blocked` on its own is what told a
+ * researcher nothing: a real run stopped at `D3-writing` because that step left the reference list
+ * empty while the outline declared it, and the page did not even report the refusal — it reported
+ * the run as still working. This carries the refusing check and the finding it recorded, so the page
+ * can say which question was asked and what the answer was.
+ */
+export interface StepBlocker {
+  /** The judgement component that refused it (the trinity's A, B or C). */
+  readonly component: TrinityComponent
+  /** The checklist that refused, or `'unknown'` for one this build cannot name. */
+  readonly check: KnownCheckId | 'unknown'
+  /**
+   * The finding, in the shapes this build can restate in the reader's own words.
+   *
+   * `empty-sections` is the shape that stopped the real run this exists for: a section the outline
+   * declares whose body came out empty. Anything this build cannot restate is `other`, and the page
+   * then shows the record's own sentence rather than a translation somebody made up. That is the
+   * honest split: restating a finding is a claim about what the engine said, and a wrong restatement
+   * is worse than the original text.
+   */
+  readonly finding:
+    | { readonly kind: 'empty-sections'; readonly sections: ReadonlyArray<string> }
+    | { readonly kind: 'other' }
+  /**
+   * The record's own words, verbatim.
+   *
+   * It is what the page shows when {@link StepBlocker.finding} is `other`, and what the reader can
+   * always open to check any restatement against its source.
+   */
+  readonly evidence: string
+}
+
+/**
+ * The next action, and the counts its sentence needs.
+ *
+ * A DISCRIMINATED UNION rather than one shape with optional fields: a refusal and a failure are
+ * always ABOUT a step, and a page that renders "something was refused" without naming what is a page
+ * that sent the reader to look through sixteen rows. The compiler enforces the difference.
+ */
+export type NextAction =
+  | {
+    readonly kind: 'not-started' | 'awaiting-human' | 'running' | 'complete'
+    readonly pendingCount: number
+    /** The step in flight, for `running`, when the projection names one. */
+    readonly step?: StepView
+  }
+  | {
+    readonly kind: 'blocked'
+    readonly pendingCount: 0
+    readonly step: StepView
+    /** Absent when the run recorded no refusing verdict for this step. */
+    readonly blocker?: StepBlocker
+  }
+  | {
+    readonly kind: 'failed'
+    readonly pendingCount: 0
+    readonly step: StepView
+  }
+
+/** The shape the engine's own review leaves in a refusing gate verdict's evidence string. */
+const FAILED_CHECK = /check\(s\) failed:\s*([a-z][a-z-]*)/u
+
+/** The one finding this build restates, as the engine words it. */
+const EMPTY_SECTIONS = /sections with an empty body:\s*([^)]+)/u
+
+/**
+ * Read a refusing gate verdict into what the page shows.
+ *
+ * THE RECORD IS A SENTENCE, NOT A STRUCTURE, and this is the cost stated rather than hidden: the
+ * engine writes the refusal into `evidence` as prose, so every field here is read back out of that
+ * prose. Two regexes, each matching one shape the engine actually emits; anything else keeps the
+ * whole sentence and says so, which is why an unrecognised refusal still reaches the reader.
+ *
+ * @param verdict - the refusing gate history entry.
+ * @returns the blocker, with the check named when the record named one.
+ */
+export function blockerOfVerdict(verdict: GateHistoryEntry): StepBlocker {
+  const failed = FAILED_CHECK.exec(verdict.evidence)?.[1]
+  const empty = EMPTY_SECTIONS.exec(verdict.evidence)?.[1]
+  return {
+    component: verdict.component,
+    check: failed !== undefined && KNOWN_CHECKS.has(failed) ? failed as KnownCheckId : 'unknown',
+    finding: empty === undefined
+      ? { kind: 'other' }
+      : {
+        kind: 'empty-sections',
+        sections: empty.split(',').map(section => section.trim()).filter(section => section.length > 0),
+      },
+    evidence: verdict.evidence,
+  }
 }
 
 /**
@@ -184,23 +328,48 @@ export interface NextAction {
  *
  * Ordered by what actually BLOCKS the reader. Demo data outranks everything: while the page shows the
  * bundled snapshot there is no run to act on, whatever states the demo happens to contain. A failed
- * step then outranks a human wait — a run that stopped on an error is not one a person can approve —
- * and a human wait outranks work still in flight, because the run cannot leave the gate without a
+ * step then outranks the rest — a run that stopped on an error is not one a person can approve.
+ *
+ * A BLOCKED STEP OUTRANKS A HUMAN WAIT, and this kind did not exist here before. `blocked` was absent
+ * from this union, so a run whose step its own check had refused fell through to `running` — the
+ * steps after it never ran, so the `pending` count was non-zero — and the page told the researcher
+ * the run was still working. That is the one reading this selector must never produce: a refusal is
+ * terminal until somebody changes the cause upstream, and a person told to wait for a run that has
+ * already stopped waits forever.
+ *
+ * A human wait then outranks work still in flight, because the run cannot leave the gate without a
  * decision.
  *
  * @param summary - the flattened run summary.
- * @returns the state, plus the count the copy needs.
+ * @returns the state, the count the copy needs, and the step and blocker it is about when it is.
  */
 export function selectNextAction(summary: RunSummary): NextAction {
   if (summary.isMock) return { kind: 'not-started', pendingCount: 0 }
-  if (summary.steps.some(step => step.status === 'failed' || step.executeError !== undefined)) {
-    return { kind: 'failed', pendingCount: 0 }
+  const failed = summary.steps.find(step => step.status === 'failed' || step.executeError !== undefined)
+  if (failed !== undefined) return { kind: 'failed', pendingCount: 0, step: failed }
+  const blocked = summary.steps.find(step => step.status === 'blocked')
+  if (blocked !== undefined) {
+    // THE VERDICT THAT REFUSED IT, not the first one ever recorded: a step driven twice has a
+    // verdict per attempt, and the reader needs the one that left it blocked.
+    const verdict = summary.gates
+      .filter(gate => gate.stepId === blocked.stepId && gate.outcome === 'blocked')
+      .at(-1)
+    return {
+      kind: 'blocked',
+      pendingCount: 0,
+      step: blocked,
+      ...(verdict === undefined ? {} : { blocker: blockerOfVerdict(verdict) }),
+    }
   }
   if (summary.humanPending.length > 0) {
     return { kind: 'awaiting-human', pendingCount: summary.humanPending.length }
   }
   if (summary.byStatus.pending > 0 || summary.byStatus.in_progress > 0) {
-    return { kind: 'running', pendingCount: 0 }
+    // The step actually in flight, when the run says: a reader told only "a run is going" cannot
+    // tell which of sixteen steps is taking the time. A run whose projection carries no in-flight
+    // step falls back to the count-free sentence the page already had.
+    const inFlight = summary.steps.find(step => step.status === 'in_progress')
+    return { kind: 'running', pendingCount: 0, ...(inFlight === undefined ? {} : { step: inFlight }) }
   }
   return { kind: 'complete', pendingCount: 0 }
 }

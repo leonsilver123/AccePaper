@@ -18,7 +18,9 @@ import {
   buildCandidate, candidateHashOf, createRevisionRequest, readRevision, reviewCandidate,
   revisionStoreOf, sectionHashOf, sectionsOf, writeCandidate, writeRevisionRequest, writeReview,
 } from '../src/manuscript-revision.ts'
-import type { RevisionCandidateRecord, RevisionStore } from '../src/manuscript-revision.ts'
+import type {
+  RevisionCandidateRecord, RevisionRequestRecord, RevisionStore,
+} from '../src/manuscript-revision.ts'
 
 const MANUSCRIPT = [
   '# A study',
@@ -56,11 +58,15 @@ afterEach(() => { rmSync(directory, { recursive: true, force: true }) })
  * It does NOT write: a helper that wrote would race the directory teardown, and a test that needs
  * the file on disk writes it and awaits, which is also what the service does.
  */
-function makeRequest(requestId = 'req-1') {
+function makeRequest(
+  requestId = 'req-1',
+  source: RevisionRequestRecord['source'] = 'panel',
+) {
   const request = createRevisionRequest({
     requestId,
     runId: 'run-1',
     stepId: 'E2-submit',
+    source,
     projectRevision: 7,
     instruction: 'tighten the claim in the results',
     operator: 'operator',
@@ -72,6 +78,16 @@ function makeRequest(requestId = 'req-1') {
   })
   return request
 }
+
+describe('a request says where it was made', () => {
+  it('carries the source the caller stated, for both places a person can ask', () => {
+    // A request typed into the conversation and one made in the panel are the same KIND of fact — a
+    // change somebody asked for — and differ only in provenance, which a reader of the record cannot
+    // reconstruct from the instruction text.
+    expect(makeRequest().source).toBe('panel')
+    expect(makeRequest('req-from-chat', 'conversation').source).toBe('conversation')
+  })
+})
 
 describe('a request names the version it read', () => {
   it('splits the manuscript by its own headings and hashes each body', () => {

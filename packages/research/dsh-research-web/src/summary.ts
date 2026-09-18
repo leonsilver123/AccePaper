@@ -93,6 +93,16 @@ export interface StepView {
   readonly index: number
   readonly phase: Phase
   readonly name: string
+  /**
+   * What this step is for, in the host's own words.
+   *
+   * The reader this view is for is the researcher, not the pipeline's author: a row that reads
+   * `D3-writing · 受阻` tells them nothing they can act on, while the sentence beside it —
+   * that this is the step which drafts the sections and assembles the reference list — is what
+   * makes the refusal legible. Absent when the host named none, and the row then says nothing
+   * about it rather than filling the gap with a guess.
+   */
+  readonly purpose?: string
   /** Runtime status of the step. */
   readonly status: StepStatus
   /** Current attempt number (1-based; 0 when never started). */

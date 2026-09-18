@@ -40,12 +40,31 @@ export interface RevisionSectionBasis {
   readonly basisHash: string
 }
 
+/**
+ * Where a request to change the manuscript was made.
+ *
+ * `panel` — the revision controls in the research panel; `conversation` — the person told the agent in
+ * the chat and the agent recorded it. The two are the same KIND of fact (a change somebody asked for)
+ * and differ only in provenance, which is what a reader of the record needs and cannot reconstruct
+ * from the instruction text.
+ */
+export type RevisionSource = 'panel' | 'conversation'
+
 /** A person's request to change named sections of the manuscript. */
 export interface RevisionRequestRecord {
   readonly requestId: string
   readonly runId: string
   /** The gate step the request was made at. */
   readonly stepId: string
+  /**
+   * Where the person made the request.
+   *
+   * REQUIRED, so every record written from now on says which place it came from. A record written
+   * before this field existed carries none, and a reader then shows no provenance rather than
+   * inferring one — the panel was the only path then, but "was the only path" is a fact about the
+   * build, not about the record in front of the reader.
+   */
+  readonly source: RevisionSource
   /** The project revision the person was reading. */
   readonly projectRevision: number
   /**
@@ -201,6 +220,8 @@ export function createRevisionRequest(input: {
   readonly requestId: string
   readonly runId: string
   readonly stepId: string
+  /** Which place the person made the request in. */
+  readonly source: RevisionSource
   readonly projectRevision: number
   readonly instruction: string
   readonly operator: string
@@ -214,6 +235,7 @@ export function createRevisionRequest(input: {
     requestId: input.requestId,
     runId: input.runId,
     stepId: input.stepId,
+    source: input.source,
     projectRevision: input.projectRevision,
     manuscriptVersion: input.manuscriptVersion,
     instruction: input.instruction,

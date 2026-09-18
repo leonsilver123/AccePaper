@@ -312,7 +312,7 @@ describe('the approval panel decides nothing by itself', () => {
     fireEvent.click(screen.getByRole('button', { name: en['tab.summary'] }))
 
     expect(screen.getByText(en['step.gateReason']
-      .replace('{component}', 'A')
+      .replace('{component}', en['gate.component.A'])
       .replace('{reason}', 'required check(s) reported not_evaluated: red-stat — a check that did not run has found nothing')))
       .toBeTruthy()
   })

@@ -162,6 +162,30 @@ describe('runStatusOf', () => {
     expect(summary.steps[1]?.humanGate).toBe(true)
   })
 
+  it('carries what the host says a step is FOR, and invents nothing when it says none', () => {
+    // THE READER IS THE RESEARCHER, NOT THE PIPELINE'S AUTHOR. A row that reads
+    // `D3-writing · 受阻` is not actionable; the sentence beside it — that this is the step which
+    // drafts the sections and assembles the reference list — is what makes the refusal legible.
+    // The sentence is the HOST'S OWN and travels through untouched, because a second copy of a
+    // sixteen-step definition in this package is a copy that drifts.
+    const payload = snapshot()
+    const first = payload.catalog[0]
+    const stated: WireRunSnapshot = {
+      ...payload,
+      catalog: [
+        { ...first, purpose: '检索本领域的近期文献,看清已经做到了什么、还缺什么' },
+        ...payload.catalog.slice(1),
+      ],
+    }
+    expect(buildSummary(summaryInputFrom(stated)).steps[0]?.purpose)
+      .toBe('检索本领域的近期文献,看清已经做到了什么、还缺什么')
+
+    // ABSENT STAYS ABSENT. A host built before the field existed sends none, and the row is then
+    // rendered without it rather than with a substitute this package composed — so the check is
+    // that the key is not there at all, not that it holds an empty string.
+    expect(Object.hasOwn(buildSummary(summaryInputFrom(payload)).steps[0], 'purpose')).toBe(false)
+  })
+
   it('carries each step\'s recorded kind, which is what says where a run\'s text came from', () => {
     const input = summaryInputFrom(snapshot())
     // `kind` has been on the wire since the driver began recording it. The view used to read only

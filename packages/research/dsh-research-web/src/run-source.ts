@@ -94,6 +94,16 @@ export interface WireStepCatalogEntry {
   readonly index: number
   readonly phase: string
   readonly name: string
+  /**
+   * What the step is for, in the host's own words.
+   *
+   * OPTIONAL IN THE TWIN because a host built before the field existed does not send it, and the
+   * view then shows the step without that one sentence rather than inventing one. The host's own
+   * catalogue always carries it (see `ResearchStepCatalogEntry` in `dsh-research-team`), which is
+   * the only place this sentence is written: a second copy here would drift from the sixteen-step
+   * definition this package deliberately does not depend on.
+   */
+  readonly purpose?: string
   readonly humanGate: boolean
   readonly gate: ReadonlyArray<string>
 }
@@ -260,6 +270,13 @@ export interface WireRevisionView {
   readonly requestId: string
   readonly instruction: string
   readonly operator: string
+  /**
+   * Where the person made the request, or absent on a record that states none.
+   *
+   * A PLAIN STRING IN THE TWIN, not a union: a host may name a source this build has not been taught,
+   * and the view then reports it as unstated rather than folding it into one it knows.
+   */
+  readonly source?: string
   readonly projectRevision: number
   /** The manuscript version the request read; an acceptance is checked against this. */
   readonly manuscriptVersion: number
@@ -528,6 +545,9 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
       index: entry.index,
       phase: asPhase(entry.phase),
       name: entry.name,
+      // The host's own sentence about what this step does, carried through untouched. Absent stays
+      // absent: a host that names none leaves the row without it rather than with a substitute.
+      ...(entry.purpose === undefined ? {} : { purpose: entry.purpose }),
       // One named rule for the two things called `status`; see `resolveStepStatus`.
       status: resolveStepStatus(outcome, state).status,
       attempt: state?.attempt ?? outcome?.attemptId ?? 0,

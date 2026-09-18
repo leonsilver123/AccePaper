@@ -34,7 +34,7 @@ const record = join(root, 'commands', `${commandId}.json`)
 const ctx = new Context()
 for (const name of ['agents', 'sessions', 'sessionPersistence', 'subagents']) ctx.provide(name, {})
 ctx.provide('sessionProjections', { register: () => () => {} })
-ctx.provide('tools', { guard: () => () => {} })
+ctx.provide('tools', { guard: () => () => {}, register: () => () => {} })
 
 const engine: { snapshotDirectory?: string } = {}
 Object.defineProperty(engine, 'snapshotDirectory', {

@@ -671,7 +671,7 @@ const D3_PRODUCER = 'fixture:writing'
  * of each passage) is a different set of facts from what a later one might, and a reader comparing
  * two runs has to be able to tell which they are holding.
  */
-const PROSE_REQUEST_VERSION = 'prose-request-v1'
+const PROSE_REQUEST_VERSION = 'prose-request-v2'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
@@ -1225,6 +1225,23 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     )
   }
 
+  // A LIVE CORPUS THAT ANSWERED AND MATCHED NOTHING IS NOT A LANDSCAPE EITHER, and the doctrine
+  // above only reached the outage. A retrieval that SUCCEEDS with zero hits passed A1, and the
+  // emptiness surfaced five steps later at D3-writing as a blocked step whose stated reason was a
+  // missing references section: writing a bibliography is the CONSEQUENCE, and the cause — this
+  // topic matched nothing in the deployment's corpus — was in no artifact at all. The remedies are
+  // different, so the two facts must not read alike: an outage is the network, and this is the topic
+  // or the corpus the deployment names.
+  if (liveCorpus && artifact.hits.length === 0) {
+    throw new Error(
+      `[A1-landscape] the live catalogue answered for the topic "${artifact.query.topic}" and matched`
+      + ' no records at all — the retrieval succeeded with an empty corpus (NOT an outage, so the'
+      + ' network is not what to look at). Either the topic as worded matches nothing in the corpus'
+      + ' this deployment names, or that corpus does not hold this literature; a landscape built from'
+      + ' no records would be invented (NO DEFAULT PASS)',
+    )
+  }
+
   // A1's second product is the gap analysis, and it must derive from the records
   // just retrieved. Without a writer it stays the fixture gap so offline runs keep
   // their deterministic output; with one, the model reads the retrieved literature.
@@ -1271,6 +1288,12 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         topic: artifact.query.topic,
         outcome: artifact.outcome,
         hitCount: artifact.hits.length,
+        // THE PRE-CAP COUNT TRAVELS WITH THE HITS. The tool derives `truncated` from the adapter's
+        // own total, and this artifact dropped it, so a run's record could not tell "the catalogue
+        // answered and matched nothing" apart from "the catalogue answered with matches and the
+        // adapter's filters dropped every one of them" — the ambiguity that made one real incident
+        // undiagnosable after the fact, five steps downstream from the retrieval that caused it.
+        truncated: artifact.truncated,
         hits: artifact.hits,
         corpus: liveCorpus ? 'live-catalogue' : 'synthetic-fixture',
         note: liveCorpus
@@ -2898,7 +2921,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // withholding the result is how a plausible number gets invented, so the request is not
         // made and the absence is recorded instead.
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
-        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
+        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. A sentence that cites a source states what that source establishes and nothing further — not a conclusion the passage does not itself draw, and not a generalization beyond the case it reports; when what you want to say is this paper's own claim rather than a source's finding, write it as the paper's claim and leave it uncited. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
         proseRequests.push({
           sectionId: h.id,
           channel: proseLabelling(writer).source,

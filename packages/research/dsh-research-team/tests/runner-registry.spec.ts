@@ -38,7 +38,7 @@ import {
   tagArtifact,
 } from '../src/runner/registry.ts'
 import type { ExecCtx, RunContext, Truthfulness } from '../src/runner/registry.ts'
-import type { ResearchRunSnapshot } from '../src/types.ts'
+import type { ResearchRunSnapshot, ResearchStepCatalogEntry } from '../src/types.ts'
 import type { RunResult } from '../src/runner/types.ts'
 import { MEASURED_METRIC, experimentStudy } from '../src/runner/platoon-sim.ts'
 import { CASE_PACK_INPUT_SLUGS } from '../src/runner/case-pack.ts'
@@ -154,6 +154,14 @@ describe('the Remote snapshot shape is frozen', () => {
       'stepId' | 'status' | 'attemptId' | 'kind' | 'producer' | 'outputSlugs'
       | 'artifacts' | 'verdicts' | 'usedRealTool' | 'readSlugs'
       | 'executeStatus' | 'executeError'
+    >()
+    // THE STEP CATALOGUE IS A SECOND SHAPE ON THE SAME BOUNDARY, and it was not pinned. The view
+    // reads each step's display name and what it is for from here; a field added, renamed or
+    // dropped on this side and not in the view's twin leaves every step in the product without the
+    // sentence that explains it, while both sides' tests stay green. That is the same invisible
+    // failure this tripwire already exists for, on the shape it was not watching.
+    expectTypeOf<keyof ResearchStepCatalogEntry>().toEqualTypeOf<
+      'id' | 'index' | 'phase' | 'name' | 'purpose' | 'humanGate' | 'gate'
     >()
   })
 })

@@ -141,7 +141,7 @@ async function boot(options: {
     },
   })
   ctx.provide('subagents', {})
-  ctx.provide('tools', { guard: () => () => {} })
+  ctx.provide('tools', { guard: () => () => {}, register: () => () => {} })
   // The research engine the service reads its deployment facts from. This is the seam the real
   // deployment fills from cordis.yml, so a test that fills it is testing the production path.
   // ONE mutable object, because the service reads this per save — which is what makes "the

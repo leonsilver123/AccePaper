@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { LiteratureSearchAdapter, LiteratureSearchOutcome } from '@deepseek-ai/dsh-research-tools'
 
@@ -233,37 +233,28 @@ describe('a refused section makes the run not ready', () => {
     expect(readiness.profileEligible).toBe(true)
   })
 
-  it('refuses a section end to end when the run retrieved no records at all', async () => {
-    // THE FALSIFICATION. A retrieval that succeeded and found nothing is a real state — the corpus
-    // is empty, so there are no references to list — and before this change D3 wrote the built-in
-    // sentence describing that and produced a complete-looking paper.
+  it('refuses the retrieval end to end when a live corpus matched nothing, rather than blocking five steps later on the references section', async () => {
+    // THE MISATTRIBUTION THIS CLOSES. A retrieval that SUCCEEDED and matched nothing is a real state
+    // — the corpus holds nothing for this topic — and it used to pass A1: the emptiness surfaced at
+    // D3-writing as a blocked step whose stated reason was a missing references section. Writing a
+    // bibliography is the CONSEQUENCE of that, and A1 is the step that knows the cause, so A1 is
+    // where the run stops and what it says is the cause rather than the symptom.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, {
       evidenceProfile: 'production',
       toolDeps: { literatureAdapter: emptyAdapter() },
     })
-    const draft = getArtifact(store, run.runId, 'draft') as
-      | { refusedSections?: ReadonlyArray<string>; sections?: ReadonlyArray<{ id: string; bodyText: string }> }
-      | undefined
-    expect(draft?.refusedSections).toEqual(['references'])
-    // Not filled, and not written by the model either: an empty body is the visible hole.
-    expect(draft?.sections?.find(section => section.id === 'references')?.bodyText).toBe('')
-    // Every other section still had its evidence, so only the one is missing.
-    expect(draft?.sections?.find(section => section.id === 'results')?.bodyText).not.toBe('')
-
-    // THE HOLE STOPS THE RUN RATHER THAN REACHING A READER — and it is the A GATE that stops it,
-    // which is the stronger of the two guards available. `red-method` reviews the manuscript this
-    // step produced, sees that a section the outline declares has an empty body, and refutes; the
-    // step is `blocked` and the run ends there. `assembleManuscript`'s own
-    // `DSH_MANUSCRIPT_EMPTY_SECTION` guard is still behind it and never fires, because nothing with
-    // an empty section reaches E1.
-    expect(run.steps.at(-1)?.stepId).toBe('D3-writing')
-    expect(run.steps.find(step => step.stepId === 'D3-writing')?.verdicts.A).toBe('blocked')
-    const evidence = String(getRunSnapshot(store, run.runId).steps['D3-writing']?.gateResults.A?.evidence)
-    expect(evidence).toContain('red-method=refute')
+    expect(run.steps.map(step => step.stepId)).toEqual(['A1-landscape'])
+    const a1 = run.steps[0]
+    expect(a1?.status).toBe('in_progress')
+    // The topic is named, and the refusal says which remedy this is NOT: the catalogue answered, so
+    // the network is not what a reader should look at.
+    expect(a1?.executeError).toContain(DEFAULT_PLAN.direction)
+    expect(a1?.executeError).toContain('NOT an outage')
+    expect(getArtifact(store, run.runId, 'landscape-map')).toBeUndefined()
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
 
-    // And readiness reports the run it actually is: eligible, and not ready.
+    // And readiness reports the run it actually is: eligible, and not ready, with no manuscript.
     const readiness = readinessOfRun(store, run.runId, 'production')
     expect(readiness.ready).toBe(false)
     expect(readiness.manuscriptProduced).toBe(false)

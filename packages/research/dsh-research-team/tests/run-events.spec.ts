@@ -69,7 +69,7 @@ async function boot(options: {
   for (const name of ['agents', 'sessions', 'sessionPersistence']) ctx.provide(name, {})
   ctx.provide('sessionProjections', { register: () => () => {} })
   ctx.provide('subagents', {})
-  ctx.provide('tools', { guard: () => () => {} })
+  ctx.provide('tools', { guard: () => () => {}, register: () => () => {} })
   const engine: {
     snapshotDirectory?: string
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }

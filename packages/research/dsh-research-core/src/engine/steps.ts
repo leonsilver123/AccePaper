@@ -18,8 +18,8 @@ import type { Phase, StepDefinition, TrinityComponent } from './types.ts'
 export const STEPS: readonly StepDefinition[] = [
   // ── Phase A: 定位 ─────────────────────────────────────────────
   {
-    id: 'A1-landscape', index: 1, phase: 'A', name: '版图',
-    purpose: '扫描领域近期文献,识别研究缺口',
+    id: 'A1-landscape', index: 1, phase: 'A', name: '文献调研',
+    purpose: '检索本领域的近期文献,看清已经做到了什么、还缺什么',
     inputs: ['domain-direction'],
     outputs: ['landscape-map', 'gap-list'],
     gate: ['B'],
@@ -27,8 +27,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'A2-claim', index: 2, phase: 'A', name: 'claim 构造',
-    purpose: '构造可证伪的中心 claim',
+    id: 'A2-claim', index: 2, phase: 'A', name: '提出主张',
+    purpose: '提出一个能被实验推翻的中心主张,并写明它预测什么',
     inputs: ['landscape-map', 'gap-list'],
     outputs: ['claim', 'falsifiable-prediction'],
     gate: ['A', 'C'],
@@ -36,8 +36,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'A3-agenda', index: 3, phase: 'A', name: '议程',
-    purpose: '定义贡献清单与研究议程',
+    id: 'A3-agenda', index: 3, phase: 'A', name: '研究议程',
+    purpose: '列出这项研究打算给出哪些贡献,以及先后顺序',
     inputs: ['claim'],
     outputs: ['agenda', 'contribution-list'],
     gate: ['A'],
@@ -45,8 +45,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'A4-venue', index: 4, phase: 'A', name: '选刊',
-    purpose: '选定目标期刊(如 TRC),匹配 scope/录用模式',
+    id: 'A4-venue', index: 4, phase: 'A', name: '选定期刊',
+    purpose: '选定目标期刊,核对它的收稿范围与投稿要求',
     // `landscape-map` carries the venues the retrieved records were published in,
     // which is the only grounded basis a venue choice has. Without it declared as an
     // input, A4 could not read the corpus at all and had to emit a literal venue.
@@ -58,8 +58,8 @@ export const STEPS: readonly StepDefinition[] = [
   },
   // ── Phase B: 构造 ─────────────────────────────────────────────
   {
-    id: 'B1-method', index: 5, phase: 'B', name: '方法推导',
-    purpose: '由 claim 推导方法,产出可测预测',
+    id: 'B1-method', index: 5, phase: 'B', name: '确定方法',
+    purpose: '由主张推导出可执行的方法,并给出可以测量的预测',
     inputs: ['claim', 'falsifiable-prediction'],
     outputs: ['method-spec', 'method-predictions'],
     gate: ['A', 'C'],
@@ -67,8 +67,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'B2-data', index: 6, phase: 'B', name: '数据',
-    purpose: '获取/清洗数据,产出数据画像与 provenance',
+    id: 'B2-data', index: 6, phase: 'B', name: '准备数据',
+    purpose: '准备实验数据,并记录它从哪来、经过了什么处理',
     inputs: ['method-spec'],
     outputs: ['dataset', 'data-profile'],
     gate: ['B'],
@@ -76,8 +76,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'B3-baseline', index: 7, phase: 'B', name: 'baseline',
-    purpose: '建立 baseline 并对照 SOTA',
+    id: 'B3-baseline', index: 7, phase: 'B', name: '对照基线',
+    purpose: '建立对照基线,并与本领域目前最好的做法比较',
     inputs: ['method-spec', 'dataset'],
     outputs: ['baseline-results', 'sota-comparison'],
     gate: ['B'],
@@ -86,8 +86,8 @@ export const STEPS: readonly StepDefinition[] = [
   },
   // ── Phase C: 迭代 ─────────────────────────────────────────────
   {
-    id: 'C1-mvp', index: 8, phase: 'C', name: 'MVP',
-    purpose: '最小可行实验,对核心预测给出裁决',
+    id: 'C1-mvp', index: 8, phase: 'C', name: '首次实验',
+    purpose: '跑通最小可行的一次实验,判定核心预测成立还是不成立',
     inputs: ['method-spec', 'dataset'],
     // `result-version` is what every later step measures against. The study's numbers used to be
     // recomputed by each consumer — the C gate, D1, D3, D4 and E1 each ran the simulation again —
@@ -100,8 +100,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'C2-trinity-loop', index: 9, phase: 'C', name: '三合一循环',
-    purpose: '判断三件套迭代收敛',
+    id: 'C2-trinity-loop', index: 9, phase: 'C', name: '三方会审',
+    purpose: '让三道理性检查同时认可,判定结论是否已经收敛',
     inputs: ['mvp-results', 'baseline-results', 'result-version'],
     outputs: ['converged-verdict'],
     gate: ['A', 'B', 'C'],
@@ -109,8 +109,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'C3-boundary', index: 10, phase: 'C', name: '边界',
-    purpose: '探边界/消融,测试方法适用域',
+    id: 'C3-boundary', index: 10, phase: 'C', name: '边界实验',
+    purpose: '做拆解与边界实验,找出方法在什么条件下不再成立',
     inputs: ['converged-verdict', 'result-version'],
     outputs: ['ablation-results', 'boundary-map'],
     gate: ['C'],
@@ -119,8 +119,8 @@ export const STEPS: readonly StepDefinition[] = [
   },
   // ── Phase D: 论证 ─────────────────────────────────────────────
   {
-    id: 'D1-figure-map', index: 11, phase: 'D', name: '图表映射',
-    purpose: '结果→图表映射(数据图/三线表/路线图)',
+    id: 'D1-figure-map', index: 11, phase: 'D', name: '规划图表',
+    purpose: '把结果规划成论文里要用的图、表与路线图',
     inputs: ['converged-verdict', 'ablation-results', 'result-version'],
     outputs: ['figure-plan'],
     gate: ['B'],
@@ -128,8 +128,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'D2-framework', index: 12, phase: 'D', name: '框架',
-    purpose: '论文框架/大纲',
+    id: 'D2-framework', index: 12, phase: 'D', name: '搭框架',
+    purpose: '搭出论文的章节结构与大纲',
     // `method-spec` is read by this step's executor and was not declared, so the dependency graph
     // did not contain the edge. That is the difference between "the closure is complete" and "the
     // closure happens to cover this case": with the edge undeclared, nothing could prove that
@@ -142,7 +142,7 @@ export const STEPS: readonly StepDefinition[] = [
   },
   {
     id: 'D3-writing', index: 13, phase: 'D', name: '写作',
-    purpose: '起草各章节 + 添加参考文献(经 L0 过滤)',
+    purpose: '起草各章节正文,并整理出参考文献',
     inputs: ['paper-outline', 'figure-plan', 'landscape-map', 'result-version', 'method-spec'],
     outputs: ['draft'],
     gate: ['A', 'B'],
@@ -150,8 +150,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'D4-rebuttal', index: 14, phase: 'D', name: 'rebuttal',
-    purpose: '对抗式 rebuttal,产出修订稿',
+    id: 'D4-rebuttal', index: 14, phase: 'D', name: '答辩演练',
+    purpose: '预演审稿人会怎么质疑,逐条回应并产出修订稿',
     inputs: ['draft', 'result-version'],
     outputs: ['rebuttal', 'revised-draft'],
     gate: ['A'],
@@ -160,8 +160,8 @@ export const STEPS: readonly StepDefinition[] = [
   },
   // ── Phase E: 落地 ─────────────────────────────────────────────
   {
-    id: 'E1-format', index: 15, phase: 'E', name: '格式',
-    purpose: '按目标期刊格式化(版式/引用样式)',
+    id: 'E1-format', index: 15, phase: 'E', name: '排版',
+    purpose: '按目标期刊的要求排版,并套用它的引用格式',
     // `paper-outline` is read by this step's executor and was not declared — see D2-framework for
     // what an undeclared read costs.
     inputs: ['revised-draft', 'venue', 'venue-scope', 'paper-outline', 'result-version'],
@@ -171,8 +171,8 @@ export const STEPS: readonly StepDefinition[] = [
     humanGate: false,
   },
   {
-    id: 'E2-submit', index: 16, phase: 'E', name: '投稿',
-    purpose: '投稿(人的行为)',
+    id: 'E2-submit', index: 16, phase: 'E', name: '投稿确认',
+    purpose: '由你来确认是否投稿 —— 这一步永远不会自动完成',
     inputs: ['formatted-manuscript'],
     outputs: ['submission-record'],
     gate: [],

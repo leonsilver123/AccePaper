@@ -240,4 +240,36 @@ describe('a revision that rewrites a cited sentence', () => {
     }
     await expect(entry?.executor(e1Ctx)).rejects.toThrow(/citation-statement-changed/u)
   })
+
+  it('asks a citing sentence for the finding its source states, and no inference beyond it', async () => {
+    // MEASURED ON A REAL RUN, 2026-09-19. Told only to avoid a number, a unit or a source the evidence
+    // lacks, the writer stated an inference the passage never draws — the abstract asserted a higher
+    // minimum time-to-collision that the cited passage, which reports the trade-off only qualitatively,
+    // does not establish. The sentence assessor read the passage, answered `partial`, and D3 refused the
+    // manuscript as `statement-beyond-scope`. The material clause was already there; what was missing
+    // was the SCOPE of a sentence that carries a citation. The instruction is model-visible, so the
+    // clause is pinned here rather than left to a reader of the prompt to notice.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      studyPlan: DEFAULT_PLAN,
+      // EVERY REVIEWED SOURCE IS CITED, so the draft is not refused for leaving one unused — the
+      // instruction is what this case is about, and the run has to reach the request to state it.
+      proseWriter: writerSaying(
+        `Prior work on this quantity has been reported ${REVIEWED_KEYS.map(key => `[@${key}]`).join(' ')}.`
+        + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
+      ),
+      casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
+    })
+    const draft = getArtifact(store, run.runId, 'draft') as {
+      proseRequests: ReadonlyArray<{ instruction: string | null }>
+    }
+    const instructions = draft.proseRequests
+      .map(request => request.instruction)
+      .filter((instruction): instruction is string => instruction !== null)
+    expect(instructions.length).toBeGreaterThan(0)
+    for (const instruction of instructions) {
+      expect(instruction).toContain('states what that source establishes and nothing further')
+      expect(instruction).toContain('leave it uncited')
+    }
+  })
 })

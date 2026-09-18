@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { WireRevisionView } from '../../run-source.ts'
+import { revisionSourceName } from '../record-vocabulary.ts'
 import type { PanelProps } from './shared.ts'
 import css from './ResearchWorkbench.module.css'
 
@@ -153,6 +154,15 @@ export function RevisionPanel({ summary, t, revisions, writesAllowed = true }: R
                 ? t('revision.wholeManuscript')
                 : t('revision.targets').replace('{sections}', revision.targets.join(', '))}
             </p>
+            {/* WHERE IT WAS ASKED. A person may hand the run a requirement by typing in the chat and
+                having the agent record it; the panel shows that request beside the ones made in its own
+                controls, so it has to say which is which. A record that states no source shows no
+                badge, rather than the panel's own name. */}
+            {revision.source !== undefined && (
+              <p className={css.note} data-research-revision-source={revision.source}>
+                {revisionSourceName(revision.source, t)}
+              </p>
+            )}
             {revision.candidates.length === 0
               ? (
                 <button
