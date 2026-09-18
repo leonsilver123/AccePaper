@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-18-a-reader-the-deployment-supplies.md
-2026-09-18-a-reader-the-deployment-supplies.md: b3d5b7eff414cca33307852d3bc273b6cefc1d27
-2026-09-18-a-reader-the-deployment-supplies.zh.md: a6a08caf2a54382c8b072997835ca7b593824774
+2026-09-18-a-reader-the-deployment-supplies.md: 195206a67f599e75656eb61e382698bf9c812679
+2026-09-18-a-reader-the-deployment-supplies.zh.md: b8fc2acf5d8b623053405c891ed8be61d4fe1e75
