@@ -110,6 +110,8 @@ async function boot(options: {
      */
     evidenceProfile?: string
     /** The journal profile this deployment is configured with, when it states one. */
+    /** How much review this deployment requires; see {@link DriveOptions.reviewPolicy}. */
+    reviewPolicy?: { readonly minimumRounds: number }
     journal?: {
       readonly id: string
       readonly name: string
@@ -150,6 +152,7 @@ async function boot(options: {
     }
     researchType?: string
     evidenceProfile?: string
+    reviewPolicy?: { readonly minimumRounds: number }
     toolDeps?: { literatureAdapter: LiteratureSearchAdapter }
   } = {}
   if (options.snapshotDirectory !== undefined) engine.snapshotDirectory = options.snapshotDirectory
@@ -1165,8 +1168,11 @@ describe('a decision a person made survives the process that took it', () => {
       const checks = new Map((first.checks ?? []).map(check => [check.code, check.passed]))
       expect(checks.get('approval-recorded')).toBe(true)
       expect(checks.get('approval-current')).toBe(true)
+      // TWO CONDITIONS, AND THE SECOND IS NEW: the evidence profile (this deployment is evaluation)
+      // and the review — the offline route takes one round and the default policy requires two. A
+      // package written before this condition existed would have called itself final here.
       expect([...(first.checks ?? [])].filter(check => !check.passed).map(check => check.code))
-        .toEqual(['production-evidence'])
+        .toEqual(['production-evidence', 'review-complete'])
 
       // NOW MOVE THE MANUSCRIPT, the way a person accepting a revision would: the approval was made
       // about the version E1 wrote, and this is a different one. The binding is only real if the
@@ -1229,7 +1235,10 @@ describe('a run the production profile published', () => {
     roots.push(packages)
     const decided = spawnSync(
       process.execPath,
-      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production'],
+      // THE RUN'S OWN POLICY: the offline route takes one revision round, so the deployment that
+      // conducts it states one — the review is evaluated where the rounds are taken, and a later
+      // process cannot re-state what happened.
+      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production', '--review-rounds', '1', '--verify'],
       { cwd: repoRoot, encoding: 'utf8' },
     )
     expect(decided.stderr).not.toMatch(/approve-and-exit: /)
@@ -1263,6 +1272,46 @@ describe('a run the production profile published', () => {
       expect(manifest.state).toBe('final')
       expect(manifest.submissionReady).toBe(true)
       expect(manifest.approval?.decision).toBe('approved')
+    } finally {
+      await next.dispose()
+    }
+  })
+})
+
+describe('a manuscript whose review did not finish', () => {
+  it('is exportable as a draft and refused as the package a journal receives', async () => {
+    // THE FLOOR, ON THE PRODUCTION PATH. The same approved production run, held to the DEFAULT policy
+    // of two complete readings: the offline route took one, so the package is a draft and the
+    // condition that refuses it names why — "a final revision that was not re-reviewed is refused", in
+    // the form this route can reach.
+    const root = snapshotRoot()
+    const packages = mkdtempSync(join(tmpdir(), 'dsh-review-floor-'))
+    roots.push(packages)
+    const decided = spawnSync(
+      process.execPath,
+      // THE RUN'S OWN POLICY: the offline route takes one revision round, so the deployment that
+      // conducts it states one — the review is evaluated where the rounds are taken, and a later
+      // process cannot re-state what happened.
+      ['--import', 'tsx/esm', APPROVE_FIXTURE, '--dir', root, '--profile', 'production'],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )
+    expect(decided.status).toBe(0)
+    const lines = decided.stdout.split('\n').map(part => part.trim()).filter(part => part.length > 0)
+    const receipt = JSON.parse(lines[lines.length - 1] ?? '{}') as { runId: string }
+
+    const next = await boot({ snapshotDirectory: root })
+    next.engine.packageDirectory = packages
+    next.engine.evidenceProfile = 'production'
+    try {
+      await next.service.openStoredRun({ runId: receipt.runId })
+      const draft = await next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'draft' })
+      const refused = (draft.checks ?? []).find(check => check.code === 'review-complete')
+      expect(refused?.passed).toBe(false)
+      expect(refused?.detail).toContain('complete review round(s)')
+      expect(draft.state).toBe('draft')
+      // AND THE FINAL EXPORT IS REFUSED, naming the same condition rather than a different one.
+      await expect(next.service.exportRunPackageNow({ runId: receipt.runId, mode: 'final' }))
+        .rejects.toThrow(/review-complete/)
     } finally {
       await next.dispose()
     }

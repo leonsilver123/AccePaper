@@ -10,7 +10,8 @@
 // host channel behind it is created on first use and carries this deployment's registered operator,
 // so the fixture does not build one: a second creation is refused, which is the channel's own rule.
 //
-// argv: `--dir <snapshot root> [--profile production|evaluation]`; prints one JSON line describing the
+// argv: `--dir <snapshot root> [--profile production|evaluation] [--review-rounds N] [--verify]`; prints one
+// JSON line describing the
 // decision, or exits non-zero. The profile is the DEPLOYMENT's, so it is stated here the way a
 // `cordis.yml` states it: a run approved under the production profile is one whose material may be
 // published, which is the difference between a draft and the package a journal receives.
@@ -35,6 +36,32 @@ const root = argument(process.argv.slice(2), '--dir')
 const profile = process.argv.includes('--profile')
   ? argument(process.argv.slice(2), '--profile')
   : undefined
+/** Whether this fixture should also read the revisions it produced. */
+const verify = process.argv.includes('--verify')
+/** The number of complete review rounds this deployment requires; absent means the shipped default. */
+const reviewRounds = process.argv.includes('--review-rounds')
+  ? Number(argument(process.argv.slice(2), '--review-rounds'))
+  : undefined
+
+/**
+ * A reader that accepts every pending revision, attributed to somebody other than the author.
+ *
+ * IT READS NOTHING, and its `basis` says so — a stand-in that claimed to have judged the revision
+ * would be the failure this fixture exists to avoid. What it demonstrates is the SHAPE: a pending
+ * issue is settled by a reader whose name is not the author's.
+ */
+const standInVerifier = {
+  id: 'fixture:reviewer',
+  verify(input: { readonly issue: { readonly issueId: string } }) {
+    return Promise.resolve({
+      issueId: input.issue.issueId,
+      verdict: 'verified' as const,
+      basis: 'accepted by the fixture stand-in; no reading was performed',
+      verifiedBy: 'fixture:reviewer',
+      verifiedAt: new Date(0).toISOString(),
+    })
+  },
+}
 
 const ctx = new Context()
 for (const name of ['agents', 'sessions', 'sessionPersistence', 'subagents']) ctx.provide(name, {})
@@ -43,6 +70,16 @@ ctx.provide('tools', { guard: () => () => {} })
 ctx.provide('research', {
   snapshotDirectory: root,
   ...(profile === undefined ? {} : { evidenceProfile: profile }),
+  // HOW MUCH REVIEW THIS DEPLOYMENT REQUIRES, stated here because the review is EVALUATED where the
+  // rounds are taken — in this process, during D4 — and recorded on the run. An export in a later
+  // process reads that record; changing the policy afterwards would be a deployment claiming a
+  // reading its run did not take.
+  ...(reviewRounds === undefined ? {} : { reviewPolicy: { minimumRounds: reviewRounds } }),
+  // A READER FOR THE REVISIONS, when this fixture is asked for one. It answers `verified` to every
+  // pending issue and says so: it is a STAND-IN, not a reviewer, and the point of providing it here is
+  // that a final package requires the revisions to have been READ — without one, the run leaves its
+  // issues waiting and the package stays a draft however the evidence profile reads.
+  ...(verify ? { resolutionVerifier: standInVerifier } : {}),
 })
 
 await ctx.plugin(ResearchTeamService, {})

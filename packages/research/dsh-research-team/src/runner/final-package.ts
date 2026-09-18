@@ -34,6 +34,8 @@ export type FinalPackageCheckCode =
   | 'required-files-present'
   | 'artifacts-current'
   | 'compiled-document-complete'
+  /** The manuscript has not had the review the deployment requires. */
+  | 'review-complete'
   | 'run-saved'
 
 /** One condition a final package must meet, with what the run recorded about it. */
@@ -96,6 +98,15 @@ export interface FinalPackageFacts {
     readonly tool: string | null
     readonly dropped: ReadonlyArray<string>
   }
+  /**
+   * What the last review left, as the rebuttal artifact recorded it.
+   *
+   * ABSENT WHEN THE RUN HAS NO REBUTTAL ARTIFACT, which is a run that never reached D4 — and a run
+   * that never reached D4 has not been reviewed, so the conditions below refuse it on `unfinishedSteps`
+   * rather than on this. Recording it here rather than deriving it from round counts keeps one home
+   * for the fact: the review policy's own evaluation, made where the rounds were taken.
+   */
+  readonly review?: { readonly satisfied: boolean; readonly reason: string }
   /** The run's last write to its snapshot, when it failed. */
   readonly saveError: string | undefined
 }
@@ -190,6 +201,22 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
           ? `'${facts.compilation.tool}' embedded every float the manuscript carries`
           : `the compiled document does not carry: ${facts.compilation.dropped.join(', ')}`
             + ' — a submission whose figures are missing is not the paper',
+    },
+    {
+      // A MANUSCRIPT WHOSE REVIEW DID NOT FINISH IS NOT THE PAPER EITHER. The deployment states how
+      // many complete readings it requires and what "complete" means; a run that has not met it — too
+      // few rounds, an issue still open, or a revision nobody has read — may be exported as the draft
+      // it is, and may not be published as the manuscript a journal receives. The `where` is the
+      // review policy's own evaluation, taken where the rounds were, so this check and the run's
+      // record cannot disagree about what happened.
+      code: 'review-complete',
+      passed: facts.review === undefined || facts.review.satisfied,
+      detail: facts.review === undefined
+        ? 'the run produced no rebuttal record, so no review is claimed'
+        : facts.review.satisfied
+          ? facts.review.reason
+          : `${facts.review.reason} — the manuscript may be exported as the draft it is and not as`
+            + ' the paper a journal receives',
     },
     {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
@@ -300,6 +327,13 @@ export function finalPackageFactsOf(
       .map(definition => `${definition.id} (${snapshot.steps[definition.id]?.status ?? 'pending'})`),
     refusedSections: refusedSectionsOf(store, runId),
     openIssues: openIssuesOf(readArtifact(store, runId, 'rebuttal')),
+    ...(() => {
+      const recorded = (readArtifact(store, runId, 'rebuttal') as
+        { review?: { satisfied?: unknown; reason?: unknown } } | undefined)?.review
+      return recorded === undefined || typeof recorded.satisfied !== 'boolean'
+        ? {}
+        : { review: { satisfied: recorded.satisfied, reason: String(recorded.reason ?? '') } }
+    })(),
     approval: humanGate === undefined ? undefined : snapshot.steps[humanGate.id]?.approval,
     staleApproval: definitions
       .map(definition => approvalStalenessOf(store, runId, definition.id))

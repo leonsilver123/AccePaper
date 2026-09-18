@@ -174,6 +174,8 @@ import type { StatementSupportAssessor } from './statement-support.ts'
 import type { StatementAssessment } from './statement-support.ts'
 import { verifyPending, verifyResolution } from './resolution-verifier.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
+import { DEFAULT_REVIEW_POLICY, reviewSatisfaction } from './review-policy.ts'
+import type { ReviewPolicy, ReviewedRound } from './review-policy.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentBlock, DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
@@ -457,6 +459,13 @@ export interface ExecCtx {
    * waiting for a reader, and without one they wait rather than closing themselves.
    */
   readonly resolutionVerifier?: ResolutionVerifier
+  /**
+   * How much review this deployment requires; see {@link DriveOptions.reviewPolicy}.
+   *
+   * THE FLOOR, not the bound: `revisionRounds` says how many times the author may be asked, and this
+   * says how many actual readings a manuscript must have had before it may be published.
+   */
+  readonly reviewPolicy?: ReviewPolicy
 
   readonly runId: string
   readonly stepId: string
@@ -3074,6 +3083,9 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
    * @param stopped - why the cycle did not continue past it.
    * @returns the record for the artifact.
    */
+  // THE ROUNDS AS THE POLICY READS THEM, kept beside the artifact's own record: an index, what the
+  // round left owed, and why the cycle moved on from it.
+  const policyRounds: ReviewedRound[] = []
   const recordRound = (
     round: number,
     result: ReturnType<typeof applyRevision>,
@@ -3089,6 +3101,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     openSections: result.outcomes
       .filter(outcome => outcome.disposition === 'open')
       .map(outcome => outcome.sectionId),
+    /// PER ISSUE, what this round did with it. The policy below counts rounds and asks whether the
+    /// last one left anything owed, and a reader asking "what happened in round 2" needs the same
+    /// thing — one field serves both rather than two that can disagree.
+    dispositions: result.outcomes.map(outcome => `${outcome.issueId}:${outcome.disposition}`),
     stoppedBecause: stopped,
   })
   if (writer === undefined) {
@@ -3146,6 +3162,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       ? 'budget'
       : applied.awaitingVerification.length === 0 ? 'closed' : 'awaiting-verification'
     rounds.push(recordRound(1, applied, stoppedBecause))
+    policyRounds.push({ index: 1, outcomes: applied.outcomes, stopped: stoppedBecause })
   } else {
     // THE CYCLE. Each round reads what the previous one wrote and is told what it did not close, so
     // a concern the applier refused for a reason another round could fix gets that round. The bound
@@ -3239,7 +3256,26 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       stoppedBecause = leftOpen.length === 0
         ? (awaitingReader.length === 0 ? 'closed' : 'awaiting-verification')
         : repeated ? 'no-progress' : 'budget'
+      // A CLOSED ROUND IS NOT A FINISHED REVIEW. The deployment states a MINIMUM number of complete
+      // readings, so a first round that closed everything is asked for a second one — the case the
+      // review named, where "the first round closed its issues" ended the review after one reading.
+      // `awaiting-verification` is different and does NOT continue: the answers are on the table and
+      // only a reader can settle them, so asking the author again would produce the same answers.
+      // RECORD THE ROUND FIRST, whatever happens next: a reading that was taken counts, and a round
+      // skipped by the floor below is still a reading the manuscript actually had.
       rounds.push(recordRound(round, applied, stoppedBecause))
+      policyRounds.push({ index: round, outcomes: applied.outcomes, stopped: stoppedBecause })
+      // A CLOSED ROUND IS NOT A FINISHED REVIEW. The deployment states a MINIMUM number of complete
+      // readings, so a first round that closed everything is asked for a second one — the case the
+      // review named, where "the first round closed its issues" ended the review after one reading.
+      // `awaiting-verification` does NOT continue: the answers are on the table and only a reader can
+      // settle them, so asking the author again would produce the same answers.
+      const floor = reviewPolicyOf(ctx).minimumRounds
+      if (stoppedBecause === 'closed' && round < floor && round < maxRounds) {
+        current = applied.sections
+        open = leftOpen
+        continue
+      }
       // A round that closed everything is done; one that repeated the previous round's open set has
       // been answered already; the last allowed round is the budget.
       if (stoppedBecause !== 'budget' || round === maxRounds) break
@@ -3285,6 +3321,11 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         rounds,
         revisionRounds: revisionRoundsOf(ctx),
         stoppedBecause,
+        // WHAT THE DEPLOYMENT REQUIRES AND WHAT IT GOT. A package that could only be read through the
+        // rebuttal record could not tell "two complete rounds" from "one round that closed early",
+        // and every later reader — the export, a reviewer, a person — would be re-deriving it.
+        reviewPolicy: { minimumRounds: reviewPolicyOf(ctx).minimumRounds },
+        review: reviewSatisfaction(policyRounds, reviewPolicyOf(ctx)),
         note: rebuttalSource === 'fixture'
           ? 'exchanges written from this study\'s own design questions, with measured numbers'
           : 'exchanges written by the model from the measured outcome',
@@ -4004,6 +4045,16 @@ async function appliedWithVerification(
       .filter(outcome => outcome.disposition === 'pending-verification')
       .map(outcome => outcome.issueId),
   }
+}
+
+/**
+ * The review policy this deployment stated, or the default one.
+ *
+ * @param ctx - the execution context.
+ * @returns the policy the run is held to.
+ */
+function reviewPolicyOf(ctx: ExecCtx): ReviewPolicy {
+  return ctx.reviewPolicy ?? DEFAULT_REVIEW_POLICY
 }
 
 /** E2-submit runs no executor at all (human gate stop). */

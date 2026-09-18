@@ -23,6 +23,7 @@ import type { DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
+import type { ReviewPolicy } from './review-policy.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -151,6 +152,14 @@ export interface DriveOptions {
    */
   readonly resolutionVerifier?: ResolutionVerifier
   /**
+   * How much review this deployment requires before a manuscript may be published.
+   *
+   * Absent means {@link DEFAULT_REVIEW_POLICY}: two complete rounds. A deployment that requires one is
+   * stating that one reading is enough for its purposes, which is a decision it is allowed to make and
+   * is recorded on the run.
+   */
+  readonly reviewPolicy?: ReviewPolicy
+  /**
    * Tool dependencies for capability steps; assembled by the Cordis adapter from
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
@@ -214,6 +223,14 @@ export interface DriveStepOptions {
   readonly statementAssessor?: StatementSupportAssessor
   /** The revision verifier; see {@link DriveOptions.resolutionVerifier}. */
   readonly resolutionVerifier?: ResolutionVerifier
+  /**
+   * How much review this deployment requires before a manuscript may be published.
+   *
+   * Absent means {@link DEFAULT_REVIEW_POLICY}: two complete rounds. A deployment that requires one is
+   * stating that one reading is enough for its purposes, which is a decision it is allowed to make and
+   * is recorded on the run.
+   */
+  readonly reviewPolicy?: ReviewPolicy
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
   /**

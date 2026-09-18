@@ -103,6 +103,9 @@ import type { DriveOptions } from './runner/types.ts'
 import { driveRun, prepareRun } from './runner/drive.ts'
 import { isFigureProvider } from './runner/figure-provider.ts'
 import type { FigureProvider } from './runner/figure-provider.ts'
+import type { StatementSupportAssessor } from './runner/statement-support.ts'
+import type { ResolutionVerifier } from './runner/resolution-verifier.ts'
+import type { ReviewPolicy } from './runner/review-policy.ts'
 import { requireStudyAdapter } from './runner/study-adapter.ts'
 import { DEFAULT_PLAN, requirePlan } from './runner/study-plan.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
@@ -791,6 +794,39 @@ export class ResearchTeamService extends TypertRemoteService {
     // CHECKED WHERE A DEPLOYMENT-FACING VALUE ARRIVES. The engine builds this from its own config, and
     // a provider missing a method would fail at D1 — five steps into a run whose earlier gates closed.
     return isFigureProvider(candidate) ? candidate : undefined
+  }
+
+  /**
+   * The sentence-level reviewer this deployment named, when it named one.
+   *
+   * @returns the assessor, or undefined.
+   */
+  private hostStatementAssessor(): StatementSupportAssessor | undefined {
+    const research = this.ctx.get('research') as { statementAssessor?: StatementSupportAssessor } | undefined
+    return research?.statementAssessor
+  }
+
+  /**
+   * The revision verifier this deployment named, when it named one.
+   *
+   * @returns the verifier, or undefined.
+   */
+  private hostResolutionVerifier(): ResolutionVerifier | undefined {
+    const research = this.ctx.get('research') as { resolutionVerifier?: ResolutionVerifier } | undefined
+    return research?.resolutionVerifier
+  }
+
+  /**
+   * How much review this deployment requires, when it says.
+   *
+   * @returns the policy, or undefined so the package's own default applies.
+   */
+  private hostReviewPolicy(): ReviewPolicy | undefined {
+    const research = this.ctx.get('research') as { reviewPolicy?: ReviewPolicy } | undefined
+    const policy = research?.reviewPolicy
+    return policy !== undefined && Number.isInteger(policy.minimumRounds) && policy.minimumRounds >= 1
+      ? policy
+      : undefined
   }
 
   private hostEvidenceProfile(): EvidenceProfile {
@@ -1517,11 +1553,20 @@ export class ResearchTeamService extends TypertRemoteService {
     const revisionRounds = this.hostRevisionRounds()
     const documentCompiler = this.hostDocumentCompiler()
     const figureProvider = this.hostFigureProvider()
+    // THE REVIEWER-SIDE CAPABILITIES, read off the deployment the same way: whether this machine can
+    // read a sentence against a passage, and whether it can read a revision against the issue it was
+    // written for. A deployment that names neither still runs — it records that nothing read them.
+    const statementAssessor = this.hostStatementAssessor()
+    const resolutionVerifier = this.hostResolutionVerifier()
+    const reviewPolicy = this.hostReviewPolicy()
     return {
       evidenceProfile: this.hostEvidenceProfile(),
       researchProfile: this.hostResearchProfile(),
       ...(documentCompiler !== undefined ? { documentCompiler } : {}),
       ...(figureProvider !== undefined ? { figureProvider } : {}),
+      ...(statementAssessor === undefined ? {} : { statementAssessor }),
+      ...(resolutionVerifier === undefined ? {} : { resolutionVerifier }),
+      ...(reviewPolicy === undefined ? {} : { reviewPolicy }),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
       ...(proseWriter !== undefined ? { proseWriter } : {}),
       ...(casePackInputs !== undefined ? { casePackInputs } : {}),

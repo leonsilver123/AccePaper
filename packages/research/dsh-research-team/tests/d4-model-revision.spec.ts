@@ -26,6 +26,7 @@ import { createHostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 import type { HostApprovalChannel } from '@deepseek-ai/dsh-research-core/host'
 
 import { runT19B } from '../src/runner/drive.ts'
+import type { ResolutionVerifier } from '../src/runner/resolution-verifier.ts'
 import { assertWellFormed, parseReply } from '../src/runner/issue-parse.ts'
 import { comparePlatoons, experimentStudy } from '../src/runner/platoon-sim.ts'
 import type { ResearchProseRequest, ResearchProseWriter } from '../src/runner/registry.ts'
@@ -206,7 +207,7 @@ let channel: HostApprovalChannel | undefined
 
 async function revisedRun(
   d4Reply: string | ReadonlyArray<string>,
-  options: { readonly revisionRounds?: number } = {},
+  options: { readonly revisionRounds?: number; readonly verifier?: ResolutionVerifier } = {},
 ): Promise<{
   store: ResearchRunStore
   runId: string
@@ -229,6 +230,7 @@ async function revisedRun(
     proseWriter: stagedWriter(d4Reply),
     casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
     ...(options.revisionRounds === undefined ? {} : { revisionRounds: options.revisionRounds }),
+    ...(options.verifier === undefined ? {} : { resolutionVerifier: options.verifier }),
   })
   return {
     store,
@@ -426,6 +428,26 @@ describe('a revision round that leaves a concern open', () => {
     expect(rebuttal?.['stoppedBecause']).toBe('budget')
   })
 
+  it('reads a second time when the first round closed everything and the policy requires two', async () => {
+    // THE FLOOR, ON THE PRODUCTION PATH. The first reply patches the results section and closes
+    // the issue it raised; under the default policy that is ONE reading, so the cycle asks for a
+    // second one instead of stopping — the early stop the review named.
+    const reply = [
+      'CONCERN: The results section states no comparison.',
+      'SECTION: results',
+      'RESPONSE: The comparison is stated.',
+      'PATCH: The comparison against this study baseline is stated in Table 1.',
+    ].join('\n')
+    // A READER IS CONFIGURED, because that is the configuration the floor is for: with one, the first
+    // round's patches are answered and the round CLOSES — and a closed first round is exactly what
+    // used to end the review. Without one the issues simply wait, which is a different stop.
+    const { rebuttal } = await revisedRun([reply, reply], { verifier: acceptingReviewer() })
+    const rounds = rebuttal?.['rounds'] as ReadonlyArray<Record<string, unknown>>
+    // TWO READINGS WERE TAKEN, not one that happened to close everything it found.
+    expect(rounds.length).toBeGreaterThanOrEqual(2)
+    expect(rebuttal?.['revisionRounds']).toBeGreaterThanOrEqual(2)
+  })
+
   it('does not read a reason the applier did not give as if it had', () => {
     // The reader states what it found and nothing more: an outcome with no reason is reported as
     // one rather than invented into a plausible sentence.
@@ -438,6 +460,22 @@ describe('a revision round that leaves a concern open', () => {
     expect(openIssuesOf(undefined)).toEqual([])
   })
 })
+
+/** A reader that accepts every pending revision, attributed to somebody the author is not. */
+function acceptingReviewer(): ResolutionVerifier {
+  return {
+    id: 'spec-reviewer',
+    verify(input) {
+      return Promise.resolve({
+        issueId: input.issue.issueId,
+        verdict: 'verified' as const,
+        basis: 'the results section now states the comparison',
+        verifiedBy: 'spec-reviewer',
+        verifiedAt: new Date(0).toISOString(),
+      })
+    },
+  }
+}
 
 describe('D4 driven by a model reply', () => {
   it('applies the three patches and marks exactly the sections they changed', async () => {
