@@ -157,6 +157,61 @@ describe('a collection read as the corpus', () => {
     expect(outcome.total).toBe(2)
   })
 
+  it('matches a plural topic word against the singular form the title carries', async () => {
+    // THE DEFECT: matching was by raw substring, so the topic's plural could never match the title's
+    // singular. A collection holding the paper the topic is about read as an empty corpus, and the
+    // pipeline had nothing to distinguish that from a collection that holds nothing.
+    const outcome = await adapterOver(record('PLATOON1', {
+      title: 'A robust platoon control study in mixed traffic flow',
+      abstractNote: 'String stability is measured for the platoon.',
+    })).search({ topic: 'Platoons in mixed traffic' })
+    expect(outcome.status).toBe('ok')
+    if (outcome.status !== 'ok') return
+    expect(outcome.hits.map(hit => String(hit.id))).toEqual(['zotero:user:1234567:PLATOON1'])
+  })
+
+  it('matches a nominalised topic word against the adjective in the title', async () => {
+    // The other shape of the same defect: `robustness` is never a substring of `robust`, and the
+    // title states the adjective. The token the rule matches on is the title's OWN word, and the
+    // four-character floor is what keeps `plan` from answering `platoons`.
+    const outcome = await adapterOver(record('ROBUST01', {
+      title: 'Robust platoon control under disturbances',
+      abstractNote: 'The controller is evaluated over a range of speeds.',
+    })).search({ topic: 'Robustness of platoon control' })
+    expect(outcome.status).toBe('ok')
+    if (outcome.status !== 'ok') return
+    expect(outcome.hits.map(hit => String(hit.id))).toEqual(['zotero:user:1234567:ROBUST01'])
+  })
+
+  it('ranks by how much of the topic an item states, and keeps the weak matches last', async () => {
+    // THE CONJUNCTION IS GONE, AND THIS IS WHAT REPLACED IT. A1 passes its topic as a research
+    // DIRECTION — a sentence — so requiring every word could only match an item that restated the
+    // whole question: measured 2026-09-19, a 27-item collection came back empty for the study it was
+    // assembled for. A curated list is answered by relevance instead, which is why the traffic-signal
+    // record is INCLUDED here rather than excluded — it states one of the topic's words — and why it
+    // comes back last.
+    const page = JSON.stringify([
+      (JSON.parse(record('SIGNALS1', {
+        title: 'Adaptive traffic signal control with reinforcement learning',
+        abstractNote: 'A reinforcement learning approach to signal timing at isolated intersections.',
+      })) as ReadonlyArray<unknown>)[0],
+      (JSON.parse(record('PLATOON1', {
+        title: 'Robustness of platoons to mixed-traffic disturbances',
+        abstractNote: 'Platoon control under mixed traffic, including disturbances from human drivers.',
+      })) as ReadonlyArray<unknown>)[0],
+    ])
+    const outcome = await adapterOver(page)
+      .search({ topic: 'Robustness of platoons to mixed-traffic disturbances' })
+    expect(outcome.status).toBe('ok')
+    if (outcome.status !== 'ok') return
+    // The item that states the topic comes first; the one that states a word of it comes last.
+    expect(outcome.hits.map(hit => String(hit.id))).toEqual([
+      'zotero:user:1234567:PLATOON1',
+      'zotero:user:1234567:SIGNALS1',
+    ])
+    expect(outcome.total).toBe(2)
+  })
+
   it('reports a library that could not be read as unavailable, not as an empty corpus', async () => {
     const failing: FetchLike = () => Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:23119'))
     const provider = new ZoteroProvider({

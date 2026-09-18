@@ -502,6 +502,14 @@ export class ZoteroProvider {
    * abstract and the match is reported as what it is — a keyword filter over a list the deployment
    * chose, not a literature search. `total` counts the items that matched before the cap.
    *
+   * IT RANKS RATHER THAN EXCLUDES, WHICH IS A CHANGE OF RULE AND NOT A LOOSENING. The filter used to
+   * demand every word of the topic, and a topic is a research DIRECTION — a sentence — so it matched
+   * nothing at all: measured 2026-09-19, a 27-item collection came back empty for the study it was
+   * assembled for, and the emptiness surfaced four steps later as a held references section and a
+   * blocked D3. An item that states some of the direction says something about it, so it is returned,
+   * scored by how much it states and ordered best first. A collection is a list somebody chose; "all
+   * of it bears on my question" is the honest answer for a broad direction, not a failure.
+   *
    * @param query - the topic to filter by and how many hits to return.
    * @param signal - cancellation from the caller.
    * @returns the candidates and how many matched, or why the collection could not be read.
@@ -513,15 +521,21 @@ export class ZoteroProvider {
     | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
     const collection = await this.readCollection(query.collectionKey, signal)
     if (!collection.ok) return collection
-    const matched: CollectionHit[] = []
+    const scored: Array<{ readonly score: number; readonly hit: CollectionHit }> = []
     for (const key of collection.collection.keys) {
       const record = await this.readItemRecord(key, signal)
       // A KEY THAT CANNOT BE READ IS NOT SKIPPED SILENTLY: the corpus would come back smaller, which
       // is the same value a corpus that never had the item produces.
       if (!record.ok) return { ok: false, failure: record.failure }
-      if (!matchesTopic(record.value, query.topic)) continue
-      matched.push(hitOf(record.value))
+      const score = topicScore(record.value, query.topic)
+      if (score === 0) continue
+      scored.push({ score, hit: hitOf(record.value) })
     }
+    // BEST FIRST, BY THE SAME MEASURE THAT ADMITTED THEM. A caller reading `hits[0]` is asking what
+    // bears on the topic most, and the collection's own order is the order somebody filed it in.
+    // Ties keep that order, so two runs over one collection agree.
+    scored.sort((left, right) => right.score - left.score)
+    const matched = scored.map(entry => entry.hit)
     const capped = query.maxResults === undefined ? matched : matched.slice(0, query.maxResults)
     return { ok: true, hits: capped, total: matched.length }
   }
@@ -958,23 +972,63 @@ function factsOf(record: ZoteroItemRecord): ZoteroItemFacts {
 }
 
 /**
- * Whether an item's title or abstract mentions the topic's words.
+ * How strongly one item answers a topic: how many of its significant words the item states.
  *
- * A LOCAL FILTER OVER A CURATED LIST, not a relevance search; see {@link ZoteroProvider.readCandidates}.
- * Every word of the topic must appear somewhere in the two fields — a sentence's words are not all
- * keywords, and matching ANY of them would return the whole collection for a topic like "the effect
- * of a change on the system".
+ * A CURATED LIST IS ANSWERED BY RELEVANCE, NOT BY CONJUNCTION, and this replaced a rule that demanded
+ * EVERY word. A1 passes its topic as a RESEARCH DIRECTION — a sentence — so a conjunctive filter could
+ * only ever match an item that restated the whole question, which is nothing at all: measured
+ * 2026-09-19, a 27-item collection came back empty for the study it was chosen to support, and the
+ * emptiness surfaced four steps later as a held references section.
+ *
+ * The reasoning that produced the old rule — that matching ANY word would return the whole collection
+ * for a generic topic — is sound for a CATALOGUE of millions. A collection is a list somebody
+ * assembled, and "all of it bears on my question" is then the honest answer rather than a failure.
  *
  * @param record - one item record.
  * @param topic - the topic as the query states it.
- * @returns whether the item mentions it.
+ * @returns how many distinct significant topic words the item states; 0 means it does not bear on it.
  */
-function matchesTopic(record: ZoteroItemRecord, topic: string): boolean {
+function topicScore(record: ZoteroItemRecord, topic: string): number {
+  const words = topicWords(topic)
+  if (words.length === 0) return 1
   const haystack = `${record.data.title ?? ''} ${record.data.abstractNote ?? ''}`.toLowerCase()
-  const words = topic.toLowerCase().split(/[^a-z0-9]+/u).filter(word => word.length > 3)
-  if (words.length === 0) return true
-  return words.every(word => haystack.includes(word))
+  const tokens = haystack.split(/[^a-z0-9]+/u).filter(token => token.length > 0)
+  return words.filter(word =>
+    // BOTH HALVES ARE DELIBERATE and the first is not redundant: the topic word `take-over` is split
+    // into `take` and `over`, and only `includes` reaches a title that states them as one word
+    // (`takeover`) — the added half asks whether a TITLE token opens the topic's word, and `take` does
+    // not begin with `takeover`.
+    haystack.includes(word) || tokens.some(token => token.length >= 4 && word.startsWith(token))).length
 }
+
+/**
+ * The words of a topic that say something about it.
+ *
+ * SHORT WORDS AND STOP WORDS ARE DROPPED because they match everything: a direction asks "how does
+ * inserting a single AV into a platoon change risk" and `how`, `does`, `into`, `the` carry no subject.
+ * Keeping them would let any item score, which is the failure the old rule was written to avoid.
+ *
+ * @param topic - the topic as the query states it.
+ * @returns the distinct significant words, in the order they appear.
+ */
+function topicWords(topic: string): ReadonlyArray<string> {
+  const seen = new Set<string>()
+  return topic.toLowerCase().split(/[^a-z0-9]+/u).filter((word) => {
+    if (word.length <= 3 || STOP_WORDS.has(word) || seen.has(word)) return false
+    seen.add(word)
+    return true
+  })
+}
+
+/** Words that carry no subject, so a match on one says nothing about relevance. */
+const STOP_WORDS: ReadonlySet<string> = new Set([
+  'about', 'after', 'against', 'also', 'among', 'because', 'been', 'before', 'being', 'between',
+  'both', 'does', 'doing', 'down', 'during', 'each', 'from', 'further', 'have', 'having', 'here',
+  'into', 'itself', 'more', 'most', 'only', 'other', 'over', 'same', 'should', 'some', 'such',
+  'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those', 'through',
+  'under', 'until', 'very', 'were', 'what', 'when', 'where', 'which', 'while', 'with', 'would',
+  'your',
+])
 
 /**
  * The arXiv id an item records in its own fields, when it records one.
