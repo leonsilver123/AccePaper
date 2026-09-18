@@ -97,6 +97,65 @@ export function isReviewStatus(value: unknown): value is ReviewStatus {
   return typeof value === 'string' && (REVIEW_STATUSES as ReadonlyArray<string>).includes(value)
 }
 
+/**
+ * Which registry a run draws its citable sources from.
+ *
+ * THE RUN SAYS WHICH, AND THE DEFAULT IS THE NARROW ONE. Two registries may both hold sources for one
+ * run, and merging them by default would make a source's origin unrecoverable exactly where it
+ * matters — in the reference list. `combined` is available and is the only mode that draws on both,
+ * and it does so by REGISTERING EACH SOURCE WITH ITS OWN ORIGIN rather than by pooling two lists.
+ *
+ * A ZOTERO MODE THAT CANNOT READ ITS LIBRARY HAS NO SOURCES. It does not fall back to the
+ * checked-in corpus: a run configured to cite what a library holds, and which silently cites what a
+ * repository holds instead, has published a bibliography nobody asked for.
+ */
+export type SourceRegistryMode =
+  /** Only sources read from the configured literature library. */
+  | 'zotero'
+  /** Only the sources checked into this repository. */
+  | 'curated'
+  /** Both, each source carrying the registry it came from. */
+  | 'combined'
+
+/** Every {@link SourceRegistryMode}. */
+export const SOURCE_REGISTRY_MODES: readonly SourceRegistryMode[] = ['zotero', 'curated', 'combined']
+
+/**
+ * Whether a value names a registry mode.
+ *
+ * @param value - a config field, or any wire value.
+ * @returns true when the value names one.
+ */
+export function isSourceRegistryMode(value: unknown): value is SourceRegistryMode {
+  return typeof value === 'string' && (SOURCE_REGISTRY_MODES as ReadonlyArray<string>).includes(value)
+}
+
+/**
+ * One source a deployment's registry offers, in the vocabulary both the reader and the registry share.
+ *
+ * WHY THIS IS DATA AND NOT A CLASS. The package that READS a library and the package that REGISTERS
+ * what may be cited are siblings: neither imports the other, so the value they exchange lives in the
+ * module both already depend on. It says what the source is and which registry it came from; whether
+ * it supports anything is decided elsewhere, from the evidence.
+ */
+export interface SourceRegistration {
+  /** The identity the registry minted; never a DOI, which names a work and not a record. */
+  readonly identity: string
+  /** The external identifier the record states, in its own namespace. */
+  readonly ref: { readonly kind: string; readonly id: string }
+  readonly title: string
+  readonly authors: ReadonlyArray<string>
+  /** The publication year the record states. NEVER inferred from another field. */
+  readonly year?: number
+  readonly venue?: string
+  /** Where this record was read from. */
+  readonly registry: SourceRegistry
+  /** How it entered the run. */
+  readonly acquisition: SourceAcquisition
+  /** The passage a judgement about this source would rest on, when one was read. */
+  readonly evidence?: EvidenceBinding
+}
+
 /** A file a piece of evidence was read out of, and that file's own version. */
 export interface EvidenceAttachment {
   /** The registry's key for the file. */

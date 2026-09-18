@@ -201,6 +201,8 @@ export type {
   SourceRegistry,
   SourceAcquisition,
   ReviewStatus,
+  SourceRegistryMode,
+  SourceRegistration,
   EvidenceAttachment,
   EvidenceBinding,
   EvidenceAxis,
@@ -210,9 +212,11 @@ export {
   SOURCE_REGISTRIES,
   SOURCE_ACQUISITIONS,
   REVIEW_STATUSES,
+  SOURCE_REGISTRY_MODES,
   isSourceRegistry,
   isSourceAcquisition,
   isReviewStatus,
+  isSourceRegistryMode,
   evidenceStalenessOf,
 } from './domain/evidence-binding.ts'
 

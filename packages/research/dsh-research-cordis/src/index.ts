@@ -54,6 +54,10 @@ import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import { LlmReviewer, type LlmReviewerConfig } from './llm-reviewer.ts'
 import { MatplotlibProvider } from './matplotlib-provider.ts'
+import type { SourceRegistration, SourceRegistryMode } from '@deepseek-ai/dsh-research-core'
+import { CitationJsBibliographyWriter } from './bibliography-writer.ts'
+import { readRegistrations } from './zotero-registration.ts'
+import type { CitedItem } from './zotero-registration.ts'
 import { ZoteroProvider } from './zotero-provider.ts'
 import { ZoteroLiteratureAdapter } from './zotero-literature-adapter.ts'
 import { PandocCompiler } from './pandoc-compiler.ts'
@@ -561,6 +565,39 @@ export class ResearchEngine extends Service {
    */
   readonly statementAssessor: LlmReviewer | undefined
   /**
+   * The `.bib` renderer this deployment supplies.
+   *
+   * Public for the same reason {@link ResearchEngine.statementAssessor} is: the runner-side service
+   * reads it and writes the package's bibliography with it. It is always present — a run whose
+   * citations cannot be rendered has no file to hand a journal, which is a gap a reader should not
+   * have to discover from an absent file.
+   */
+  readonly bibliographyWriter = new CitationJsBibliographyWriter()
+  /**
+   * Which registry this run draws its citable sources from.
+   *
+   * `zotero` when this deployment configured a library, `curated` otherwise. The runner-side service
+   * reads it to decide whether a citation may name a source read during this run.
+   */
+  readonly sourceRegistryMode: SourceRegistryMode
+  /**
+   * The sources this deployment's library offered, once they have been read.
+   *
+   * EMPTY UNTIL {@link ResearchEngine.sourceRegistration} SETTLES, and empty forever when the library
+   * could not be read — a run in `zotero` mode then has nothing to cite rather than the checked-in
+   * corpus, which is the failure the configuration demands.
+   */
+  registeredSources: ReadonlyArray<SourceRegistration> = []
+  /** One sentence per designated item that could not be registered. */
+  registrationFailures: ReadonlyArray<string> = []
+  /**
+   * The registration read, so a caller can wait for the sources before starting a run.
+   *
+   * A RUN THAT BEGAN BEFORE THIS SETTLED would bind its sentences against an empty registry and
+   * record them as uncited. Undefined when this deployment configured no library to read.
+   */
+  sourceRegistration: Promise<void> | undefined
+  /**
    * The revision verifier this deployment named, or undefined when it named none.
    *
    * Public for the same reason {@link ResearchEngine.statementAssessor} is: the service reads it and
@@ -581,6 +618,11 @@ export class ResearchEngine extends Service {
    */
   private readonly deterministicProse: DeterministicProseConfig | undefined
 
+  /** The configured library, when this deployment named one; the registration read uses it. */
+  private readonly zoteroProvider: ZoteroProvider | undefined
+  /** The items this deployment designates as cited sources. Empty when it named no library. */
+  private readonly citedItems: ReadonlyArray<CitedItem>
+
   /** Set at the commit point of the deterministic route's registration. */
   private proseReady = false
 
@@ -597,32 +639,40 @@ export class ResearchEngine extends Service {
     // `tools` registry for the MCP metadata route. The registry is read LAZILY — the loader starts
     // entries concurrently, so `tools` may not exist yet when this constructor runs, and a port that
     // resolved it once would be permanently undefined.
+    // THE LIBRARY IS KEPT, not only wrapped: the registration read below needs the provider itself
+    // to read the metadata and the page of each designated item, which the adapter does not expose.
+    const channel = config.literatureSearch
+    const zotero = channel?.kind === 'zotero'
+      ? new ZoteroProvider(
+        {
+          apiBase: channel.apiBase,
+          localLibraryPath: channel.localLibraryPath,
+          mcpServerName: channel.mcpServerName,
+          ...(channel.timeoutMs === undefined ? {} : { timeoutMs: channel.timeoutMs }),
+          ...(channel.pageSize === undefined ? {} : { pageSize: channel.pageSize }),
+        },
+        (url, init) => fetch(url, { signal: init.signal }),
+        // READ LAZILY: the loader starts entries concurrently, so `tools` may not exist yet when this
+        // constructor runs, and a port that resolved it once would be permanently undefined.
+        {
+          get: (name: string) => (ctx.get('tools') as {
+            get?: (toolName: string) => { execute(args: unknown, exec: { signal: AbortSignal }): Promise<unknown> } | undefined
+          } | undefined)?.get?.(name),
+        },
+      )
+      : undefined
+    this.sourceRegistryMode = channel?.kind === 'zotero' ? channel.sourceRegistryMode ?? 'zotero' : 'curated'
+    this.zoteroProvider = zotero
+    this.citedItems = channel?.kind === 'zotero' ? channel.citedItems ?? [] : []
     this.toolDeps = buildToolDeps(
-      config.literatureSearch,
+      channel,
       config.citationResolver,
-      config.literatureSearch?.kind === 'zotero'
-        ? new ZoteroLiteratureAdapter(
-          new ZoteroProvider(
-            {
-              apiBase: config.literatureSearch.apiBase,
-              localLibraryPath: config.literatureSearch.localLibraryPath,
-              mcpServerName: config.literatureSearch.mcpServerName,
-              ...config.literatureSearch.timeoutMs === undefined ? {} : { timeoutMs: config.literatureSearch.timeoutMs },
-              ...config.literatureSearch.pageSize === undefined ? {} : { pageSize: config.literatureSearch.pageSize },
-            },
-            (url, init) => fetch(url, { signal: init.signal }),
-            {
-              get: (name: string) => (ctx.get('tools') as {
-                get?: (toolName: string) => { execute(args: unknown, exec: { signal: AbortSignal }): Promise<unknown> } | undefined
-              } | undefined)?.get?.(name),
-            },
-          ),
-          {
-            collectionKey: config.literatureSearch.collectionKey,
-            ...config.literatureSearch.fallbackVenue === undefined ? {} : { fallbackVenue: config.literatureSearch.fallbackVenue },
-          },
-        )
-        : undefined,
+      zotero === undefined || channel?.kind !== 'zotero'
+        ? undefined
+        : new ZoteroLiteratureAdapter(zotero, {
+          collectionKey: channel.collectionKey,
+          ...(channel.fallbackVenue === undefined ? {} : { fallbackVenue: channel.fallbackVenue }),
+        }),
     )
     this.sessionCwd = resolveWorkspace(config.workspace)
     this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
@@ -721,6 +771,23 @@ export class ResearchEngine extends Service {
   }
 
   /** Load: register an unload effect clearing the in-memory run store (ephemeral — see C-6). */
+  /**
+   * Read the items this deployment designated as citable sources, once.
+   *
+   * A FAILURE IS RECORDED, NOT THROWN. A library that is not running is a fact about the machine the
+   * run is on, and a load that threw for it would make the deployment unusable whenever Zotero is
+   * closed; what must not happen is a run CITING the checked-in corpus instead, which is why the
+   * registry mode and the source set travel separately and `zotero` mode yields only what is here.
+   *
+   * @returns nothing; the sources and the failures are published on this instance.
+   */
+  private async readConfiguredSources(): Promise<void> {
+    if (this.zoteroProvider === undefined || this.citedItems.length === 0) return
+    const read = await readRegistrations(this.zoteroProvider, this.citedItems)
+    this.registeredSources = read.registrations
+    this.registrationFailures = read.failures
+  }
+
   async [Service.init](): Promise<void> {
     this.ctx.effect(() => () => {
       runs.clear()
@@ -739,7 +806,18 @@ export class ResearchEngine extends Service {
     // keeps a load-time gate (`requireResearchTools` still throws out of `ctx.plugin`
     // in that case). When it is not up yet, awaiting would hang the load for as long
     // as the host takes to provide it, so the effect commits whenever it appears.
-    const injectedTools = this.ctx.inject(['tools'], toolsCtx => this.mountResearchTools(toolsCtx))
+    const injectedTools = this.ctx.inject(['tools'], async (toolsCtx) => {
+      // THE TOOL SURFACE FIRST, AND ITS PROMISE RETURNED: this callback's result is what `inject`
+      // waits on, so a body that mounted the tools and returned nothing would leave the load
+      // reporting success before the seven tools existed.
+      await this.mountResearchTools(toolsCtx)
+      // AND THE DESIGNATED SOURCES, read here because this callback runs once `tools` exists — the
+      // registration needs the MCP client's metadata tool, which is registered onto that same
+      // service, and reading it from the constructor would find no tool and report the whole library
+      // as unreadable. The promise is published rather than awaited: a host that takes a while to
+      // provide `tools` must not hold up the load, and a run waits on it explicitly.
+      this.sourceRegistration ??= this.readConfiguredSources()
+    })
     if (this.ctx.get('tools') !== undefined) await injectedTools
     if (this.deterministicProse !== undefined) {
       const injectedLlm = this.ctx.inject(['llm'], (llmCtx) => { this.registerDeterministicProse(llmCtx) })

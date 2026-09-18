@@ -70,6 +70,15 @@ export interface ZoteroProviderConfig {
   readonly pageSize?: number
 }
 
+/**
+ * The byte-order mark a tool reply may open with, measured 2026-09-18.
+ *
+ * BUILT FROM ITS CODE POINT rather than written into a literal: the character is invisible, a literal
+ * one survives review as nothing at all, and an editor is free to strip it — which would turn the
+ * strip below into a no-op that no diff shows.
+ */
+const BYTE_ORDER_MARK = String.fromCharCode(0xFEFF)
+
 /** The default time one request may take. */
 const DEFAULT_TIMEOUT_MS = 30_000
 
@@ -1048,9 +1057,19 @@ function auditOf(tool: string, raw: string): Omit<ToolReplyAudit, 'classificatio
   }
 }
 
+/**
+ * A reply without the byte-order mark some tools open with.
+ *
+ * @param raw - the reply, exactly as the tool returned it.
+ * @returns the reply with a leading mark removed, and otherwise unchanged.
+ */
+function stripByteOrderMark(raw: string): string {
+  return raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(BYTE_ORDER_MARK.length) : raw
+}
+
 /** The first line of a reply, for a refusal that has to name what actually arrived. */
 function firstLineOf(raw: string): string {
-  const line = raw.replace(/^﻿/u, '').split(/\r?\n/u)[0] ?? ''
+  const line = raw.replace(/^/u, '').split(/\r?\n/u)[0] ?? ''
   return line.length > 120 ? `${line.slice(0, 120)}…` : line
 }
 
@@ -1071,14 +1090,14 @@ type PageText =
  * happily hand on as page text.
  *
  * A LEADING BYTE-ORDER MARK IS REMOVED FIRST: the tool's out-of-range notice carries one, measured
- * 2026-09-18, and a leading `﻿` would otherwise make every pattern miss.
+ * 2026-09-18, and a leading one would otherwise make every pattern miss.
  *
  * @param raw - the reply, exactly as the tool returned it.
  * @param page - the page that was asked for.
  * @returns the page's words and the attachment's length, or why the reply is not this page.
  */
 function pageTextOf(raw: string, page: number): PageText {
-  const cleaned = raw.replace(/^﻿/u, '')
+  const cleaned = stripByteOrderMark(raw)
   const lines = cleaned.split(/\r?\n/u)
   const header = /^# PDF Pages (\d+)-(\d+) of /u.exec(lines[0] ?? '')
   if (header === null) {

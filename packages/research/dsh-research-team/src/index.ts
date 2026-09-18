@@ -104,6 +104,10 @@ import { driveRun, prepareRun } from './runner/drive.ts'
 import { isFigureProvider } from './runner/figure-provider.ts'
 import type { FigureProvider } from './runner/figure-provider.ts'
 import type { StatementSupportAssessor } from './runner/statement-support.ts'
+import type { BibliographyWriter } from './runner/bibliography.ts'
+import { sourcesForMode } from './runner/citation-bindings.ts'
+import type { SourceRecord } from './runner/citation-bindings.ts'
+import { renderBibliography } from './runner/package-export.ts'
 import type { ResolutionVerifier } from './runner/resolution-verifier.ts'
 import type { ReviewPolicy } from './runner/review-policy.ts'
 import { requireStudyAdapter } from './runner/study-adapter.ts'
@@ -135,6 +139,7 @@ import {
   rollback,
 } from '@deepseek-ai/dsh-research-core'
 import type { AuditEvent, EvidenceProfile } from '@deepseek-ai/dsh-research-core'
+import type { SourceRegistration, SourceRegistryMode } from '@deepseek-ai/dsh-research-core'
 import type { RestoredRun, RunPersistence } from '@deepseek-ai/dsh-research-core'
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { CASE_PACK_INPUT_SLUGS, loadCasePack, planCasePackInputs } from './runner/case-pack.ts'
@@ -807,6 +812,36 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /**
+   * The bibliography writer this deployment named, when it named one.
+   *
+   * @returns the writer, or undefined.
+   */
+  private hostBibliographyWriter(): BibliographyWriter | undefined {
+    const research = this.ctx.get('research') as { bibliographyWriter?: BibliographyWriter } | undefined
+    return research?.bibliographyWriter
+  }
+
+  /**
+   * The sources this run may cite, from the registry the deployment configured.
+   *
+   * A ZOTERO MODE WITH NOTHING REGISTERED YIELDS NOTHING. The registry reports what it read, and a
+   * library that could not be read reports no sources rather than the checked-in corpus — so the run
+   * refuses to cite rather than citing a registry it was not pointed at.
+   *
+   * @returns the citable sources, keyed by their own id.
+   */
+  private hostSources(): ReadonlyMap<string, SourceRecord> {
+    const research = this.ctx.get('research') as {
+      sourceRegistryMode?: SourceRegistryMode
+      registeredSources?: ReadonlyArray<SourceRegistration>
+    } | undefined
+    return sourcesForMode(
+      research?.sourceRegistryMode ?? 'curated',
+      research?.registeredSources ?? [],
+    )
+  }
+
+  /**
    * The revision verifier this deployment named, when it named one.
    *
    * @returns the verifier, or undefined.
@@ -1453,6 +1488,16 @@ export class ResearchTeamService extends TypertRemoteService {
     // it was read from, and handing them back is what lets the checks report which of them the run
     // has moved past instead of describing the current state as though nothing had.
     const previousArtifactRefs = previousArtifactRefsOf(directory)
+    // THE BIBLIOGRAPHY, WHEN THE DEPLOYMENT SUPPLIED A WRITER. Rendered before anything is written,
+    // because a `.bib` that leaks a path or omits a cited key has to stop the export rather than
+    // travel inside the package looking like the file a journal accepts.
+    const writer = this.hostBibliographyWriter()
+    const bibliography = writer === undefined
+      ? { refusals: [] as ReadonlyArray<string> }
+      : await renderBibliography(active.store, request.runId, this.hostSources(), writer)
+    if (bibliography.refusals.length > 0) {
+      throw new Error(`[research] the bibliography was refused: ${bibliography.refusals.join('; ')}`)
+    }
     const plan = planRunPackage(
       active.store,
       packageRunFactsOf(active.store, request.runId),
@@ -1461,6 +1506,7 @@ export class ResearchTeamService extends TypertRemoteService {
         mode: request.mode,
         ...(saveError === undefined ? {} : { saveError }),
         ...(previousArtifactRefs.length === 0 ? {} : { previousArtifactRefs }),
+        ...(bibliography.text === undefined ? {} : { bibliography: bibliography.text }),
       },
     )
     // REFUSED BEFORE ANYTHING IS WRITTEN. A refusal that had already emptied the directory would
@@ -1565,6 +1611,10 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(documentCompiler !== undefined ? { documentCompiler } : {}),
       ...(figureProvider !== undefined ? { figureProvider } : {}),
       ...(statementAssessor === undefined ? {} : { statementAssessor }),
+      // THE CITABLE SOURCES, from the registry this deployment configured. Passed always: a run told
+      // to draw on a literature library must not fall back to the checked-in corpus, and the map it
+      // was given is the whole of what it may cite — empty when the library could not be read.
+      sources: this.hostSources(),
       ...(resolutionVerifier === undefined ? {} : { resolutionVerifier }),
       ...(reviewPolicy === undefined ? {} : { reviewPolicy }),
       ...(toolDeps !== undefined ? { toolDeps } : {}),
@@ -1632,6 +1682,20 @@ export class ResearchTeamService extends TypertRemoteService {
    * @param request - the command.
    * @returns the receipt.
    */
+  /**
+   * Wait for the deployment's library sources to be read, when it configured any.
+   *
+   * A RUN MUST NOT BEGIN BEFORE THIS SETTLES. The sentences a run writes are bound against the source
+   * registry, and a run that started first would bind them against an empty one and record them as
+   * uncited — a manuscript that cites nothing, produced by a race rather than by a decision.
+   *
+   * @returns nothing, once the read has finished or if it never started.
+   */
+  private async awaitConfiguredSources(): Promise<void> {
+    const research = this.ctx.get('research') as { sourceRegistration?: Promise<void> } | undefined
+    await research?.sourceRegistration
+  }
+
   private async startCommandOnce(
     commandId: string,
     digest: string,
@@ -1673,6 +1737,7 @@ export class ResearchTeamService extends TypertRemoteService {
         return { studyPlan: validated.plan }
       })()
       : (request.domainDirection !== undefined ? { domainDirection: request.domainDirection } : {})
+    await this.awaitConfiguredSources()
     const driveOpts: DriveOptions = { ...this.driveOptions(), ...seed }
 
     const store: ResearchRunStore = new Map()

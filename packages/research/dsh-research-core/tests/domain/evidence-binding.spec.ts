@@ -97,12 +97,11 @@ describe('whether a judgement is still about the words it was made from', () => 
 
   it('treats gaining or losing a file as a move of the same axis', () => {
     // Otherwise reading a source whole and then reading a page of its file would compare equal.
-    const gone = evidenceStalenessOf(binding(), binding({ attachment: undefined }))
+    const without = { ...binding() }
+    delete (without as { attachment?: unknown }).attachment
+    const gone = evidenceStalenessOf(binding(), without)
     expect(gone.moved).toEqual(['attachment-version'])
-    const appeared = evidenceStalenessOf(
-      binding({ attachment: undefined }),
-      binding(),
-    )
+    const appeared = evidenceStalenessOf(without, binding())
     expect(appeared.moved).toEqual(['attachment-version'])
   })
 

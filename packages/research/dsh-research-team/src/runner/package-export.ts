@@ -28,6 +28,10 @@ import type { SubmissionReadiness } from './submission-readiness.ts'
 import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
 import { reportPaperQuality } from './paper-quality.ts'
 import type { PaperQualityReport } from './paper-quality.ts'
+import { checkBibliography, referenceEntriesOf } from './bibliography.ts'
+import type { BibliographyWriter } from './bibliography.ts'
+import { bibliographyOf } from './citation-bindings.ts'
+import type { CitationUse, SourceRecord } from './citation-bindings.ts'
 import { metricsForStudy } from './metrics.ts'
 
 /**
@@ -232,6 +236,44 @@ function artifactRecord(store: ResearchRunStore, runId: string, slug: string): R
 }
 
 /**
+ * Render a run's cited sources as a bibliography, or nothing when it cites none.
+ *
+ * THE CITATIONS ARE READ FROM THE DRAFT ARTIFACT, not from the retrieval ledger: the ledger is what
+ * the library returned and the citations are what the manuscript rests on, and a bibliography built
+ * from the first is the search log this pipeline exists not to publish.
+ *
+ * NOTHING IS WRITTEN WHEN THE CHECKS REFUSE. A `.bib` that leaks a local path or omits a cited key is
+ * worse than none — it looks like the file a journal accepts — so the refusal travels with the text
+ * and the caller decides whether the package may be produced at all.
+ *
+ * @param store - the run store.
+ * @param runId - the run whose citations are to be rendered.
+ * @param sources - the sources this run may cite, from the registry it configured.
+ * @param writer - the deployment's bibliography writer.
+ * @returns the rendered text, or undefined when the run cites nothing; the refusals, when any.
+ */
+export async function renderBibliography(
+  store: ResearchRunStore,
+  runId: string,
+  sources: ReadonlyMap<string, SourceRecord>,
+  writer: BibliographyWriter,
+): Promise<{ readonly text?: string; readonly refusals: ReadonlyArray<string> }> {
+  const citations = artifactRecord(store, runId, 'draft')?.citations
+  if (!Array.isArray(citations) || citations.length === 0) return { refusals: [] }
+  const cited = bibliographyOf(citations as ReadonlyArray<CitationUse>, sources)
+  const entries = referenceEntriesOf(cited.entries)
+  // WRITTEN ONCE. A writer asked twice may answer twice differently — a reference manager stamps a
+  // retrieval date — and the file that was checked has to be the file that is written.
+  const text = await writer.write(entries)
+  const refusals = [
+    ...cited.unresolvable.map(ref => `the manuscript cites '${ref}', which the ${String(sources.size)}`
+      + ' source(s) this run may cite do not hold'),
+    ...checkBibliography(text, entries),
+  ]
+  return refusals.length > 0 ? { refusals } : { text, refusals: [] }
+}
+
+/**
  * The metric a run registered, as the quality baseline needs it: its name, which way is better, and
  * the measured change. Read from the run's own records — never from the manuscript's prose, which is
  * the thing being judged.
@@ -412,6 +454,15 @@ export function planRunPackage(
      * it cannot support.
      */
     readonly previousArtifactRefs?: ReadonlyArray<{ readonly slug: string; readonly version: number }>
+    /**
+     * The run's citations rendered as a bibliography file, when a deployment supplied a writer.
+     *
+     * RENDERED BY THE CALLER because the writer is a capability the deployment supplies, and this
+     * module decides what goes IN the file rather than how a reference manager spells it. Absent when
+     * no writer is configured, and the package then carries `citations.json` alone — which says what
+     * the run cited without a file a journal could be handed.
+     */
+    readonly bibliography?: string
   } = { mode: 'draft' },
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
@@ -484,6 +535,13 @@ export function planRunPackage(
         + ' and a key in it names the passage the judgement was made on.',
     }),
   })
+  // THE SAME CITATIONS AS A FILE A REFERENCE MANAGER READS. `citations.json` above is what a reader
+  // inspects; this is what a submission portal accepts, and the two are rendered from one set of
+  // cited sources — the previous export produced only the first, so "the manuscript cites these
+  // works" could not be handed to anything.
+  if (options.bibliography !== undefined && options.bibliography.trim() !== '') {
+    files.push({ path: 'bibliography.bib', content: `${options.bibliography.replace(/\n+$/u, '')}\n` })
+  }
   files.push({
     // WHAT THE FIGURES WERE DRAWN FROM. The presentation plan states the question each figure answers,
     // the record its values came from and the canvas it was drawn on; with the rendered file and the

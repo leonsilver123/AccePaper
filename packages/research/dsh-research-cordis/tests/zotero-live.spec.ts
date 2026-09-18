@@ -1,0 +1,253 @@
+/**
+ * The live acceptance: the real library, read through the product's own MCP client and its production
+ * provider, from the collection to a citation and a `.bib` file.
+ *
+ * WHAT IS REAL HERE. The client is `packages/mcp/mcp-client`, mounted the way a deployment mounts it;
+ * the HTTP route is the host's own `fetch` against Zotero's local API on `127.0.0.1:23119`; the
+ * library is the one the user named; the writer is the deployment's own; the gates are the product's.
+ * Nothing is scripted: every value below was read from the library during the run.
+ *
+ * SELF-SKIPPING, LIKE THE OTHER LIVE SUITES. Without a running Zotero the whole file skips: a fixture
+ * that stood in for the library would be evidence about the fixture, and this file's purpose is to be
+ * evidence about the library.
+ *
+ * THE DEMONSTRATIONS, in the order the guidance lists them:
+ *   1. the corrected pagination call returns the page that was asked for;
+ *   2. one source's identity is the same at registration, at the evidence, in the citation key and in
+ *      the `.bib`;
+ *   3. (the sentence-support half is in `dsh-research-team`, which owns that gate — this package is
+ *      its sibling and cannot import it; `registered-sources.spec.ts` there runs the gate over the
+ *      shape this file produces)
+ *   4. evidence that moved makes the old verdict unusable;
+ *   5. an unreachable library is an outage, never an empty collection or a substituted corpus;
+ *   6. the `.bib` parses, its fields are the source's, and no local path is in it.
+ */
+import { Context } from '@deepseek-ai/cordis'
+import { beforeAll, describe, expect, it } from 'vitest'
+
+import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
+import { CitationJsBibliographyWriter } from '../src/bibliography-writer.ts'
+import { ZoteroLiteratureAdapter } from '../src/zotero-literature-adapter.ts'
+import { ZoteroProvider } from '../src/zotero-provider.ts'
+import { readRegistrations } from '../src/zotero-registration.ts'
+import type { CitedItem } from '../src/zotero-registration.ts'
+import type { RegistrationRead } from '../src/zotero-registration.ts'
+import { evidenceStalenessOf } from '@deepseek-ai/dsh-research-core'
+import { checkBibtexEntry } from '../src/zotero-bibliography.ts'
+import { citeKeyOfLike, referenceEntriesOf } from './live-bibliography.ts'
+
+/** The MCP server this deployment mounts, and the library it reads. */
+const MCP_COMMAND = 'C:/Users/Administrator/.codex/mcp/zotero-mcp/Scripts/zotero-mcp.exe'
+const API_BASE = 'http://127.0.0.1:23119/api'
+const LIBRARY_PATH = 'users/0'
+const COLLECTION = 'ILFASAAE'
+/** The one item this deployment designates as a source its run may cite. */
+const ITEM: CitedItem = { itemKey: 'UA5MIGG3', page: 4, bibtexKey: 'rocheWhatHappensWhen2020' }
+
+/**
+ * Whether the local library is answering.
+ *
+ * PROBED BEFORE THE SUITE IS DECLARED, so an absent library skips these cases rather than failing
+ * them: "Zotero is not running" is a fact about the machine, and a red suite for it would train a
+ * reader to ignore the one case that must never be ignored — a library that answered wrongly.
+ *
+ * @returns true when the local API answered.
+ */
+async function libraryAnswers(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/${LIBRARY_PATH}/collections`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+const live = await libraryAnswers()
+
+describe.skipIf(!live)('the configured library, through the product\'s own client', () => {
+  /** The tool registry the MCP client registered onto. */
+  const registrations = new Map<string, {
+    execute(args: unknown, exec: { readonly signal: AbortSignal }): Promise<unknown>
+  }>()
+  let provider: ZoteroProvider
+  let read: RegistrationRead
+
+  beforeAll(async () => {
+    const ctx = new Context()
+    ctx.provide('tools', {
+      register(tool: {
+        name: string
+        execute?: (args: unknown, exec: { readonly signal: AbortSignal }) => Promise<unknown>
+      }) {
+        if (tool.execute !== undefined) registrations.set(tool.name, { execute: tool.execute.bind(tool) })
+        return () => {}
+      },
+      get: (name: string) => registrations.get(name),
+      guard: () => () => {},
+    })
+    await ctx.plugin(mcpClient as never, {
+      transport: 'stdio',
+      serverName: 'zotero',
+      command: MCP_COMMAND,
+      args: ['serve'],
+      env: { ZOTERO_LOCAL: 'true' },
+      cwd: process.cwd(),
+      toolCallTimeoutMs: 120_000,
+      failOnStartupError: true,
+    } as never)
+
+    provider = new ZoteroProvider(
+      { apiBase: API_BASE, localLibraryPath: LIBRARY_PATH, mcpServerName: 'zotero', timeoutMs: 60_000 },
+      (url, init) => fetch(url, { signal: init.signal }),
+      { get: name => registrations.get(name) },
+    )
+    read = await readRegistrations(provider, [ITEM])
+  }, 180_000)
+
+  it('enumerates the configured collection in full, and finds the designated item in it', async () => {
+    const collection = await provider.readCollection(COLLECTION)
+    expect(collection.ok).toBe(true)
+    if (!collection.ok) return
+    expect(collection.collection.complete).toBe(true)
+    expect(collection.collection.keys).toContain(ITEM.itemKey)
+  })
+
+  it('registers the designated source, with its entry and its passage read at one version', () => {
+    expect(read.failures).toEqual([])
+    const registration = read.registrations[0]
+    expect(registration?.identity).toBe('zotero:user:17529257:UA5MIGG3')
+    expect(registration?.registry).toBe('zotero')
+    expect(registration?.acquisition).toBe('live-library-read')
+    expect(registration?.evidence?.attachment?.key).toBe('PU2XWW83')
+    expect(registration?.evidence?.locator).toContain('page 4 of 10')
+  })
+
+  it('returns the page that was asked for, with the tool\'s own header removed', async () => {
+    // THE CORRECTED PAGINATION CALL. It takes `item_key` and an inclusive `start_page`; measured with
+    // the real server, the reply wraps the page in `# PDF Pages 4-4 of …` / `**Item Key:** …` /
+    // `**Total pages in PDF:** 10` / `## Page 4`, and the evidence text is what follows the marker.
+    const page = await provider.readPage(ITEM.itemKey, ITEM.page)
+    expect(page.ok).toBe(true)
+    if (!page.ok) return
+    expect(page.passage.page).toBe(ITEM.page)
+    expect(page.passage.totalPages).toBeGreaterThan(1)
+    expect(page.passage.text.length).toBeGreaterThan(200)
+    expect(page.passage.text).not.toContain('PDF Pages')
+    expect(page.passage.text).not.toContain('Item Key')
+    expect(page.passage.text).not.toContain('## Page')
+    // The reply is kept whole beside the extracted text, and its hash is over the REPLY.
+    expect(page.passage.audit.raw).toContain('PDF Pages')
+    expect(page.passage.audit.classification).toBe('page-text')
+    expect(page.passage.audit.rawLength).toBeGreaterThan(page.passage.text.length)
+  })
+
+  it('refuses a page past the end, and a page of an item that is not there', async () => {
+    const past = await provider.readPage(ITEM.itemKey, 10_000)
+    expect(past.ok).toBe(false)
+    if (past.ok) return
+    expect(past.failure.code).toBe('passage-out-of-range')
+
+    const absent = await provider.readPage('ZZZZZZZZ', 1)
+    expect(absent.ok).toBe(false)
+    if (absent.ok) return
+    expect(['passage-unrecognized', 'endpoint-unreadable']).toContain(absent.failure.code)
+  })
+
+  it('carries one identity from the registration to the citation key and into the .bib', async () => {
+    const source = read.registrations[0]
+    expect(source).toBeDefined()
+    if (source === undefined) return
+    // THE IDENTITY IS THE LIBRARY AND THE ITEM KEY; the DOI travels beside it as the external name.
+    expect(source.identity).toBe('zotero:user:17529257:UA5MIGG3')
+    expect(source.ref).toEqual({ kind: 'doi', id: '10.1016/j.aap.2020.105588' })
+    expect(source.evidence?.sourceIdentity).toBe(source.identity)
+
+    const citeKey = citeKeyOfLike(source)
+    expect(citeKey).toBe('cite-zotero:user:17529257:UA5MIGG3')
+
+    const bib = new CitationJsBibliographyWriter()
+    const text = await bib.write(referenceEntriesOf([source]))
+    expect(text).toContain(citeKey)
+    expect(text).toContain('10.1016/j.aap.2020.105588')
+    expect(text).toContain('Accident Analysis and Prevention')
+  })
+
+  it('renders a .bib that parses, agrees with the source, and carries no local path', async () => {
+    const source = read.registrations[0]
+    if (source === undefined) return
+    const citeKey = citeKeyOfLike(source)
+    const text = await new CitationJsBibliographyWriter().write(referenceEntriesOf([source]))
+
+    // PARSES: read back by the product's OWN reader, which is the one a run uses.
+    const checked = checkBibtexEntry({
+      text,
+      item: {
+        itemKey: source.identity,
+        title: source.title,
+        ...(source.year === undefined ? {} : { year: source.year }),
+        ...(source.ref.kind !== 'doi' ? {} : { doi: source.ref.id }),
+      },
+      citationKey: citeKey,
+    })
+    expect(checked.ok ? [] : checked.refusals).toEqual([])
+    if (!checked.ok) return
+    expect(checked.citation.citationKey).toBe(citeKey)
+    expect(checked.citation.title).toBe(source.title)
+    expect(checked.citation.year).toBe(source.year)
+    expect(checked.citation.doi).toBe('10.1016/j.aap.2020.105588')
+
+    // AND NO PATH. The library's own entry carries a `file` field naming where this machine keeps the
+    // PDF; the writer emits a fixed set of fields and `file` is not among them.
+    expect(text).not.toMatch(/[A-Za-z]:\\/u)
+    expect(text).not.toMatch(/\/(?:home|Users)\//u)
+    expect(text.toLowerCase()).not.toContain('file =')
+  })
+
+  it('makes a verdict unusable once the evidence it was made from has moved', async () => {
+    // THE BINDING IS COMPARED ON EVERY AXIS, and none implies another: the item's version moves when
+    // its metadata is edited, the attachment's when the FILE is replaced — which need not move the
+    // parent — and the hash when the extracted words change.
+    const binding = read.registrations[0]?.evidence
+    expect(binding).toBeDefined()
+    if (binding === undefined) return
+    expect(evidenceStalenessOf(binding, binding).stale).toBe(false)
+
+    const laterItem = { ...binding, sourceVersion: String(Number(binding.sourceVersion) + 1) }
+    expect(evidenceStalenessOf(binding, laterItem).moved).toEqual(['source-version'])
+
+    const laterFile = binding.attachment === undefined ? undefined : {
+      ...binding, attachment: { ...binding.attachment, version: String(Number(binding.attachment.version) + 1) },
+    }
+    expect(laterFile === undefined ? [] : evidenceStalenessOf(binding, laterFile).moved)
+      .toEqual(['attachment-version'])
+
+    const reExtracted = { ...binding, contentSha256: 'f'.repeat(64) }
+    expect(evidenceStalenessOf(binding, reExtracted).moved).toEqual(['content'])
+  })
+
+  it('reports an unreachable library as an outage, never as an empty collection', async () => {
+    // THE SAME PROVIDER, AIMED AT A PORT NOTHING ANSWERS ON. The distinction is the whole point of the
+    // seam: "the library holds nothing" and "the library could not be read" must never arrive as one
+    // value, and an outage must not become a successful read, an empty corpus, or a fixture.
+    const dead = new ZoteroProvider(
+      { apiBase: 'http://127.0.0.1:23118/api', localLibraryPath: LIBRARY_PATH, mcpServerName: 'zotero', timeoutMs: 5_000 },
+      (url, init) => fetch(url, { signal: init.signal }),
+      { get: name => registrations.get(name) },
+    )
+    const collection = await dead.readCollection(COLLECTION)
+    expect(collection.ok).toBe(false)
+    if (collection.ok) return
+    expect(collection.failure.code).toBe('endpoint-unreadable')
+
+    const outcome = await new ZoteroLiteratureAdapter(dead, { collectionKey: COLLECTION })
+      .search({ topic: 'take-over control' })
+    expect(outcome.status).toBe('unavailable')
+
+    const registered = await readRegistrations(dead, [ITEM])
+    expect(registered.registrations).toEqual([])
+    expect(registered.failures.join(' ')).toContain('UA5MIGG3')
+  })
+
+})

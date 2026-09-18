@@ -22,6 +22,7 @@ import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } fr
 import type { DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
+import type { SourceRecord } from './citation-bindings.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
 import type { ReviewPolicy } from './review-policy.ts'
 
@@ -144,6 +145,14 @@ export interface DriveOptions {
    */
   readonly statementAssessor?: StatementSupportAssessor
   /**
+   * The sources this run may cite, when the deployment configured a registry to draw them from.
+   *
+   * Absent means the checked-in corpus. Present, it is what the configured registry offered — and a
+   * registry that could not read its library offers NOTHING rather than falling back, so a run
+   * pointed at a library cannot silently cite the repository instead.
+   */
+  readonly sources?: ReadonlyMap<string, SourceRecord>
+  /**
    * The deployment's ability to check a revision against the issue it was written for.
    *
    * Absent means the issues a revision leaves pending stay pending: nothing closes them, which is a
@@ -221,6 +230,8 @@ export interface DriveStepOptions {
   readonly figureProvider?: FigureProvider
   /** The sentence-level reviewer; see {@link DriveOptions.statementAssessor}. */
   readonly statementAssessor?: StatementSupportAssessor
+  /** The citable sources; see {@link DriveOptions.sources}. */
+  readonly sources?: ReadonlyMap<string, SourceRecord>
   /** The revision verifier; see {@link DriveOptions.resolutionVerifier}. */
   readonly resolutionVerifier?: ResolutionVerifier
   /**

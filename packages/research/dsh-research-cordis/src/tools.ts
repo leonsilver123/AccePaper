@@ -31,6 +31,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { MockCitationResolverAdapter } from '@deepseek-ai/dsh-research-core'
+import type { SourceRegistryMode } from '@deepseek-ai/dsh-research-core'
+import type { CitedItem } from './zotero-registration.ts'
 import type { LiteratureSearchAdapter } from '@deepseek-ai/dsh-research-tools'
 
 import { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
@@ -193,6 +195,22 @@ export type LiteratureChannel =
     readonly pageSize?: number
     /** The venue to record for an item whose own record states none. */
     readonly fallbackVenue?: string
+    /**
+     * Which registry this run draws its citable sources from.
+     *
+     * Absent means `zotero`: a deployment that configured this channel named a library as its
+     * evidence, and drawing on the checked-in corpus as well would put sources in the bibliography
+     * that this deployment never pointed at.
+     */
+    readonly sourceRegistryMode?: SourceRegistryMode
+    /**
+     * The items this deployment designates as sources its runs may cite, each with the page its
+     * evidence is read from and the key its bibliographic entry carries.
+     *
+     * A run cites what is here and nothing else, so an item that could not be read leaves the run with
+     * fewer sources than it named — or none — rather than with a corpus from somewhere else.
+     */
+    readonly citedItems?: ReadonlyArray<CitedItem>
   }
 
 /** Bibliographic-resolver selection, configured the same way as the channel above. */

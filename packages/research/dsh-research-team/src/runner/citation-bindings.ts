@@ -26,8 +26,11 @@
 
 import { createHash } from 'node:crypto'
 
-import { EVIDENCE_CORPUS, assessmentsFor, corpusSource } from './evidence-corpus.ts'
+import { EVIDENCE_CORPUS, assessmentsFor, corpusBindingOf, corpusSource } from './evidence-corpus.ts'
 import type { StatementAssessment } from './statement-support.ts'
+import type {
+  EvidenceBinding, SourceAcquisition, SourceRegistration, SourceRegistry, SourceRegistryMode,
+} from '@deepseek-ai/dsh-research-core'
 
 /** How one source stands in relation to the statement it is cited for. */
 export type CitationSupport =
@@ -81,6 +84,23 @@ export interface SourceRecord {
   readonly locator?: Readonly<Record<string, string>>
   /** Whether the source is recorded as retracted or corrected, with what was recorded. */
   readonly correction?: { readonly kind: 'retracted' | 'corrected'; readonly note: string }
+  /**
+   * Which registry this record was read from.
+   *
+   * OPTIONAL BECAUSE A REGISTRY MAY NOT SAY, and absent is not a third registry: it is a record whose
+   * origin this run cannot state. A bibliography drawn from such a record is still writable and its
+   * origin is unrecorded, which is a fact about the run rather than about the source.
+   */
+  readonly registry?: SourceRegistry
+  /** How the record entered the run. Absent when the registry did not say. */
+  readonly acquisition?: SourceAcquisition
+  /**
+   * The passage a judgement about this source would rest on, when one was read.
+   *
+   * THE CITED RECORD CARRIES ITS EVIDENCE, not only its identity: a bibliography entry can be written
+   * from a title and a year, and a citation cannot be checked without knowing which words were read.
+   */
+  readonly evidence?: EvidenceBinding
 }
 
 /**
@@ -296,12 +316,68 @@ export function reviewedSources(): ReadonlyMap<string, SourceRecord> {
       authors: source.authors,
       year: source.year,
       venue: source.venue,
+      registry: 'curated',
+      acquisition: 'retrieved-then-checked-in',
+      evidence: corpusBindingOf(source),
       ...(source.retracted
         ? { correction: { kind: 'retracted' as const, note: 'the catalogue that served the record marks it retracted' } }
         : {}),
     }
     return [record.id, record]
   }))
+}
+
+/**
+ * One source a deployment's registry offered, as a record the citation chain can use.
+ *
+ * @param registration - the source, as the reading package handed it over.
+ * @returns the record, carrying the registry it came from and the passage it was read at.
+ */
+export function sourceRecordOf(registration: SourceRegistration): SourceRecord {
+  return {
+    id: registration.identity,
+    ref: registration.ref,
+    title: registration.title,
+    authors: registration.authors,
+    ...(registration.year === undefined ? {} : { year: registration.year }),
+    ...(registration.venue === undefined ? {} : { venue: registration.venue }),
+    registry: registration.registry,
+    acquisition: registration.acquisition,
+    ...(registration.evidence === undefined ? {} : { evidence: registration.evidence }),
+  }
+}
+
+/**
+ * The sources one run may cite, from the registry it configured.
+ *
+ * ONE MECHANISM, SELECTED BY CONFIGURATION, AND NO FALLBACK. `zotero` answers with what the library
+ * registry offered — and when that registry could not read its library it offers nothing, so this
+ * returns nothing rather than the checked-in corpus. A run configured to cite a library and silently
+ * citing a repository instead has published a bibliography nobody asked for, and the failure is
+ * invisible in the delivered paper.
+ *
+ * `combined` registers each source WITH ITS OWN ORIGIN rather than pooling two lists, so which
+ * registry a reference came from survives into the bibliography.
+ *
+ * @param mode - which registry this run draws on.
+ * @param registrations - what the library registry offered, empty for a run that does not read one.
+ * @returns the citable sources, keyed by their own id.
+ */
+export function sourcesForMode(
+  mode: SourceRegistryMode,
+  registrations: ReadonlyArray<SourceRegistration>,
+): ReadonlyMap<string, SourceRecord> {
+  const curated = mode === 'zotero' ? new Map<string, SourceRecord>() : reviewedSources()
+  if (mode === 'curated') return curated
+  const records = new Map(curated)
+  for (const registration of registrations) {
+    const record = sourceRecordOf(registration)
+    // A REGISTRATION NEVER OVERWRITES A CURATED RECORD. Two registries that minted one identity is a
+    // collision, and silently preferring one would drop a source the other offered without saying so.
+    if (records.has(record.id)) continue
+    records.set(record.id, record)
+  }
+  return records
 }
 
 /**
@@ -398,8 +474,13 @@ function sha256(text: string): string {
 }
 
 /** What the reviewed corpus establishes about one claim version's sources, unattached. */
-export function judgementsFor(claimRef: string): ReadonlyArray<SourceJudgement> {
-  const sources = reviewedSources()
+export function judgementsFor(
+  claimRef: string,
+  from?: ReadonlyMap<string, SourceRecord>,
+): ReadonlyArray<SourceJudgement> {
+  // THE RUN'S OWN REGISTRY WHEN IT HAS ONE. A run configured to cite a literature library passes what
+  // that library offered; one that names none reads the checked-in corpus, exactly as before.
+  const sources = from ?? reviewedSources()
   return assessmentsFor(claimRef)
     .flatMap((assessment) => {
       const source = sources.get(assessment.sourceDoi)

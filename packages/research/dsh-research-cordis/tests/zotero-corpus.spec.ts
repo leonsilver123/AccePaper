@@ -247,7 +247,7 @@ const PYMUPDF_NOTICE =
   + " 'zotero-mcp-server[pdf]')"
 
 /** The out-of-range sentence, with the byte-order mark the live reply actually carried. */
-const OUT_OF_RANGE = '﻿Start page 11 is out of range. PDF has 10 pages (1-10).'
+const OUT_OF_RANGE = `${String.fromCharCode(0xFEFF)}Start page 11 is out of range. PDF has 10 pages (1-10).`
 
 /**
  * A provider whose text tools answer with scripted replies.

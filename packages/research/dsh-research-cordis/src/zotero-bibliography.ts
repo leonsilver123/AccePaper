@@ -316,10 +316,21 @@ function normaliseDoi(doi: string): string {
  * @returns the bibliography text.
  */
 export function renderBibtex(citations: ReadonlyArray<ParsedCitation>): string {
-  // THE KEY THE RUN DECIDED IS `citation-key`, NOT `id`. Measured 2026-09-18: the writer ignores `id`
-  // and, without `citation-key`, INVENTS a label from author and title — an entry this run keyed
-  // `rocheWhatHappensWhen2020` came back as `@article{Roche2020title,`. That would rename the source
-  // in the one place a reader follows the citation, so the key travels in the field the writer reads.
+  // THE KEY THE RUN DECIDED IS THE KEY THE FILE MUST PRINT, AND THE WRITER WILL NOT DO IT UNASKED.
+  //
+  // Measured 2026-09-18, against the installed plugin: `LABEL.toSource` uses the label it is given
+  // only when `isLabelSafe` accepts it, and `isLabelSafe` rejects anything matching
+  // `/[ -/:-@[-^]…/` — which includes `-`, `.` and `/`. EVERY cite key
+  // this run mints is `cite-<identifier>` and every DOI contains all three, so the check rejected all
+  // of them and the writer fell through to inventing a label from author and year: the file carried
+  // `@article{Roche2020What,` where the manuscript cites `cite-10.1016/j.aap.2020.105588`. It parsed,
+  // it looked like a bibliography, and the citation in the text named nothing in it.
+  //
+  // `checkLabel: false` is the plugin's own configuration point for exactly this, and `useIdAsLabel`
+  // makes the fallback the id rather than a label built from the entry's fields. A DOI is a legal
+  // BibTeX key — BibTeX reserves `,`, `{`, `}`, `(` and `)` and whitespace, none of which appears in
+  // one — and it is what reference managers themselves key DOIs by.
+  configureBibtexLabels()
   const entries = citations.map(citation => ({
     id: citation.citationKey,
     'citation-key': citation.citationKey,
@@ -333,6 +344,24 @@ export function renderBibtex(citations: ReadonlyArray<ParsedCitation>): string {
     ...(citation.doi === undefined ? {} : { DOI: citation.doi }),
   }))
   return plugins.output.format('bibtex', entries)
+}
+
+/**
+ * Tell the BibTeX writer to print the label it was given, rather than inventing one.
+ *
+ * THE PLUGIN'S OWN CONFIGURATION POINT, set once. It is a module-level setting on the plugin rather
+ * than an argument to the writer, which is why this cannot be a parameter: the alternative would be
+ * rewriting the rendered text, and a deliverable repaired by string surgery is a deliverable whose
+ * correctness depends on the shape of a label this repository does not control.
+ *
+ * Idempotent, and safe to call from every render.
+ */
+function configureBibtexLabels(): void {
+  const config = plugins.config.get('@bibtex') as {
+    format: { checkLabel: boolean; useIdAsLabel: boolean }
+  }
+  config.format.checkLabel = false
+  config.format.useIdAsLabel = true
 }
 
 /**

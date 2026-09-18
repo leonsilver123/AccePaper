@@ -185,7 +185,7 @@ import {
   checkStatementBindings, judgementsFor, locateStatements,
   citeKeyOf, renderCitationMarkers, reviewedSources,
 } from './citation-bindings.ts'
-import type { CitationUse, SourceJudgement } from './citation-bindings.ts'
+import type { CitationUse, SourceJudgement, SourceRecord } from './citation-bindings.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -452,6 +452,14 @@ export interface ExecCtx {
    * happened.
    */
   readonly statementAssessor?: StatementSupportAssessor
+  /**
+   * The sources this run may cite, from the registry the deployment configured.
+   *
+   * ABSENT MEANS THE CHECKED-IN CORPUS, which is what every run read before there was a choice. A run
+   * pointed at a literature library passes what that library offered, so a sentence can be bound to a
+   * source read during this run rather than only to one committed to the repository.
+   */
+  readonly sources?: ReadonlyMap<string, SourceRecord>
   /**
    * The deployment's revision verifier, when it has one.
    *
@@ -851,8 +859,9 @@ function priorWorkSentence(judgements: ReadonlyArray<SourceJudgement>): string {
  */
 function referenceEntriesFor(
   citations: ReadonlyArray<CitationUse>,
+  from?: ReadonlyMap<string, SourceRecord>,
 ): ReadonlyArray<Record<string, unknown>> {
-  const { entries, unresolvable } = bibliographyOf(citations, reviewedSources())
+  const { entries, unresolvable } = bibliographyOf(citations, from ?? reviewedSources())
   if (unresolvable.length > 0) {
     // A CITED SOURCE THE DEPLOYMENT HAS NO RECORD OF cannot be printed. Reaching here means a binding
     // names something the reviewed corpus does not hold, which the binding check refuses earlier; the
@@ -2770,7 +2779,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // what the reviewed corpus establishes about this claim's sources says nothing about where in a
   // manuscript a source will be cited, so a judgement made before the prose exists could only be
   // about a slot — which is what this used to be, and why a rewritten sentence kept its support.
-  const judgements = judgementsFor(claimRef)
+  const judgements = judgementsFor(claimRef, ctx.sources)
   // A JUDGEMENT IS CHECKED WHERE IT IS MADE, before any of it reaches the draft: an empty passage, a
   // judgement stronger than what was read, or a source the retrieval does not hold is refused here.
   for (const judgement of judgements) {
@@ -2987,7 +2996,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     )
   }
   const citations = bound.uses
-  const references = referenceEntriesFor(citations)
+  const references = referenceEntriesFor(citations, ctx.sources)
   const sectionEvidence = headings.map(h => evidenceFor(h.id))
   const refused = sectionEvidence.filter(entry => entry.missing.length > 0)
 
@@ -3438,7 +3447,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             statementAssessments: await assessStatements(
               ctx.statementAssessor,
               locateStatements(revised.map(section => ({ id: section.id, bodyText: section.bodyText }))),
-              judgementsFor(claimRef),
+              judgementsFor(claimRef, ctx.sources),
               carriedAssessments(ctx),
             ),
           }),
@@ -3558,7 +3567,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const statementRefusals = checkStatementBindings(
     (Array.isArray(revised?.citations) ? revised.citations : []) as ReadonlyArray<CitationUse>,
     locateStatements(sections.map(section => ({ id: section.id, bodyText: section.bodyText }))),
-    judgementsFor(claimRef),
+    judgementsFor(claimRef, ctx.sources),
   )
   if (statementRefusals.length > 0) {
     throw new Error(
@@ -3585,7 +3594,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? checkStatementSupport(
       readings,
       locateStatements(sections.map(section => ({ id: section.id, bodyText: section.bodyText }))),
-      judgementsFor(claimRef),
+      judgementsFor(claimRef, ctx.sources),
     )
     : []
   if (supportRefusals.length > 0) {

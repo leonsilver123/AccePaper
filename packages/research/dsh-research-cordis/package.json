@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-mcp-client": "workspace:^",
     "@deepseek-ai/dsh-research-core": "workspace:^",
     "@deepseek-ai/dsh-research-tools": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",

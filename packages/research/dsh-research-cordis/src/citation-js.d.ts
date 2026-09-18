@@ -46,6 +46,19 @@ declare module '@citation-js/core' {
   }
 
   export const plugins: {
+    /**
+     * A plugin's own configuration, by its namespace.
+     *
+     * The BibTeX plugin decides how it labels an entry from here, and its defaults reject this
+     * repository's cite keys; see `configureBibtexLabels` in `zotero-bibliography.ts`.
+     */
+    readonly config: {
+      /**
+       * @param name - the plugin namespace, e.g. `'@bibtex'`.
+       * @returns its configuration object, whose fields the caller narrows.
+       */
+      get(name: string): unknown
+    }
     readonly output: {
       /**
        * @param name - the registered output format, e.g. `'bibtex'`.
