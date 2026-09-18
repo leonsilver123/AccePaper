@@ -16,6 +16,10 @@
 // exemption, non-member passthrough, plus the service teardown disposer.
 
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
@@ -206,6 +210,20 @@ interface BootOptions extends ResearchTeamServiceConfig {
   failStart?: boolean
 }
 
+/**
+ * The `draft` artifact of a stored run, read from the snapshot the run itself wrote.
+ *
+ * @param directory - the configured snapshot directory.
+ * @param runId - the run to read.
+ * @returns the draft artifact's fields, or `{}` when the run wrote none.
+ */
+function readDraftOf(directory: string, runId: string): Record<string, unknown> {
+  const path = join(directory, runId, 'research-run-snapshot.json')
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
+    registry?: Record<string, { value?: Record<string, unknown> }>
+  }
+  return parsed.registry?.['draft']?.value ?? {}
+}
 async function bootHost(options: BootOptions = {}): Promise<Host> {
   const ctx = new Context()
   const agents = new Map<string, AgentStub>()
@@ -1353,6 +1371,61 @@ describe('ResearchTeamService — the production pipeline entry', () => {
       expect(result.submissionReady).toBe(false)
       expect(result.readinessNote.length).toBeGreaterThan(0)
       expect(result.artifacts.map(artifact => artifact.slug)).toContain('rebuttal')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  it('gives a resumed run the whole deployment capability set, not a subset of it', async () => {
+    // MEASURED, 2026-09-19, on the deployed profile. A run stopped at D3 with `statement-beyond-scope`
+    // — the sentence assessor had read the passages and refused the manuscript — and the run was then
+    // resumed through the product's own restart path. It PASSED D3 and ran to the gate. The draft
+    // artifact it wrote carried NO `statementAssessments` at all.
+    //
+    // `resumeRunPipeline` handed the drive two capabilities by hand — `toolDeps` and `proseWriter` —
+    // so the resumed run supplied no assessor: the gate that had just refused the manuscript never
+    // ran. The same omission drops `documentCompiler`, `figureProvider`, `resolutionVerifier`,
+    // `reviewPolicy` and the citable `sources`, which is why the fix is the deployment's whole set
+    // rather than the two fields a reader happens to notice.
+    //
+    // THE ASSERTION IS THE ARTIFACT FIELD, because it is the one thing the two drives differ in and
+    // the run's own record is where a reader looks. Comparing the capability object itself would
+    // pass while the executor still saw nothing.
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-resume-capability-'))
+    const host = await bootHost()
+    try {
+      host.ctx.provide('research', {
+        snapshotDirectory: directory,
+        statementAssessor: {
+          id: 'spec-assessor',
+          assess: (input: {
+            statement: { statementId: string; textSha256: string }
+            judgement: { citeKey: string; quoteSha256: string; readScope: string }
+          }) => Promise.resolve({
+            statementId: input.statement.statementId,
+            statementSha256: input.statement.textSha256,
+            citeKey: input.judgement.citeKey,
+            quoteSha256: input.judgement.quoteSha256,
+            assessorVersion: 'spec-assessor',
+            support: 'partial',
+            readScope: input.judgement.readScope,
+            basis: 'the passage states less than the sentence claims',
+            judgedBy: 'spec-assessor',
+            judgedAt: '2026-09-19T00:00:00.000Z',
+          }),
+        },
+      })
+      const refused = await host.service.runPipeline()
+      const refusedRunId = refused.run.runId
+      expect(refused.run.steps.find(step => step.stepId === 'D3-writing')?.executeError)
+        .toContain('statement-beyond-scope')
+
+      await host.service.resumeRunPipeline({ runId: refusedRunId })
+      const draft = readDraftOf(directory, refusedRunId)
+      // PRESENT, not merely configured. `undefined` is what the weaker drive left here, and it is
+      // also what a deployment that configures no reader leaves — the two are told apart by the
+      // presence of the field, which is the reading the artifact is written to support.
+      expect(Array.isArray(draft['statementAssessments'])).toBe(true)
     } finally {
       await host.dispose()
     }

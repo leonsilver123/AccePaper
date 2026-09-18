@@ -1085,7 +1085,16 @@ export class ResearchTeamService extends TypertRemoteService {
     if (persistence === undefined) {
       throw new Error('[research] no snapshot directory is configured, so there is no run to resume')
     }
-    const capability = { toolDeps: this.hostToolDeps(), proseWriter: this.hostProseWriter() }
+    // THE SAME CAPABILITIES A FRESH RUN GETS, because a resumed run IS the same run. This was two
+    // hand-picked fields — `toolDeps` and `proseWriter` — and the omission was not neutral: it made a
+    // resumed run STRICTLY WEAKER than the run it continues, and it said so nowhere. Measured
+    // 2026-09-19: a run stopped at D3 by the sentence assessor (`statement-beyond-scope`) was resumed,
+    // re-ran D3, and PASSED — because the resume supplied no `statementAssessor`, so the gate that
+    // had just refused the manuscript never ran, and the draft artifact simply carries no
+    // `statementAssessments`. The same omission drops `documentCompiler`, `figureProvider`,
+    // `resolutionVerifier`, `reviewPolicy` and the citable `sources`. A resumed run that skips the
+    // gates the fresh one enforced reports a clean pass for a manuscript nothing read.
+    const capability = this.driveOptions()
     const restored = await persistence.tryLoad(capability)
     if (restored === null) {
       throw new Error('[research] no persisted run to resume in the configured snapshot directory')
@@ -1202,13 +1211,15 @@ export class ResearchTeamService extends TypertRemoteService {
       ? recordedTimeout
       : undefined
     const run = await driveRemaining(restored.store, restored.runId, runCtx, from, {
+      // The capability set first, then the two facts the RUN'S OWN RECORD is the authority for. The
+      // order is the whole point: a resume must not re-resolve the profile or the budget from
+      // whatever this deployment is configured for today, and it must not drop anything else either.
+      ...capability,
       evidenceProfile,
       // The budget the run was started with, for the same reason as the plan: the registry's
       // per-step value fits the offline channels, and a run driven through a model route that
       // resumed under the registry budget would record `timeout` on its first long step.
       ...(recordedTimeoutMs === undefined ? {} : { timeoutMs: recordedTimeoutMs }),
-      ...(capability.toolDeps !== undefined ? { toolDeps: capability.toolDeps } : {}),
-      ...(capability.proseWriter !== undefined ? { proseWriter: capability.proseWriter } : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       checkpointAfterStep: async (checkpointRunId: string) => { await this.checkpointRun(restored.store, checkpointRunId) },
     })
