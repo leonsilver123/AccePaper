@@ -31,6 +31,51 @@ function contractOf(plan: ArgumentPlan, id: string) {
   return contract
 }
 
+/** The results section's contract for a run that measured one magnitude. */
+function resultsContractWith(measuredPct: number) {
+  const plan = argumentPlanOf({ ...SHIPPED, measuredPct })
+  const contract = plan.sections.find(section => section.id === 'results')
+  if (contract === undefined) throw new Error('fixture: the plan has no results contract')
+  return contract
+}
+
+describe('a percentage is stated in the forms a paper writes one', () => {
+  /** Whether the section is refused FOR NOT STATING THE MEASURED CHANGE. */
+  const owesTheChange = (body: string): boolean =>
+    checkSectionContract(resultsContractWith(-38.2), body)
+      .some(refusal => refusal.detail.includes('states-measured-change'))
+
+  it('accepts the words, the spaced sign and a rounded value', () => {
+    // THE REAL RUN THAT PRODUCED THIS. A model wrote "a change of minus 38.2 per cent" — correct
+    // English, and the form this repository's own prose uses — and the abstract's obligation was
+    // refused for not stating the change, which stopped the run at E1. The rule now says what stating
+    // a percentage looks like rather than one spelling of it. (The results section owes other things
+    // too, so each body below is asked about THIS obligation and not about the section as a whole.)
+    for (const body of [
+      'The minimum time-to-collision fell by 38.2 % under the mixed composition.',
+      'The minimum time-to-collision fell by 38.2% under the mixed composition.',
+      'The minimum time-to-collision fell by minus 38.2 per cent under the mixed composition.',
+      'The minimum time-to-collision fell by 38.20 percent under the mixed composition.',
+      'The minimum time-to-collision fell by 38.2-per-cent under the mixed composition.',
+    ]) {
+      expect(owesTheChange(body), body).toBe(false)
+    }
+  })
+
+  it('still refuses a section that states no percentage at all', () => {
+    // THE OTHER DIRECTION, so the rule is "the measurement is stated" and not "anything is accepted":
+    // a section that reports the arms and says nothing about the change owes the obligation.
+    expect(owesTheChange(
+      'The minimum time-to-collision was 19.58 s for the baseline and 12.10 s for the mixed platoon.',
+    )).toBe(true)
+  })
+
+  it('still refuses a section that states a different magnitude', () => {
+    expect(owesTheChange('The minimum time-to-collision fell by 12.5 % under the mixed composition.'))
+      .toBe(true)
+  })
+})
+
 describe('what a measurement did to the claim it committed to', () => {
   it('is a refutation when the measurement moved the other way', () => {
     expect(claimOutcomeOf(-38.2, 'increase', 20)).toBe('refuted')

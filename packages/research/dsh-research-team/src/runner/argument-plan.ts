@@ -370,6 +370,14 @@ export function contractFor(sectionId: string): SectionContract | undefined {
  * @param bodyText - the section as written.
  * @returns one refusal per unmet obligation, or an empty list.
  */
+/**
+ * A number stated as a percentage, in the forms a paper writes one.
+ *
+ * `%` and its spaced form, and the words `per cent` / `percent` / `per-cent` — a manuscript that says
+ * "minus 38.2 per cent" has stated the measurement.
+ */
+const PERCENT_STATED = /(\d+(?:\.\d+)?)[-\s]*(?:%|per[-\s]?cent)/gu
+
 export function checkSectionContract(
   contract: SectionContract,
   bodyText: string,
@@ -380,7 +388,13 @@ export function checkSectionContract(
     const check = obligation.check
     if (check === undefined) continue
     const percent = check.percentWithin
-    const statesPercent = percent === undefined || [...bodyText.matchAll(/(\d+(?:\.\d+)?)\s*%/gu)]
+    // WHAT STATING A PERCENTAGE LOOKS LIKE, not one spelling of it. This read `(\d+(\.\d+)?)\s*%`,
+    // so a manuscript that wrote "a change of minus 38.2 per cent" — correct English, and the form
+    // this repository's own prose uses — was refused for not stating the change, and a real
+    // production run stopped at E1 on exactly that sentence (2026-09-18). The magnitude is compared
+    // with a tolerance, so `38.20` and `38.2` are the same measurement; the sign is not read here at
+    // all, because whether the change was a rise or a fall is what the DIRECTION obligation is for.
+    const statesPercent = percent === undefined || [...bodyText.matchAll(PERCENT_STATED)]
       .some(match => Math.abs(Number.parseFloat(match[1] ?? '') - percent) < 0.05)
     const statesDirection = check.anyOf === undefined
       || check.anyOf.some(word => new RegExp(`\\b${word}\\b`, 'u').test(text))
