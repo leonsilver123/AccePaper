@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-18-a-citation-supports-a-sentence-not-a-claim.md
-2026-09-18-a-citation-supports-a-sentence-not-a-claim.md: 98e11a61d65b178f6d80599b74fbf1fc551c5b32
-2026-09-18-a-citation-supports-a-sentence-not-a-claim.zh.md: b736fdd7934832f23056f150f988cb63f443d76e
+2026-09-18-a-citation-supports-a-sentence-not-a-claim.md: b0b1e5a62f491d2b2279eca65be0a88d50f79a8b
+2026-09-18-a-citation-supports-a-sentence-not-a-claim.zh.md: 76479cfcd04ab762bfd0776310a140fb63f226e8

@@ -3265,6 +3265,23 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         openIssues: applied.openIssues,
         citations,
         references,
+        // THE READINGS TRAVEL WITH THE MANUSCRIPT THEY WERE MADE ABOUT. D4 rebuilt the revised draft
+        // without this field, so a run under a deployment that HAD read every sentence arrived at E1
+        // looking like one that could not — and E1, reading the absence as "no assessor", skipped the
+        // check entirely (reproduced by the pipeline review of 2026-09-18 with a deterministic
+        // assessor: 3 assessments at D3, none on the revised draft, E1 passed). A patch that rewrote a
+        // sentence makes its assessment stale rather than absent: `assessStatements` re-reads exactly
+        // those, so what arrives here is a reading of THIS manuscript.
+        ...(ctx.statementAssessor === undefined
+          ? {}
+          : {
+            statementAssessments: await assessStatements(
+              ctx.statementAssessor,
+              locateStatements(revised.map(section => ({ id: section.id, bodyText: section.bodyText }))),
+              judgementsFor(claimRef),
+              carriedAssessments(ctx),
+            ),
+          }),
         ...(argumentPlan === undefined ? {} : { argumentPlan }),
         renderedFigures,
         resultSource: d4Outcome.source,
@@ -3395,17 +3412,22 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // reads sentences (which is the only case this fires in) has to re-read before the manuscript is
   // published. Checked HERE rather than only where the assessment was made, because the manuscript
   // assembled at this step is the revised one.
-  const supportRefusals = !Array.isArray(revised?.statementAssessments)
-    // NO READINGS WERE MADE, because the deployment has no reviewer for sentences. Nothing is refused:
-    // the absence is the record, and `checkStatementSupport` with an empty list would refuse every
-    // citation of every run under such a deployment — a fact about the deployment, reported as a
-    // defect of the manuscript.
-    ? []
-    : checkStatementSupport(
-      revised.statementAssessments as ReadonlyArray<StatementAssessment>,
+  // WHAT DECIDES WHETHER A READING IS REQUIRED IS THE RUN'S POLICY, NOT THE ARTIFACT'S FIELDS. The
+  // step before this one carried the readings forward, so an empty list here means the deployment
+  // cannot read sentences — a fact about the deployment — while a deployment that CAN read them and
+  // arrives with none or with stale ones is refused. Reading the absence of the field as "no
+  // assessor" is what let a revision drop every reading and still pass (measured, 2026-09-18).
+  const readingsRequired = ctx.statementAssessor !== undefined
+  const readings = Array.isArray(revised?.statementAssessments)
+    ? (revised.statementAssessments as ReadonlyArray<StatementAssessment>)
+    : []
+  const supportRefusals = readingsRequired
+    ? checkStatementSupport(
+      readings,
       locateStatements(sections.map(section => ({ id: section.id, bodyText: section.bodyText }))),
       judgementsFor(claimRef),
     )
+    : []
   if (supportRefusals.length > 0) {
     throw new Error(
       '[E1-format] a sentence cites a source the deployment never read it against: '
@@ -3883,6 +3905,19 @@ function nonEmptyPackageFiles(
     sources[path] = entry.source
   }
   return { files, sources }
+}
+
+/**
+ * The readings this run already holds, read off the draft D4 is revising.
+ *
+ * @param ctx - the D4 execution context.
+ * @returns the assessments the draft carries, or an empty list when it carries none.
+ */
+function carriedAssessments(ctx: ExecCtx): ReadonlyArray<StatementAssessment> {
+  const draft = readInput(ctx, 'draft')
+  return Array.isArray(draft?.statementAssessments)
+    ? (draft.statementAssessments as ReadonlyArray<StatementAssessment>)
+    : []
 }
 
 /** E2-submit runs no executor at all (human gate stop). */

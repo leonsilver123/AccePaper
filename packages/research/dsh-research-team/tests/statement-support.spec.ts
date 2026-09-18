@@ -19,6 +19,7 @@ import { locateStatements } from '../src/runner/citation-bindings.ts'
 import type { SourceJudgement } from '../src/runner/citation-bindings.ts'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
+import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 
 const CITING = 'Prior work reports that the controller holds a constant gap [@cite-10.1016/j.trb.2025.103352].'
 
@@ -54,6 +55,10 @@ function assessor(answer: Partial<StatementAssessment>): {
           statementId: input.statement.statementId,
           statementSha256: input.statement.textSha256,
           citeKey: input.judgement.citeKey,
+          // WHAT IT READ AND WHAT IT IS: an assessment names the passage's version and the reader's,
+          // because either moving makes the verdict a statement about something else.
+          quoteSha256: input.judgement.quoteSha256,
+          assessorVersion: 'spec-assessor',
           support: 'supported',
           readScope: 'full-text',
           basis: 'the passage states it',
@@ -93,6 +98,8 @@ describe('a claim-level verdict is not a sentence-level one', () => {
       statementId: one?.statementId ?? '',
       statementSha256: 'b'.repeat(64),
       citeKey: 'cite-10.1016/j.trb.2025.103352',
+      quoteSha256: judgement().quoteSha256,
+      assessorVersion: 'spec-assessor',
       support: 'supported',
       readScope: 'full-text',
       basis: 'the passage states it',
@@ -228,5 +235,92 @@ describe('a run under a deployment that reads sentences', () => {
     // ABSENT, NOT EMPTY. An empty list would mean the readings were made and found nothing — the
     // reading a consumer must not make — so the field is missing and E1 checks nothing for this run.
     expect(draft.statementAssessments).toBeUndefined()
+  })
+})
+
+describe('the readings travel with the manuscript, and the policy decides', () => {
+  it('carries them from the draft onto the revised draft, through D4', async () => {
+    // THE BREAK THE REVIEW REPRODUCED: D4 rebuilt the revised draft without the field, so a run under
+    // a deployment that HAD read every sentence arrived at E1 looking like one that could not read any.
+    // This drives the production executors and asserts what the artifact between them carries.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { statementAssessor: assessor({}).assessor })
+    const draft = getArtifact(store, run.runId, 'draft') as {
+      statementAssessments?: ReadonlyArray<StatementAssessment>
+    }
+    const revised = getArtifact(store, run.runId, 'revised-draft') as {
+      statementAssessments?: ReadonlyArray<StatementAssessment>
+    }
+    expect(draft.statementAssessments?.length ?? 0).toBeGreaterThan(0)
+    expect(revised.statementAssessments?.length).toBe(draft.statementAssessments?.length)
+    // AND THE RUN FINISHED: the manuscript this revision produced is the one the readings are about.
+    expect(run.steps.find(step => step.stepId === 'E1-format')?.status).toBe('passed')
+  })
+
+  it('refuses at E1 when the revision arrives carrying no readings at all', async () => {
+    // THE BREAK THE REVIEW FOUND, INJECTED AT THE STEP THAT CAUSED IT: the REAL D4 executor runs, and
+    // what it hands on has the field removed — exactly what the shipped code did by rebuilding the
+    // revised draft without it. D3's readings are sound, so nothing refuses before E1; the run under a
+    // deployment that READS SENTENCES arrives at the manuscript step with no reading of it, and that
+    // is refused there rather than mistaken for a deployment that cannot read.
+    const store: ResearchRunStore = new Map()
+    const real = STEP_EXECUTOR_REGISTRY.get('D4-rebuttal')?.executor
+    expect(real).toBeDefined()
+    const run = await runT19B(store, {
+      statementAssessor: assessor({}).assessor,
+      executorOverride: stepId => stepId !== 'D4-rebuttal' || real === undefined
+        ? undefined
+        : async (ctx) => {
+          const produced = await real(ctx)
+          const revised_ = produced['revised-draft']
+          if (revised_ !== null && typeof revised_ === 'object') {
+            delete (revised_ as Record<string, unknown>)['statementAssessments']
+          }
+          return produced
+        },
+    })
+    const d3 = run.steps.find(step => step.stepId === 'D3-writing')
+    const e1 = run.steps.find(step => step.stepId === 'E1-format')
+    // D3 IS SOUND — it wrote three readings and passed. What fails is the step that publishes.
+    expect(d3?.status).toBe('passed')
+    expect(e1?.status).toBe('in_progress')
+    expect(e1?.executeError).toContain('statement-unassessed')
+    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+  })
+})
+
+describe('an assessment is bound to the passage as well as the sentence', () => {
+  it('asks again when the passage changed, even though the sentence did not', async () => {
+    // THE CACHE GAP THE REVIEW MEASURED: the sentence unchanged, the source's excerpt replaced, and
+    // the old verdict reused. An assessment is a reading of a pair, so either half moving makes it a
+    // different question.
+    const { assessor: a, asked } = assessor({})
+    const first = await assessStatements(a, statements, [judgement()])
+    expect(asked).toHaveLength(1)
+    const corrected: SourceJudgement = { ...judgement(), quote: 'a corrected passage', quoteSha256: 'd'.repeat(64) }
+    await assessStatements(a, statements, [corrected], first)
+    expect(asked).toHaveLength(2)
+  })
+
+  it('asks again when the assessor changes, and not when it has not', async () => {
+    const { assessor: a, asked } = assessor({})
+    const first = await assessStatements(a, statements, [judgement()])
+    // Same reader, same policy: nothing to ask again.
+    await assessStatements({ ...a, id: 'spec-assessor' }, statements, [judgement()], first)
+    expect(asked).toHaveLength(1)
+    // A reader whose rules changed produces a different verdict for the same pair, so the old one is
+    // not reused.
+    await assessStatements({ ...a, id: 'spec-assessor', policyVersion: '2' }, statements, [judgement()], first)
+    expect(asked).toHaveLength(2)
+  })
+
+  it('refuses a verdict made on a passage the source no longer holds', async () => {
+    const { assessor: a } = assessor({})
+    const assessed = await assessStatements(a, statements, [judgement()])
+    expect(checkStatementSupport(assessed, statements, [judgement()])).toEqual([])
+    const replaced: SourceJudgement = { ...judgement(), quote: 'a replaced passage', quoteSha256: 'e'.repeat(64) }
+    const refusals = checkStatementSupport(assessed, statements, [replaced])
+    expect(refusals.map(refusal => refusal.code)).toEqual(['statement-unassessed'])
+    expect(refusals[0]?.detail).toContain('evidence that has changed')
   })
 })

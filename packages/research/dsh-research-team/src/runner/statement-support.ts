@@ -35,6 +35,23 @@ export interface StatementAssessment {
   readonly statementSha256: string
   /** The source the sentence cites, by the key the manuscript prints. */
   readonly citeKey: string
+  /**
+   * THE EVIDENCE VERSION: SHA-256 of the passage the assessment was made on.
+   *
+   * A sentence and the passage read for it are two documents, and each can change without the other.
+   * Binding only the sentence meant a corpus that corrected or replaced an excerpt left every
+   * assessment about the old passage standing — the pipeline review of 2026-09-18 reproduced exactly
+   * that: the sentence unchanged, `quoteSha256` changed, and the cache returned the old verdict.
+   */
+  readonly quoteSha256: string
+  /**
+   * WHAT MADE THE JUDGEMENT: the assessor's own id, and the version of the rules it applied.
+   *
+   * A verdict is only as good as the reader that reached it. An assessor that is replaced, or whose
+   * policy changes, invalidates what the old one concluded — and a timestamp cannot stand in for
+   * this, because two verdicts the same day are two verdicts.
+   */
+  readonly assessorVersion: string
   /** How the passage read stands in relation to THIS sentence. */
   readonly support: CitationSupport
   /** How much of the source was read to reach it, which bounds what the verdict can claim. */
@@ -57,6 +74,14 @@ export interface StatementAssessment {
 export interface StatementSupportAssessor {
   /** What this assessor is, for the record — a model id, or the name of the rulebook behind it. */
   readonly id: string
+  /**
+   * The version of the rules this assessor applies, when it has any.
+   *
+   * A verdict is bound to the reader that reached it. An assessor whose policy changes produces a
+   * different verdict for the same pair, so its old assessments are not reused — see
+   * {@link assessStatements}.
+   */
+  readonly policyVersion?: string
   /**
    * Judge one citing sentence against the source it cites.
    *
@@ -135,6 +160,20 @@ export function checkStatementSupport(
         })
         continue
       }
+      // THE PASSAGE IS THE OTHER HALF OF THE PAIR. A corpus that corrects or replaces an excerpt
+      // changes what the source says without touching the manuscript, and a verdict reached on the old
+      // excerpt establishes nothing about the new one — so it is refused exactly as a rewritten
+      // sentence is, and for the same reason.
+      if (assessment.quoteSha256 !== judgement.quoteSha256) {
+        refusals.push({
+          code: 'statement-unassessed',
+          statementId: statement.statementId,
+          citeKey: judgement.citeKey,
+          detail: `'${statement.statementId}' was assessed on a passage '${judgement.citeKey}' no`
+            + ' longer holds, so the verdict rests on evidence that has changed',
+        })
+        continue
+      }
       if (assessment.support === 'supported') continue
       // EVERY OTHER VERDICT IS REFUSED AS ITSELF, so a reader can tell "the source disagrees" from
       // "the source says something else entirely" from "nobody could read enough of it to say".
@@ -151,6 +190,22 @@ export function checkStatementSupport(
     }
   }
   return refusals
+}
+
+/**
+ * What an assessor is, as a version.
+ *
+ * The deployment's assessor states its own id; a policy version may be added where an assessor holds
+ * rules that change. Both are recorded on every verdict, so a reader can tell a verdict made by a
+ * replaced reader from one made by the same reader under different rules.
+ *
+ * @param assessor - the deployment's assessor.
+ * @returns the version string recorded on its assessments.
+ */
+function assessorVersionOf(assessor: StatementSupportAssessor): string {
+  return assessor.policyVersion === undefined || assessor.policyVersion.length === 0
+    ? assessor.id
+    : `${assessor.id}@${assessor.policyVersion}`
 }
 
 /**
@@ -181,9 +236,14 @@ export async function assessStatements(
       if (!statement.text.includes(`[@${judgement.citeKey}]`)) continue
       const key = `${statement.statementId} ${judgement.citeKey}`
       const already = held.get(key)
-      // A VERDICT ABOUT A DIFFERENT VERSION IS NOT A VERDICT ABOUT THIS ONE. It is re-assessed rather
-      // than carried, which is the whole difference this module makes.
-      if (already !== undefined && already.statementSha256 === statement.textSha256) continue
+      // A VERDICT ABOUT A DIFFERENT VERSION IS NOT A VERDICT ABOUT THIS ONE — and the versions are
+      // three: the sentence, the passage, and the reader. Reusing on the sentence alone was measured
+      // returning the old verdict after the source's excerpt changed, which is the cache asserting
+      // something nobody checked. Any of the three moving means the question is new.
+      if (already !== undefined
+        && already.statementSha256 === statement.textSha256
+        && already.quoteSha256 === judgement.quoteSha256
+        && already.assessorVersion === assessorVersionOf(assessor)) continue
       assessed.push(await assessor.assess({ statement, judgement }))
     }
   }
