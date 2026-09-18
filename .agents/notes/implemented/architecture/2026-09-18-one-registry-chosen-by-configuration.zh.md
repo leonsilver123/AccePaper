@@ -38,7 +38,8 @@ Status: implemented
 - **`tests/zotero-live.spec.ts`**(新增,cordis)让真实文献库走产品自己的 MCP client 与生产 provider,Zotero 不应答时自动跳过。2026-09-18 对着 `ILFASAAE` 有八条通过:集合完整读出且含指定条目;来源以 `zotero:user:17529257:UA5MIGG3` 登记,附件 `PU2XWW83`,定位符在第 4 页;**修正后的分页调用返回 10 页中的第 4 页并剥掉工具头**,而原始回复完整留在审计记录里;超出末尾的页是 `passage-out-of-range`,不存在的条目被拒;身份在登记处、证据、引用键 `cite-zotero:user:17529257:UA5MIGG3` 与 `.bib` 中是同一个;`.bib` 由产品自己的解析器读回,title、year、DOI 相符且不含本地路径;三条失效轴各自独立移动;指向死端口的 provider 报 `endpoint-unreadable` 且无回退。
 - **`tests/registered-sources.spec.ts`**(新增,team)守着句子那一半,用的是实测运行产出的那条登记项:各模式的选取、冲突规则、没人评估的句子以 `statement-unassessed` 被拒而不是继承主张的判定、在来源已不再持有的段落上作出的评估以那个理由被拒、被改写的句子以它自己的理由被拒。
 - **`tests/bibliography-writer.spec.ts`**(新增,cordis)是旧用例缺的那条回归:渲染出的文件由 `checkBibtexEntry` —— 产品自己的读入器 —— 读回,而它的键必须是运行自己的。它还钉住转义用例(标题里的花括号、&、百分号、TeX 命令)以及没有 DOI 的用例。
-- **实测验收没有做到的。** 一段引文是否支撑一个句子是审查者的判断,而这台机器没有配置模型 key,所以 `registered-sources.spec.ts` 提供那个判定并说明这一点。检索、证据、绑定、身份链、失效与导出都是真的;**支撑关系**本身还没有走这条链被模型跑过。
+- **支撑关系现在由模型跑通了。** `tests/zotero-evidence.e2e.ts` 按引擎的方式构造部署自己的 `LlmReviewer` —— 同一个类、同一条路由、走 prose 通道真正发送所用的真实 agent loop —— 拿**两句**话对着文献库返回的那一段问它。2026-09-18 在 `deepseek-v4-flash` 上实测:陈述第 4 页评分量表的那句答 `supported`,依据里引的是那一页自己的话;声称测到最小 TTC 的那句答 `unrelated`,依据点名了该页实际报告的是时距值。一个对什么都答 `supported` 的审查者只能过前一句。两条判定都带着该段落的 SHA-256 与审查者的版本。
+- **实测验收仍然没有做到的。** 来自一个来源的两条判定不足以说明审查者可靠,两份文件也都没有这样声称。运行本身也还没有被驱动:这些用例是拿真实文献库在跑链的各部分,不是走产品自己的启动跑完 16 步。
 - **已接线但尚未端到端演示的。** `renderBibliography` 由运行的导出调用,它的拒绝会中止导出,而 `package-export.ts` 由此写出 `bibliography.bib` —— 但还没有用例把一次完整运行驱动到一个包并检视磁盘上的那个文件。在有一个之前,这条导出路径是单元验证而不是集成验证。
 
 ## Files
