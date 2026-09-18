@@ -28,6 +28,7 @@ import ResearchTeamService from '../src/index.ts'
 import type { ResearchTeamServiceConfig } from '../src/index.ts'
 import { ResearchJournal } from '../src/journal.ts'
 import { researchTeamProjectionDefinition } from '../src/research-projection.ts'
+import { RECORD_CHANGE_REQUEST_TOOL_ID } from '../src/change-request-tool.ts'
 import type { ResearchProjectionState } from '../src/research-projection.ts'
 
 // ───────────────────────────── In-memory session ───────────────────────────
@@ -176,6 +177,14 @@ interface Host {
     readonly name: string
     readonly arguments: Readonly<Record<string, unknown>>
   }): string | undefined
+  /**
+   * Every tool definition the service registered on boot.
+   *
+   * The service registers exactly one — the door a requirement stated in the conversation is recorded
+   * through — and the boot path is where that is asserted, because a tool that never registered is a
+   * door the agent cannot see and nothing else in the product would say so.
+   */
+  readonly registeredTools: ReadonlyArray<{ readonly name: string }>
   dispose(): Promise<void>
   /** Resolve/reject control for a held `startContinuable`. */
   readonly startControl: {
@@ -209,14 +218,22 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
   const projection = projectionStandIn()
   ctx.provide('sessionProjections', projection.service)
 
-  // Tools stand-in capturing the single global guard installation.
+  // Tools stand-in capturing the single global guard installation and every registered definition.
   const guards: Array<(exec: unknown) => string | undefined> = []
+  const registeredTools: Array<{ readonly name: string }> = []
   ctx.provide('tools', {
     guard: (guard: (exec: unknown) => string | undefined) => {
       guards.push(guard)
       return () => {
         const index = guards.indexOf(guard)
         if (index >= 0) guards.splice(index, 1)
+      }
+    },
+    register: (definition: { readonly name: string }) => {
+      registeredTools.push(definition)
+      return () => {
+        const index = registeredTools.indexOf(definition)
+        if (index >= 0) registeredTools.splice(index, 1)
       }
     },
   })
@@ -341,6 +358,7 @@ async function bootHost(options: BootOptions = {}): Promise<Host> {
     warnings,
     readTeam: fold,
     seedLead: (event) => { lead.session.seedRaw(event) },
+    registeredTools,
     guardCall: (exec) => {
       const guard = guards[guards.length - 1]
       return guard?.(exec)
@@ -407,6 +425,12 @@ describe('ResearchTeamService — host integration', () => {
       expect(membership.role).toBe('lead')
       expect(membership.id).toBe(TeamId(host.lead.id as unknown as string))
       expect(membership.name).toBe('lead')
+      // AND THE ONE TOOL THIS SERVICE REGISTERS: the door a requirement stated in the conversation is
+      // recorded through. It is asserted on the boot path because a tool that never registered is a
+      // door the agent cannot see, and nothing else in the product would say so.
+      const registered: ReadonlyArray<{ readonly name: string }> = host.registeredTools
+      expect(registered.length).toBe(1)
+      expect(registered[0]?.name).toBe(RECORD_CHANGE_REQUEST_TOOL_ID)
     } finally {
       await host.dispose()
     }
