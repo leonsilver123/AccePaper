@@ -167,9 +167,10 @@ import {
 } from './manuscript-revision.ts'
 import { acceptManuscriptCandidate } from '@deepseek-ai/dsh-research-core'
 import type {
-  RevisionCandidateRecord, RevisionReviewMaterial, RevisionStore,
+  RevisionCandidateRecord, RevisionReviewMaterial, RevisionSource, RevisionStore,
 } from './manuscript-revision.ts'
 import type { ApprovalDecision } from './approval.ts'
+import { changeRequestTool, CONVERSATION_REQUEST_SOURCE } from './change-request-tool.ts'
 
 // ───────────────────────────── Public re-exports ───────────────────────────
 // The package entry re-exports its caller-visible brands, errors, entities,
@@ -309,6 +310,10 @@ function snapshotOf(
     index: step.index,
     phase: step.phase,
     name: step.name,
+    // THE STEP'S OWN SENTENCE ABOUT ITSELF travels with the catalogue, so a view can say what a
+    // step does without holding a second copy of the sixteen-step definition (see the field's
+    // declaration in `./types.ts`).
+    purpose: step.purpose,
     humanGate: step.humanGate,
     gate: [...step.gate],
   }))
@@ -538,6 +543,11 @@ export class ResearchTeamService extends TypertRemoteService {
       const disposers: Array<() => void> = [
         ctx.root.sessionProjections.register(researchTeamProjectionDefinition),
         installResearchGuard(ctx, this.roster, this.scopeCheckedTools),
+        // THE DOOR THE CONVERSATION WRITES THROUGH: a person who states a requirement in the chat gets
+        // it recorded against the run, and the panel shows it as recorded by the agent. Registered here
+        // because the run's records are this service's, and it is the ONLY tool this service registers:
+        // the pipeline's own seven are the engine's.
+        this.installChangeRequestTool(ctx),
       ]
       return () => {
         for (const dispose of disposers.reverse()) dispose()
@@ -1964,31 +1974,106 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   @Remote('requestRevision')
   async requestRevision(request: ResearchRevisionRequest): Promise<ResearchRevisionView> {
-    const active = this.heldRun(request.runId)
-    const store = this.revisionStoreOrThrow()
-    if (request.instruction.trim() === '') {
-      throw new Error('[revision-instruction-empty] a request to change the manuscript must say what to change')
-    }
-    const sections = sectionsOf(this.manuscriptMarkdownOf(request.runId))
-    if (sections.length === 0) {
-      throw new Error(
-        `[revision-no-manuscript] run '${request.runId}' has no manuscript yet — there is nothing to revise`,
-      )
-    }
-    const record = createRevisionRequest({
+    return await this.recordRevisionRequest({
       requestId: request.requestId,
       runId: request.runId,
       stepId: request.stepId,
-      projectRevision: getRunSnapshot(active.store, request.runId).revision,
+      instruction: request.instruction,
+      source: 'panel',
+    })
+  }
+
+  /**
+   * Record one request to change the manuscript, from whichever place it was made.
+   *
+   * ONE RECORD EITHER WAY, and the difference between the two places is one field. The panel's own
+   * request and one the agent records from the conversation both produce a durable request that names
+   * the sections it read and the body hash each one had, so the work that answers it can be shown to
+   * answer THAT version rather than whatever the manuscript says later. What the record adds for a
+   * conversation-sourced one is where it came from: a reader of the panel has to be able to tell a
+   * request they made from one recorded on their behalf.
+   *
+   * @param input - the run, the gate step, the instruction, which place it came from, an optional id,
+   *   and the sections the instruction is about.
+   * @returns the recorded request, re-projected for the page.
+   * @throws {Error} when this process holds no such run, when the instruction is empty, when the run has
+   *   no manuscript yet, or when the deployment keeps no durable root to record a request in.
+   */
+  private async recordRevisionRequest(input: {
+    readonly runId: string
+    readonly stepId: string
+    readonly instruction: string
+    readonly source: RevisionSource
+    readonly requestId?: string
+    readonly targets?: ReadonlyArray<string>
+  }): Promise<ResearchRevisionView> {
+    const active = this.heldRun(input.runId)
+    const store = this.revisionStoreOrThrow()
+    if (input.instruction.trim() === '') {
+      throw new Error('[revision-instruction-empty] a request to change the manuscript must say what to change')
+    }
+    const sections = sectionsOf(this.manuscriptMarkdownOf(input.runId))
+    if (sections.length === 0) {
+      throw new Error(
+        `[revision-no-manuscript] run '${input.runId}' has no manuscript yet — there is nothing to revise`,
+      )
+    }
+    const record = createRevisionRequest({
+      requestId: input.requestId ?? randomUUID(),
+      runId: input.runId,
+      stepId: input.stepId,
+      source: input.source,
+      projectRevision: getRunSnapshot(active.store, input.runId).revision,
       // RECORDED HERE, AT THE MOMENT THE PERSON READ IT: an acceptance later compares against this,
       // not against whatever version the manuscript happens to be at when someone presses accept.
-      manuscriptVersion: this.manuscriptVersionOf(request.runId),
-      instruction: request.instruction,
+      manuscriptVersion: this.manuscriptVersionOf(input.runId),
+      instruction: input.instruction,
       operator: OPERATOR_PRINCIPAL_ID,
       sections,
+      ...(input.targets === undefined ? {} : { targets: input.targets }),
     })
     await writeRevisionRequest(store, record)
-    return await this.revisionViewOf(request.runId, record.requestId)
+    return await this.revisionViewOf(input.runId, record.requestId)
+  }
+
+  /**
+   * Register the tool an agent calls to record a change the person asked for in the conversation.
+   *
+   * THE STEP IS THE PIPELINE'S OWN HUMAN GATE, not the caller's choice: a change request is answered at
+   * the gate where a person decides, and a request made in the conversation is answered at the same one
+   * the panel's own requests name. Letting the caller name it would let a model file a request against
+   * a step that never waits for anybody.
+   *
+   * @param ctx - the service context, whose `tools` service the definition registers on.
+   * @returns the disposer that unregisters the tool.
+   * @throws {Error} when this pipeline declares no human gate, because then there is nowhere for the
+   *   request to be answered and a tool that recorded one would be lying about what happens next.
+   */
+  private installChangeRequestTool(ctx: Context): () => void {
+    const gate = getStepDefinitions().find(step => step.humanGate)
+    if (gate === undefined) {
+      throw new Error(
+        '[change-request-no-gate] this pipeline declares no human gate, so a change request recorded'
+        + ' from the conversation would have nowhere to be answered',
+      )
+    }
+    return ctx.tools.register(changeRequestTool({
+      record: async (input) => {
+        const recorded = await this.recordRevisionRequest({
+          runId: input.runId,
+          stepId: gate.id,
+          instruction: input.instruction,
+          source: CONVERSATION_REQUEST_SOURCE,
+          ...(input.targets === undefined ? {} : { targets: input.targets }),
+        })
+        return {
+          requestId: recorded.requestId,
+          runId: recorded.runId,
+          instruction: recorded.instruction,
+          targets: recorded.targets,
+        }
+      },
+    }))
   }
 
   /**
@@ -2250,6 +2335,9 @@ export class ResearchTeamService extends TypertRemoteService {
       requestId: randomUUID(),
       runId: receipt.runId,
       stepId: receipt.stepId,
+      // THE APPROVAL PANEL'S OWN "request changes": the decision was made in the panel, so the record
+      // it produces says the panel, whatever the person typed into the box.
+      source: 'panel',
       projectRevision: receipt.snapshot?.projectRevision ?? getRunSnapshot(
         this.heldRun(receipt.runId).store, receipt.runId).revision,
       // THE VERSION THE DECISION WAS MADE AGAINST: the run's manuscript as it stands when the person
@@ -2340,6 +2428,11 @@ export class ResearchTeamService extends TypertRemoteService {
       requestId: read.request.requestId,
       instruction: read.request.instruction,
       operator: read.request.operator,
+      // WHERE IT WAS ASKED, carried through as the record states it. No guard for a missing value: the
+      // record's field is required and a file predating it is an old on-disk format this pre-release
+      // backend does not carry forward. The CLIENT twin stays optional for the case that is real — a
+      // host built before the field exists, which sends none.
+      source: read.request.source,
       projectRevision: read.request.projectRevision,
       manuscriptVersion: read.request.manuscriptVersion,
       requestedAt: read.request.requestedAt,
@@ -2401,7 +2494,28 @@ export class ResearchTeamService extends TypertRemoteService {
     }
     for (const runId of this.storedRunIds()) {
       if (this.activeRuns.has(runId)) continue
-      const found = await this.findStoredRun(runId)
+      // ONE UNREADABLE SNAPSHOT MUST NOT TAKE THE LISTING DOWN. `tryLoad` throws for a file it cannot
+      // parse, and that is right — a missing file and an unparseable one are different, and the
+      // persistence suite pins exactly that. What was wrong is what this loop did with it: the throw
+      // left `listRuns` with no answer at all, so a single snapshot written by another schema made
+      // EVERY run unlistable. Measured 2026-09-19: a deployment with one stale store on disk answered
+      // its own run list with `SNAPSHOT_INVALID`.
+      let found: Awaited<ReturnType<typeof this.findStoredRun>>
+      try {
+        found = await this.findStoredRun(runId)
+      } catch (error) {
+        entries.push({
+          runId,
+          execution: 'unreadable',
+          projectRevision: 0,
+          stepsPassed: 0,
+          stepsTotal: getStepDefinitions().length,
+          submissionReady: false,
+          readFailure: errorMessage(error),
+          interrupted: [],
+        })
+        continue
+      }
       if (found === null) continue
       const snapshot = snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped')
       entries.push({

@@ -401,6 +401,7 @@ export interface ResearchProposalAnswer {
 }
 
 import type { EvidenceProfile } from '@deepseek-ai/dsh-research-core'
+import type { RevisionSource } from './manuscript-revision.ts'
 import type { StudyPlan } from './runner/study-plan.ts'
 import type { PaperQualityReport } from './runner/paper-quality.ts'
 
@@ -430,6 +431,17 @@ export interface ResearchStepCatalogEntry {
   readonly index: number
   readonly phase: string
   readonly name: string
+  /**
+   * What this step is FOR, in the step's own words — the one sentence that tells a reader who does
+   * not know this pipeline what the step does.
+   *
+   * WHY IT TRAVELS. The view showed a step as its identifier and a status badge, and a researcher
+   * reading `D3-writing · 受阻` had no way to learn that the step drafts the sections and assembles
+   * the reference list — the one fact that makes a refusal here legible. The sentence exists in core
+   * (`PIPELINE_STEPS[].purpose`); re-writing it in the client would be a second copy of a
+   * sixteen-step definition that the client deliberately does not depend on, and a copy drifts.
+   */
+  readonly purpose: string
   readonly humanGate: boolean
   readonly gate: ReadonlyArray<string>
 }
@@ -481,6 +493,8 @@ export interface ResearchRunSummaryEntry {
   readonly saveFailure?: string
   /** Why a driver stopped with a failure, when it did. */
   readonly executionError?: string
+  /** Why a stored run could not be read, when it could not; present only with `execution: 'unreadable'`. */
+  readonly readFailure?: string
   /**
    * The steps that were in flight when the snapshot was taken, for a run this process is not driving.
    *
@@ -629,6 +643,16 @@ export type ResearchRunExecution =
   | 'stopped'
   /** A driver was on it and threw; the snapshot's `executionError` says what. */
   | 'failed'
+  /**
+   * Something is on disk under this id and THIS BUILD CANNOT READ IT.
+   *
+   * NOT `failed`, and not absent. A driver that threw and a snapshot written by another schema are
+   * different facts, and reporting the second as the first sends a reader after a crash that never
+   * happened. The stored run is named in the listing with {@link ResearchRunSummaryEntry.readFailure}
+   * saying why, because a run that vanishes from a list is indistinguishable from one that was never
+   * there — which is the same confusion this listing exists to avoid.
+   */
+  | 'unreadable'
 
 /** One gate verdict recorded during a run, with the evidence it carried. */
 export interface ResearchGateVerdictView {
@@ -769,6 +793,15 @@ export interface ResearchRevisionView {
   readonly requestId: string
   readonly instruction: string
   readonly operator: string
+  /**
+   * Where the person made the request: the panel's own controls, or the conversation.
+   *
+   * REQUIRED, because the record's own field is: a record written before the field existed is an old
+   * on-disk format, which this pre-release backend does not carry forward. The client twin keeps it
+   * optional, because a HOST is a different matter — one built before the field exists sends none, and
+   * the page then shows no provenance rather than inferring one.
+   */
+  readonly source: RevisionSource
   /** The project revision the person was reading when they asked. */
   readonly projectRevision: number
   readonly requestedAt: number
