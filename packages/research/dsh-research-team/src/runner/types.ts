@@ -22,6 +22,7 @@ import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } fr
 import type { DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
+import type { ResolutionVerifier } from './resolution-verifier.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -142,6 +143,14 @@ export interface DriveOptions {
    */
   readonly statementAssessor?: StatementSupportAssessor
   /**
+   * The deployment's ability to check a revision against the issue it was written for.
+   *
+   * Absent means the issues a revision leaves pending stay pending: nothing closes them, which is a
+   * state a reader can see. Present, each pending issue is read by somebody other than the author of
+   * the answer, and only then is it `answered`.
+   */
+  readonly resolutionVerifier?: ResolutionVerifier
+  /**
    * Tool dependencies for capability steps; assembled by the Cordis adapter from
    * its retrieval-channel config. When absent, steps use the fixture deps.
    */
@@ -203,6 +212,8 @@ export interface DriveStepOptions {
   readonly figureProvider?: FigureProvider
   /** The sentence-level reviewer; see {@link DriveOptions.statementAssessor}. */
   readonly statementAssessor?: StatementSupportAssessor
+  /** The revision verifier; see {@link DriveOptions.resolutionVerifier}. */
+  readonly resolutionVerifier?: ResolutionVerifier
   /** Tool deps for capability steps; see {@link DriveOptions.toolDeps}. */
   readonly toolDeps?: ResearchToolDeps
   /**

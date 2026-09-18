@@ -350,12 +350,20 @@ describe('a revision round that leaves a concern open', () => {
 
     const { store, runId, rebuttal } = await revisedRun([first, second])
 
+    // NOTHING IS OPEN AND NOTHING IS CLOSED EITHER: this deployment has no verifier, so every patch
+    // the two rounds applied is still waiting for a reader. A run that called this `closed` would be
+    // reporting a settled review over answers nobody had read — the early stop the review named — and
+    // the cycle stops for the reason that says so: asking for another round would produce the same
+    // answers, and only a reader can settle what is there.
     expect(rebuttal?.['openIssues']).toEqual([])
-    expect(rebuttal?.['stoppedBecause']).toBe('closed')
+    expect(rebuttal?.['stoppedBecause']).toBe('awaiting-verification')
     const rounds = rebuttal?.['rounds'] as ReadonlyArray<Record<string, unknown>>
     expect(rounds.map(round => round['roundId'])).toEqual(['t19s-rebuttal-1', 't19s-rebuttal-2'])
     expect(rounds[0]?.['openSections']).toEqual(['method'])
-    expect(rounds[1]?.['stoppedBecause']).toBe('closed')
+    // THE LAST ROUND'S ISSUE IS THE ONE STILL WAITING, and its id is `d4-issue-1` because a round
+    // numbers its own issues from one — the ids are per round, which is why every other reader in this
+    // file is asked for the round it belongs to.
+    expect(rebuttal?.['awaitingVerification']).toEqual(['d4-issue-1'])
 
     // Every gate closed and a person approved the package, so readiness has nothing else to report.
     const decide = approvalChannel()
@@ -423,8 +431,10 @@ describe('a revision round that leaves a concern open', () => {
     // one rather than invented into a plausible sentence.
     expect(openIssuesOf({ issues: [{ issueId: 'i1', sectionId: 'method', disposition: 'open' }] }))
       .toEqual([{ issueId: 'i1', sectionId: 'method', reason: 'no reason recorded' }])
-    // And an outcome that was closed is not an open issue.
-    expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'patched' }] })).toEqual([])
+    // And an outcome the round produced something for is not an open issue — whether that something
+    // ANSWERS the concern is the verifier's reading, not this reader's.
+    expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'pending-verification' }] })).toEqual([])
+    expect(openIssuesOf({ issues: [{ issueId: 'i1', disposition: 'answered' }] })).toEqual([])
     expect(openIssuesOf(undefined)).toEqual([])
   })
 })
@@ -445,7 +455,10 @@ describe('D4 driven by a model reply', () => {
       .toEqual(['conclusion', 'method', 'results'])
     expect(rebuttal?.['openIssues']).toEqual([])
     const issues = rebuttal?.['issues'] as ReadonlyArray<{ disposition: string }>
-    expect(issues.map(issue => issue.disposition)).toEqual(['patched', 'patched', 'patched'])
+    // THREE PATCHES APPLIED, and every one of them now waits for a reader: applying a patch is not
+    // answering the concern it was written for.
+    expect(issues.map(issue => issue.disposition))
+      .toEqual(['pending-verification', 'pending-verification', 'pending-verification'])
 
     const before = draft?.['sections'] as ReadonlyArray<{ id: string; bodyText: string }>
     const after = revised?.['sections'] as ReadonlyArray<{ id: string; bodyText: string; revised: boolean }>
@@ -474,9 +487,12 @@ describe('D4 driven by a model reply', () => {
     const { rebuttal } = await revisedRun(reply)
     const issues = rebuttal?.['issues'] as ReadonlyArray<{ disposition: string; reason: string }>
     expect(issues).toHaveLength(1)
-    expect(issues[0]?.disposition).toBe('accepted_explanation')
+    // NO TEXT CHANGED, so nothing stands behind the answer but its argument — which is exactly the
+    // case that must not close itself. It waits for the verifier, and it is not an open issue either.
+    expect(issues[0]?.disposition).toBe('pending-verification')
     expect(rebuttal?.['patchedSections']).toEqual([])
     expect(rebuttal?.['openIssues']).toEqual([])
+    expect(rebuttal?.['awaitingVerification']).toEqual(['d4-issue-1'])
   })
 
   it('FAILS the step on a malformed reply instead of closing an issue on nothing', async () => {

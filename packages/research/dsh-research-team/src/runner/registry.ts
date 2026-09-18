@@ -163,7 +163,7 @@ import type { MeasuredOutcome, ResultSource } from './result-version.ts'
 import { sectionEvidenceFor } from './section-evidence.ts'
 import { applyRevision, bodyHashOf } from './issue-patch.ts'
 import { assertWellFormed, parseReply, type DiscardedExchange } from './issue-parse.ts'
-import type { RevisionIssue } from './issue-patch.ts'
+import type { AppliedRevision, RevisionIssue } from './issue-patch.ts'
 import type { SectionEvidence } from './section-evidence.ts'
 import { assessmentsFor } from './evidence-corpus.ts'
 import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from './argument-plan.ts'
@@ -172,6 +172,8 @@ import type { ArgumentPlan } from './argument-plan.ts'
 import { assessStatements, checkStatementSupport } from './statement-support.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
 import type { StatementAssessment } from './statement-support.ts'
+import { verifyPending, verifyResolution } from './resolution-verifier.ts'
+import type { ResolutionVerifier } from './resolution-verifier.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type { DocumentBlock, DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
@@ -447,6 +449,14 @@ export interface ExecCtx {
    * happened.
    */
   readonly statementAssessor?: StatementSupportAssessor
+  /**
+   * The deployment's revision verifier, when it has one.
+   *
+   * Absent means the issues a revision leaves pending stay pending — see
+   * {@link DriveOptions.resolutionVerifier}. A patch that applied and an answer that argued are both
+   * waiting for a reader, and without one they wait rather than closing themselves.
+   */
+  readonly resolutionVerifier?: ResolutionVerifier
 
   readonly runId: string
   readonly stepId: string
@@ -3050,7 +3060,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // patch — used to end there, with the round number hard-coded to 1 and nothing to try again.
   // `revisionRounds` bounds how many times the author may be asked; the cycle stops early when
   // another round could not change anything.
-  let stoppedBecause: 'closed' | 'no-progress' | 'budget' = 'closed'
+  // WHY THE CYCLE ENDED, and `awaiting-verification` is a reason of its own: the authors answered and
+  // nobody has read the answers, so more rounds cannot settle it — a state a reader can act on, and a
+  // different fact from an exhausted budget.
+  let stoppedBecause: 'closed' | 'no-progress' | 'budget' | 'awaiting-verification' = 'closed'
   const rounds: Array<Record<string, unknown>> = []
   /**
    * What one round did, in the terms a reader needs: what it was asked, what it closed, what it
@@ -3064,7 +3077,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const recordRound = (
     round: number,
     result: ReturnType<typeof applyRevision>,
-    stopped: 'closed' | 'no-progress' | 'budget',
+    stopped: 'closed' | 'no-progress' | 'budget' | 'awaiting-verification',
   ): Record<string, unknown> => ({
     roundId: `t19s-rebuttal-${String(round)}`,
     opened: result.outcomes.length,
@@ -3120,9 +3133,18 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       sections,
       issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
     )
+    applied = await appliedWithVerification(
+      ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(bodiesShown.get(issue.sectionId) ?? '') })),
+      new Map(applied.sections.map(section => [section.id, section.bodyText])),
+    )
     // The fixture path writes its issues once; one round IS its whole cycle, and it is recorded as
     // one rather than pretending a model was asked again.
-    stoppedBecause = applied.openIssues.length === 0 ? 'closed' : 'budget'
+    // A ROUND IS NOT "CLOSED" BECAUSE IT APPLIED PATCHES. The stop condition reads what is still
+    // owed: nothing open AND nothing waiting for a reader. Reporting `closed` on the strength of the
+    // patches alone is how a round with three unread issues looked like a settled review.
+    stoppedBecause = applied.openIssues.length > 0
+      ? 'budget'
+      : applied.awaitingVerification.length === 0 ? 'closed' : 'awaiting-verification'
     rounds.push(recordRound(1, applied, stoppedBecause))
   } else {
     // THE CYCLE. Each round reads what the previous one wrote and is told what it did not close, so
@@ -3191,17 +3213,32 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         current,
         issues.map(issue => ({ ...issue, basisHash: bodyHashOf(currentBodies.get(issue.sectionId) ?? '') })),
       )
+      applied = await appliedWithVerification(
+        ctx, applied, issues.map(issue => ({ ...issue, basisHash: bodyHashOf(currentBodies.get(issue.sectionId) ?? '') })),
+        new Map(applied.sections.map(section => [section.id, section.bodyText])),
+      )
       // NO PROGRESS IS MEASURED BY SECTION, NOT BY ISSUE ID. A round numbers its issues from one, so
       // `d4-issue-1` names a different concern in every round — comparing ids would call two rounds
       // that failed on the SAME sections "progress" and spend the budget re-asking. What repeated
       // means is that the manuscript is no better off: the same sections are still open.
+      // WHAT IS STILL OWED, split by what would settle it. An OPEN issue needs work, so asking the
+      // author again can help. An issue waiting for a READER cannot be settled by asking again: the
+      // answer is on the table and the round would get the same one, which is why the cycle stops
+      // there and says so — a run that kept spending rounds on it would report a settled review (or
+      // an exhausted budget) over answers nobody had read, and the review of 2026-09-18 named exactly
+      // that early stop.
       const leftOpen = applied.outcomes
         .filter(outcome => outcome.disposition === 'open')
+        .map(outcome => outcome.sectionId)
+      const awaitingReader = applied.outcomes
+        .filter(outcome => outcome.disposition === 'pending-verification')
         .map(outcome => outcome.sectionId)
       const repeated = leftOpen.length > 0
         && leftOpen.length === open.length
         && leftOpen.every(sectionId => open.includes(sectionId))
-      stoppedBecause = leftOpen.length === 0 ? 'closed' : repeated ? 'no-progress' : 'budget'
+      stoppedBecause = leftOpen.length === 0
+        ? (awaitingReader.length === 0 ? 'closed' : 'awaiting-verification')
+        : repeated ? 'no-progress' : 'budget'
       rounds.push(recordRound(round, applied, stoppedBecause))
       // A round that closed everything is done; one that repeated the previous round's open set has
       // been answered already; the last allowed round is the budget.
@@ -3238,6 +3275,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         discardedExchanges,
         patchedSections: applied.patchedSections,
         openIssues: applied.openIssues,
+        // AND WHAT NOBODY HAS READ. A round that applied three patches has three issues waiting for a
+        // reader, and a record that showed only `openIssues: []` would read as three answered
+        // concerns — the reading the review of 2026-09-18 refused.
+        awaitingVerification: applied.awaitingVerification,
         // THE CYCLE'S OWN RECORD, so a reader can see whether the author was asked once or as many
         // times as the configuration allows, and whether the last round stopped because it closed
         // everything or because asking again could not change anything.
@@ -3263,6 +3304,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // section a patch changed from one it did not.
         patchedSections: applied.patchedSections,
         openIssues: applied.openIssues,
+        awaitingVerification: applied.awaitingVerification,
         citations,
         references,
         // THE READINGS TRAVEL WITH THE MANUSCRIPT THEY WERE MADE ABOUT. D4 rebuilt the revised draft
@@ -3918,6 +3960,50 @@ function carriedAssessments(ctx: ExecCtx): ReadonlyArray<StatementAssessment> {
   return Array.isArray(draft?.statementAssessments)
     ? (draft.statementAssessments as ReadonlyArray<StatementAssessment>)
     : []
+}
+
+/**
+ * Let the deployment's verifier read what the round produced, and settle what it decides.
+ *
+ * THE INDEPENDENT READ, and the reason a revision no longer closes its own issues. Without a verifier
+ * the round's issues stay `pending-verification`: applying a patch and arguing for no change are both
+ * things the AUTHOR did, and neither answers the concern it was written for. With one, each pending
+ * issue is read by somebody else — a verification naming the author is refused outright rather than
+ * recorded, because an answer that certifies itself is the defect this replaced.
+ *
+ * @param ctx - the D4 execution context.
+ * @param applied - what the round did to the manuscript.
+ * @param issues - the round's issues, as raised.
+ * @param revisedBodies - the section bodies as they now stand.
+ * @returns the revision with its outcomes settled as far as they can be.
+ * @throws {Error} when a verification is not independent, or names an issue nothing left pending.
+ */
+async function appliedWithVerification(
+  ctx: ExecCtx,
+  applied: AppliedRevision,
+  issues: ReadonlyArray<RevisionIssue>,
+  revisedBodies: ReadonlyMap<string, string>,
+): Promise<AppliedRevision> {
+  const verifier = ctx.resolutionVerifier
+  if (verifier === undefined) return applied
+  const verifications = await verifyPending(applied.outcomes, verifier, {
+    issues, changes: applied.changes, revisedBodies,
+  })
+  const settled = verifyResolution(applied.outcomes, verifications, D4_PRODUCER)
+  if (settled.refusals.length > 0) {
+    throw new Error(
+      `[D4-rebuttal] [${settled.refusals[0]?.code ?? 'verification-not-independent'}] `
+      + settled.refusals.map(refusal => refusal.detail).join('; '),
+    )
+  }
+  return {
+    ...applied,
+    outcomes: settled.outcomes,
+    openIssues: settled.outcomes.filter(outcome => outcome.disposition === 'open').map(outcome => outcome.issueId),
+    awaitingVerification: settled.outcomes
+      .filter(outcome => outcome.disposition === 'pending-verification')
+      .map(outcome => outcome.issueId),
+  }
 }
 
 /** E2-submit runs no executor at all (human gate stop). */

@@ -43,7 +43,7 @@ function issue(overrides: Partial<RevisionIssue> & { sectionId: string }): Revis
   }
 }
 
-describe('a patch that changes a body closes its issue', () => {
+describe('a patch that changes a body leaves its issue awaiting verification', () => {
   it('applies, records the diff, and marks only that section revised', () => {
     const applied = applyRevision(SECTIONS, [
       issue({
@@ -52,7 +52,8 @@ describe('a patch that changes a body closes its issue', () => {
         patch: 'The results as written, with the sentence the concern asked for.',
       }),
     ])
-    expect(applied.outcomes[0]?.disposition).toBe('patched')
+    // THE PATCH APPLIED. Whether it ANSWERS the concern is a separate reading, so the issue waits.
+    expect(applied.outcomes[0]?.disposition).toBe('pending-verification')
     expect(applied.patchedSections).toEqual(['results'])
     // PER SECTION, and derived from the bodies. Every section elsewhere is unchanged and says so.
     expect(applied.sections.map(section => [section.id, section.revised])).toEqual([
@@ -106,14 +107,16 @@ describe('an issue that proposes no diff does not close', () => {
   })
 })
 
-describe('an answer without a text change is recorded as an explanation', () => {
+describe('an answer without a text change awaits verification too', () => {
   it('is neither a patch nor an open issue', () => {
     const applied = applyRevision(SECTIONS, [
       issue({ sectionId: 'conclusion', response: 'The scope sentence already states this limit.' }),
     ])
     // A DIFFERENT OUTCOME from a patch, and it has to be: a reader comparing two rounds needs to
     // tell "the text was changed" from "the author argued and the text was left alone".
-    expect(applied.outcomes[0]?.disposition).toBe('accepted_explanation')
+    // AN ANSWER IS NOT AN ANSWER UNTIL SOMEBODY ELSE READS IT: no change was made, so the only
+    // thing standing behind it is its argument — which the author wrote.
+    expect(applied.outcomes[0]?.disposition).toBe('pending-verification')
     expect(applied.outcomes[0]?.reason).toContain('without a text change')
     expect(applied.patchedSections).toEqual([])
     expect(applied.openIssues).toEqual([])
@@ -145,7 +148,7 @@ describe('a patch written against another version is refused, not applied', () =
       issue({ issueId: 'issue-1', sectionId: 'results', requiresTextChange: true, patch: 'The first revision.' }),
       issue({ issueId: 'issue-2', sectionId: 'results', requiresTextChange: true, patch: 'The second revision.' }),
     ])
-    expect(applied.outcomes.map(outcome => outcome.disposition)).toEqual(['patched', 'open'])
+    expect(applied.outcomes.map(outcome => outcome.disposition)).toEqual(['pending-verification', 'open'])
     expect(applied.sections.find(section => section.id === 'results')?.bodyText).toBe('The first revision.')
   })
 
@@ -193,8 +196,8 @@ describe('the driven revision is a diff', () => {
       | undefined
     const dispositions = rebuttal?.issues?.map(entry => entry.disposition) ?? []
     // One explanation and one patch: the two outcomes the review asked to see recorded apart.
-    expect(dispositions).toContain('accepted_explanation')
-    expect(dispositions).toContain('patched')
+    expect(dispositions).toContain('pending-verification')
+    expect(dispositions).not.toContain('answered')
     expect(rebuttal?.openIssues).toEqual([])
     for (const entry of rebuttal?.issues ?? []) expect(entry.reason.length).toBeGreaterThan(20)
   })

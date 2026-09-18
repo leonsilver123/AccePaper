@@ -51,8 +51,28 @@ export interface RevisionIssue {
   readonly basisHash: string
 }
 
-/** How one issue ended. */
-export type IssueDisposition = 'patched' | 'accepted_explanation' | 'open'
+/**
+ * How one issue stands after a round of revision.
+ *
+ * TWO DISPOSITIONS, AND NEITHER OF THEM IS "CLOSED". `pending-verification` means the round produced
+ * something to check — a replacement body, or an argument for changing nothing — and
+ * `open` means it produced neither (`the draft has no such section`, a patch written against a body
+ * that has since moved, a "revision" that proposes no diff). Whether a pending issue is ANSWERED is a
+ * separate judgement made by somebody who did not write the answer, which is what
+ * `resolution-verifier.ts` records.
+ *
+ * THE TWO DISPOSITIONS IT REPLACED WERE THE DEFECT. `patched` said the text changed, so the concern
+ * was handled — a patch can land beside the sentence it was about. `accepted_explanation` said a
+ * non-empty answer was enough — prose the author wrote about their own work. Both closed an issue on
+ * the strength of the act rather than of the answer, and the pipeline review of 2026-09-18 named it.
+ */
+export type IssueDisposition =
+  /** The round produced something to check and nobody has checked it. */
+  | 'pending-verification'
+  /** The round produced nothing that could answer the issue: it still needs work. */
+  | 'open'
+  /** An independent reader accepted the answer. THE ONLY DISPOSITION THAT CLOSES AN ISSUE. */
+  | 'answered'
 
 /** What became of one issue, and why. */
 export interface IssueOutcome {
@@ -80,8 +100,16 @@ export interface AppliedRevision {
   readonly changes: ReadonlyArray<SectionChange>
   /** Sections whose body actually changed (derived, never asserted by a caller). */
   readonly patchedSections: ReadonlyArray<string>
-  /** Issues left open (derived). */
+  /** Issues left open (derived): the round produced nothing that could answer them. */
   readonly openIssues: ReadonlyArray<string>
+  /**
+   * Issues awaiting verification (derived): something was produced and nobody has checked it.
+   *
+   * SEPARATE FROM {@link AppliedRevision.openIssues} because the two are answered differently — an
+   * open issue needs work, a pending one needs a reader — and a reader of the revision who saw one
+   * number could not tell which.
+   */
+  readonly awaitingVerification: ReadonlyArray<string>
 }
 
 /**
@@ -141,8 +169,9 @@ export function applyRevision(
           : {
             issueId: issue.issueId,
             sectionId: issue.sectionId,
-            disposition: 'accepted_explanation',
-            reason: 'answered without a text change; recorded as an explanation, not as a patch',
+            disposition: 'pending-verification',
+            reason: 'answered without a text change, so the answer rests on its argument alone and'
+              + ' only an independent reader can accept it',
           },
       )
       continue
@@ -187,8 +216,11 @@ export function applyRevision(
     outcomes.push({
       issueId: issue.issueId,
       sectionId: issue.sectionId,
-      disposition: 'patched',
-      reason: `replaced the body of '${issue.sectionId}' (${currentHash.slice(0, 12)}… → ${patchHash.slice(0, 12)}…)`,
+      disposition: 'pending-verification',
+      // WHAT HAPPENED IS STATED; WHETHER IT ANSWERS THE CONCERN IS NOT. A patch that lands beside the
+      // sentence it was about is a patch that applied, and calling that "handled" is the defect.
+      reason: `replaced the body of '${issue.sectionId}' (${currentHash.slice(0, 12)}… → ${patchHash.slice(0, 12)}…),`
+        + ' awaiting an independent reader',
     })
   }
 
@@ -207,5 +239,8 @@ export function applyRevision(
     changes,
     patchedSections: [...patched],
     openIssues: outcomes.filter(outcome => outcome.disposition === 'open').map(outcome => outcome.issueId),
+    awaitingVerification: outcomes
+      .filter(outcome => outcome.disposition === 'pending-verification')
+      .map(outcome => outcome.issueId),
   }
 }
