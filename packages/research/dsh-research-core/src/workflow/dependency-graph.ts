@@ -112,8 +112,16 @@ export function transitiveDependents(
  * Every declared input edge that points at a step which runs at or after the consumer.
  *
  * A forward edge is a cycle in disguise: the consumer's `canStart` could never be satisfied from a
- * linear pass, and the module-load assertion in `steps.ts` refuses one. This is the same check as
- * a function, so a spec can state the expected graph instead of re-running the module.
+ * linear pass. THIS IS THE ONLY IMPLEMENTATION OF THAT RULE — `assertDagAndSeedSeparation` in
+ * `engine/steps.ts` calls it rather than repeating it. The two used to be separate, and when a slug
+ * gained a second producer only one of them was corrected, so the module-load assertion accepted a
+ * graph that this function reported as a forward edge. One home for the rule is what stops that.
+ *
+ * A SLUG'S PRODUCER IS ITS EARLIEST PRODUCER. A slug may be republished — the manuscript is created
+ * by D3 and republished by D4 and E1 under one name and one version counter — and the step that
+ * republishes it must consume it. Reading the LAST producer instead makes the middle producer's
+ * consumption of its own output look like an edge pointing forward, which is not a cycle and not a
+ * fact about the graph.
  *
  * @param definitions - the pipeline's step definitions.
  * @returns the offending `consumer -> input` pairs, in definition order.
@@ -123,7 +131,9 @@ export function forwardEdges(
 ): ReadonlyArray<{ readonly consumer: string; readonly input: string; readonly producerIndex: number }> {
   const producerIndex = new Map<string, number>()
   for (const definition of definitions) {
-    for (const output of definition.outputs) producerIndex.set(output, definition.index)
+    for (const output of definition.outputs) {
+      if (!producerIndex.has(output)) producerIndex.set(output, definition.index)
+    }
   }
   const out: Array<{ consumer: string; input: string; producerIndex: number }> = []
   for (const definition of definitions) {

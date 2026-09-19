@@ -236,8 +236,14 @@ async function revisedRun(
     store,
     runId: run.runId,
     rebuttal: getArtifact(store, run.runId, 'rebuttal') as Record<string, unknown> | undefined,
-    revised: getArtifact(store, run.runId, 'revised-draft') as Record<string, unknown> | undefined,
-    draft: getArtifact(store, run.runId, 'draft') as Record<string, unknown> | undefined,
+    // ONE DOCUMENT, ONE SLUG, TWO VERSIONS. `manuscript` is created by D3 and republished by D4 under
+    // the same slug, so the registry holds only the latest value and D3's version is read where the
+    // engine keeps it — the attempt that wrote it. Reading the slug twice would compare the revision
+    // with itself and report that nothing changed.
+    revised: getArtifact(store, run.runId, 'manuscript') as Record<string, unknown> | undefined,
+    draft: getRunSnapshot(store, run.runId).steps['D3-writing']?.artifacts['manuscript'] as
+      | Record<string, unknown>
+      | undefined,
   }
 }
 
@@ -597,8 +603,10 @@ describe('D4 driven by a model reply', () => {
     const snap = getRunSnapshot(store, runId)
     expect(snap.steps['D4-rebuttal']?.status).toBe('passed')
     expect(snap.steps['D4-rebuttal']?.gateResults.A?.outcome).toBe('passed')
-    // The gate read the REVISED draft, not the one D3 wrote.
-    expect(String(snap.steps['D4-rebuttal']?.gateResults.A?.evidence)).toContain('revised-draft')
+    // The gate read the MANUSCRIPT rather than the claim material. One slug names one document, so
+    // the sentence cannot say which version it read: `getInput` resolves the slug when the gate is
+    // adjudicated, which is after this step committed, so the document graded is the revision.
+    expect(String(snap.steps['D4-rebuttal']?.gateResults.A?.evidence)).toContain('manuscript')
   })
 
   it('records a PATCH: NONE exchange as an explanation and applies nothing', async () => {
@@ -630,8 +638,13 @@ describe('D4 driven by a model reply', () => {
     expect(d4?.status).toBe('in_progress')
     expect(d4?.executeError).toMatch(/did not state 1 of its 2 exchanges completely/u)
     expect(d4?.executeError).toMatch(/#2 \(missing SECTION\)/u)
-    // Nothing downstream was produced from a reply the pipeline could not read.
-    expect(getArtifact(store, run.runId, 'revised-draft')).toBeUndefined()
+    // Nothing downstream was produced from a reply the pipeline could not read. The manuscript is
+    // NOT absent — D3 writes it before D4 runs, and it is D4 that failed — so the fact to assert is
+    // that D4 did not republish the document: it is still D3's attempt, at the first version of the
+    // artifact, and the assembly that would have read D4's output never ran.
+    const manuscript = getRunSnapshot(store, run.runId).registry['manuscript']
+    expect(manuscript?.producerStepId).toBe('D3-writing')
+    expect(manuscript?.ref.version).toBe(1)
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
   })
 })

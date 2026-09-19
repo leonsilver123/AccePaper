@@ -59,7 +59,7 @@ describe('a production run carries real material to the human gate', () => {
     // `LiteratureHit` had no such field, so the adapter dropped it and every exported reference
     // named a venue, authors and a DOI with no year at all.
     const { store, runId } = await productionRun()
-    const draft = getArtifact(store, runId, 'draft') as
+    const draft = getArtifact(store, runId, 'manuscript') as
       | { references?: ReadonlyArray<{ title?: string; year?: unknown }> }
       | undefined
     expect(draft?.references?.length).toBeGreaterThan(0)
@@ -76,7 +76,7 @@ describe('a production run carries real material to the human gate', () => {
 
   it('writes a manuscript whose sections record the evidence they were written from', async () => {
     const { store, runId } = await productionRun()
-    const draft = getArtifact(store, runId, 'draft') as
+    const draft = getArtifact(store, runId, 'manuscript') as
       | { refusedSections?: ReadonlyArray<string>; sectionEvidence?: ReadonlyArray<{ sectionId: string; supplied: ReadonlyArray<string> }> }
       | undefined
     expect(draft?.refusedSections).toEqual([])
@@ -99,10 +99,10 @@ describe('an injected error stops the run where it is read', () => {
         stepId === 'D3-writing'
           ? async (ctx) => {
             const produced = await real(ctx)
-            const draft = produced['draft'] as { sections: ReadonlyArray<{ id: string; bodyText: string }> }
+            const draft = produced['manuscript'] as { sections: ReadonlyArray<{ id: string; bodyText: string }> }
             return {
               ...produced,
-              draft: {
+              manuscript: {
                 ...draft,
                 sections: draft.sections.map(section =>
                   section.id === 'results'
@@ -118,8 +118,11 @@ describe('an injected error stops the run where it is read', () => {
     // well-formed, and nothing about the artifact says it is wrong.
     expect(run.steps.at(-1)?.stepId).toBe('D3-writing')
     expect(run.steps.at(-1)?.verdicts.A).toBe('blocked')
-    // And the run produced no manuscript, so the number reached no reader.
-    expect(getArtifact(store, run.runId, 'revised-draft')).toBeUndefined()
+    // And nothing downstream was produced from the doctored draft: the manuscript is still the one
+    // D3 wrote, so the revision and the assembly never saw the number. The artifact itself exists —
+    // D3 wrote it and its gate refused the STEP — which is why the check is on who produced it and
+    // not on whether it is there.
+    expect(getRunSnapshot(store, run.runId).registry['manuscript']?.producerStepId).toBe('D3-writing')
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
     expect(readinessOfRun(store, run.runId, 'production').ready).toBe(false)
   })

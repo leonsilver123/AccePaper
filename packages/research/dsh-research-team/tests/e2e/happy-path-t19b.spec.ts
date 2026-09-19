@@ -141,11 +141,20 @@ describe('T19-B happy path — real tool execution is provable from the artifact
   it('writes every declared output slug into the artifact registry', async () => {
     const { store, run } = await happyRun()
     const snap = getRunSnapshot(store, run.runId)
+    // A SLUG'S ENTRY NAMES THE STEP THAT WROTE THE VALUE THE REGISTRY HOLDS. Most slugs have one
+    // producer, so that is the step declaring them; `manuscript` is created by D3 and republished by
+    // D4, and its entry names D4 — the LAST step to declare it, which is whose attempt produced the
+    // bytes under that slug now. The invariant is unchanged: every declared output has an entry, and
+    // a step that declares the slug is the step behind that entry.
+    const producerOf = new Map<string, string>()
+    for (const def of getStepDefinitions()) {
+      for (const slug of def.outputs) producerOf.set(slug, def.id)
+    }
     for (const def of getStepDefinitions()) {
       if (def.id === 'E2-submit') continue // human gate: no executor, no artifact
       for (const slug of def.outputs) {
         expect(snap.registry[slug], `${def.id} must have produced '${slug}'`).toBeDefined()
-        expect(snap.registry[slug]?.producerStepId).toBe(def.id)
+        expect(snap.registry[slug]?.producerStepId).toBe(producerOf.get(slug))
       }
     }
     expect(snap.registry['submission-record']).toBeUndefined()
@@ -257,8 +266,16 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
   it('D2→D3→D4→E1 carries the SAME manuscript skeleton through outline/draft/revision/format', async () => {
     const { store, run } = await happyRun()
     const outline = artifactOf(store, run.runId, 'paper-outline')
-    const draft = artifactOf(store, run.runId, 'draft')
-    const revised = artifactOf(store, run.runId, 'revised-draft')
+    // ONE DOCUMENT, ONE SLUG, TWO VERSIONS: D3 creates `manuscript` and D4 republishes it under the
+    // same name, so the registry holds only the revision. Reading the slug twice would compare the
+    // revision with itself and make the two assertions below vacuous — the draft is read where the
+    // engine keeps it, as D3's own attempt.
+    const draftValue = getRunSnapshot(store, run.runId).steps['D3-writing']?.artifacts['manuscript']
+    if (draftValue === null || typeof draftValue !== 'object' || Array.isArray(draftValue)) {
+      throw new Error("happy-path: D3's attempt produced no 'manuscript' artifact")
+    }
+    const draft = draftValue as Record<string, unknown>
+    const revised = artifactOf(store, run.runId, 'manuscript')
     const formatted = artifactOf(store, run.runId, 'formatted-manuscript')
 
     const outlineIds = (outline.sections as ReadonlyArray<{ id: string }>).map(s => s.id)

@@ -106,7 +106,7 @@ async function figurePlan(): Promise<Record<string, unknown>> {
  */
 async function revisedDraftInputs(): Promise<Record<string, unknown>> {
   const plan = await figurePlan()
-  return { 'revised-draft': { renderedFigures: plan.figures } }
+  return { 'manuscript': { renderedFigures: plan.figures } }
 }
 
 describe('T19-B registry — 16-step coverage derived from core', () => {

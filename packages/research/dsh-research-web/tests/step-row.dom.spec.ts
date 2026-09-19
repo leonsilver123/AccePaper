@@ -101,7 +101,7 @@ function summaryOf(input: Partial<RunSummaryInput> = {}) {
     steps: writingStage().steps,
     artifacts: [
       {
-        slug: 'draft', producerStepId: 'D3-writing', producerAttemptId: 1, producedAt: 1,
+        slug: 'manuscript', producerStepId: 'D3-writing', producerAttemptId: 1, producedAt: 1,
         invalidated: false, summary: 'the assembled manuscript',
       },
       {
@@ -156,7 +156,7 @@ describe('a step row', () => {
     const { container } = renderStage()
 
     const details = container.querySelector('[data-research-step-details="D3-writing"]')
-    expect(details?.textContent).toContain(en['artifactName.draft'])
+    expect(details?.textContent).toContain(en['artifactName.manuscript'])
     // The stage's own product list names them too — a slug is what a reader cannot use, so it is not
     // what either surface shows.
     const outcomes = container.querySelector('[data-research-stage-artifacts]')

@@ -39,8 +39,8 @@ export type ArtifactSlug =
   | 'ablation-results' | 'boundary-map'
   | 'figure-plan'
   | 'paper-outline'
-  | 'draft'
-  | 'rebuttal' | 'revised-draft'
+  | 'manuscript'
+  | 'rebuttal'
   | 'formatted-manuscript'
   | 'submission-record'
 
@@ -67,9 +67,8 @@ const ARTIFACT_NAME_KEYS: Readonly<Record<ArtifactSlug, ResearchKey>> = {
   'boundary-map': 'artifactName.boundary-map',
   'figure-plan': 'artifactName.figure-plan',
   'paper-outline': 'artifactName.paper-outline',
-  draft: 'artifactName.draft',
+  manuscript: 'artifactName.manuscript',
   rebuttal: 'artifactName.rebuttal',
-  'revised-draft': 'artifactName.revised-draft',
   'formatted-manuscript': 'artifactName.formatted-manuscript',
   'submission-record': 'artifactName.submission-record',
 }

@@ -437,14 +437,14 @@ describe('the A gate refuses a doctored manuscript in a driven run', () => {
         stepId === 'D3-writing'
           ? async (ctx) => {
             const produced = await real(ctx)
-            const draft = produced['draft'] as { sections: ReadonlyArray<{ id: string; bodyText: string }> }
+            const draft = produced['manuscript'] as { sections: ReadonlyArray<{ id: string; bodyText: string }> }
             // The injection: one plausible decimal that the run never measured.
             const sections = draft.sections.map(section =>
               section.id === 'results'
                 ? { ...section, bodyText: `${section.bodyText} The improvement was 12.5%.` }
                 : section,
             )
-            return { ...produced, draft: { ...draft, sections } }
+            return { ...produced, manuscript: { ...draft, sections } }
           }
           : undefined,
       stopBefore: 'D4-rebuttal',
@@ -454,11 +454,14 @@ describe('the A gate refuses a doctored manuscript in a driven run', () => {
     const evidence = String(getRunSnapshot(store, run.runId).steps['D3-writing']?.gateResults.A?.evidence)
     // The verdict names WHICH document it read. A gate that says only "blocked" leaves a reader
     // unable to tell a manuscript finding from a claim finding.
-    expect(evidence).toContain('the draft manuscript')
+    expect(evidence).toContain('the manuscript')
     expect(evidence).toContain('red-stat=refute')
     // The run stops there rather than carrying a fabricated number further down the pipeline.
     expect(run.steps.at(-1)?.stepId).toBe('D3-writing')
-    expect(getArtifact(store, run.runId, 'revised-draft')).toBeUndefined()
+    // The manuscript D3 wrote stays the only one written — a blocked step's output is in the
+    // registry, so what says the number went no further is that no LATER step republished it.
+    expect(getRunSnapshot(store, run.runId).registry['manuscript']?.producerStepId).toBe('D3-writing')
+    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
   })
 
   it('reviews the claim material on the steps that run before a manuscript exists', async () => {

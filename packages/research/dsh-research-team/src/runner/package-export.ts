@@ -258,7 +258,7 @@ export async function renderBibliography(
   sources: ReadonlyMap<string, SourceRecord>,
   writer: BibliographyWriter,
 ): Promise<{ readonly text?: string; readonly refusals: ReadonlyArray<string> }> {
-  const citations = artifactRecord(store, runId, 'draft')?.citations
+  const citations = artifactRecord(store, runId, 'manuscript')?.citations
   if (!Array.isArray(citations) || citations.length === 0) return { refusals: [] }
   const cited = bibliographyOf(citations as ReadonlyArray<CitationUse>, sources)
   const entries = referenceEntriesOf(cited.entries)
@@ -365,7 +365,7 @@ function declaredMetricsOf(
  */
 const PACKAGED_SLUGS: ReadonlyArray<string> = [
   'claim', 'landscape-map', 'method-spec', 'mvp-results', 'baseline-results',
-  'figure-plan', 'draft', 'revised-draft', 'result-version', 'formatted-manuscript',
+  'figure-plan', 'manuscript', 'result-version', 'formatted-manuscript',
 ]
 
 /**
@@ -473,7 +473,7 @@ export function planRunPackage(
   const experiment = artifactRecord(store, runId, 'mvp-results')
   const baseline = artifactRecord(store, runId, 'baseline-results')
   const method = artifactRecord(store, runId, 'method-spec')
-  const draftArtifact = artifactRecord(store, runId, 'draft')
+  const draftArtifact = artifactRecord(store, runId, 'manuscript')
   const baselineArtifact = artifactRecord(store, runId, 'baseline-results')
 
   const files: PackageFile[] = []

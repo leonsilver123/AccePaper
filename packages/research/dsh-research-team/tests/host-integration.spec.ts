@@ -222,7 +222,7 @@ function readDraftOf(directory: string, runId: string): Record<string, unknown> 
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
     registry?: Record<string, { value?: Record<string, unknown> }>
   }
-  return parsed.registry?.['draft']?.value ?? {}
+  return parsed.registry?.['manuscript']?.value ?? {}
 }
 async function bootHost(options: BootOptions = {}): Promise<Host> {
   const ctx = new Context()

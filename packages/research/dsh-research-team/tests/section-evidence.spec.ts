@@ -165,7 +165,7 @@ describe('the driven draft records what each section was written from', () => {
   it('writes every section of the study run, and refuses none of them', async () => {
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as
+    const draft = getArtifact(store, run.runId, 'manuscript') as
       | {
         refusedSections?: ReadonlyArray<string>
         sectionEvidence?: ReadonlyArray<{ sectionId: string; supplied: ReadonlyArray<string>; missing: ReadonlyArray<string> }>

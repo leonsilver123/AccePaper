@@ -228,7 +228,7 @@ describe('the same baseline on a different research task', () => {
     // AND THE BASELINE READS THIS MANUSCRIPT TOO — the same rules, applied to a run that ended the
     // other way, still finding what is actually wrong with the document rather than what the shipped
     // task's answer looks like.
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
     }
     const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
@@ -271,7 +271,7 @@ describe('the shipped run, read by the baseline', () => {
     // baseline into a golden file, and the plan forbids exactly that.
     const store = new Map() as ResearchRunStore
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
     }
     const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {

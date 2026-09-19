@@ -59,13 +59,13 @@ export type { VerdictBuildCtx } from './types.ts'
 const A_CHANNEL_ROLES: ReadonlyArray<string> = REVIEW_ROLES.map(entry => entry.role)
 
 /**
- * The manuscript this step's A gate reviews, when the run has one.
+ * The slugs that name the manuscript this step's A gate reviews.
  *
- * `D3-writing` produces `draft` and `D4-rebuttal` produces `revised-draft`; a step that reads the
- * draft sees it as an input. The more downstream artifact wins, because that is the document the
- * run is currently standing behind.
+ * ONE DOCUMENT, ONE SLUG. `D3-writing` creates `manuscript` and `D4-rebuttal` republishes it under
+ * the same name, so there is one entry and it is the document the run is currently standing behind:
+ * a step that declares it as an input reads D3's version, and a later step reads D4's.
  */
-const MANUSCRIPT_SLUGS: ReadonlyArray<string> = ['revised-draft', 'draft']
+const MANUSCRIPT_SLUGS: ReadonlyArray<string> = ['manuscript']
 
 /**
  * The manuscript this step's A gate is to review, with the evidence its checks need.
@@ -78,6 +78,7 @@ const MANUSCRIPT_SLUGS: ReadonlyArray<string> = ['revised-draft', 'draft']
  * @returns the manuscript and its rosters, or undefined when there is no manuscript to review.
  */
 function manuscriptUnderReview(ctx: VerdictBuildCtx): {
+  /** The artifact's slug, which is the document's name in the verdict's own sentence. */
   readonly slug: string
   readonly sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
   readonly implementationNames: ReadonlyArray<string>
@@ -217,7 +218,10 @@ function verdictA(ctx: VerdictBuildCtx): GateVerdict {
       predictionText: ctx.runCtx.predictionText,
       metricPhrases: planOf(ctx).metric.phrases,
     })
-  const reviewed = manuscript === undefined ? 'claim material' : `the ${manuscript.slug} manuscript`
+  // WHICH DOCUMENT IT READ, as a reader of the verdict sees it. The slug IS the document's name —
+  // `manuscript` — so composing `the ${slug} manuscript` stated it twice. What separates this
+  // finding from a claim finding is that the review read the manuscript at all.
+  const reviewed = manuscript === undefined ? 'claim material' : `the ${manuscript.slug}`
   const votes: ResearchRebuttal[] = reviews.map(review => ({
     roundId,
     claimRef,

@@ -37,7 +37,7 @@ describe('claim-construct', () => {
     const variants = [
       baseInput({ falsifiability: {} }),
       baseInput({ falsifiability: { experimentToFalsify: 'cool the lattice below 1 nK' } }),
-      baseInput({ note: 'draft', claimId: 'manual-id' }),
+      baseInput({ note: 'manuscript', claimId: 'manual-id' }),
     ]
     for (const variant of variants) {
       expect(constructClaim(variant).claim.supportStatus).toBe('not_claimed')

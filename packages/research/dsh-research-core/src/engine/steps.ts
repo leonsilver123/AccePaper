@@ -1,4 +1,5 @@
 import type { Phase, StepDefinition, TrinityComponent } from './types.ts'
+import { forwardEdges } from '../workflow/dependency-graph.ts'
 
 /**
  * The 16-step research pipeline (methodology v1.0, Phases A–E).
@@ -144,7 +145,10 @@ export const STEPS: readonly StepDefinition[] = [
     id: 'D3-writing', index: 13, phase: 'D', name: '写作',
     purpose: '起草各章节正文,并整理出参考文献',
     inputs: ['paper-outline', 'figure-plan', 'landscape-map', 'result-version', 'method-spec'],
-    outputs: ['draft'],
+    // THE DOCUMENT IS ONE ARTIFACT WITH ONE VERSION COUNTER, created here and republished by every
+    // later writing step. It is not a per-step product: a judgement has to bind the version of the
+    // document it was made about, and three slugs for one document give it three things to bind.
+    outputs: ['manuscript'],
     gate: ['A', 'B'],
     falsifiable: null,
     humanGate: false,
@@ -152,8 +156,10 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'D4-rebuttal', index: 14, phase: 'D', name: '答辩演练',
     purpose: '预演审稿人会怎么质疑,逐条回应并产出修订稿',
-    inputs: ['draft', 'result-version'],
-    outputs: ['rebuttal', 'revised-draft'],
+    // `manuscript` is BOTH an input and an output here: this step republishes the document it read,
+    // which is what `assertDagAndSeedSeparation` requires of a step that is not its first producer.
+    inputs: ['manuscript', 'result-version'],
+    outputs: ['rebuttal', 'manuscript'],
     gate: ['A'],
     falsifiable: null,
     humanGate: false,
@@ -164,7 +170,7 @@ export const STEPS: readonly StepDefinition[] = [
     purpose: '按目标期刊的要求排版,并套用它的引用格式',
     // `paper-outline` is read by this step's executor and was not declared — see D2-framework for
     // what an undeclared read costs.
-    inputs: ['revised-draft', 'venue', 'venue-scope', 'paper-outline', 'result-version'],
+    inputs: ['manuscript', 'venue', 'venue-scope', 'paper-outline', 'result-version'],
     outputs: ['formatted-manuscript'],
     gate: ['B'],
     falsifiable: null,
@@ -294,14 +300,18 @@ export function assertDagAndSeedSeparation(steps: readonly StepDefinition[] = ST
   for (const s of steps) {
     for (const input of s.inputs) {
       if (SEEDABLE_INPUTS.includes(input)) continue
-      const owner = firstProducer.get(input)
-      if (owner === undefined) {
+      if (!firstProducer.has(input)) {
         throw new Error(`assertDagAndSeedSeparation: step '${s.id}' input '${input}' has no producer and is not seedable`)
       }
-      if (owner >= s.index) {
-        throw new Error(`assertDagAndSeedSeparation: step '${s.id}' (index ${s.index}) consumes '${input}' produced by a later/equal-index step (index ${owner}) — cycle or forward-edge (DEP-9)`)
-      }
     }
+  }
+  // THE FORWARD-EDGE RULE HAS ONE HOME. `forwardEdges` states it as a function so a spec can assert
+  // the expected graph without re-running the module; this call is what makes the module-load check
+  // and the spec the same rule rather than two copies of it. They were two copies, and when a slug
+  // gained a second producer only one was corrected — the assertion passed a graph the spec's
+  // function reported as broken.
+  for (const edge of forwardEdges(steps)) {
+    throw new Error(`assertDagAndSeedSeparation: step '${edge.consumer}' consumes '${edge.input}' produced by a later/equal-index step (index ${edge.producerIndex}) — cycle or forward-edge (DEP-9)`)
   }
   for (const [slug, ids] of producers) {
     if (ids.length < 2) continue

@@ -242,7 +242,7 @@ describe('what a section was asked for is part of the run', () => {
     // record; the session log is not, so a run read back from disk carries it.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       proseRequests: ReadonlyArray<{
         sectionId: string
         channel: string

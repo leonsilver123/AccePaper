@@ -53,6 +53,8 @@ function packageView(overrides: Partial<DeliverableView> = {}): DeliverableView 
     files: [{ path: 'manuscript.md', bytes: 1200 }],
     revision: null,
     directory: 'H:/packages/run_package_001',
+    // THE PACKAGE STATE, not the artifact slug: `draft` here is `FinalPackageState`, and the file
+    // above is the artifact that happens to be named `manuscript.md`.
     state: 'draft',
     checks: [
       { code: 'production-evidence', passed: false, detail: 'the run was conducted under the evaluation profile' },

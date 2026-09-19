@@ -383,9 +383,8 @@ export const zh = {
   'artifactName.boundary-map': '适用边界图',
   'artifactName.figure-plan': '图表规划',
   'artifactName.paper-outline': '论文大纲',
-  'artifactName.draft': '论文草稿',
+  'artifactName.manuscript': '论文稿件',
   'artifactName.rebuttal': '答辩意见',
-  'artifactName.revised-draft': '修订稿',
   'artifactName.formatted-manuscript': '排版后的稿件',
   'artifactName.submission-record': '投稿记录',
 
@@ -794,9 +793,8 @@ export const en: Record<ResearchKey, string> = {
   'artifactName.boundary-map': 'applicability boundary map',
   'artifactName.figure-plan': 'figure and table plan',
   'artifactName.paper-outline': 'paper outline',
-  'artifactName.draft': 'manuscript draft',
+  'artifactName.manuscript': 'manuscript',
   'artifactName.rebuttal': 'rebuttal',
-  'artifactName.revised-draft': 'revised draft',
   'artifactName.formatted-manuscript': 'formatted manuscript',
   'artifactName.submission-record': 'submission record',
 

@@ -677,7 +677,7 @@ function declaredPackageFilesOf(store: ResearchRunStore, runId: string): Readonl
 
 /** The sections the run's draft recorded as refused. */
 function refusedSectionsOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
-  const value = readArtifact(store, runId, 'draft')
+  const value = readArtifact(store, runId, 'manuscript')
   if (value === null || typeof value !== 'object') return []
   const refused = (value as { refusedSections?: unknown }).refusedSections
   return Array.isArray(refused) ? refused.filter((id): id is string => typeof id === 'string') : []

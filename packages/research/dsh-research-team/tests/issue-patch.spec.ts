@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 
 import { runT19B } from '../src/runner/drive.ts'
 import { applyRevision, bodyHashOf } from '../src/runner/issue-patch.ts'
@@ -163,10 +163,14 @@ describe('the driven revision is a diff', () => {
   it('marks only the patched section revised, and the bodies actually differ', async () => {
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as
+    // ONE DOCUMENT, ONE SLUG, TWO VERSIONS. D3 creates `manuscript` and D4 republishes it under the
+    // same slug, so the registry holds only the latest value; the draft the revision started from is
+    // read where the engine keeps it — D3's own attempt. Reading the slug twice would compare the
+    // revision with itself and report that nothing changed.
+    const draft = getRunSnapshot(store, run.runId).steps['D3-writing']?.artifacts['manuscript'] as
       | { sections: ReadonlyArray<{ id: string; bodyText: string }> }
       | undefined
-    const revised = getArtifact(store, run.runId, 'revised-draft') as
+    const revised = getArtifact(store, run.runId, 'manuscript') as
       | {
         sections: ReadonlyArray<{ id: string; bodyText: string; revised: boolean }>
         patchedSections?: ReadonlyArray<string>

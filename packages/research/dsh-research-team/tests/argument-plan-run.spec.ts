@@ -26,14 +26,14 @@ const CASE_PACK_DIR = join(process.cwd(), 'plan/overnight/2026-09-09/case-pack-t
 
 /** The plan a driven run recorded on its draft. */
 function planOfRun(store: ResearchRunStore, runId: string): ArgumentPlan {
-  const draft = getArtifact(store, runId, 'draft') as { argumentPlan?: ArgumentPlan }
+  const draft = getArtifact(store, runId, 'manuscript') as { argumentPlan?: ArgumentPlan }
   if (draft.argumentPlan === undefined) throw new Error('the draft recorded no argument plan')
   return draft.argumentPlan
 }
 
 /** The section bodies a driven run assembled, by id. */
 function sectionsOfRun(store: ResearchRunStore, runId: string): ReadonlyMap<string, string> {
-  const draft = getArtifact(store, runId, 'draft') as {
+  const draft = getArtifact(store, runId, 'manuscript') as {
     sections: ReadonlyArray<{ id: string; bodyText: string }>
   }
   return new Map(draft.sections.map(section => [section.id, section.bodyText]))
@@ -72,7 +72,7 @@ describe('the plan a run records, on the task that refutes its own claim', () =>
     // required, and the plan revision it was judged against.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       sectionEvidence: ReadonlyArray<{ sectionId: string; required: ReadonlyArray<string>; missing: ReadonlyArray<string> }>
       argumentPlan: ArgumentPlan
     }

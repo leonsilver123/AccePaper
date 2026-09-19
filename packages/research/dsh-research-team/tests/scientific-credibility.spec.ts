@@ -172,7 +172,7 @@ describe('evidence that is missing blocks the manuscript', () => {
 
   it('records the sections it refused, so the gap is a fact about the run', async () => {
     const { store, runId } = await shippedRun()
-    const draft = artifact(store, runId, 'draft')
+    const draft = artifact(store, runId, 'manuscript')
     // An empty list here is the shipped case pack's honest outcome — every section had evidence. The
     // assertion is that the field exists and is a list: a run that could not say which sections it
     // skipped could not be checked for them either.

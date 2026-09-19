@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createRun,
   getArtifact,
+  getRunSnapshot,
   getStepDefinitionById,
   getStepDefinitions,
   setRunInput,
@@ -85,8 +86,13 @@ describe('the result record', () => {
 
   it('is what the prose steps report, not a fresh measurement', async () => {
     const { store, runId } = await fullRun()
-    const draft = getArtifact(store, runId, 'draft') as DraftShape | undefined
-    const revised = getArtifact(store, runId, 'revised-draft') as RecitedShape | undefined
+    // ONE DOCUMENT, ONE SLUG, TWO VERSIONS. D3 creates `manuscript` and D4 republishes it under the
+    // same name, so the registry holds only the revision; D3's version is read where the engine
+    // keeps it, as D3's own attempt. Reading the slug twice would assert the revision's
+    // `resultSource` against itself and leave D3's unreported — which is the defect this file exists
+    // to catch.
+    const draft = getRunSnapshot(store, runId).steps['D3-writing']?.artifacts['manuscript'] as DraftShape | undefined
+    const revised = getArtifact(store, runId, 'manuscript') as RecitedShape | undefined
     const record = readResultVersion(getArtifact(store, runId, RESULT_VERSION_SLUG))
     // THE ASSERTION THIS FILE EXISTS FOR. `recomputed` would mean the step measured the study
     // itself while a record of that measurement sat in the run.

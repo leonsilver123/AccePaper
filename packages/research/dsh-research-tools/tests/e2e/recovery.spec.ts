@@ -139,7 +139,7 @@ describe('E2E-2 Abstained / Failure / Recovery — recover through 3 faults to E
       timeoutMs: 20,
     })
     expect(d3.status).toBe('in_progress') // never left in_progress, never hung
-    expect(getArtifact(store, runId, 'draft')).toBeUndefined()
+    expect(getArtifact(store, runId, 'manuscript')).toBeUndefined()
     assertStepExecuted(store, runId, 'D3-writing', 'timeout') // deterministic timeout, no hang
     rollback(store, runId, 'D3-writing')
     const d3b = await runStepWithGate(store, runId, 'D3-writing', { verdictFactory: passedVerdictFactory() })

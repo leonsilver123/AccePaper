@@ -132,7 +132,7 @@ describe('a run that cites its sources', () => {
     // quoted passage, so "this paper rests on that sentence in that source" is auditable.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       citations: ReadonlyArray<{ citeKey: string; quote: string; location: string; support: string }>
     }
     expect(draft.citations.map(citation => citation.citeKey)).toEqual(REVIEWED_KEYS)
@@ -164,7 +164,7 @@ describe('a run whose manuscript cites none of the sources it reviewed', () => {
     expect(d3?.executeError).toContain('citation-source-uncited')
     for (const key of REVIEWED_KEYS) expect(d3?.executeError, key).toContain(key)
     // AND NOTHING WAS PUBLISHED: a run stopped here has no draft, so no manuscript can follow it.
-    expect(getArtifact(store, run.runId, 'draft')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
   })
 })
@@ -207,7 +207,7 @@ describe('a revision that rewrites a cited sentence', () => {
     // sources. Nothing else about the run changes, so the refusal can only come from the versions.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const revised = getArtifact(store, run.runId, 'revised-draft') as {
+    const revised = getArtifact(store, run.runId, 'manuscript') as {
       sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
       citations: ReadonlyArray<{ citeKey: string }>
     }
@@ -236,7 +236,7 @@ describe('a revision that rewrites a cited sentence', () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
     const e1Ctx: ExecCtx = {
       ...execCtx('E1-format'),
-      getInput: slug => (slug === 'revised-draft' ? edited : getArtifact(store, run.runId, slug)),
+      getInput: slug => (slug === 'manuscript' ? edited : getArtifact(store, run.runId, slug)),
     }
     await expect(entry?.executor(e1Ctx)).rejects.toThrow(/citation-statement-changed/u)
   })
@@ -260,7 +260,7 @@ describe('a revision that rewrites a cited sentence', () => {
       ),
       casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
     })
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       proseRequests: ReadonlyArray<{ instruction: string | null }>
     }
     const instructions = draft.proseRequests

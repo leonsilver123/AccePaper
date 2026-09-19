@@ -17,7 +17,7 @@ import type {
 } from '../src/runner/statement-support.ts'
 import { locateStatements } from '../src/runner/citation-bindings.ts'
 import type { SourceJudgement } from '../src/runner/citation-bindings.ts'
-import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import { STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 
@@ -194,7 +194,7 @@ describe('a run under a deployment that reads sentences', () => {
     // them, which is the fact the review found being reported as support.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, { statementAssessor: assessor({}).assessor })
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       statementAssessments?: ReadonlyArray<StatementAssessment>
     }
     expect(draft).toBeDefined()
@@ -219,7 +219,7 @@ describe('a run under a deployment that reads sentences', () => {
     expect(d3?.executeError).toContain('statement-contradicted')
     expect(d3?.executeError).toContain('the passage reports the opposite')
     // AND NOTHING WAS PUBLISHED: no draft, so no manuscript can follow it.
-    expect(getArtifact(store, run.runId, 'draft')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
     expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
   })
 
@@ -229,7 +229,7 @@ describe('a run under a deployment that reads sentences', () => {
     // draft says the list is empty and a reader can tell the two apart.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
       statementAssessments?: ReadonlyArray<StatementAssessment>
     }
     // ABSENT, NOT EMPTY. An empty list would mean the readings were made and found nothing — the
@@ -245,10 +245,14 @@ describe('the readings travel with the manuscript, and the policy decides', () =
     // This drives the production executors and asserts what the artifact between them carries.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, { statementAssessor: assessor({}).assessor })
-    const draft = getArtifact(store, run.runId, 'draft') as {
+    // ONE DOCUMENT, ONE SLUG, TWO VERSIONS. The draft is D3's version, which the registry no longer
+    // holds once D4 has republished `manuscript`; it is read where the engine keeps it, as D3's own
+    // attempt. Reading the slug twice would compare the revision with itself, and this case — D4
+    // rebuilding the manuscript without the readings — is the break it exists to catch.
+    const draft = getRunSnapshot(store, run.runId).steps['D3-writing']?.artifacts['manuscript'] as {
       statementAssessments?: ReadonlyArray<StatementAssessment>
     }
-    const revised = getArtifact(store, run.runId, 'revised-draft') as {
+    const revised = getArtifact(store, run.runId, 'manuscript') as {
       statementAssessments?: ReadonlyArray<StatementAssessment>
     }
     expect(draft.statementAssessments?.length ?? 0).toBeGreaterThan(0)
@@ -272,7 +276,7 @@ describe('the readings travel with the manuscript, and the policy decides', () =
         ? undefined
         : async (ctx) => {
           const produced = await real(ctx)
-          const revised_ = produced['revised-draft']
+          const revised_ = produced['manuscript']
           if (revised_ !== null && typeof revised_ === 'object') {
             delete (revised_ as Record<string, unknown>)['statementAssessments']
           }

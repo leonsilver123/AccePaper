@@ -720,9 +720,8 @@ const ARTIFACT_TYPE_BY_SLUG: Readonly<Record<string, string>> = {
   'boundary-map': 'boundary-map',
   'figure-plan': 'figure-render-plan',
   'paper-outline': 'paper-outline',
-  'draft': 'manuscript-draft',
+  'manuscript': 'manuscript-draft',
   'rebuttal': 'rebuttal-record',
-  'revised-draft': 'manuscript-draft',
   'formatted-manuscript': 'formatted-manuscript',
   'submission-record': 'submission-record',
 }
@@ -3023,12 +3022,15 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const sectionEvidence = headings.map(h => evidenceFor(h.id))
   const refused = sectionEvidence.filter(entry => entry.missing.length > 0)
 
+  // THE KEY IS THE OUTPUT SLUG — what `commitStepOutputs` matches against the step's declared
+  // outputs (INV-OUTPUT-CONTRACT). Renaming the value's `slug` field alone leaves the commit naming
+  // an artifact no step declares, which the engine refuses as `DSH_COMMIT_OUTPUT_NOT_DECLARED`.
   return {
-    draft: tagArtifact(
+    manuscript: tagArtifact(
       {
         fixture: proseSource === 'fixture',
         stepId: 'D3-writing',
-        slug: 'draft',
+        slug: 'manuscript',
         title: planOf(ctx).title,
         claimRef,
         sections,
@@ -3122,7 +3124,7 @@ const DEFAULT_REVISION_ROUNDS = 2
 
 async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
-  const draft = readInput(ctx, 'draft')
+  const draft = readInput(ctx, 'manuscript')
   const sections = sectionsOf(draft, planOf(ctx), ctx)
   // A revision keeps the reference list it is revising. Dropping it here is what
   // made the assembled manuscript report zero references while its own references
@@ -3138,6 +3140,19 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const argumentPlan = draft?.argumentPlan as ArgumentPlan | undefined
   // Same reasoning as the references: a revision keeps the figures it is revising.
   const renderedFigures = Array.isArray(draft?.renderedFigures) ? draft.renderedFigures : []
+  // AND WHAT D3 RECORDED ABOUT HOW IT WROTE THE DOCUMENT THIS STEP REPUBLISHES. There is ONE
+  // manuscript artifact with ONE version counter now: D3 creates it and this step overwrites it
+  // under the same slug, so a field dropped here is a fact the run no longer holds anywhere — there
+  // is no second slug to read it from, and the reader of the current manuscript is the only reader
+  // there is. `refusedSections` is the one with a consumer inside the product: `manuscriptFactsOf`
+  // decides the package's `no-refused-sections` check from it, so a revision that dropped it
+  // reported a run that had refused a section as one that had refused none. The other three are the
+  // draft's own record of what each section was asked for and written from, which is the log a
+  // refused statement or citation has to be traceable to.
+  const proseRequests = Array.isArray(draft?.proseRequests) ? draft.proseRequests : []
+  const proseRequestVersion = draft?.proseRequestVersion
+  const sectionEvidence = Array.isArray(draft?.sectionEvidence) ? draft.sectionEvidence : []
+  const refusedSections = Array.isArray(draft?.refusedSections) ? draft.refusedSections : []
   const d4Outcome = measureOutcomeWithSource(ctx)
   const measured = d4Outcome.measured
 
@@ -3442,11 +3457,11 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       D4_PRODUCER,
       proseKindOf(rebuttalSource),
     ),
-    'revised-draft': tagArtifact(
+    'manuscript': tagArtifact(
       {
         fixture: true,
         stepId: 'D4-rebuttal',
-        slug: 'revised-draft',
+        slug: 'manuscript',
         title: planOf(ctx).title,
         claimRef,
         sections: revised,
@@ -3457,6 +3472,11 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         awaitingVerification: applied.awaitingVerification,
         citations,
         references,
+        // THE DOCUMENT'S OWN WRITING RECORD TRAVELS WITH IT — see the reads above.
+        proseRequests,
+        ...(typeof proseRequestVersion === 'string' ? { proseRequestVersion } : {}),
+        sectionEvidence,
+        refusedSections,
         // THE READINGS TRAVEL WITH THE MANUSCRIPT THEY WERE MADE ABOUT. D4 rebuilt the revised draft
         // without this field, so a run under a deployment that HAD read every sentence arrived at E1
         // looking like one that could not — and E1, reading the absence as "no assessor", skipped the
@@ -3493,7 +3513,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const venue = readInput(ctx, 'venue')
   const venueScope = readInput(ctx, 'venue-scope')
-  const revised = readInput(ctx, 'revised-draft')
+  const revised = readInput(ctx, 'manuscript')
   const outline = readInput(ctx, 'paper-outline')
   // The manuscript carries the outline's title, so the assembled document is this
   // paper rather than a generic skeleton.
@@ -4110,7 +4130,7 @@ function nonEmptyPackageFiles(
  * @returns the assessments the draft carries, or an empty list when it carries none.
  */
 function carriedAssessments(ctx: ExecCtx): ReadonlyArray<StatementAssessment> {
-  const draft = readInput(ctx, 'draft')
+  const draft = readInput(ctx, 'manuscript')
   return Array.isArray(draft?.statementAssessments)
     ? (draft.statementAssessments as ReadonlyArray<StatementAssessment>)
     : []

@@ -47,6 +47,7 @@ function withQuality(quality: PaperQualityReportView): RunSummaryInput {
       kind: 'package',
       files: [{ path: 'manuscript.md', bytes: 100 }],
       revision: null,
+      // THE PACKAGE STATE, not the artifact slug — this file says nothing about the state.
       state: 'draft',
       quality,
     }],
