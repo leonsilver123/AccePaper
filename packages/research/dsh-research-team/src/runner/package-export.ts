@@ -33,6 +33,7 @@ import type { BibliographyWriter } from './bibliography.ts'
 import { bibliographyOf } from './citation-bindings.ts'
 import type { CitationUse, SourceRecord } from './citation-bindings.ts'
 import { metricsForStudy } from './metrics.ts'
+import { parsePipeTable } from './paper-format.ts'
 
 /**
  * What a package needs to know about one step.
@@ -81,6 +82,294 @@ export interface PackagedFile {
   readonly sha256: string
 }
 
+/** One table the package carries, as the run's document holds it. */
+export interface PackagedTable {
+  /** The float's number, e.g. `Table 1`, as the manuscript prints it. */
+  readonly label: string
+  /** Package-relative path of the printed table, e.g. `tables/table-1.md`. */
+  readonly markdown: string
+  /** Package-relative path of the machine-readable twin, when one could be laid out. */
+  readonly csv?: string
+  /**
+   * Why the twin is not beside the printed table, when it is not.
+   *
+   * A CSV IS NOT WRITTEN RATHER THAN WRITTEN WRONG: the twin is read back out of the table the paper
+   * prints, and text that is not a pipe table is refused. An absent file with no sentence would read
+   * as a run that produced no table.
+   */
+  readonly csvRefusal?: string
+}
+
+/**
+ * One attachment a deployment read, for one cite key, with what the run's reading record states.
+ *
+ * THE TWO VERSIONS ARE THE POINT. `readFrom` is the file a judgement about a passage of this source
+ * was made from, as the run recorded it; `file` is what reading the attachment produced now. A
+ * package stores the bytes only when the two agree — see {@link planRunPackage}.
+ */
+export interface ReferencePdfRead {
+  /** The stable key the manuscript cites, minted once and never re-derived from the title. */
+  readonly citeKey: string
+  /** The file the passage behind this citation was read from, as the run's reading record states it. */
+  readonly readFrom: {
+    readonly sourceIdentity: string
+    readonly key: string
+    readonly version: string
+  }
+  /** What reading the attachment produced: its bytes, or why none were read. */
+  readonly file:
+    | {
+      readonly key: string
+      readonly version: string
+      /** SHA-256 of the bytes, as the reader computed it over the bytes it returned. */
+      readonly sha256: string
+      readonly base64: string
+    }
+    | { readonly failure: string }
+}
+
+/**
+ * The reference files a package may carry, and the deployment's decision about reading them.
+ *
+ * `none` IS THE ABSENCE OF THE CAPABILITY, not an empty result: a deployment that reads no attachment
+ * file says so in its manifest, so a reader is told "this package carries no reference PDFs because
+ * the deployment does not store them" rather than being left to interpret an empty directory.
+ */
+export type ReferencePdfPlan =
+  /** The deployment reads no attachment files; no reference file is stored and the manifest says so. */
+  | { readonly policy: 'none' }
+  /** The deployment reads them; these are the reads the caller made. */
+  | { readonly policy: 'local-cache'; readonly reads: ReadonlyArray<ReferencePdfRead> }
+
+/** One reference file the package holds, tied to the attachment a judgement rests on. */
+export interface StoredReferencePdf {
+  readonly citeKey: string
+  /** Package-relative path, e.g. `refs-pdf/cite-10.1016-j.trb.2025.103352.pdf`. */
+  readonly path: string
+  readonly bytes: number
+  readonly sha256: string
+  /** The attachment the bytes belong to, as the reading record names it. */
+  readonly attachmentKey: string
+  /** The attachment's own version, which moves when the file is replaced even if the item does not. */
+  readonly attachmentVersion: string
+  /** What the file is for, stated rather than left to be inferred from its name. */
+  readonly purpose: string
+}
+
+/** One reference file that was not stored, and why. */
+export interface RefusedReferencePdf {
+  readonly citeKey: string
+  readonly attachmentKey: string
+  /** The failure, in the reader's own words. NEVER a filesystem path. */
+  readonly reason: string
+}
+
+/**
+ * Render records as CSV, one record per line.
+ *
+ * RFC 4180 QUOTING, which is what makes a round trip through any reader possible: a field is quoted
+ * when it contains a comma, a double quote, a carriage return or a newline, and an embedded double
+ * quote is doubled. A field that needs none is written bare, so the common case stays readable.
+ *
+ * The record separator is `\n`, not the RFC's `\r\n`. This repository's files end in one `\n`, and a
+ * reader that requires `\r\n` is a reader that also accepts `\n`; the reverse is not true, so the
+ * line ending that both accept is the one used. A field carrying a bare `\r` is quoted, which is what
+ * keeps a carriage return inside a cell from ending a record for a reader that splits on it.
+ *
+ * @param records - the records, each already in column order.
+ * @returns the file body, newline-terminated, or the empty string when there are no records.
+ */
+export function csvRecords(records: ReadonlyArray<ReadonlyArray<string>>): string {
+  if (records.length === 0) return ''
+  return `${records.map(record => record.map(csvField).join(',')).join('\n')}\n`
+}
+
+/** One CSV field, quoted exactly when a reader would otherwise mis-read it. */
+function csvField(value: string): string {
+  return /[",\r\n]/u.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+}
+
+/** The file name one cite key gets under `refs-pdf/`, or undefined when it names no usable file. */
+function referencePdfNameOf(citeKey: string): string | undefined {
+  // A CITE KEY IS NOT A FILE NAME. It is minted from the identifier it cites and so carries dots,
+  // slashes and colons — `cite-10.1016/j.trb.2025.103352` would land in a SUBDIRECTORY named after
+  // the prefix. The manifest entry carries the key itself, so the mapping is explicit rather than
+  // left to be read off the path.
+  const slug = citeKey.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^[.-]+|[.-]+$/gu, '')
+  // A name that is empty, or that walks out of its directory, is refused rather than sanitized into
+  // something that happens to be safe.
+  return slug === '' || slug.includes('..') ? undefined : `${slug}.pdf`
+}
+
+/** The tables the run's document holds, read from the artifact a durable store keeps them in. */
+function documentTablesOf(
+  document: unknown,
+): ReadonlyArray<{ readonly label: string; readonly caption: string; readonly markdown: string }> {
+  const sections = (document as { readonly sections?: unknown } | undefined)?.sections
+  if (!Array.isArray(sections)) return []
+  return sections.flatMap((section) => {
+    const blocks = (section as { readonly blocks?: unknown }).blocks
+    if (!Array.isArray(blocks)) return []
+    return blocks.flatMap((block): ReadonlyArray<{ label: string; caption: string; markdown: string }> => {
+      const entry = block as {
+        readonly kind?: unknown
+        readonly label?: unknown
+        readonly caption?: unknown
+        readonly markdown?: unknown
+      }
+      return entry.kind === 'table' && typeof entry.label === 'string' && typeof entry.caption === 'string'
+        && typeof entry.markdown === 'string' && entry.markdown.trim() !== ''
+        ? [{ label: entry.label, caption: entry.caption, markdown: entry.markdown }]
+        : []
+    })
+  })
+}
+
+/**
+ * The attachments the run's own reading records name, one per cited source.
+ *
+ * READ FROM THE RUN, and from the registry the deployment configured. A citation names the source it
+ * rests on by `literatureRef`; the source record for it carries the reading the judgement was made
+ * from — the item identity and, when the words came out of a file rather than a page of text, the
+ * attachment and that attachment's own version. A source with no attachment contributed no file, so
+ * it is not in this list: what a caller reads is exactly the files a judgement stands on.
+ *
+ * THE BYTES ARE NOT READ HERE. This module is pure with respect to the filesystem, and reading an
+ * attachment is a file or a network read; the caller reads, and {@link planRunPackage} decides what
+ * of it the package may carry.
+ *
+ * @param store - the run store.
+ * @param runId - the run whose citations are read.
+ * @param sources - the sources this run may cite, from the registry it configured.
+ * @returns one request per cited source whose reading record names an attachment.
+ */
+export function citedAttachments(
+  store: ResearchRunStore,
+  runId: string,
+  sources: ReadonlyMap<string, SourceRecord>,
+): ReadonlyArray<{ readonly citeKey: string; readonly readFrom: ReferencePdfRead['readFrom'] }> {
+  const citations = artifactRecord(store, runId, 'manuscript')?.citations
+  if (!Array.isArray(citations)) return []
+  return (citations as ReadonlyArray<CitationUse>).flatMap((citation) => {
+    const evidence = sources.get(citation.literatureRef)?.evidence
+    const attachment = evidence?.attachment
+    if (evidence === undefined || attachment === undefined) return []
+    return [{
+      citeKey: citation.citeKey,
+      readFrom: {
+        sourceIdentity: evidence.sourceIdentity,
+        key: attachment.key,
+        version: attachment.version,
+      },
+    }]
+  })
+}
+
+/**
+ * The reference files a package carries, with what was checked about each one.
+ *
+ * NOTHING IS STORED THAT IS NOT THE FILE THE JUDGEMENT WAS MADE FROM. Bytes are stored under the
+ * cite key that cites them, and a file whose version is not the version the reading record states
+ * belongs to a DIFFERENT file than the passage — storing it would put a document in the package that
+ * no judgement rests on, under a name that says one does. That is refused with the two versions, and
+ * so is a read that returned another attachment, or one whose bytes do not hash to what the reader
+ * said they hashed to.
+ *
+ * @param plan - the deployment's decision, and the reads the caller made.
+ * @param files - the files written so far, which the stores are appended to.
+ * @returns the manifest section, and the paths this package stores.
+ */
+function storeReferencePdfs(
+  plan: ReferencePdfPlan,
+  files: PackageFile[],
+): RunPackageManifest['referencePdfs'] {
+  // THE DEPLOYMENT'S DECISION IS THE FIRST THING THE MANIFEST SAYS. An empty `refs-pdf/` and a
+  // deployment that reads no files are different facts, and a reader given a list would take the
+  // second for the first.
+  if (plan.policy === 'none') return 'not-stored'
+  const stored: StoredReferencePdf[] = []
+  const refused: RefusedReferencePdf[] = []
+  const taken = new Set<string>()
+  for (const read of plan.reads) {
+    const name = referencePdfNameOf(read.citeKey)
+    if (name === undefined) {
+      refused.push({
+        citeKey: read.citeKey,
+        attachmentKey: read.readFrom.key,
+        reason: `the cite key '${read.citeKey}' names no file this package can carry`,
+      })
+      continue
+    }
+    const path = `refs-pdf/${name}`
+    const file = read.file
+    if ('failure' in file) {
+      // THE READER'S OWN SENTENCE. It names the attachment and the reason and never a location —
+      // which is the rule the bibliography writer follows for the same reason: where this machine
+      // keeps its files is not part of a package.
+      refused.push({ citeKey: read.citeKey, attachmentKey: read.readFrom.key, reason: file.failure })
+      continue
+    }
+    if (file.key !== read.readFrom.key) {
+      refused.push({
+        citeKey: read.citeKey,
+        attachmentKey: read.readFrom.key,
+        reason: `the file read for '${read.citeKey}' is attachment '${file.key}', not the`
+          + ` '${read.readFrom.key}' its reading record names`,
+      })
+      continue
+    }
+    if (file.version !== read.readFrom.version) {
+      refused.push({
+        citeKey: read.citeKey,
+        attachmentKey: read.readFrom.key,
+        reason: `attachment '${read.readFrom.key}' was read at version ${file.version} and the judgement`
+          + ` about '${read.citeKey}' was made from version ${read.readFrom.version}; these bytes belong`
+          + ' to a different file than the passage the judgement rests on, so they are not stored',
+      })
+      continue
+    }
+    if (taken.has(path)) {
+      refused.push({
+        citeKey: read.citeKey,
+        attachmentKey: read.readFrom.key,
+        reason: `another cite key already stores a file at '${path}'`,
+      })
+      continue
+    }
+    const bytes = Buffer.from(file.base64, 'base64')
+    // BOTH DIGESTS ARE OVER THE SAME BYTES, which is why they can be compared at all: the reader
+    // computed its `sha256` over the bytes it returned, and the digest here is over those bytes
+    // decoded — no newline is normalised, because a PDF is not text and `writePackageFiles` decodes
+    // base64 rather than re-encoding it. A comparison across encodings (a text document's content vs
+    // the file that lands) would need to say which side it compares; this one does not.
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (digest !== file.sha256) {
+      refused.push({
+        citeKey: read.citeKey,
+        attachmentKey: read.readFrom.key,
+        reason: `the bytes read for '${read.citeKey}' hash to ${digest} and the read states ${file.sha256}`,
+      })
+      continue
+    }
+    taken.add(path)
+    files.push({ path, content: file.base64, encoding: 'base64' })
+    stored.push({
+      citeKey: read.citeKey,
+      path,
+      bytes: bytes.length,
+      sha256: digest,
+      attachmentKey: file.key,
+      attachmentVersion: file.version,
+      // WHAT THE FILE IS FOR, so a reader does not have to guess why a publisher's PDF is in a
+      // package of a run's own artifacts. It is evidence for one citation and nothing else.
+      purpose: `the attachment the passage cited as '${read.citeKey}' was read from; stored so the`
+        + ' quotation in citations.json can be checked against the file it came from. It is a source'
+        + ' the run read, not a product of the run.',
+    })
+  }
+  return { policy: 'local-cache', stored, refused }
+}
+
 /** The manifest written as `run-manifest.json`. */
 export interface RunPackageManifest {
   readonly runId: string
@@ -113,6 +402,32 @@ export interface RunPackageManifest {
   }>
   /** Where each numeric figure came from, so a reader can trace it. */
   readonly numberSources: Readonly<Record<string, string>>
+  /**
+   * The tables this package carries, each with where its two forms landed.
+   *
+   * TWO FORMS OF ONE TABLE, and the difference matters: the Markdown is what the paper prints, and
+   * the CSV is the same table for a reader that wants to re-plot or re-check the numbers. The
+   * manifest says so because a directory of files does not: `tables/table-1.csv` in a package whose
+   * manifest never mentions it is a file nobody can place. A run that produced no table carries an
+   * empty list, which is a fact about the run rather than a missing section.
+   */
+  readonly tables: ReadonlyArray<PackagedTable>
+  /**
+   * The reference files this package carries, or the fact that this deployment stores none.
+   *
+   * `'not-stored'` is the absence of the CAPABILITY, not an empty result: a deployment that reads no
+   * attachment files says so here, so a reader is not left to interpret an empty `refs-pdf/`. Each
+   * stored file names the attachment and that attachment's own version, which is what ties the bytes
+   * to the passage a judgement about this run was made from.
+   *
+   * NOT A PRODUCT OF THE RUN. A reference PDF is a source the run read, carried so the quotation in
+   * `citations.json` can be checked against the file it came from.
+   */
+  readonly referencePdfs: 'not-stored' | {
+    readonly policy: 'local-cache'
+    readonly stored: ReadonlyArray<StoredReferencePdf>
+    readonly refused: ReadonlyArray<RefusedReferencePdf>
+  }
   /**
    * The evidence profile this run was conducted under, whether that profile's evidence may ever
    * carry a submission, and whether THIS run is ready.
@@ -201,6 +516,18 @@ const NUMBER_SOURCES: Readonly<Record<string, string>> = {
   'figures/figure-1.svg': 'mvp-results',
   'roadmap.md': 'figure-plan',
 }
+
+/**
+ * Where the numbers in a table this package carries come from.
+ *
+ * THE SAME RECORD THE FIGURE AND THE VERDICT USE. The results table is rendered by the
+ * `three-line-table` tool over the run's own measured record at D3-writing, so the path is fixed and
+ * the source is the measurement — not the plan, which says which table exists rather than what is in
+ * it. Stated per table rather than added to {@link NUMBER_SOURCES}, whose keys are paths the
+ * exporter knows before it knows whether the run produced a table.
+ */
+const TABLE_NUMBER_SOURCE =
+  'mvp-results + baseline-results (the same measurement the figures and the verdict use)'
 
 /**
  * Strip anything that must not leave the process.
@@ -463,6 +790,15 @@ export function planRunPackage(
      * the run cited without a file a journal could be handed.
      */
     readonly bibliography?: string
+    /**
+     * The reference files the caller read for this run, when the deployment opted into reading them.
+     *
+     * READ BY THE CALLER, for the same reason the bibliography is rendered by it: reading an
+     * attachment is a file or a network read, and this module decides what of it a package may carry
+     * rather than performing the read. Absent means the deployment reads no attachment file — there is
+     * no default that reads one — and the manifest then says so.
+     */
+    readonly referencePdfs?: ReferencePdfPlan
   } = { mode: 'draft' },
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
@@ -494,6 +830,12 @@ export function planRunPackage(
   // they are outputs of the same step, and a second home for them would be a second thing to keep in
   // step. Both lists are written the same way — the split is about what a reader is told, not about
   // what the package holds.
+  //
+  // AN ENTRY WITHOUT `base64` IS A TEXT DOCUMENT AND IS SKIPPED, deliberately and not by the shape of
+  // the test: `documents` carries one record per compiled document — `{format, path, bytes, sha256}`,
+  // with `base64` present only for the formats that are binary — so `.tex` and `.html` appear here
+  // and in `packageFiles` above, which is where their text is. Writing them from both places would
+  // give one file two contents, and the digest this package records would describe whichever won.
   const compileRecord = (typeset as {
     compilation?: { documents?: unknown; assets?: unknown }
   } | undefined)?.compilation
@@ -501,9 +843,10 @@ export function planRunPackage(
     if (!Array.isArray(list)) continue
     for (const entry of list) {
       const asset = entry as { path?: unknown; base64?: unknown }
-      if (typeof asset.path === 'string' && typeof asset.base64 === 'string' && asset.base64.length > 0) {
-        files.push({ path: asset.path, content: asset.base64, encoding: 'base64' })
-      }
+      if (typeof asset.path !== 'string' || asset.path.length === 0) continue
+      if (typeof asset.base64 !== 'string') continue
+      if (asset.base64.length === 0) continue
+      files.push({ path: asset.path, content: asset.base64, encoding: 'base64' })
     }
   }
 
@@ -584,6 +927,35 @@ export function planRunPackage(
       'Session audit entries for each step are in the run log; this package does not duplicate them.',
     ]),
   })
+
+  // THE TABLES THE PAPER PRINTS, AS THEIR OWN FILES. The document carries them as blocks, and a
+  // package that carries the whole document and no table is one where a reader wanting the numbers
+  // has to find them in Markdown prose. TWO FORMS OF ONE TABLE, and both are read out of the block
+  // the manuscript holds rather than re-derived from the run's measurements: the paper prints one
+  // table, and a second construction of it is how the CSV and the printed table come to disagree.
+  const tables: PackagedTable[] = []
+  for (const table of documentTablesOf(draftArtifact?.document)) {
+    const stem = `tables/${table.label.trim().toLowerCase().replace(/\s+/gu, '-')}`
+    const markdown = `${stem}.md`
+    files.push({ path: markdown, content: markdownFile([`**${table.label}.** ${table.caption}`, '', table.markdown]) })
+    const parsed = parsePipeTable(table.markdown)
+    if (parsed === undefined) {
+      tables.push({
+        label: table.label,
+        markdown,
+        csvRefusal: 'the table as the manuscript prints it is not a pipe table this package can read'
+          + ' back, so no machine-readable twin was written',
+      })
+      continue
+    }
+    const csv = `${stem}.csv`
+    files.push({ path: csv, content: csvRecords([parsed.header, ...parsed.rows]) })
+    tables.push({ label: table.label, markdown, csv })
+  }
+  // THE REFERENCE FILES, WHEN THE DEPLOYMENT READS THEM. Planned here rather than by the caller
+  // because this module decides what a package may carry: the caller hands back what it read, and
+  // the version each file must agree with is checked below.
+  const referencePdfs = storeReferencePdfs(options.referencePdfs ?? { policy: 'none' }, files)
 
   const written = new Set(files.map(file => file.path))
   // THE ARTIFACT VERSIONS THIS PACKAGE IS A READING OF. Recorded from the run's registry at plan
@@ -666,10 +1038,20 @@ export function planRunPackage(
     // and no roadmap, and naming their sources anyway is the same defect this exporter replaced in
     // E1's artifact — a list of files that reads as run output while nothing wrote them. A path
     // whose producer did not run is reported as not produced, not silently omitted.
-    numberSources: Object.fromEntries(
-      Object.entries(NUMBER_SOURCES).map(([path, source]) =>
+    numberSources: Object.fromEntries([
+      ...Object.entries(NUMBER_SOURCES).map(([path, source]): [string, string] =>
         [path, written.has(path) ? source : 'NOT PRODUCED by this run']),
-    ),
+      // THE TABLE'S OWN NUMBERS, by the path this package gave the table rather than by a name the
+      // plan assumed. The figure plan numbers its floats and the results table prints the run's own
+      // measurement, so a reader tracing a number in the CSV lands on the same record the figure and
+      // the verdict rest on.
+      ...tables.flatMap((table): Array<[string, string]> => [
+        [table.markdown, TABLE_NUMBER_SOURCE],
+        ...(table.csv === undefined ? [] : [[table.csv, TABLE_NUMBER_SOURCE] as [string, string]]),
+      ]),
+    ]),
+    tables,
+    referencePdfs,
     evidenceProfile,
     profileEligible: readiness.profileEligible,
     submissionReady: readiness.ready,

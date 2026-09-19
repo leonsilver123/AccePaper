@@ -117,6 +117,14 @@ describe('reading the designated items', () => {
     expect(read.registrations.map(entry => entry.identity)).toEqual(['zotero:user:17529257:UA5MIGG3'])
   })
 
+  it('records the item key each identity was read from, so a file can be asked for by identity', async () => {
+    // THE IDENTITY IS MINTED HERE AND RESOLVED HERE. A reading record names its source by the identity
+    // this package minted; reading that source's FILE needs the bare item key the local API addresses,
+    // and decoding the identity back into one would put the scheme in two places that can drift.
+    const read = await readRegistrations(providerOver(library({})), [ITEM])
+    expect([...read.itemKeys]).toEqual([['zotero:user:17529257:UA5MIGG3', 'UA5MIGG3']])
+  })
+
   it('registers nothing when the library cannot be read, and names the item', async () => {
     // THE SUBSTITUTION THIS PREVENTS. A caller in `zotero` mode gets an empty registry here, so the run
     // has nothing to cite — never the checked-in corpus, which is a bibliography nobody asked for.

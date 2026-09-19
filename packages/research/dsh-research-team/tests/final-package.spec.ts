@@ -8,11 +8,16 @@
  * failed — in the operation, so a caller that never saw a button is refused for the same reason.
  */
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import type { DocumentCompiler } from '../src/runner/document-compile.ts'
+import { runT19B } from '../src/runner/drive.ts'
 import type { ApprovalRecord } from '@deepseek-ai/dsh-research-core'
-import type { FinalPackageFacts } from '../src/runner/final-package.ts'
+import type { FinalPackageFacts, TypesetDocument } from '../src/runner/final-package.ts'
 import {
   checkFinalPackage, finalPackageApprovalOf, finalPackageRefusalOf, finalPackageStateOf,
+  manuscriptFactsOf,
 } from '../src/runner/final-package.ts'
 
 /** Facts for a run that satisfies every condition; each test moves exactly one of them. */
@@ -29,6 +34,14 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
     artifactRefs: { read: ['typeset@1'], moved: [] },
     compilation: { tool: null, dropped: [] },
+    // THE TYPESET FORM IS A RENDER OF THE DOCUMENT THE RUN HOLDS, and this deployment declared no
+    // submission format it produces — the case where it compiles nothing, which the cases below move.
+    typeset: {
+      renderedManuscriptVersion: 3,
+      manuscriptVersion: 3,
+      declaredFormats: [],
+      documents: [],
+    },
     // NO DELIVERABLES, because this deployment compiles nothing: the case that says "no document is
     // claimed" is the one below, and every other case here moves exactly one condition.
     deliverables: { produced: [], carried: [] },
@@ -280,3 +293,170 @@ describe('a package that replaces a moved reading, re-checked and re-approved', 
     expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
   })
 })
+
+
+/** One compiled document as the facts state it: what the artifact carries, and whether it survives. */
+function typesetDocument(
+  format: string,
+  overrides: Partial<TypesetDocument> = {},
+): TypesetDocument {
+  return {
+    format,
+    path: format === 'docx' ? 'manuscript.docx' : `manuscript.${format}`,
+    present: true,
+    intact: true,
+    ...overrides,
+  }
+}
+
+describe("a typeset form that is not this run's submission", () => {
+  it('refuses a typeset form rendered from a document the run has moved past', () => {
+    // ONE DOCUMENT, MANY VERSIONS: D4 republishes it, a person may publish an accepted candidate over
+    // it, and the typeset form names the version it rendered. A form of a superseded version is a
+    // submission of the draft the paper was, so it is a draft here rather than a final package.
+    const facts = readyFacts({
+      typeset: { renderedManuscriptVersion: 2, manuscriptVersion: 3, declaredFormats: [], documents: [] },
+    })
+    const check = checkOf(facts, 'manuscript-typeset')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('version 2')
+    expect(check.detail).toContain('version 3')
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
+  })
+
+  it('refuses a run that holds no typeset form at all', () => {
+    // `undefined === undefined` would be a pass, so the case where the run rendered nothing is stated
+    // rather than left to an equality that holds between two absences.
+    const facts = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: undefined,
+        manuscriptVersion: undefined,
+        declaredFormats: [],
+        documents: [],
+      },
+    })
+    expect(checkOf(facts, 'manuscript-typeset').passed).toBe(false)
+  })
+
+  it('refuses a declared submission format the compile produced no document for', () => {
+    // THE DEPLOYMENT DECLARED IT, so it is asked for it: `latex` was in this compiler's `formats` and
+    // no `.tex` came out. A journal that wants LaTeX source would be handed nothing.
+    const facts = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: 3,
+        manuscriptVersion: 3,
+        declaredFormats: ['html', 'latex', 'docx'],
+        documents: [typesetDocument('docx')],
+      },
+    })
+    const check = checkOf(facts, 'typeset-complete')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('latex')
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
+  })
+
+  it('refuses a document that is present but is not the one that was compiled', () => {
+    // A DIGEST IS A RECORD AND THE BYTES ARE THE FACT. A document whose content moved while the digest
+    // recorded beside it did not is not the file that was compiled, and a submission carrying it would
+    // carry something else under the name of the paper.
+    const facts = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: 3,
+        manuscriptVersion: 3,
+        declaredFormats: ['docx'],
+        documents: [typesetDocument('docx', { intact: false })],
+      },
+    })
+    const check = checkOf(facts, 'typeset-complete')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('do not carry the bytes')
+  })
+
+  it('asks a deployment for nothing it did not declare it produces', () => {
+    // A MACHINE WITH NO LATEX ENGINE asks nobody for `.tex`, and a deployment that compiles nothing is
+    // asked for nothing: the requirement follows the compiler's own declaration, which E1 recorded.
+    const facts = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: 3,
+        manuscriptVersion: 3,
+        declaredFormats: ['html'],
+        documents: [typesetDocument('html')],
+      },
+    })
+    const check = checkOf(facts, 'typeset-complete')
+    expect(check.passed, check.detail).toBe(true)
+    expect(check.detail).toContain('declared no submission format')
+    expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('final')
+  })
+
+  it('passes when both declared deliverables are present and intact', () => {
+    const facts = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: 3,
+        manuscriptVersion: 3,
+        declaredFormats: ['latex', 'docx'],
+        documents: [typesetDocument('docx'), typesetDocument('latex')],
+      },
+    })
+    const check = checkOf(facts, 'typeset-complete')
+    expect(check.passed, check.detail).toBe(true)
+    expect(check.detail).toContain('manuscript.docx')
+  })
+})
+
+describe('the facts a real run records about its typeset form', () => {
+  it('recomputes each document digest from the bytes the artifact carries', async () => {
+    // THE CHECK IS ONLY AS GOOD AS THE READ. A digest compared against a field copied from the entry
+    // it is testing proves nothing, so the digests are recomputed here from the bytes the artifact
+    // holds — and the outcome is asserted for a run that really compiled one.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { documentCompiler: stubCompiler() })
+    const facts = manuscriptFactsOf(store, run.runId, 'production')
+    const snapshot = getRunSnapshot(store, run.runId)
+    expect(facts.typeset.renderedManuscriptVersion).toBe(snapshot.registry['manuscript']?.ref.version)
+    expect(facts.typeset.declaredFormats).toEqual(['html', 'latex', 'docx'])
+    const docx = facts.typeset.documents.find(entry => entry.format === 'docx')
+    expect(docx?.present).toBe(true)
+    expect(docx?.intact).toBe(true)
+    // AND THE DIGEST IS THE ONE OVER THE BYTES, not over the base64 text that carries them.
+    const carried = (getArtifact(store, run.runId, 'typeset') as {
+      compilation: { documents: ReadonlyArray<{ path: string; base64: string; sha256: string; bytes: number }> }
+    }).compilation.documents.find(entry => entry.path === 'manuscript.docx')
+    const bytes = Buffer.from(carried?.base64 ?? '', 'base64')
+    expect(carried?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(carried?.bytes).toBe(bytes.length)
+  })
+})
+
+/**
+ * A compiler that answers with a DOCX (bytes, a ZIP) and text for the other formats.
+ *
+ * @returns the compiler, as `DriveOptions.documentCompiler` takes it.
+ */
+function stubCompiler(): DocumentCompiler {
+  return {
+    tool: 'stub',
+    formats: ['html', 'latex', 'docx'],
+    compile(request) {
+      return Promise.resolve(request.format === 'docx'
+        ? {
+          format: request.format,
+          fileName: 'manuscript.docx',
+          content: Buffer.from([0x50, 0x4b, 0x03, 0x04]).toString('base64'),
+          encoding: 'base64' as const,
+          tool: 'stub@1',
+          assets: { embedded: [], dropped: [] },
+          files: [],
+        }
+        : {
+          format: request.format,
+          fileName: `manuscript.${request.format === 'latex' ? 'tex' : 'html'}`,
+          content: `<document>${request.document.title}</document>`,
+          encoding: 'utf8' as const,
+          tool: 'stub@1',
+          assets: { embedded: [], dropped: [] },
+          files: [],
+        })
+    },
+  }
+}

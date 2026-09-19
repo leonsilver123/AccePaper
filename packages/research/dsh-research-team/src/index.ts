@@ -107,7 +107,10 @@ import type { StatementSupportAssessor } from './runner/statement-support.ts'
 import type { BibliographyWriter } from './runner/bibliography.ts'
 import { sourcesForMode } from './runner/citation-bindings.ts'
 import type { SourceRecord } from './runner/citation-bindings.ts'
-import { renderBibliography } from './runner/package-export.ts'
+import { renderBibliography, citedAttachments } from './runner/package-export.ts'
+import type { ReferencePdfPlan, ReferencePdfRead } from './runner/package-export.ts'
+import { isReferenceFileReader } from './runner/reference-files.ts'
+import type { ReferenceFileReader } from './runner/reference-files.ts'
 import type { ResolutionVerifier } from './runner/resolution-verifier.ts'
 import type { ReviewPolicy } from './runner/review-policy.ts'
 import { requireStudyAdapter } from './runner/study-adapter.ts'
@@ -802,7 +805,7 @@ export class ResearchTeamService extends TypertRemoteService {
       const stored = await this.readStoredRun(run.runId)
       return this.persistRun(store, run.runId, stored?.revision ?? 0)
     })
-    return { persistence, packageExport: this.exportRunPackage(store, run) }
+    return { persistence, packageExport: await this.exportRunPackage(store, run) }
   }
 
   /**
@@ -883,6 +886,73 @@ export class ResearchTeamService extends TypertRemoteService {
       research?.sourceRegistryMode ?? 'curated',
       research?.registeredSources ?? [],
     )
+  }
+
+  /**
+   * The attachment reader this deployment published, when it published one.
+   *
+   * READ OFF THE RESEARCH ENGINE the way every other deployment capability is, and never imported from
+   * the package that provides it: the two are siblings and the dependency runs one way. Whether the
+   * deployment reads attachment files at all is the reader's own `policy`, so a deployment that
+   * declared nothing keeps the behaviour it had before the capability existed.
+   *
+   * @returns the reader, or undefined when this deployment has no library.
+   */
+  private hostReferenceFiles(): ReferenceFileReader | undefined {
+    const research = this.ctx.get('research') as { referenceFiles?: ReferenceFileReader } | undefined
+    const candidate = research?.referenceFiles
+    return isReferenceFileReader(candidate) ? candidate : undefined
+  }
+
+  /**
+   * The reference files this run's package may carry, read from the deployment's library.
+   *
+   * READ HERE AND NOT IN THE EXPORTER, which decides what a package carries and never touches a file:
+   * reading an attachment is a file or a network read. What is read is exactly what the run's own
+   * reading records name — one file per cited source whose judgement was made from a file rather than
+   * from a page of text — so a passage quoted in `citations.json` has the document it came out of
+   * beside it.
+   *
+   * A READ THAT FAILS IS RECORDED, NOT THROWN. One attachment the library cannot hand back is a fact
+   * about that source, and a package that refused to be written because one file was missing would
+   * take away the export a reader can still use. An ABSENT reader, or one whose policy is `none`, is
+   * not a failure: nothing is attempted and the manifest says the deployment stores no reference
+   * files.
+   *
+   * @param store - the run store.
+   * @param runId - the run being packaged.
+   * @returns the plan the exporter records, whether or not any file was read.
+   */
+  private async referencePdfPlanOf(store: ResearchRunStore, runId: string): Promise<ReferencePdfPlan> {
+    const reader = this.hostReferenceFiles()
+    if (reader === undefined || reader.policy === 'none') return { policy: 'none' }
+    const requests = citedAttachments(store, runId, this.hostSources())
+    const reads = await Promise.all(requests.map(async (request): Promise<ReferencePdfRead> => {
+      try {
+        const read = await reader.read({
+          sourceIdentity: request.readFrom.sourceIdentity,
+          attachmentKey: request.readFrom.key,
+        })
+        return {
+          citeKey: request.citeKey,
+          readFrom: request.readFrom,
+          file: read.ok
+            ? {
+              key: read.attachmentKey,
+              version: read.attachmentVersion,
+              sha256: read.sha256,
+              base64: read.base64,
+            }
+            : { failure: read.reason },
+        }
+      } catch (error) {
+        // A THROW IS THE READER FAILING, not the file being absent, and both reach a reader as the
+        // reason this source has no file. A throw escaping here would abandon the package for one
+        // library error; the reason still carries the error rather than a location.
+        return { citeKey: request.citeKey, readFrom: request.readFrom, file: { failure: errorMessage(error) } }
+      }
+    }))
+    return { policy: 'local-cache', reads }
   }
 
   /**
@@ -1450,7 +1520,7 @@ export class ResearchTeamService extends TypertRemoteService {
    * @param run - the driven run.
    * @returns what was written, or the failure, or null when no directory is configured.
    */
-  private exportRunPackage(store: ResearchRunStore, run: RunResult): ResearchPackageExport | null {
+  private async exportRunPackage(store: ResearchRunStore, run: RunResult): Promise<ResearchPackageExport | null> {
     const research = this.ctx.get('research') as { packageDirectory?: string } | undefined
     const root = research?.packageDirectory
     if (root === undefined) return null
@@ -1473,6 +1543,7 @@ export class ResearchTeamService extends TypertRemoteService {
         planRunPackage(store, { runId: run.runId, steps: run.steps }, this.hostEvidenceProfile(), {
           mode: 'draft',
           ...saveErrorOfDraft,
+          referencePdfs: await this.referencePdfPlanOf(store, run.runId),
         }),
         directory,
       )
@@ -1560,6 +1631,7 @@ export class ResearchTeamService extends TypertRemoteService {
         ...(saveError === undefined ? {} : { saveError }),
         ...(previousArtifactRefs.length === 0 ? {} : { previousArtifactRefs }),
         ...(bibliography.text === undefined ? {} : { bibliography: bibliography.text }),
+        referencePdfs: await this.referencePdfPlanOf(active.store, request.runId),
       },
     )
     // REFUSED BEFORE ANYTHING IS WRITTEN. A refusal that had already emptied the directory would

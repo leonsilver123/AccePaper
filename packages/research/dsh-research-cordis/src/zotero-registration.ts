@@ -32,6 +32,16 @@ export interface RegistrationRead {
   readonly registrations: ReadonlyArray<SourceRegistration>
   /** One sentence per item that could not be registered, naming the item and why. */
   readonly failures: ReadonlyArray<string>
+  /**
+   * The library's own item key for each registration, by the identity the registration carries.
+   *
+   * RECORDED WHERE BOTH ARE KNOWN. A registration names its source by the identity this package
+   * minted (`zotero:<type>:<library>:<itemKey>`), and reading that source's FILE needs the bare item
+   * key the local API addresses. Decoding the identity back into a key would put the scheme in two
+   * places — the function that mints it and a parser that has to keep up with it — so the pair is
+   * taken here, from the read that produced it.
+   */
+  readonly itemKeys: ReadonlyMap<string, string>
 }
 
 /**
@@ -88,6 +98,7 @@ export async function readRegistrations(
 ): Promise<RegistrationRead> {
   const registrations: SourceRegistration[] = []
   const failures: string[] = []
+  const itemKeys = new Map<string, string>()
   for (const item of items) {
     // THE ENTRY AND THE RECORD ARE READ AS ONE VERSION, which is what `readSource` refuses to skip;
     // the page is read after it, and the two versions are compared so a passage from one revision is
@@ -111,7 +122,9 @@ export async function readRegistrations(
         + ' of it was read as both')
       continue
     }
-    registrations.push(registrationOf(source.source, passage.passage))
+    const registration = registrationOf(source.source, passage.passage)
+    registrations.push(registration)
+    itemKeys.set(registration.identity, item.itemKey)
   }
-  return { registrations, failures }
+  return { registrations, failures, itemKeys }
 }

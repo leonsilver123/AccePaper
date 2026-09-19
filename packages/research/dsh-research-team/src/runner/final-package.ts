@@ -17,20 +17,32 @@
 // run's own records — its step statuses, its registry, its approval, its last write — and never from
 // a caller's claim about them.
 //
-// ONE DEFINITION OF READY, IN TWO SCOPES. Seven of the conditions below are about the MANUSCRIPT: is
-// the evidence the kind that may carry a submission, was there a manuscript, did every step close,
-// does it have every section, is any concern still open, does the compiled document carry its floats,
-// has it had the review the deployment requires. Six are about the DELIVERY: is there an approval,
+// ONE DEFINITION OF READY, IN TWO SCOPES. Nine of the conditions below are about the MANUSCRIPT: is
+// the evidence the kind that may carry a submission, was there a manuscript, is the typeset form a
+// render of the document the run holds, did every step close, does it have every section, is any
+// concern still open, does the approval still cover it, does the compiled document carry its floats,
+// has it had the review the deployment requires. Seven are about the DELIVERY: is there an approval,
 // does it still cover what the run holds, will the package carry the files the manuscript declares,
-// does it carry the documents the compile produced, does the package describe the state the run is in,
-// is that state on disk. `checkManuscript` evaluates the first seven and `submissionReadinessOf`
-// reports them as the manifest's `submissionReady`; `checkFinalPackage` evaluates all thirteen. They
-// are the SAME function, so a run cannot be ready in the manifest and refused as a package for a
-// reason about the paper — which is the disagreement this file and `submission-readiness.ts` used to
-// be able to produce.
+// does it carry the documents the compile produced, are those documents the ones that were compiled,
+// does the package describe the state the run is in, is that state on disk. `checkManuscript`
+// evaluates the first nine and `submissionReadinessOf` reports them as the manifest's
+// `submissionReady`; `checkFinalPackage` evaluates all sixteen. They are the SAME function, so a run
+// cannot be ready in the manifest and refused as a package for a reason about the paper — which is
+// the disagreement this file and `submission-readiness.ts` used to be able to produce.
 
+import { createHash } from 'node:crypto'
 import { approvalStalenessOf, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ApprovalRecord, EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+
+/**
+ * The formats a submission is handed in.
+ *
+ * DOCX AND LATEX ARE THE DELIVERABLES: most journals' submission systems take a Word file and some
+ * want the LaTeX source, and the same document model produces both (`document-compile.ts`). A PDF this
+ * pipeline compiles was never the submission — a machine without a LaTeX engine simply has none — and
+ * HTML is the self-contained preview.
+ */
+const SUBMISSION_FORMATS: ReadonlyArray<string> = ['docx', 'latex']
 
 /** Why a final package was refused, or why it may be written. */
 export type FinalPackageCheckCode =
@@ -48,6 +60,10 @@ export type FinalPackageCheckCode =
   | 'review-complete'
   /** A document the compile produced is not in the package. */
   | 'deliverables-present'
+  /** The typeset form is a render of a superseded document, so it is not this paper's submission. */
+  | 'manuscript-typeset'
+  /** A submission format the deployment declared has no document, or one that does not survive it. */
+  | 'typeset-complete'
   /** The target journal's requirements have not been read, so nothing was checked against them. */
   | 'journal-rules-verified'
   | 'run-saved'
@@ -109,6 +125,34 @@ export function openIssuesOf(rebuttal: unknown): ReadonlyArray<OpenIssue> {
   })
 }
 
+/** One document this run's compile produced, and whether it survives the record that carries it. */
+export interface TypesetDocument {
+  readonly format: string
+  readonly path: string
+  /** True when the artifact carries the document — its bytes, or its text under `packageFiles`. */
+  readonly present: boolean
+  /**
+   * True when what the artifact carries is the document it recorded.
+   *
+   * THE DIGEST AND LENGTH ARE THE RECORD, AND THE BYTES ARE THE FACT. A truncated base64 payload, a
+   * hand-edited entry, a document whose content moved while its digest did not: all three pass a
+   * presence check and none of them is the file the compile produced. Recomputed here from the bytes
+   * the artifact holds — never from a file on disk, which is a different thing that may agree.
+   */
+  readonly intact: boolean
+}
+
+/** The typeset form as the run holds it: which document it renders, and what the compile produced. */
+export interface TypesetFacts {
+  /** The manuscript version the typeset form records it rendered, when it records one. */
+  readonly renderedManuscriptVersion: number | undefined
+  /** The version of the manuscript the run holds now, when it holds one. */
+  readonly manuscriptVersion: number | undefined
+  /** The formats this deployment's compile was asked for here, as it declared them. */
+  readonly declaredFormats: ReadonlyArray<string>
+  readonly documents: ReadonlyArray<TypesetDocument>
+}
+
 /** Everything the conditions about the MANUSCRIPT read, gathered from the run. */
 export interface ManuscriptFacts {
   readonly profile: EvidenceProfile
@@ -119,6 +163,15 @@ export interface ManuscriptFacts {
   readonly openIssues: ReadonlyArray<OpenIssue>
   /** The first artifact that moved after an approved decision, when one did. */
   readonly staleApproval: string | undefined
+  /**
+   * The typeset form, and whether it is a render of the document the run holds.
+   *
+   * ONE DOCUMENT, ONE SLUG, MANY VERSIONS: D3 creates `manuscript`, D4 republishes it, and a person
+   * may publish an accepted candidate over it. The typeset form names the version it was rendered
+   * from, so a render of a superseded document is told apart from a render of the document the run
+   * holds — which is the difference between submitting this paper and submitting the draft it was.
+   */
+  readonly typeset: TypesetFacts
   /**
    * What the run's compile produced, as the artifact recorded it.
    *
@@ -219,6 +272,37 @@ export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPack
         : 'the run produced no formatted manuscript, so there is no paper to package',
     },
     {
+      // THE TYPESET FORM MUST BE A RENDER OF THE DOCUMENT THE RUN HOLDS. A journal is handed the
+      // typeset form, and the run's document can move after it was rendered — a later step, a re-run,
+      // or a person publishing an accepted candidate over it — so a form of a superseded version is a
+      // submission of a manuscript the run no longer stands behind. Both versions are read off the
+      // run's own records: the typeset artifact names what it rendered, and the registry holds what
+      // the document is now.
+      code: 'manuscript-typeset',
+      passed: facts.typeset.renderedManuscriptVersion !== undefined
+        && facts.typeset.renderedManuscriptVersion === facts.typeset.manuscriptVersion,
+      detail: facts.typeset.renderedManuscriptVersion === undefined
+        ? 'the run holds no typeset form that records the document it rendered, so there is no'
+          + ' submission that binds this manuscript'
+        : facts.typeset.renderedManuscriptVersion === facts.typeset.manuscriptVersion
+          ? `the typeset form renders the document the run holds (version ${String(facts.typeset.manuscriptVersion)})`
+          : `the typeset form renders manuscript version ${String(facts.typeset.renderedManuscriptVersion)}`
+            + ` and the run holds version ${String(facts.typeset.manuscriptVersion ?? 0)}`
+            + ' — the document moved after it was typeset, so this form is a render of the draft the'
+            + ' paper was',
+    },
+    {
+      // A SUBMISSION IS HANDED A DOCUMENT, IN THE FORMATS THE DEPLOYMENT SAID IT PRODUCES. Both the
+      // document and its digest have to hold: a document that is absent, and one whose bytes do not
+      // match the digest recorded beside them, are the same failure to a reader — there is nothing to
+      // send. The requirement follows the deployment's OWN declaration (`formats`), which is what E1
+      // recorded, so a machine with no LaTeX engine asks nobody for `.tex` and a deployment that
+      // compiles nothing is held to nothing.
+      code: 'typeset-complete',
+      passed: missingDocuments(facts.typeset).length === 0 && brokenDocuments(facts.typeset).length === 0,
+      detail: documentDetail(facts.typeset),
+    },
+    {
       code: 'every-step-closed',
       passed: facts.unfinishedSteps.length === 0,
       detail: facts.unfinishedSteps.length === 0
@@ -288,6 +372,59 @@ export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPack
 }
 
 /**
+ * The submission formats this run's compile was asked for, and did not produce.
+ *
+ * THE DEPLOYMENT'S OWN DECLARATION SETS THE REQUIREMENT. `declaredFormats` is what its compiler said
+ * it can produce on THIS machine, recorded by E1 — so a deployment with no LaTeX engine is asked for
+ * no `.tex`, and one that compiles nothing is asked for nothing. Holding either of them to a format
+ * it never claimed would refuse a package for a document it was never going to have.
+ *
+ * @param typeset - the typeset facts.
+ * @returns the declared submission formats with no document at all.
+ */
+function missingDocuments(typeset: TypesetFacts): ReadonlyArray<string> {
+  return requiredDocuments(typeset).filter(document => !document.present).map(document => document.format)
+}
+
+/**
+ * The declared submission documents the artifact does not carry intact.
+ *
+ * @param typeset - the typeset facts.
+ * @returns the formats whose document is present but does not match the record that carries it.
+ */
+function brokenDocuments(typeset: TypesetFacts): ReadonlyArray<string> {
+  return requiredDocuments(typeset).filter(document => document.present && !document.intact).map(document => document.format)
+}
+
+/** The per-format documents this run owes: the submission formats this deployment declared. */
+function requiredDocuments(typeset: TypesetFacts): ReadonlyArray<TypesetDocument> {
+  return typeset.declaredFormats
+    .filter(format => SUBMISSION_FORMATS.includes(format))
+    .map(format => typeset.documents.find(document => document.format === format)
+      ?? { format, path: '', present: false, intact: false })
+}
+
+/** The sentence a reader of `typeset-complete` acts on, naming what is missing and what is wrong. */
+function documentDetail(typeset: TypesetFacts): string {
+  const required = requiredDocuments(typeset)
+  const missing = missingDocuments(typeset)
+  const broken = brokenDocuments(typeset)
+  if (required.length === 0) {
+    return 'this deployment declared no submission format it produces, so no document is claimed'
+  }
+  if (missing.length > 0) {
+    return `the compile produced no ${missing.join(' or ')} for a deployment that declared it — a`
+      + ' journal is handed a document, and there is none to hand it'
+  }
+  if (broken.length > 0) {
+    return `${broken.join(' and ')} do not carry the bytes the compile recorded for them (a digest or`
+      + ' length that does not match): what is in the package is not the document that was compiled'
+  }
+  return 'every submission format this deployment declared is present and intact'
+    + ` (${required.map(document => `${document.format}: ${document.path}`).join(', ')})`
+}
+
+/**
  * The order a package's conditions are reported in.
  *
  * FIXED, AND NOT DERIVED FROM THE TWO GROUPS ABOVE. `finalPackageRefusalOf` names the FIRST unmet
@@ -298,6 +435,7 @@ export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPack
 const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'production-evidence',
   'manuscript-produced',
+  'manuscript-typeset',
   'every-step-closed',
   'no-refused-sections',
   'no-open-issues',
@@ -305,6 +443,7 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'approval-current',
   'required-files-present',
   'deliverables-present',
+  'typeset-complete',
   'compiled-document-complete',
   'review-complete',
   'journal-rules-verified',
@@ -573,6 +712,7 @@ export function manuscriptFactsOf(
     // `manuscript`, and a run whose writing steps passed but whose formatting did not would have a
     // paper and no submission.
     manuscriptProduced: snapshot.registry['typeset'] !== undefined,
+    typeset: typesetFactsOf(snapshot, readArtifact(store, runId, 'typeset')),
     unfinishedSteps: definitions
       .filter(definition => (snapshot.steps[definition.id]?.status ?? 'pending') !== 'passed')
       .map(definition => `${definition.id} (${snapshot.steps[definition.id]?.status ?? 'pending'})`),
@@ -583,6 +723,79 @@ export function manuscriptFactsOf(
       .find(reason => reason !== undefined),
     compilation: compilationOf(store, runId),
     ...reviewOf(store, runId),
+  }
+}
+
+/**
+ * A field as a plain record, or an empty one.
+ *
+ * THE FIELD IS `unknown` UNTIL IT IS READ. An artifact written by an earlier version of this package,
+ * or by a hand, is not the shape the writer promises — and a record that reached into it would throw
+ * where a check should state what it found. Absence is an empty record: a lookup on it answers
+ * undefined, which is what every reader below already treats as "not recorded".
+ *
+ * @param value - the field, as the artifact carries it.
+ * @returns it as a record, or an empty record.
+ */
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+/**
+ * The typeset form as the run records it, with every document checked against what carries it.
+ *
+ * READ FROM THE ARTIFACT, NEVER FROM THE FILESYSTEM. A `.docx` in the package directory may be the one
+ * this run compiled or a copy someone put there, and the checks decide whether a package is the paper;
+ * they read the run's own record of what it produced, and recompute a document's digest from the bytes
+ * that record carries rather than from a file that may agree with it.
+ *
+ * @param snapshot - the run's snapshot, for the version the manifest holds of the document.
+ * @param value - the `typeset` artifact's value, or null when the run holds none.
+ * @returns the facts, all of them stating an absence rather than a value when nothing was recorded.
+ */
+function typesetFactsOf(snapshot: ReturnType<typeof getRunSnapshot>, value: unknown): TypesetFacts {
+  const record = value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : undefined
+  const compilation = asRecord(record?.compilation)
+  const packageFiles = asRecord(record?.packageFiles)
+  const rendered = asRecord(record?.manuscriptRef)
+  return {
+    renderedManuscriptVersion: typeof rendered.version === 'number' ? rendered.version : undefined,
+    manuscriptVersion: snapshot.registry['manuscript']?.ref.version,
+    declaredFormats: (Array.isArray(compilation.formats) ? compilation.formats : [])
+      .filter((format): format is string => typeof format === 'string'),
+    documents: (Array.isArray(compilation.documents) ? compilation.documents : [])
+      .flatMap((entry): TypesetDocument[] => {
+        if (entry === null || typeof entry !== 'object') return []
+        const { format, path, bytes, sha256, base64 } = entry as {
+          readonly format?: unknown
+          readonly path?: unknown
+          readonly bytes?: unknown
+          readonly sha256?: unknown
+          readonly base64?: unknown
+        }
+        if (typeof path !== 'string' || path.length === 0) return []
+        // WHAT THE ARTIFACT CARRIES for this document, which is its bytes when they are binary and its
+        // text in `packageFiles` when they are not. The digest below is taken from THIS, so a document
+        // whose content and record disagree is caught rather than reconciled.
+        const text = packageFiles[path]
+        const carried = typeof base64 === 'string' && base64.length > 0
+          ? Buffer.from(base64, 'base64')
+          : typeof text === 'string'
+            ? Buffer.from(text, 'utf8')
+            : undefined
+        return [{
+          format: typeof format === 'string' ? format : '',
+          path,
+          present: carried !== undefined,
+          intact: carried !== undefined
+            && typeof sha256 === 'string'
+            && typeof bytes === 'number'
+            && carried.length === bytes
+            && createHash('sha256').update(carried).digest('hex') === sha256,
+        }]
+      }),
   }
 }
 

@@ -165,7 +165,7 @@ function renderRunMarkdown(run: RunResult, mode: string): string {
     '## Truthfulness counts',
     '',
     ...TRUTHFULNESS_LEVELS.map(l => `- \`${l}\`: ${counts[l]}`),
-    `- \`humanGate\` (E2-submit, no executor): ${counts.humanGate}`,
+    `- \`humanGate\` (E2-submit, the human gate): ${counts.humanGate}`,
     '',
     truthfulnessLegend(),
     '',
@@ -268,7 +268,7 @@ export function writeComparisonReport(
     `| \`fixture_executor\` steps | ${T19A.fixtureCount} | ${counts.fixture_executor} |`,
     `| \`mock_external\` executor steps | ${T19A.mockExternalCount} | ${counts.mock_external} |`,
     `| \`live_external\` steps | 0 | ${counts.live_external} |`,
-    `| E2-submit human gate (no executor) | 1 | ${counts.humanGate} |`,
+    `| E2-submit human gate | 1 | ${counts.humanGate} |`,
     '| E2-submit final status | gated (stop) | gated (stop) |',
     // (kept as a template literal because oxlint quotes rule applies to quotes only)
     '',

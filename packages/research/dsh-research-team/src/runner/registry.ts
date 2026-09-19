@@ -86,7 +86,7 @@ import { platoonAdapter, requireStudyAdapter } from './study-adapter.ts'
 import { DEFAULT_PLAN } from './study-plan.ts'
 import type { PlanSection, StudyPlan } from './study-plan.ts'
 
-import type { StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
+import type { ArtifactRef, StepDefinition, TrinityComponent } from '@deepseek-ai/dsh-research-core'
 import { getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import { DirectResearchToolInvoker } from '@deepseek-ai/dsh-research-tools'
 import type { ResearchToolInvoker, ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
@@ -181,7 +181,7 @@ import { DEFAULT_REVIEW_POLICY, reviewSatisfaction } from './review-policy.ts'
 import type { ReviewPolicy, ReviewedRound } from './review-policy.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
 import type {
-  DocumentBlock, DocumentCompiler, DocumentReference, ManuscriptDocument,
+  CompileFormat, DocumentBlock, DocumentCompiler, DocumentReference, ManuscriptDocument,
 } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import {
@@ -487,6 +487,19 @@ export interface ExecCtx {
   readonly signal?: AbortSignal
   /** Read an upstream-produced artifact value (verified satisfied by canStart). */
   readonly getInput: (slug: string) => unknown
+  /**
+   * The reference of the artifact the run holds under `slug`, when it holds one.
+   *
+   * A VALUE DOES NOT KNOW ITS OWN VERSION. `getInput` answers with the value, and two steps have to
+   * state which version they read: E1 records the manuscript version its typeset form renders, and
+   * E2 records the two versions its submission request was prepared from. The run's registry is the
+   * only home of that fact, and this is the read that reaches it.
+   *
+   * `undefined` means the run holds no artifact under that slug. A SEEDED INPUT IS NOT AN ARTIFACT:
+   * `domain-direction` and the Case Pack files are recorded in the run's `inputs` by `setRunInput`
+   * before it starts, have no version, and answer undefined here rather than an invented one.
+   */
+  readonly readInputRef: (slug: string) => ArtifactRef | undefined
   /** Shared cross-step scratch (claim / prediction wiring). */
   readonly runCtx: RunContext
   /**
@@ -524,12 +537,13 @@ export interface StepExecutorEntry {
   readonly stepId: string
   /**
    * Truthfulness of THIS executor (not of the step's gate — see verdict.ts), or
-   * `'humanGate'` for a step no executor runs (E2-submit).
+   * `'humanGate'` for the pipeline's human gate (E2-submit).
    *
    * `'humanGate'` is the level `StepOutcome.kind` uses for exactly that case, so the
-   * registry table and the per-step table now say the same thing about E2. Declaring
-   * it `fixture_executor` made the registry table claim a fixture executor for a step
-   * whose own basis says no executor runs.
+   * registry table and the per-step table say the same thing about E2. E2 HAS AN EXECUTOR AND KEEPS
+   * THIS LEVEL: what runs there prepares the submission request and submits nothing, so a level that
+   * names a computation would report the preparation as evidence about the paper. What makes the
+   * step a gate is `gateRequirement.humanGate`, which is read off the core definition.
    */
   readonly kind: Truthfulness | 'humanGate'
   /** Why the step carries this `kind` (audit basis; required for every entry). */
@@ -541,13 +555,11 @@ export interface StepExecutorEntry {
   readonly inputSchema: ReadonlyArray<InputSpec>
   /** Declared outputs + artifact type (slugs derived from the core step definition). */
   readonly outputSchema: ReadonlyArray<OutputSpec>
-  /** Execute-phase timeout handed to core runStep (ms). 0 = no executor runs. */
+  /** Execute-phase timeout handed to core runStep (ms). 0 = the executor is given no bound. */
   readonly timeoutMs: number
   /** Gate the step must satisfy (derived from the core step definition). */
   readonly gateRequirement: GateRequirement
   readonly recoveryPolicy: RecoveryPolicy
-  /** E2-submit stops at the human gate (completeStep → 'gated'); no executor runs. */
-  readonly humanGateStop?: boolean
 }
 
 /**
@@ -566,7 +578,14 @@ export interface ArtifactChannelMeta {
 export function tagArtifact(
   value: unknown,
   producer: string,
-  kind: Truthfulness,
+  /**
+   * The level this artifact is recorded under.
+   *
+   * `'humanGate'` is accepted for the ONE artifact the human gate's own step produces (E2's
+   * submission request): it is the same level the step carries, so the registry table, the per-step
+   * table and the artifact agree about what happened there.
+   */
+  kind: Truthfulness | 'humanGate',
   channelMeta?: ArtifactChannelMeta,
 ): Record<string, unknown> {
   const branded: Record<string, unknown> = (value !== null && typeof value === 'object' && !Array.isArray(value))
@@ -3947,6 +3966,13 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     throw new Error('[E1-format] the manuscript artifact carries no document to render')
   }
   const document = carriedDocument as ManuscriptDocument
+  // WHICH VERSION OF THE DOCUMENT THIS RENDER IS OF. The pipeline writes one document under one slug
+  // (D3 creates it, D4 republishes it, a person may publish an accepted candidate over it), so an
+  // artifact that named only the slug would say "a manuscript" rather than which one — and the
+  // question a package asks ("is this typeset form a render of the document the run holds, or of one
+  // it has left behind") could not be answered at all. Read off the registry, not off the value: a
+  // value does not know its own version.
+  const manuscriptRef = ctx.readInputRef('manuscript')
   // WHAT D3'S INVOCATION OF THE TABLE TOOL PRODUCED. The document carries the table as a block; the
   // tool's own rendering and its binding hash are the record of the render, and the package's
   // `experiment-tables.md` is that rendering. Read from the manuscript rather than by running the
@@ -4143,6 +4169,8 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     readonly content: string
     readonly encoding?: 'utf8' | 'base64'
     readonly kind: 'document' | 'asset'
+    /** The format a DOCUMENT was compiled to. An asset belongs to a document rather than a format. */
+    readonly format?: CompileFormat
   }> = []
   const compileRefusals: string[] = []
   // WHICH FLOATS THE COMPILED DOCUMENT ACTUALLY CARRIES, per format: a figure that could not be
@@ -4181,6 +4209,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         content: result.compiled.content,
         encoding: result.compiled.encoding,
         kind: 'document',
+        format: result.compiled.format,
       })
       // THE ASSETS THE DOCUMENT EMBEDS travel beside it, as bytes, so the compiled file is buildable
       // outside this run and the figures can be reconciled by their labels rather than by a count.
@@ -4258,6 +4287,10 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     'typeset': tagArtifact(
       {
         title,
+        // THE DOCUMENT THIS RENDER IS OF, by version. A journal, a reader or a check comparing this
+        // form with the run's current document needs to know which version it was rendered from; the
+        // slug alone would answer "the manuscript", which is true of every version of it.
+        manuscriptRef: manuscriptRef === undefined ? null : { ...manuscriptRef },
         // WHAT RENDERED IT, AND WHAT COULD NOT. A package that named only `manuscript.html` would
         // leave a reader unable to tell a compiled document from a copy of the Markdown — and a run
         // that could not compile says so here rather than by the absence of a file.
@@ -4265,13 +4298,25 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           tool: ctx.documentCompiler?.tool ?? null,
           formats: ctx.documentCompiler?.formats ?? [],
           compiled: compiled.map(file => file.path),
-          // THE COMPILED DOCUMENTS CARRIED AS BYTES, separately from the figures they embed. A DOCX
-          // and a PDF are binary, so neither is in the package's text files — and a reader looking for
-          // the manuscript a journal receives must not have to find it under `assets`, which names the
-          // things the document carries rather than the document. The two are written the same way.
+          // THE COMPILED DOCUMENTS, ONE PER FORMAT THE COMPILE PRODUCED, WITH WHAT EACH ONE IS. A
+          // DOCX and a PDF are binary, so neither is in the package's text files — and a reader looking
+          // for the manuscript a journal receives must not have to find it under `assets`, which names
+          // the things the document carries rather than the document. A BINARY DOCUMENT CARRIES ITS
+          // BYTES HERE; a text one (HTML, LaTeX) has its content in `packageFiles` under the same path,
+          // because one file has one home and the base64 of text is not the text.
+          //
+          // EVERY ENTRY SAYS WHICH FORMAT IT IS, HOW LONG ITS BYTES ARE, AND THEIR DIGEST. A person
+          // asked to send this file, a package that writes it and a check comparing the two all need
+          // the same three facts, and an entry carrying only its bytes would leave each of them to
+          // recompute or guess it.
           documents: compiled
-            .filter(file => file.kind === 'document' && file.encoding === 'base64')
-            .map(file => ({ path: file.path, base64: file.content })),
+            .filter(file => file.kind === 'document')
+            .map(file => ({
+              format: file.format ?? null,
+              path: file.path,
+              ...digestsOf(file.content, file.encoding),
+              ...(file.encoding === 'base64' ? { base64: file.content } : {}),
+            })),
           // THE ASSETS, AS BYTES. A figure the compiled document embeds is not text, and a package
           // that carried it as base64 text would ship a file that looks written and is not the asset.
           assets: compiled
@@ -4325,6 +4370,26 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       'local_computation',
     ),
   }
+}
+
+/**
+ * A file's byte length and digest, over the bytes it is MADE OF.
+ *
+ * A BASE64 ENTRY IS NOT TEXT. Measuring or hashing the encoded string reports the length of the
+ * encoding rather than of the file, and a digest taken that way can never be compared with one taken
+ * from the written file — which is what a package does when it verifies what it wrote, and what a
+ * submission request has to state about the file it is asking a person to send.
+ *
+ * @param content - the file's content, in the encoding it is carried in.
+ * @param encoding - how that content is encoded; absent means it is text.
+ * @returns the byte length and the sha256 hex digest of those bytes.
+ */
+function digestsOf(
+  content: string,
+  encoding: 'utf8' | 'base64' | undefined,
+): { readonly bytes: number; readonly sha256: string } {
+  const bytes = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8')
+  return { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
 }
 
 /**
@@ -4458,9 +4523,115 @@ function reviewPolicyOf(ctx: ExecCtx): ReviewPolicy {
   return ctx.reviewPolicy ?? DEFAULT_REVIEW_POLICY
 }
 
-/** E2-submit runs no executor at all (human gate stop). */
-function noExecutor(): Record<string, unknown> {
-  throw new Error('T19B registry: E2-submit has no executor — it stops at the human gate')
+/**
+ * E2-submit: THE SUBMISSION REQUEST, PREPARED. A person decides it; nothing here submits.
+ *
+ * WHY THIS STEP HAS AN EXECUTOR AT ALL. It declared `submission-record` as its output and nothing
+ * wrote one: the step stopped at the gate with an empty executor, so the run advertised a submission
+ * record that did not exist — the same defect as a package listing files no step wrote. The record
+ * below is what the person at the gate is deciding about, and the pipeline still does not decide it.
+ *
+ * IT READS THE ARTIFACT AND NOT THE FILESYSTEM. A `manuscript.docx` on disk, a package a previous
+ * export wrote, a file a hand edited: none of them is evidence that THIS run produced the document,
+ * and a record built from them would attest to bytes the run never held. Every fact below comes from
+ * the run's own artifacts, so the versions named are the ones the decision binds.
+ *
+ * @param ctx - the execution context.
+ * @returns the `submission-record` — the request, and what it states about the state it was prepared
+ *   from.
+ * @throws {Error} when the run holds no document or no typeset form, which are the two inputs there
+ *   is nothing to prepare a submission from.
+ */
+function e2Executor(ctx: ExecCtx): Record<string, unknown> {
+  // BOTH INPUTS ARE READ, not only the one the documents come from: the commit receipt's input digest
+  // is taken from the slugs this executor ASKED FOR, so a record naming the manuscript's version
+  // without reading the manuscript would attest to a state its own receipt does not cover.
+  const manuscript = readInput(ctx, 'manuscript')
+  const typeset = readInput(ctx, 'typeset')
+  // The two refusals this step has: E2 declares `manuscript` and `typeset` as its inputs, so `canStart`
+  // guarantees both exist — and a direct caller that reached here without them would otherwise be
+  // handed a record saying a submission is ready when there is nothing to submit.
+  if (manuscript === undefined) {
+    throw new Error('[E2-submit] the run holds no document, so there is no submission request to prepare')
+  }
+  if (typeset === undefined) {
+    throw new Error('[E2-submit] the run holds no typeset form, so there is no submission request to prepare')
+  }
+  const compilation = (typeset.compilation ?? {}) as {
+    readonly formats?: unknown
+    readonly documents?: unknown
+  }
+  // WHAT A SUBMISSION WOULD CARRY, as the compile recorded it: one entry per document, with the
+  // format it was compiled to and the length and digest of its bytes. Read, not recomputed — this
+  // step did not compile anything, and a digest taken here would be this step's reading of the
+  // document rather than the one the package and the person would both check against.
+  const documents = (Array.isArray(compilation.documents) ? compilation.documents : [])
+    .flatMap((entry): Array<Record<string, unknown>> => {
+      if (entry === null || typeof entry !== 'object') return []
+      const { format, path, sha256, bytes } = entry as {
+        readonly format?: unknown
+        readonly path?: unknown
+        readonly sha256?: unknown
+        readonly bytes?: unknown
+      }
+      if (typeof path !== 'string' || path.length === 0) return []
+      return [{
+        format: typeof format === 'string' ? format : null,
+        path,
+        sha256: typeof sha256 === 'string' ? sha256 : null,
+        bytes: typeof bytes === 'number' ? bytes : null,
+      }]
+    })
+  return {
+    'submission-record': tagArtifact(
+      {
+        // THE TWO VERSIONS THE DECISION BINDS, read off the run's registry: the document a person is
+        // approving the submission of, and the typeset form a journal would receive. The approval
+        // freezes both (core's `_applyHumanApproval` takes them from this step's declared inputs), so
+        // a record that named only the slugs could not say which version that was.
+        manuscript: refRecordOf(ctx, 'manuscript'),
+        typeset: refRecordOf(ctx, 'typeset'),
+        // THE FILES, and which formats this deployment compiled: `formats` is what the deployment's
+        // compiler said it can produce HERE, which is why a machine with no LaTeX engine asks nobody
+        // for `.tex` rather than reporting a document that went missing.
+        documents,
+        declaredFormats: (Array.isArray(compilation.formats) ? compilation.formats : [])
+          .filter((format): format is string => typeof format === 'string'),
+        // WHERE IT WOULD GO, as the typeset form records the venue it was rendered for.
+        venue: {
+          name: typeof typeset.venueName === 'string' ? typeset.venueName : null,
+          venueId: typeof typeset.venueId === 'string' ? typeset.venueId : null,
+          scopeLine: typeof typeset.scopeLine === 'string' ? typeset.scopeLine : null,
+        },
+        // NOTHING HAS BEEN SENT, AND NOTHING HERE CAN SEND IT. Two facts rather than one: the first is
+        // what this record states about the world, and the second is why the decision is a person's.
+        submitted: false,
+        decision: 'pending',
+        note: 'PREPARED, NOT SUBMITTED. This is the request a person is asked to decide: the documents'
+          + ' and versions above are what the run holds and what a submission would carry. Nothing has'
+          + ' been sent to the venue, and nothing in this pipeline sends one — a submission is an'
+          + ' external act by a person, which is why E2-submit reaches `passed` only through the host\'s'
+          + ' approval channel and never through this executor.',
+      },
+      'human-gate:E2-submit',
+      'humanGate',
+    ),
+  }
+}
+
+/**
+ * One artifact's reference as a plain record, or null when the run holds none.
+ *
+ * `null` rather than an absent field: a reader of the record compares this with the version the run
+ * holds now, and "there was none" is a fact that has to survive JSON.
+ *
+ * @param ctx - the execution context.
+ * @param slug - the artifact slug.
+ * @returns the reference, detached from the registry's own object.
+ */
+function refRecordOf(ctx: ExecCtx, slug: string): Record<string, unknown> | null {
+  const ref = ctx.readInputRef(slug)
+  return ref === undefined ? null : { artifactId: ref.artifactId, version: ref.version, contentHash: ref.contentHash }
 }
 
 // ── Registry (16-step map) ──────────────────────────────────────────────────────
@@ -4471,14 +4642,13 @@ function noExecutor(): Record<string, unknown> {
 
 interface EntrySpec {
   readonly stepId: string
-  /** See {@link StepExecutorEntry.kind}: `'humanGate'` for the step no executor runs. */
+  /** See {@link StepExecutorEntry.kind}: `'humanGate'` for the pipeline's human gate (E2). */
   readonly kind: Truthfulness | 'humanGate'
   readonly basis: string
   readonly producer: string
   readonly timeoutMs: number
   readonly recoveryPolicy: RecoveryPolicy
   readonly executor: StepExecutorFn
-  readonly humanGateStop?: boolean
 }
 
 const REAL_TOOL_TIMEOUT_MS = 5_000
@@ -4646,13 +4816,19 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'E2-submit',
+    // THE ONE STEP A MACHINE NEVER COMPLETES. Its `kind` is the human gate rather than a truthfulness
+    // level because what runs here prepares a request and judges nothing: a `local_computation` beside
+    // this step's artifact would report the preparation as evidence about the paper. Its executor
+    // writes the request a person decides, and the step still reaches only `gated` — the host's
+    // approval channel is the only route to `passed` (INV-APPROVAL-STATE).
     kind: 'humanGate',
-    basis: 'NO executor runs and NO artifact is produced: submission is a human act. The step reaches `gated` via completeStep (empty machine gate + humanGate) and is never auto-approved',
+    basis: 'submission is a human act: the executor PREPARES the request (the manuscript and typeset versions, the documents with their digests, the venue) and submits nothing. The step reaches `gated` via completeStep (empty machine gate + humanGate) and is never auto-approved',
     producer: 'human-gate:E2-submit',
-    timeoutMs: 0,
+    // AN EXECUTOR RUNS HERE, so it is bounded like every other: it reads the run\'s own artifacts and
+    // reaches no external system, which is what the offline budget covers.
+    timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'human_approval_only',
-    executor: noExecutor,
-    humanGateStop: true,
+    executor: e2Executor,
   },
 ]
 
@@ -4674,7 +4850,6 @@ function buildRegistry(): Map<string, StepExecutorEntry> {
       timeoutMs: spec.timeoutMs,
       gateRequirement: gateRequirementOf(def),
       recoveryPolicy: spec.recoveryPolicy,
-      ...(spec.humanGateStop === true ? { humanGateStop: true } : {}),
     })
   }
   if (map.size !== STEP_DEFS.length) {

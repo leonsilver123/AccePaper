@@ -207,6 +207,14 @@ function manuscriptFacts(input: {
     openIssues: [],
     staleApproval: undefined,
     compilation: { tool: null, dropped: [] },
+    // THE TYPESET FORM RENDERS THE DOCUMENT THE RUN HOLDS, so nothing about the submission is what
+    // these cases are about: the manuscript's conditions decide what they assert.
+    typeset: {
+      renderedManuscriptVersion: 1,
+      manuscriptVersion: 1,
+      declaredFormats: [],
+      documents: [],
+    },
   }
 }
 

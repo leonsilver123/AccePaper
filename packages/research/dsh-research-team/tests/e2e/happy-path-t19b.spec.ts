@@ -160,13 +160,11 @@ describe('T19-B happy path — real tool execution is provable from the artifact
       for (const slug of def.outputs) producerOf.set(slug, def.id)
     }
     for (const def of getStepDefinitions()) {
-      if (def.id === 'E2-submit') continue // human gate: no executor, no artifact
       for (const slug of def.outputs) {
         expect(snap.registry[slug], `${def.id} must have produced '${slug}'`).toBeDefined()
         expect(snap.registry[slug]?.producerStepId).toBe(producerOf.get(slug))
       }
     }
-    expect(snap.registry['submission-record']).toBeUndefined()
   })
 
   it('accounts for all 15 executing steps and reports 0 live_external', async () => {
@@ -363,11 +361,25 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     expect(Array.isArray(formatted.sectionHeadings)).toBe(true)
   })
 
-  it('E2-submit stays gated — the formatted manuscript is the last artifact', async () => {
+  it('E2-submit stays gated — the submission request is prepared and not decided', async () => {
+    // THE TYPESET FORM IS THE LAST ARTIFACT THE PAPER PRODUCES, and the record E2 writes is the
+    // REQUEST a person is asked to decide — not a submission, and not a decision. The step is still
+    // `gated` and the run carries no approval, which is what "never auto-approved" means here.
     const { store, run } = await happyRun()
+    const snapshot = getRunSnapshot(store, run.runId)
     expect(getArtifact(store, run.runId, 'typeset')).toBeDefined()
-    expect(getArtifact(store, run.runId, 'submission-record')).toBeUndefined()
+    const request = getArtifact(store, run.runId, 'submission-record') as {
+      submitted?: unknown
+      decision?: unknown
+      typeset?: { artifactId?: unknown; version?: unknown } | null
+    }
+    expect(request.submitted).toBe(false)
+    expect(request.decision).toBe('pending')
+    // PREPARED FROM THE VERSIONS THE RUN HOLDS, which is what the approval goes on to bind.
+    expect(request.typeset?.artifactId).toBe('typeset')
+    expect(request.typeset?.version).toBe(snapshot.registry['typeset']?.ref.version)
     expect(outcomeOf(run, 'E2-submit').status).toBe('gated')
+    expect(snapshot.steps['E2-submit']?.approval).toBeUndefined()
   })
 })
 
@@ -441,9 +453,11 @@ describe('T19-B happy path — audit timeline is core-owned and duplicate-free',
     const { store, run } = await happyRun()
     const snap = getRunSnapshot(store, run.runId)
     const executed = snap.events.filter(e => e.kind === 'step-executed')
-    // 15 executors ran; E2-submit runs none.
-    expect(executed.length).toBe(15)
-    expect(executed.map(e => e.stepId)).toEqual(CORE_ORDER.filter(id => id !== 'E2-submit'))
+    // SIXTEEN EXECUTORS RUN, E2-submit among them: its step prepares the submission request and
+    // decides nothing, so what keeps it a gate is the gate — not the absence of an executor. A step
+    // that declared an output no executor wrote was the defect this replaced.
+    expect(executed.length).toBe(16)
+    expect(executed.map(e => e.stepId)).toEqual(CORE_ORDER)
   })
 
   it('emits exactly one gate-verdict event per submitted component (no runner duplicates)', async () => {

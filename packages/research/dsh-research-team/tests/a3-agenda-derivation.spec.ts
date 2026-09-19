@@ -63,6 +63,7 @@ function ctxFor(writer?: ResearchProseWriter): ExecCtx {
     attemptId: 1,
     getInput: (slug: string) =>
       slug === 'claim' ? { claimRef: 'claim-1', assertion: 'adaptive control cuts delay' } : undefined,
+    readInputRef: () => undefined,
     runCtx: {
       predictionText: '',
       claimId: '',

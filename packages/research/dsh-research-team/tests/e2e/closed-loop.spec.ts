@@ -37,13 +37,17 @@ async function productionRun(): Promise<{ store: ResearchRunStore; runId: string
 }
 
 describe('a production run carries real material to the human gate', () => {
-  it('drives all fifteen steps and stops at E2, unapproved', async () => {
+  it('drives every step, prepares the submission request, and stops at E2 unapproved', async () => {
     const { store, runId } = await productionRun()
     const snap = getRunSnapshot(store, runId)
     const statuses = getStepDefinitions().map(definition => [definition.id, snap.steps[definition.id]?.status])
     expect(statuses.filter(([, status]) => status !== 'passed' && status !== 'gated')).toEqual([])
     expect(snap.steps['E2-submit']?.status).toBe('gated')
-    expect(snap.registry['submission-record']).toBeUndefined()
+    // THE REQUEST EXISTS AND NOTHING WAS SUBMITTED. The record is committed before the gate, like
+    // every step's output, and it says so itself: `submitted: false`, `decision: 'pending'`. What is
+    // absent is the decision — the step is `gated` and the run carries no approval.
+    expect(snap.registry['submission-record']).toBeDefined()
+    expect(snap.steps['E2-submit']?.approval).toBeUndefined()
   })
 
   it('anchors its B gates on reviewed literature rather than on the synthetic fixture', async () => {

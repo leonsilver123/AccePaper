@@ -59,7 +59,8 @@ import type { SourceRegistration, SourceRegistryMode } from '@deepseek-ai/dsh-re
 import { CitationJsBibliographyWriter } from './bibliography-writer.ts'
 import { readRegistrations } from './zotero-registration.ts'
 import type { CitedItem } from './zotero-registration.ts'
-import { ZoteroProvider } from './zotero-provider.ts'
+import { ZoteroProvider, resolveAttachmentPolicy } from './zotero-provider.ts'
+import type { ReferenceFileReaderLike } from './zotero-provider.ts'
 import { ZoteroLiteratureAdapter } from './zotero-literature-adapter.ts'
 import { PandocCompiler } from './pandoc-compiler.ts'
 import type { ResearchToolDeps } from '@deepseek-ai/dsh-research-tools'
@@ -635,6 +636,20 @@ export class ResearchEngine extends Service {
    * applies. Public for the same reason {@link ResearchEngine.revisionRounds} is.
    */
   readonly reviewPolicy: { readonly minimumRounds: number } | undefined
+  /**
+   * The deployment's library, as a reader of the files a passage was read from.
+   *
+   * PUBLIC FOR THE SAME REASON {@link ResearchEngine.bibliographyWriter} IS: the runner-side service
+   * stores the reference files a package carries, and it may not import this package — the two are
+   * siblings. It is asked for a file by the ITEM IDENTITY AND ATTACHMENT KEY a reading record
+   * carries, never by a path, and it resolves that identity to the library's own item key here so
+   * the identity scheme stays in the package that mints it.
+   *
+   * UNDEFINED WHEN NO LIBRARY WAS CONFIGURED, and `policy` is `'none'` when the deployment did not
+   * opt into reading attachment files — under which nothing is requested at all and the package
+   * records that the deployment stores no reference files.
+   */
+  readonly referenceFiles: ReferenceFileReaderLike | undefined
 
   /**
    * The deterministic provider to register at load, when the deployment selected that
@@ -651,6 +666,16 @@ export class ResearchEngine extends Service {
   private readonly zoteroServerName: string | undefined
   /** How long the registration waits for those tools, from the deployment's own configuration. */
   private readonly sourceToolWaitMs: number
+  /**
+   * The library's own item key for each registered source identity.
+   *
+   * THE IDENTITY IS MINTED HERE AND RESOLVED HERE. A reading record names a source by the identity
+   * this package minted for it (`zotero:<type>:<library>:<itemKey>`); reading that source's file
+   * needs the bare item key the local API addresses. Decoding the identity string back into a key
+   * would put one copy of the scheme in the minting function and another in a parser that has to keep
+   * up with it, so the pair is recorded where both are known: the registration read.
+   */
+  private readonly referenceItemKeys = new Map<string, string>()
 
   /** Set at the commit point of the deterministic route's registration. */
   private proseReady = false
@@ -704,6 +729,30 @@ export class ResearchEngine extends Service {
       )
     this.sourceRegistryMode = library?.sourceRegistryMode ?? (library === undefined ? 'curated' : 'zotero')
     this.zoteroProvider = zotero
+    this.referenceFiles = zotero === undefined
+      ? undefined
+      : {
+        policy: resolveAttachmentPolicy(library?.attachments),
+        read: async (request, signal) => {
+          const itemKey = this.referenceItemKeys.get(request.sourceIdentity)
+          if (itemKey === undefined) {
+            return {
+              ok: false,
+              reason: `no item of the configured library was registered as '${request.sourceIdentity}',`
+                + ` so the file '${request.attachmentKey}' was not read`,
+            }
+          }
+          const read = await zotero.readAttachment(itemKey, request.attachmentKey, signal)
+          if (!read.ok) return { ok: false, reason: `[${read.failure.code}] ${read.failure.detail}` }
+          return {
+            ok: true,
+            attachmentKey: read.file.attachment.key,
+            attachmentVersion: String(read.file.attachment.version),
+            sha256: read.file.sha256,
+            base64: Buffer.from(read.file.bytes).toString('base64'),
+          }
+        },
+      }
     this.citedItems = library?.citedItems ?? []
     this.zoteroServerName = library?.mcpServerName
     this.sourceToolWaitMs = library?.sourceToolWaitMs ?? DEFAULT_SOURCE_TOOL_WAIT_MS
@@ -830,6 +879,10 @@ export class ResearchEngine extends Service {
     const read = await readRegistrations(this.zoteroProvider, this.citedItems)
     this.registeredSources = read.registrations
     this.registrationFailures = read.failures
+    // WHAT EACH IDENTITY WAS READ FROM, so a file can later be asked for by the identity a reading
+    // record carries without anyone decoding it back into an item key.
+    this.referenceItemKeys.clear()
+    for (const [identity, itemKey] of read.itemKeys) this.referenceItemKeys.set(identity, itemKey)
   }
 
   /**

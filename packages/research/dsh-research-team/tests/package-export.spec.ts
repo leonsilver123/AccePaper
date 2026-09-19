@@ -16,7 +16,10 @@ import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { resolveResearchProfile } from '../src/runner/research-profile.ts'
-import { checkPackagedFiles, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
+import { checkPackagedFiles, citedAttachments, csvRecords, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
+import { parsePipeTable } from '../src/runner/paper-format.ts'
+import { sourcesForMode } from '../src/runner/citation-bindings.ts'
+import type { ReferencePdfRead } from '../src/runner/package-export.ts'
 import type { DocumentCompiler } from '../src/runner/document-compile.ts'
 
 const created: string[] = []
@@ -141,6 +144,24 @@ describe('planRunPackage', () => {
     const deliverables = plan.manifest.checks.find(check => check.code === 'deliverables-present')
     expect(deliverables?.passed, deliverables?.detail).toBe(true)
     expect(deliverables?.detail).toContain('manuscript.docx')
+  })
+
+  it('writes a text document from `packageFiles` alone, and not again from the compile record', async () => {
+    // `compilation.documents` CARRIES ONE RECORD PER COMPILED DOCUMENT — `{format, path, bytes,
+    // sha256}`, with `base64` present only for the binary formats — so `.tex` and `.html` appear there
+    // AND in `packageFiles`, which is where their text is. The bytes loop skips an entry with no
+    // `base64` for that reason, and the failure it prevents is silent: one path written twice, with
+    // the digest describing whichever content won.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, { documentCompiler: byteCompiler() })
+    const plan = planRunPackage(store, run, 'evaluation')
+    const paths = plan.files.map(file => file.path)
+
+    expect(paths.filter(path => path === 'manuscript.tex').length).toBe(1)
+    expect(paths.filter(path => path === 'manuscript.html').length).toBe(1)
+    expect(plan.files.find(file => file.path === 'manuscript.tex')?.encoding).toBeUndefined()
+    // The binary one is here AND in `compilation.documents`, and it is written as the bytes it is.
+    expect(plan.files.find(file => file.path === 'manuscript.docx')?.encoding).toBe('base64')
   })
 
   it('records every driven step with how it was produced, and nothing it did not drive', async () => {
@@ -498,5 +519,233 @@ describe('a package that says which state it describes', () => {
     // AND THE PACKAGE IS NOT FINAL, whatever else holds: a reading of a state the run has left is not
     // the package to hand anyone.
     expect(second.state).toBe('draft')
+  })
+})
+
+describe('the tables a package carries', () => {
+  it('writes the printed table and its machine-readable twin, read out of one another', async () => {
+    // THE TABLE WAS IN THE PACKAGE ONLY AS PROSE INSIDE THE MANUSCRIPT. A reader who wants the
+    // numbers had to find them in Markdown, and nothing offered them to a tool. Both forms are read
+    // out of the block the manuscript holds, so the CSV cannot describe a different table from the
+    // one the paper prints.
+    const { store, run } = await realRun()
+    const plan = planRunPackage(store, run, 'evaluation')
+    const paths = plan.files.map(file => file.path)
+
+    expect(paths).toContain('tables/table-1.md')
+    expect(paths).toContain('tables/table-1.csv')
+    const markdown = plan.files.find(file => file.path === 'tables/table-1.md')?.content ?? ''
+    const csv = plan.files.find(file => file.path === 'tables/table-1.csv')?.content ?? ''
+    // The printed form carries the caption the paper prints with the table.
+    expect(markdown).toContain('**Table 1.**')
+    // THE TWO FORMS ARE ONE TABLE. The CSV's records are the printed table's cells, which is the
+    // property that makes it a twin rather than a second reading of the run.
+    const printed = markdown.replace(/^\*\*Table 1\.\*\* .*\n\n/u, '')
+    const parsed = parsePipeTable(printed)
+    const records = csv.trimEnd().split('\n').map(line => line.split(','))
+    expect(records[0]).toEqual([...(parsed?.header ?? [])])
+    expect(records.slice(1)).toEqual((parsed?.rows ?? []).map(row => [...row]))
+    expect(records.length).toBe(3)
+  })
+
+  it('names both files in the manifest, and says where the numbers came from', async () => {
+    const { store, run } = await realRun()
+    const manifest = planRunPackage(store, run, 'evaluation').manifest
+    const entry = manifest.tables.find(table => table.label === 'Table 1')
+
+    expect(entry?.markdown).toBe('tables/table-1.md')
+    expect(entry?.csv).toBe('tables/table-1.csv')
+    expect(entry?.csvRefusal).toBeUndefined()
+    for (const path of ['tables/table-1.md', 'tables/table-1.csv']) {
+      expect(manifest.numberSources[path]).toContain('mvp-results')
+    }
+  })
+})
+
+describe('CSV is written so any reader reads the same cells back', () => {
+  it('quotes a field that carries a comma, a quote, a newline or a carriage return', () => {
+    // A CAPTION OR A CELL CONTAINING ANY OF THESE MUST SURVIVE. A writer that joined on commas and
+    // did not quote would produce a file that parses into a different table — silently, because it
+    // still looks like CSV.
+    expect(csvRecords([['plain', 'a,b', 'say "hi"', 'two\nlines', 'cr\rhere']]))
+      .toBe('plain,"a,b","say ""hi""","two\nlines","cr\rhere"\n')
+  })
+
+  it('leaves a field that needs no quoting bare, and writes the records in order', () => {
+    expect(csvRecords([['Method', 'Minimum TTC (s)'], ['HV-AV-HV', '12.10']]))
+      .toBe('Method,Minimum TTC (s)\nHV-AV-HV,12.10\n')
+    expect(csvRecords([])).toBe('')
+  })
+})
+
+/** One PDF's bytes, the digest over them, and the cite key a real run cites. */
+const PDF_BYTES = Buffer.from('%PDF-1.7 synthetic reference file')
+const PDF_SHA256 = createHash('sha256').update(PDF_BYTES).digest('hex')
+const CITED_KEY = 'cite-10.1016/j.trb.2025.103352'
+
+/**
+ * One attachment read, as the caller hands it to the exporter.
+ *
+ * @param over - the fields a case varies: the version or key the reader returned, the digest it
+ *   stated, or the failure it reported instead of bytes.
+ * @returns the read the exporter is given.
+ */
+function referenceRead(
+  over: Partial<{ version: string; key: string; sha256: string; failure: string }> = {},
+): ReferencePdfRead {
+  return {
+    citeKey: CITED_KEY,
+    readFrom: { sourceIdentity: 'zotero:user:1:ABCD1234', key: 'PDFKEY01', version: '7' },
+    file: over.failure === undefined
+      ? {
+        key: over.key ?? 'PDFKEY01',
+        version: over.version ?? '7',
+        sha256: over.sha256 ?? PDF_SHA256,
+        base64: PDF_BYTES.toString('base64'),
+      }
+      : { failure: over.failure },
+  }
+}
+
+describe('the reference files a package carries', () => {
+  it('says the deployment stores none, rather than leaving a folder to be interpreted', async () => {
+    // AN EMPTY `refs-pdf/` AND A DEPLOYMENT THAT READS NO FILES ARE DIFFERENT FACTS. The manifest says
+    // which one it is, so a reader is never left to decide whether a file is missing.
+    const { store, run } = await realRun()
+    const plan = planRunPackage(store, run, 'evaluation')
+    expect(plan.manifest.referencePdfs).toBe('not-stored')
+    expect(plan.files.some(file => file.path.startsWith('refs-pdf/'))).toBe(false)
+  })
+
+  it('stores the file a judgement was made from, with the attachment it came from', async () => {
+    const { store, run } = await realRun()
+    const plan = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft',
+      referencePdfs: { policy: 'local-cache', reads: [referenceRead()] },
+    })
+    const path = 'refs-pdf/cite-10.1016-j.trb.2025.103352.pdf'
+    expect(plan.files.find(file => file.path === path)?.encoding).toBe('base64')
+
+    const section = plan.manifest.referencePdfs
+    if (section === 'not-stored') throw new Error('the deployment opted in, so this is not the answer')
+    expect(section.policy).toBe('local-cache')
+    expect(section.refused).toEqual([])
+    expect(section.stored.length).toBe(1)
+    const stored = section.stored[0]
+    expect(stored?.citeKey).toBe(CITED_KEY)
+    expect(stored?.path).toBe(path)
+    expect(stored?.bytes).toBe(PDF_BYTES.length)
+    expect(stored?.sha256).toBe(PDF_SHA256)
+    expect(stored?.attachmentKey).toBe('PDFKEY01')
+    expect(stored?.attachmentVersion).toBe('7')
+    // THE FILE SAYS WHAT IT IS. A publisher's PDF in a package of a run's own artifacts has to be
+    // placable by a reader who did not build it.
+    expect(stored?.purpose).toContain('not a product of the run')
+  })
+
+  it('refuses bytes whose version is not the one the judgement was made from', async () => {
+    // THE FILE WAS REPLACED SINCE THE PASSAGE WAS READ. The bytes are real and belong to a DIFFERENT
+    // file than the passage a judgement rests on, so storing them would put a document in the package
+    // that no judgement was made from — under a name that says one was.
+    const { store, run } = await realRun()
+    const plan = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft',
+      referencePdfs: { policy: 'local-cache', reads: [referenceRead({ version: '8' })] },
+    })
+    const section = plan.manifest.referencePdfs
+    if (section === 'not-stored') throw new Error('the deployment opted in, so this is not the answer')
+    expect(section.stored).toEqual([])
+    expect(section.refused[0]?.reason).toContain('version 8')
+    expect(section.refused[0]?.reason).toContain('version 7')
+    expect(plan.files.some(file => file.path.startsWith('refs-pdf/'))).toBe(false)
+  })
+
+  it('refuses a read that returned another attachment, and bytes that do not hash to what it stated', async () => {
+    const { store, run } = await realRun()
+    const other = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft',
+      referencePdfs: { policy: 'local-cache', reads: [referenceRead({ key: 'OTHER001' })] },
+    }).manifest.referencePdfs
+    if (other === 'not-stored') throw new Error('the deployment opted in, so this is not the answer')
+    expect(other.stored).toEqual([])
+    expect(other.refused[0]?.reason).toContain('OTHER001')
+
+    const wrongDigest = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft',
+      referencePdfs: { policy: 'local-cache', reads: [referenceRead({ sha256: 'c'.repeat(64) })] },
+    }).manifest.referencePdfs
+    if (wrongDigest === 'not-stored') throw new Error('the deployment opted in, so this is not the answer')
+    expect(wrongDigest.stored).toEqual([])
+    expect(wrongDigest.refused[0]?.reason).toContain('c'.repeat(64))
+  })
+
+  it('carries the reader\'s own reason when nothing was read, and never a path', async () => {    // A FAILURE TO READ IS RECORDED, NOT THROWN, and what travels is the error rather than where this
+    // machine keeps its files — the rule the bibliography writer follows for the same reason.
+    const { store, run } = await realRun()
+    const refusal = 'the file of \'PDFKEY01\' could not be read from local storage (ENOENT)'
+    const plan = planRunPackage(store, run, 'evaluation', {
+      mode: 'draft',
+      referencePdfs: { policy: 'local-cache', reads: [referenceRead({ failure: refusal })] },
+    })
+    const section = plan.manifest.referencePdfs
+    if (section === 'not-stored') throw new Error('the deployment opted in, so this is not the answer')
+    expect(section.refused).toEqual([{
+      citeKey: CITED_KEY,
+      attachmentKey: 'PDFKEY01',
+      reason: refusal,
+    }])
+    expect(JSON.stringify(plan.manifest)).not.toContain('C:\\')
+  })
+
+  it('writes the PDF as the bytes it is, and the manifest digests them as written', async () => {
+    // A PDF WRITTEN AS BASE64 TEXT IS NOT THE FILE. The package writer decodes, and the digest it
+    // records is over the bytes that landed — so this reads the file back and compares it with the
+    // attachment the read returned, byte for byte.
+    const dir = join(tempDir(), 'pkg')
+    const { store, run } = await realRun()
+    const manifest = writeRunPackage(
+      planRunPackage(store, run, 'evaluation', {
+        mode: 'draft',
+        referencePdfs: { policy: 'local-cache', reads: [referenceRead()] },
+      }),
+      dir,
+    )
+    const path = 'refs-pdf/cite-10.1016-j.trb.2025.103352.pdf'
+    const onDisk = readFileSync(join(dir, path))
+    expect(onDisk.equals(PDF_BYTES)).toBe(true)
+    const entry = manifest.files.find(file => file.path === path)
+    expect(entry?.bytes).toBe(PDF_BYTES.length)
+    expect(entry?.sha256).toBe(PDF_SHA256)
+    expect(checkPackagedFiles(dir, manifest).every(check => check.status === 'ok')).toBe(true)
+  })
+})
+
+describe('the attachments a run\'s own reading records name', () => {
+  it('asks for exactly the files a judgement was made from', async () => {
+    // THE IDENTITY AND THE VERSION COME FROM THE READING RECORD, not from the citation and not from a
+    // path: a citation names a sentence and a source, and only the binding says which file the words
+    // were read out of.
+    const { store, run } = await realRun()
+    // The checked-in corpus reads pages of text rather than files, so it names no attachment and
+    // nothing is asked for — the honest answer for a run that read no file.
+    expect(citedAttachments(store, run.runId, sourcesForMode('curated', []))).toEqual([])
+
+    const sources = new Map(sourcesForMode('curated', []))
+    const literatureRef = [...sources.keys()][0] ?? ''
+    const record = sources.get(literatureRef)
+    if (record?.evidence === undefined) throw new Error('the curated corpus carries no reading record')
+    sources.set(literatureRef, {
+      ...record,
+      evidence: { ...record.evidence, attachment: { key: 'PDFKEY01', version: '7' } },
+    })
+    const asked = citedAttachments(store, run.runId, sources)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(asked[0]?.readFrom).toEqual({
+      sourceIdentity: record.evidence.sourceIdentity,
+      key: 'PDFKEY01',
+      version: '7',
+    })
+    // The cite key travels with it, because the file is stored under the citation that rests on it.
+    expect(asked[0]?.citeKey).toBe(`cite-${literatureRef}`)
   })
 })

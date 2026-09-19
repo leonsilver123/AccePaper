@@ -217,6 +217,56 @@ export function markdownPipeTable(
   return `${[line(header), rule, ...rows.map(line)].join('\n')}\n`
 }
 
+/** A pipe table read back into the cells it was written from. */
+export interface ParsedPipeTable {
+  readonly header: ReadonlyArray<string>
+  readonly rows: ReadonlyArray<ReadonlyArray<string>>
+}
+
+/**
+ * Read a pipe table back into its header and body rows.
+ *
+ * THE INVERSE OF {@link markdownPipeTable}, AND ONLY OF IT. This reads the format this module writes,
+ * which is what lets a caller render a table's machine-readable twin without a second authority on
+ * what the paper prints — a Markdown table written by another tool may carry alignment markers,
+ * padding or escapes this writer never emits, and anything this reader does not fully recognize is
+ * REFUSED rather than partly understood.
+ *
+ * The escaping is invertible because the writer escapes every `|` exactly once: splitting on the
+ * exact separator `" | "` cannot hit an escaped pipe, and removing one backslash from each `\|`
+ * restores the original for any number of backslashes before it.
+ *
+ * WHAT IS NOT RECOVERABLE, and is not guessed at: the writer folds a newline inside a cell to a space
+ * and trims the cell, so a reader that needs those characters must read them where they are still
+ * whole. The caller is told the table's cells, not the text a cell was rendered from.
+ *
+ * @param markdown - a pipe table as {@link markdownPipeTable} wrote it.
+ * @returns the header cells and the body rows, or undefined when the text is not one of those tables.
+ */
+export function parsePipeTable(markdown: string): ParsedPipeTable | undefined {
+  const lines = markdown.replace(/\n+$/u, '').split('\n')
+  const first = lines[0]
+  const second = lines[1]
+  if (first === undefined || second === undefined) return undefined
+  const cellsOf = (line: string): ReadonlyArray<string> | undefined => {
+    if (!line.startsWith('| ') || !line.endsWith(' |')) return undefined
+    return line.slice(2, -2).split(' | ').map(cell => cell.replaceAll('\\|', '|'))
+  }
+  const header = cellsOf(first)
+  // THE RULE IS PART OF THE FORMAT, not decoration: without it the text is a paragraph of pipes, and
+  // accepting it would report a table a Markdown reader does not draw as one.
+  const rule = cellsOf(second)
+  if (header === undefined || rule === undefined) return undefined
+  if (rule.length !== header.length || rule.some(cell => cell !== '---')) return undefined
+  const rows: Array<ReadonlyArray<string>> = []
+  for (const line of lines.slice(2)) {
+    const cells = cellsOf(line)
+    if (cells === undefined || cells.length !== header.length) return undefined
+    rows.push(cells)
+  }
+  return { header, rows }
+}
+
 /**
  * Render one numbered figure: the image link, then its caption.
  *

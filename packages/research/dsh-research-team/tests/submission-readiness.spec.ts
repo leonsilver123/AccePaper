@@ -43,6 +43,15 @@ function facts(overrides: Partial<ManuscriptFacts> = {}): ManuscriptFacts {
     staleApproval: undefined,
     compilation: { tool: null, dropped: [] },
     ...overrides,
+    // THE TYPESET FORM RENDERS THE DOCUMENT THE RUN HOLDS, and this deployment declared no submission
+    // format it produces. STATED AFTER THE SPREAD so the field is required in the result, the way
+    // every other fact is; a case that varies it passes its own.
+    typeset: overrides.typeset ?? {
+      renderedManuscriptVersion: 1,
+      manuscriptVersion: 1,
+      declaredFormats: [],
+      documents: [],
+    },
   }
 }
 
@@ -100,6 +109,30 @@ describe('submissionReadinessOf', () => {
 
   it('stays ready when no approval went stale', () => {
     expect(submissionReadinessOf(facts()).ready).toBe(true)
+  })
+
+  it('is NOT ready when the typeset form renders a document the run has moved past', () => {
+    // A JOURNAL IS HANDED THE TYPESET FORM, and a form rendered from a superseded version is a
+    // submission of the draft the paper was. Readiness is a fact about the run, so it says so here
+    // rather than only at export time.
+    const readiness = submissionReadinessOf(facts({
+      typeset: { renderedManuscriptVersion: 1, manuscriptVersion: 2, declaredFormats: [], documents: [] },
+    }))
+    expect(readiness.ready).toBe(false)
+    expect(readiness.reason).toContain('the document moved after it was typeset')
+  })
+
+  it('is NOT ready when a submission format the deployment declared has no document', () => {
+    const readiness = submissionReadinessOf(facts({
+      typeset: {
+        renderedManuscriptVersion: 1,
+        manuscriptVersion: 1,
+        declaredFormats: ['latex'],
+        documents: [],
+      },
+    }))
+    expect(readiness.ready).toBe(false)
+    expect(readiness.reason).toContain('latex')
   })
 
   it('is NOT ready when the review the deployment requires did not finish', () => {

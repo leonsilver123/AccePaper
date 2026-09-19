@@ -37,7 +37,7 @@ export interface StepOutcome {
   readonly stepId: string
   readonly status: StepStatus
   readonly attemptId: number
-  /** Truthfulness of the executor that ran, or 'humanGate' when none ran (E2). */
+  /** Truthfulness of the executor that ran, or 'humanGate' for the step whose executor is the gate (E2). */
   readonly kind: Truthfulness | 'humanGate'
   readonly producer: string
   readonly outputSlugs: ReadonlyArray<string>
@@ -54,7 +54,7 @@ export interface StepOutcome {
    * mistake the definition made. This is what a run actually did.
    */
   readonly readSlugs: ReadonlyArray<string>
-  /** Core `runStep` outcome of the execute phase. Absent when no executor ran (E2). */
+  /** Core `runStep` outcome of the execute phase. Absent when the step declared no executor. */
   readonly executeStatus?: RunStepStatus
   readonly executeError?: string
 }

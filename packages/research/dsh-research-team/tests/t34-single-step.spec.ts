@@ -62,12 +62,11 @@ describe('T34 — 16 步单步可运行验证', () => {
     expect(rows.every(r => r.status !== 'pending')).toBe(true)
   })
 
-  it('除人工门 E2 外,每一步都产出至少一个 artifact', async () => {
+  it('每一步都产出它声明的 artifact,人工门 E2 的是待决定的投稿请求', async () => {
     const rows = await driveEveryStepIndividually()
-    const producers = rows.filter(r => r.stepId !== 'E2-submit')
 
-    expect(producers).toHaveLength(15)
-    for (const row of producers) {
+    expect(rows).toHaveLength(16)
+    for (const row of rows) {
       expect(row.outputSlugs.length, `${row.stepId} 未产出 artifact`).toBeGreaterThan(0)
     }
   })
@@ -78,7 +77,7 @@ describe('T34 — 16 步单步可运行验证', () => {
 
     expect(e2?.kind).toBe('humanGate')
     expect(e2?.status).toBe('gated')
-    expect(e2?.outputSlugs).toEqual([])
+    expect(e2?.outputSlugs).toEqual(['submission-record'])
   })
 
   it('每一步的 artifact 都真实写入 registry(可经 getArtifact 取回)', async () => {

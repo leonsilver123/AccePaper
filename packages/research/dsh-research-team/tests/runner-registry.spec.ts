@@ -75,6 +75,9 @@ function execCtx(stepId: string, runCtx: RunContext = freshRunCtx()): ExecCtx {
     stepId,
     attemptId: 1,
     getInput: () => undefined,
+    // NO ARTIFACT VERSIONS: this context stands over no run, so every slug it is asked about is one
+    // the registry here does not hold. A step that states which version it read records the absence.
+    readInputRef: () => undefined,
     runCtx,
   }
 }
@@ -289,12 +292,18 @@ describe('T19-B registry — truthfulness levels (5-level ruling)', () => {
 
   it('classifies every step with one of the 5 levels, or the human gate', () => {
     for (const entry of STEP_EXECUTOR_REGISTRY.values()) {
-      // E2-submit runs no executor at all, so it carries `'humanGate'` — the same
-      // level `StepOutcome.kind` reports for it. Declaring it a `fixture_executor`
-      // made the registry table describe an executor its own basis says never runs.
-      const allowed = entry.humanGateStop === true ? [...TRUTHFULNESS_LEVELS, 'humanGate'] : TRUTHFULNESS_LEVELS
-      expect(allowed).toContain(entry.kind)
+      // E2-submit carries `'humanGate'` — the same level `StepOutcome.kind` reports for it. What runs
+      // there prepares the submission request and judges nothing, so a truthfulness level beside it
+      // would report that preparation as evidence about the paper. The level is the STEP's, and the
+      // step is a gate whatever executor it drives.
+      expect([...TRUTHFULNESS_LEVELS, 'humanGate']).toContain(entry.kind)
     }
+    // AND IT IS THE ONLY ONE. The allowance above is for the pipeline's human gate, not for any entry
+    // that would rather not name what ran: a second `humanGate` would be a step claiming a person
+    // decides it.
+    expect([...STEP_EXECUTOR_REGISTRY.values()]
+      .filter(entry => entry.kind === 'humanGate')
+      .map(entry => entry.stepId)).toEqual(['E2-submit'])
   })
 
   it('has ZERO live_external steps in this wave', () => {
@@ -569,7 +578,7 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
   const fixtureSteps = [...STEP_EXECUTOR_REGISTRY.values()]
     // B2-data's level depends on whether its dataset is present on this host, so it
     // is asserted separately (below) rather than counted as a fixed fixture.
-    .filter(e => e.kind === 'fixture_executor' && e.humanGateStop !== true
+    .filter(e => e.kind === 'fixture_executor'
       && e.stepId !== 'B2-data' && e.stepId !== 'B3-baseline' && e.stepId !== 'C2-trinity-loop')
     .map(e => e.stepId)
 
@@ -686,16 +695,57 @@ describe('T19-B registry — T19-S canonical semantics (business artifacts)', ()
 describe('T19-B registry — E2-submit is a human gate, never automated', () => {
   const e2 = STEP_EXECUTOR_REGISTRY.get('E2-submit')
 
-  it('is flagged as a human-gate stop with a human_approval_only recovery policy', () => {
-    expect(e2?.humanGateStop).toBe(true)
+  it('is the pipeline human gate with a human_approval_only recovery policy', () => {
+    expect(e2?.kind).toBe('humanGate')
     expect(e2?.recoveryPolicy).toBe('human_approval_only')
     expect(e2?.gateRequirement.humanGate).toBe(true)
     expect(e2?.gateRequirement.components).toEqual([])
-    expect(e2?.timeoutMs).toBe(0)
+    // AN EXECUTOR RUNS HERE, so the step carries a bound like every other step rather than the zero
+    // that meant "no executor". What it may do is still one thing: prepare a request.
+    expect(e2?.timeoutMs).toBeGreaterThan(0)
   })
 
-  it('refuses to execute if anyone ever calls its executor', () => {
-    expect(() => e2?.executor(execCtx('E2-submit'))).toThrow(/no executor/i)
+  it('prepares the submission record and submits nothing', async () => {
+    // THE ARTIFACT THIS STEP DECLARES IS THE ARTIFACT IT PRODUCES. Until this unit the step declared
+    // `submission-record` and no executor wrote one, so the run advertised a record that did not
+    // exist — the same defect as a package listing files no step wrote.
+    const entry = STEP_EXECUTOR_REGISTRY.get('E2-submit')
+    const out = (await entry?.executor(execCtxWith('E2-submit', {
+      manuscript: { sections: [] },
+      typeset: {
+        compilation: {
+          formats: ['html', 'latex', 'docx'],
+          documents: [{ format: 'docx', path: 'manuscript.docx', bytes: 4, sha256: 'aa' }],
+        },
+        venueName: 'A venue',
+        venueId: 'venue-1',
+        scopeLine: 'Scope match: transport.',
+      },
+    }))) as Record<string, Record<string, unknown>>
+    const record = out['submission-record']!
+    expect(Object.keys(out)).toEqual(['submission-record'])
+    // WHAT THE PERSON IS DECIDING ABOUT, and it is not decided here.
+    expect(record.submitted).toBe(false)
+    expect(record.decision).toBe('pending')
+    expect(String(record.note)).toMatch(/PREPARED, NOT SUBMITTED/)
+    // The documents and the venue come off the typeset artifact, so the record names what a
+    // submission would carry rather than what this step compiled.
+    expect(record.documents).toEqual([{ format: 'docx', path: 'manuscript.docx', sha256: 'aa', bytes: 4 }])
+    expect(record.declaredFormats).toEqual(['html', 'latex', 'docx'])
+    expect(record.venue).toEqual({ name: 'A venue', venueId: 'venue-1', scopeLine: 'Scope match: transport.' })
+    // THE VERSIONS ARE READ OFF THE REGISTRY. This context holds no run, so it records none — which is
+    // the honest answer and not an invented version.
+    expect(record.manuscript).toBeNull()
+    expect(record.typeset).toBeNull()
+  })
+
+  it('refuses when the run holds no document and no typeset form to submit', () => {
+    // THE TWO INPUTS THERE IS NOTHING TO PREPARE A REQUEST FROM. `canStart` guarantees both in a driven
+    // run; a direct caller is refused rather than handed a record saying a submission is ready. Both
+    // are named, because "which one is missing" is what a caller has to fix.
+    expect(() => e2?.executor(execCtx('E2-submit'))).toThrow(/no document/i)
+    expect(() => e2?.executor(execCtxWith('E2-submit', { manuscript: { sections: [] } })))
+      .toThrow(/no typeset form/i)
   })
 })
 

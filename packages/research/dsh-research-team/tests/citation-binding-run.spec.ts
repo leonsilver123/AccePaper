@@ -8,7 +8,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
@@ -26,7 +26,14 @@ function execCtx(stepId: string): ExecCtx {
     study: experimentStudy(), studyPlan: DEFAULT_PLAN, planSource: 'default',
     timestamp: FIXED_TS, adapter: platoonAdapter(experimentStudy()),
   }
-  return { runId: 'citation-binding-run-spec', stepId, attemptId: 1, getInput: () => undefined, runCtx }
+  return {
+    runId: 'citation-binding-run-spec', stepId, attemptId: 1,
+    getInput: () => undefined,
+    // THIS CONTEXT STANDS OVER NO RUN of its own, so it holds no artifact versions; the one case
+    // below that drives E1 with a real store supplies its own reader.
+    readInputRef: () => undefined,
+    runCtx,
+  }
 }
 
 /** The Case Pack the deployment ships, which supplies the claim's declared scope and data source. */
@@ -237,6 +244,9 @@ describe('a revision that rewrites a cited sentence', () => {
     const e1Ctx: ExecCtx = {
       ...execCtx('E1-format'),
       getInput: slug => (slug === 'manuscript' ? edited : getArtifact(store, run.runId, slug)),
+      // THE HAND-EDITED MANUSCRIPT IS NOT IN THE REGISTRY, so the version E1 would record is the one
+      // the run holds — which is the state this case exists to have E1 refuse.
+      readInputRef: slug => getRunSnapshot(store, run.runId).registry[slug]?.ref,
     }
     await expect(entry?.executor(e1Ctx)).rejects.toThrow(/citation-statement-changed/u)
   })

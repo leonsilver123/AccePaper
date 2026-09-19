@@ -1429,7 +1429,12 @@ describe('ResearchTeamService — the production pipeline entry', () => {
     } finally {
       await host.dispose()
     }
-  })
+    // TWICE THE WHOLE PIPELINE, so the default budget is measured against the wrong thing: this case
+    // drives sixteen steps, refuses D3, then resumes and drives the rest. At 0.5 s alone it fits
+    // easily; under the runner's concurrent load (seventy-seven files in fork workers) the same work
+    // has taken five seconds and been reported as a timeout — a defect in the budget, not in the
+    // resume path this case is about.
+  }, 30_000)
 
   it('returns a fresh run each call (the store does not leak between runs)', async () => {
     const host = await bootHost()

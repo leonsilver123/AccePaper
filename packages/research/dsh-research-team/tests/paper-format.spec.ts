@@ -18,6 +18,7 @@ import {
   markdownPipeTable,
   numberFloats,
   numberedReferences,
+  parsePipeTable,
   tableBlock,
 } from '../src/runner/paper-format.ts'
 
@@ -152,5 +153,43 @@ describe('the paper formatting layer', () => {
     )
     // A record with no author says "Unknown author" rather than dropping the field and reading complete.
     expect(formatReference({ title: 'T' })).toBe('Unknown author. T.')
+  })
+})
+
+describe('reading a pipe table back', () => {
+  it('recovers the cells a table was written from, including the characters that had to be escaped', () => {
+    // THE ROUND TRIP IS WHAT MAKES THE CSV TWIN TRUSTWORTHY: the machine-readable form is read back
+    // out of the table the paper prints, so the two cannot describe different tables.
+    const header = ['Method', 'Minimum TTC (s)']
+    const rows = [
+      ['HV-AV-HV', '12.45'],
+      // The characters that end a Markdown cell, a CSV field, or both.
+      ['a|b', '1,2'],
+      ['said "x"', '3.0'],
+      ['trailing\\', '4.0'],
+      ['back\\|slash', '5.0'],
+    ]
+    const parsed = parsePipeTable(markdownPipeTable(header, rows))
+    expect(parsed?.header).toEqual(header)
+    expect(parsed?.rows).toEqual(rows)
+  })
+
+  it('flattens a newline the way the writer did rather than inventing one back', () => {
+    // THE LOSS IS THE WRITER'S AND IS NOT UNDONE HERE. A cell whose text carried a newline was folded
+    // to a space when it was written; a reader that guessed a newline back would report text nobody
+    // wrote. What comes back is what the paper prints.
+    const parsed = parsePipeTable(markdownPipeTable(['a'], [['one\ntwo']]))
+    expect(parsed?.rows).toEqual([['one two']])
+  })
+
+  it('refuses text that is not one of these tables', () => {
+    // PARTLY UNDERSTOOD IS REFUSED, not partly read: a caller that took the rows of a paragraph, or of
+    // a table another tool wrote with alignment markers, would report a table the paper does not have.
+    expect(parsePipeTable('just a paragraph')).toBeUndefined()
+    expect(parsePipeTable('')).toBeUndefined()
+    expect(parsePipeTable('| a | b |\n| a | b |\n')).toBeUndefined()
+    expect(parsePipeTable('| a | b |\n| --- | --- |\n| one |\n')).toBeUndefined()
+    expect(parsePipeTable('a | b\n| --- | --- |\n')).toBeUndefined()
+    expect(parsePipeTable('| a | b |\n| :--- | ---: |\n| one | two |\n')).toBeUndefined()
   })
 })

@@ -7,7 +7,8 @@
 //     canStart (dependency guard) → startStep → runStep(registry executor)
 //     → on success: build genuine gate verdicts (verdict.ts) → submitGateVerdict
 //       (core `_adjudicate` is the SOLE gate adjudicator) → step leaves in_progress
-//     → E2-submit (humanGate, empty gate): completeStep → 'gated' (await human approval)
+//     → E2-submit (humanGate, empty gate): its executor PREPARES the submission request and
+//       submits nothing → completeStep → 'gated' (await human approval)
 //
 // Discipline (spec §3/§7): the driver does NOT re-implement the gate, does NOT
 // reinterpret outcomes, does NOT add a StepStatus, does NOT auto-approve E2, and
@@ -156,24 +157,6 @@ export async function driveStep(
   const attemptId = started.attemptId
   const usedRealTool = entry.kind === 'real_tool_fixture_input'
 
-  // E2-submit: human gate, empty gate → completeStep leaves it 'gated' (awaiting
-  // human approval). The driver NEVER auto-approves (spec §7).
-  if (entry.humanGateStop) {
-    const status = completeStep(store, runId, stepId)
-    return {
-      stepId,
-      status,
-      attemptId,
-      kind: 'humanGate',
-      producer: entry.producer,
-      outputSlugs: [],
-      artifacts: [],
-      verdicts: {},
-      usedRealTool: false,
-      readSlugs: [],
-    }
-  }
-
   // Execute phase — core runStep keeps atomicity (rollback / attempt / timeout / error).
   // The timeout comes from the registry declaration unless the caller overrides it.
   const myExec = opts.executorOverride?.(stepId) ?? entry.executor
@@ -205,6 +188,9 @@ export async function driveStep(
           readSlugs.push(slug)
           return resolveStepInput(store, runId, slug)
         },
+        // WHICH VERSION, not only which value. Resolved from the same registry `getInput` reads, so an
+        // executor cannot be handed a value and a version that describe different revisions.
+        readInputRef: (slug: string) => inputRefOf(store, runId, slug),
         runCtx: opts.runCtx,
         ...(opts.invoker !== undefined ? { invoker: opts.invoker } : {}),
         ...(opts.proseWriter !== undefined ? { proseWriter: opts.proseWriter } : {}),
@@ -240,11 +226,22 @@ export async function driveStep(
     }
   }
 
-  // Gate phase — build genuine verdicts and submit via core (single adjudication source).
-  // core `submitGateVerdict` writes the 'gate-verdict' / 'gate-abstention' audit
-  // events itself; the driver adds nothing.
+  // Finalize phase — the two ways a step reaches a terminal status, and no third one.
+  //
+  // AN EMPTY GATE IS FINALIZED BY `completeStep`, the core's empty-gate finalize. For the pipeline's
+  // human gate (E2-submit) that call leaves the step `gated`: the run STOPS HERE FOR A PERSON, and
+  // the driver never approves it (spec §7) — the host's approval channel is the only route to
+  // `passed`. E2 HAS AN EXECUTOR AND IS NOT EXEMPT FROM THIS PATH ANY MORE: it prepares the
+  // submission request through the same startStep → runStep → completeStep sequence as every other
+  // step, so the request it declares as its output is really written, and the decision on it is
+  // still nobody's but the person's.
+  //
+  // A NON-EMPTY GATE is adjudicated by the verdicts below, and core `submitGateVerdict` writes the
+  // 'gate-verdict' / 'gate-abstention' audit events itself; the driver adds nothing.
   const verdicts: Record<string, GateOutcome> = {}
-  if (stepDef.gate.length > 0) {
+  if (stepDef.gate.length === 0) {
+    completeStep(store, runId, stepId)
+  } else {
     const comps = opts.abstainComponents?.(stepId) ?? []
     // The receipt this attempt's commit produced. Its absence is not tolerated here: a step whose
     // gate is non-empty was executed through `runStep`, which commits, and a missing receipt means
@@ -346,6 +343,28 @@ export async function driveStep(
 function resolveStepInput(store: ResearchRunStore, runId: string, slug: string): unknown {
   const seeded: Record<string, unknown> = getRunSnapshot(store, runId).inputs
   return slug in seeded ? seeded[slug] : getArtifact(store, runId, slug)
+}
+
+/**
+ * The reference of the artifact the run holds under a slug, or undefined when it holds none.
+ *
+ * THE OTHER HALF OF {@link resolveStepInput}. That function answers with a value, and a value does not
+ * know its own version — so a step that has to state which revision it read (E1 records the manuscript
+ * version its typeset form is of, E2 records the versions its submission request was prepared from)
+ * has no way to say it from the value alone. This reads the run's registry, which is where that fact
+ * lives.
+ *
+ * A SEEDED INPUT IS NOT AN ARTIFACT. `domain-direction` and the Case Pack files are recorded in the
+ * run's `inputs` by `setRunInput` before it starts, are assigned no version, and answer undefined here
+ * rather than a number invented for them.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read from.
+ * @param slug - the artifact slug.
+ * @returns the reference, or undefined.
+ */
+function inputRefOf(store: ResearchRunStore, runId: string, slug: string): ArtifactRef | undefined {
+  return getRunSnapshot(store, runId).registry[slug]?.ref
 }
 
 /**

@@ -51,6 +51,7 @@ function execCtxWith(inputs: Readonly<Record<string, unknown>>): ExecCtx {
     attemptId: 1,
     getInput: (slug: string): unknown =>
       (inputs as Record<string, unknown>)[slug],
+    readInputRef: () => undefined,
     runCtx,
   }
 }

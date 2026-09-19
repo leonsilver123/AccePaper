@@ -149,6 +149,43 @@ export function resolveAttachmentPolicy(declared: unknown): ZoteroAttachmentPoli
 }
 
 /**
+ * The attachment reader the runner-side service consumes, as this package offers it.
+ *
+ * A STRUCTURAL TWIN OF THE RUNNER'S `ReferenceFileReader`, spelled out rather than imported because
+ * `dsh-research-team` is not a dependency of this package — the two are siblings. The runner checks
+ * `policy` and `read`, and this shape is what a deployment publishes on the research service under
+ * `referenceFiles`.
+ *
+ * THE REQUEST CARRIES AN IDENTITY, NOT A PATH. `sourceIdentity` is the identity a reading record
+ * carries, which this package minted and is the only place that can resolve it back to the library's
+ * own item key — so a caller stores a file without knowing how this package names items.
+ */
+export interface ReferenceFileReaderLike {
+  /** Whether this deployment reads attachment files. `'none'` means nothing is ever requested. */
+  readonly policy: ZoteroAttachmentPolicy
+  /**
+   * Read one attachment's bytes.
+   *
+   * @param request - the source identity and attachment key a reading record carries.
+   * @param signal - cancellation from the caller.
+   * @returns the bytes with the version they were read at, or why none were read.
+   */
+  read(
+    request: { readonly sourceIdentity: string; readonly attachmentKey: string },
+    signal?: AbortSignal,
+  ): Promise<
+    | {
+      readonly ok: true
+      readonly attachmentKey: string
+      readonly attachmentVersion: string
+      readonly sha256: string
+      readonly base64: string
+    }
+    | { readonly ok: false; readonly reason: string }
+  >
+}
+
+/**
  * The byte-order mark a tool reply may open with, measured 2026-09-18.
  *
  * BUILT FROM ITS CODE POINT rather than written into a literal: the character is invisible, a literal
