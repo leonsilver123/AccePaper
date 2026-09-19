@@ -259,26 +259,57 @@ export const SEEDABLE_INPUTS: readonly string[] = [
  * `computeTransitiveDependents` terminates and that seed-vs-registry precedence is
  * unambiguous (DEP-9, DEP-8). Called once at module load; throws on a cycle or
  * seed/production overlap.
+ *
+ * A SLUG MAY HAVE MORE THAN ONE PRODUCER, and then two further things have to hold. The manuscript is
+ * the case that forced this: every writing step republishes the SAME document under one slug, so a
+ * single slug has three producers and one continuous version counter. What breaks without saying so
+ * is that the owner of a slug is no longer a single number — last-writer-wins would record the LAST
+ * producer's index and then read the middle producer's own consumption of that slug as a forward
+ * edge, failing the module load of every importer of this package. The two rules that replace it:
+ *
+ *   - the owner is the EARLIEST producer, which is the step that creates the slug and the only index
+ *     the no-forward-edge property is about;
+ *   - a step that republishes a slug must also CONSUME it, because `computeTransitiveDependents`
+ *     walks `inputs ∩ outputs` and an unstated consumption is an invalidation cascade with a hole in
+ *     it — invalidating the first producer would leave the republisher's artifact standing.
+ *
+ * @param steps - the graph to check. Defaults to the shipped `STEPS`; parameterized so a spec can
+ *   exercise the multi-producer rules against a synthetic graph, which the frozen constant cannot be
+ *   made to violate.
+ * @throws {Error} on a cycle, a forward edge, a seed/production overlap, a slug with no producer, or
+ *   a republished slug its republisher does not consume.
  */
-export function assertDagAndSeedSeparation(): void {
-  const outputOwner = new Map<string, number>()
-  for (const s of STEPS) {
+export function assertDagAndSeedSeparation(steps: readonly StepDefinition[] = STEPS): void {
+  const firstProducer = new Map<string, number>()
+  const producers = new Map<string, string[]>()
+  for (const s of steps) {
     for (const o of s.outputs) {
       if (SEEDABLE_INPUTS.includes(o)) {
         throw new Error(`assertDagAndSeedSeparation: step '${s.id}' outputs '${o}' which is a seedable input (DEP-8 violation: seed slug cannot be a produced artifact)`)
       }
-      outputOwner.set(o, s.index)
+      if (!firstProducer.has(o)) firstProducer.set(o, s.index)
+      producers.set(o, [...(producers.get(o) ?? []), s.id])
     }
   }
-  for (const s of STEPS) {
+  for (const s of steps) {
     for (const input of s.inputs) {
       if (SEEDABLE_INPUTS.includes(input)) continue
-      const owner = outputOwner.get(input)
+      const owner = firstProducer.get(input)
       if (owner === undefined) {
         throw new Error(`assertDagAndSeedSeparation: step '${s.id}' input '${input}' has no producer and is not seedable`)
       }
       if (owner >= s.index) {
         throw new Error(`assertDagAndSeedSeparation: step '${s.id}' (index ${s.index}) consumes '${input}' produced by a later/equal-index step (index ${owner}) — cycle or forward-edge (DEP-9)`)
+      }
+    }
+  }
+  for (const [slug, ids] of producers) {
+    if (ids.length < 2) continue
+    for (const s of steps) {
+      if (!s.outputs.includes(slug)) continue
+      if (s.index === firstProducer.get(slug)) continue
+      if (!s.inputs.includes(slug)) {
+        throw new Error(`assertDagAndSeedSeparation: step '${s.id}' (index ${s.index}) republishes '${slug}' but does not consume it — the invalidation cascade would stop here (DEP-9)`)
       }
     }
   }
