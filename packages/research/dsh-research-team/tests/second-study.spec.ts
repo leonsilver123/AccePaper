@@ -75,8 +75,16 @@ describe('the study’s measurement', () => {
   })
 
   it('hashes the numbers it was built from, so two records are comparable', () => {
-    expect(latencyHashOf(compareLatency())).toBe(latencyHashOf(compareLatency()))
-    expect(latencyHashOf(compareLatency())).toHaveLength(64)
+    const comparison = compareLatency()
+    // THE SAME MEASUREMENT IS THE SAME RECORD, which is what makes two runs comparable at all.
+    expect(latencyHashOf(comparison)).toBe(latencyHashOf(compareLatency()))
+    expect(latencyHashOf(comparison)).toHaveLength(64)
+    // AND A DIFFERENT MEASUREMENT IS NOT. The first version of this case hashed the same call twice
+    // and never moved a number, so a digest that ignored the comparison — a constant, or one taken
+    // over the metric key alone — satisfied it. `result-version.spec.ts` is the same case for the
+    // other study, and it varies its input for this reason.
+    const moved = { ...comparison, relativeImprovementPct: comparison.relativeImprovementPct + 1 }
+    expect(latencyHashOf(moved)).not.toBe(latencyHashOf(comparison))
   })
 
   it('batching actually forms, which is what makes the variant a variant', () => {

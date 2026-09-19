@@ -215,10 +215,22 @@ describe('registration transactionality and lifecycle (Phase 1.1-R)', () => {
     dispose()
   })
 
-  it('readiness requires the exact seven-tool set, not just an onReady signal', async () => {
+  it('signals readiness only after the registry really holds the set', async () => {
+    // THE SIGNAL IS CORROBORATED WHERE IT FIRES, not re-checked afterwards. The old body awaited the
+    // plugin and then asserted readiness itself, so an `onReady` that fired before registration had
+    // settled would have passed it; here the callback runs the run's own assertion at the moment the
+    // required path is told the tools are up, which is the ordering the plugin's doc claims. The
+    // other half of the old title — that readiness needs the EXACT set rather than any signal — is
+    // the case above, which drops `roadmap` from a registry and requires the refusal.
     const ctx = await setupWithTools()
     const applied = { value: false }
-    await ctx.plugin(researchToolsPlugin, { verify: true, onReady: () => { applied.value = true } })
+    await ctx.plugin(researchToolsPlugin, {
+      verify: true,
+      onReady: () => {
+        applied.value = true
+        expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
+      },
+    })
     expect(applied.value).toBe(true)
     expect(() => { assertResearchToolsReady(ctx) }).not.toThrow()
     await ctx.fiber.dispose()

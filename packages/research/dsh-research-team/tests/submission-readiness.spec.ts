@@ -51,6 +51,7 @@ function facts(overrides: Partial<ManuscriptFacts> = {}): ManuscriptFacts {
       manuscriptVersion: 1,
       declaredFormats: [],
       documents: [],
+      repairedFromVersion: undefined,
     },
   }
 }
@@ -116,7 +117,7 @@ describe('submissionReadinessOf', () => {
     // submission of the draft the paper was. Readiness is a fact about the run, so it says so here
     // rather than only at export time.
     const readiness = submissionReadinessOf(facts({
-      typeset: { renderedManuscriptVersion: 1, manuscriptVersion: 2, declaredFormats: [], documents: [] },
+      typeset: { renderedManuscriptVersion: 1, manuscriptVersion: 2, declaredFormats: [], documents: [], repairedFromVersion: undefined },
     }))
     expect(readiness.ready).toBe(false)
     expect(readiness.reason).toContain('the document moved after it was typeset')
@@ -129,6 +130,7 @@ describe('submissionReadinessOf', () => {
         manuscriptVersion: 1,
         declaredFormats: ['latex'],
         documents: [],
+        repairedFromVersion: undefined,
       },
     }))
     expect(readiness.ready).toBe(false)

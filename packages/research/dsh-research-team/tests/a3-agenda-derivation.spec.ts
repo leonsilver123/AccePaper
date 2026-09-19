@@ -118,7 +118,20 @@ describe('A3 agenda derivation', () => {
       'argue',
       'ship',
     ])
-    expect(agenda.plan).toEqual(agenda.phases)
+    // AGAINST THE MODEL'S OWN STAGES, not against `agenda.phases`: the executor assigns both fields
+    // from the one parsed list on this branch, so `plan === phases` restated the assignment and could
+    // not fail. What the field is for is told apart by the FIXTURE branch, where `phases` is the five
+    // canonical stages and `plan` is the pipeline sentence — so a model path that left the fixture's
+    // plan in place would pass the old assertion whenever the two happened to be equal, and its
+    // failure would be about a coincidence rather than about the derivation.
+    expect(agenda.plan).toEqual([
+      'frame the gap',
+      'build the experiment',
+      'iterate',
+      'argue',
+      'ship',
+    ])
+    expect(agenda.plan).not.toEqual(['A 定位', 'B 构造', 'C 迭代', 'D 论证', 'E 落地'])
     expect(agenda.agendaRoute.producer).toContain('test-provider/test-model')
 
     expect(list.contributions.map(c => c.claim)).toEqual([

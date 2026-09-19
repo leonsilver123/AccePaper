@@ -1178,16 +1178,17 @@ describe('a decision a person made survives the process that took it', () => {
       const checks = new Map((first.checks ?? []).map(check => [check.code, check.passed]))
       expect(checks.get('approval-recorded')).toBe(true)
       expect(checks.get('approval-current')).toBe(true)
-      // TWO CONDITIONS, AND THE SECOND IS NEW: the evidence profile (this deployment is evaluation)
-      // and the review — the offline route takes one round and the default policy requires two. A
-      // package written before this condition existed would have called itself final here.
-      // THREE CONDITIONS, AND THE THIRD IS THE JOURNAL'S OWN. The evidence profile (this deployment
-      // is evaluation), the review (the offline route took one round and the default policy requires
-      // two), and the target journal's requirements — which A4 records as the questions its guide
-      // answers, every one unknown, because nobody has read it. A manuscript measured against an
-      // invented word limit would read as compliant while being measured against nothing.
+      // TWO CONDITIONS: the evidence profile (this deployment is evaluation) and the review — the
+      // offline route takes one round and the default policy requires two. A package written before
+      // the review condition existed would have called itself final here.
+      // THE JOURNAL'S OWN CONDITION IS NOT AMONG THEM, and that is the state this deployment is in:
+      // it configures no journal, so the run was conducted under the SHIPPED profile, whose official
+      // guide was obtained and read on 2026-09-18 — every rule in it is either `verified` or
+      // `not_specified`, and a rule the guide was read for and states nothing about is a finding
+      // rather than a gap. A deployment whose venue profile records unread rules is refused by the
+      // same condition, which `final-package.spec.ts` and the package-vocabulary spec pin.
       expect([...(first.checks ?? [])].filter(check => !check.passed).map(check => check.code))
-        .toEqual(['production-evidence', 'review-complete', 'journal-rules-verified'])
+        .toEqual(['production-evidence', 'review-complete'])
 
       // NOW MOVE THE MANUSCRIPT, the way a person accepting a revision would: the approval was made
       // about the version E1 wrote, and this is a different one. The binding is only real if the

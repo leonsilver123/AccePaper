@@ -129,12 +129,20 @@ export type ResearchViewProps = PropsLocale<'research'> & {
 }
 
 /** Workbench sub-panel tab identifiers. */
-type WorkbenchTab =
+export type WorkbenchTab =
   | 'summary' | 'pipeline' | 'figures' | 'tables' | 'roadmap'
   | 'gates' | 'adversarial' | 'approval' | 'revision' | 'quality' | 'recovery'
 
-/** Tab roster: id → label dictionary key (kept in `research` namespace order). */
-const TABS: ReadonlyArray<{ id: WorkbenchTab; labelKey: ResearchKey }> = [
+/**
+ * The workbench's tab roster: id → label dictionary key, in `research` namespace order.
+ *
+ * EXPORTED SO THE COVERAGE SPEC READS IT rather than keeping its own copy. The spec that clicks every
+ * tab had a hand-written list that stopped at nine while this roster grew to eleven, so the revision
+ * and quality panels — the two a person reaches for when a finding is raised — were never rendered
+ * under test, and the spec's own title went on saying "nine". A list the component and its spec share
+ * cannot drift; a copy can, and did.
+ */
+export const WORKBENCH_TABS: ReadonlyArray<{ readonly id: WorkbenchTab; readonly labelKey: ResearchKey }> = [
   { id: 'summary', labelKey: 'tab.summary' },
   { id: 'pipeline', labelKey: 'tab.pipeline' },
   { id: 'figures', labelKey: 'tab.figures' },
@@ -562,7 +570,7 @@ export function ResearchWorkbench({
           )}
 
           <nav className={css.tabs}>
-            {TABS.map(tab => (
+            {WORKBENCH_TABS.map(tab => (
               <button
                 type="button"
                 key={tab.id}

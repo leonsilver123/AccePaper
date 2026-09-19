@@ -416,6 +416,7 @@ describe('a commit gives every artifact an identity, not just a name', () => {
     const [store, id] = started()
     expect(commitStepOutputs(store, id, STEP, request(store, id)).ok).toBe(true)
     const first = getRunSnapshot(store, id).registry['landscape-map']!.ref.contentHash
+    const firstSibling = getRunSnapshot(store, id).registry['gap-list']!.ref.contentHash
     rollback(store, id, STEP)
     startStep(store, id, STEP)
     expect(commitStepOutputs(store, id, STEP, {
@@ -423,6 +424,21 @@ describe('a commit gives every artifact an identity, not just a name', () => {
       outputs: outputsOf('m', 'g'),
     }).ok).toBe(true)
     expect(getRunSnapshot(store, id).registry['landscape-map']?.ref.contentHash).toBe(first)
+
+    // AND A DIFFERENT VALUE IS A DIFFERENT HASH, which is the other half the title names. The first
+    // version of this case performed only the same-value half, so a digest that ignored its value —
+    // a constant, or one taken over the slug alone — satisfied it exactly.
+    rollback(store, id, STEP)
+    startStep(store, id, STEP)
+    expect(commitStepOutputs(store, id, STEP, {
+      ...request(store, id),
+      idempotencyKey: 'k2',
+      outputs: outputsOf('m-changed', 'g'),
+    }).ok).toBe(true)
+    expect(getRunSnapshot(store, id).registry['landscape-map']?.ref.contentHash).not.toBe(first)
+    // AND THE DIGEST IS THE ARTIFACT'S OWN. Its sibling's value did not move, and its hash did not
+    // either — one output changing does not rewrite the identity of another.
+    expect(getRunSnapshot(store, id).registry['gap-list']?.ref.contentHash).toBe(firstSibling)
   })
 
   it('advances the version when a re-run commits different content', () => {

@@ -24,6 +24,7 @@ import {
 
 import { createRunContext, driveStep } from '../src/runner/drive.ts'
 import { packageRunFactsOf } from '../src/runner/package-export.ts'
+import { stepProjectionsOf } from '../src/runner/project-view.ts'
 import { FIXED_TS, type ResearchProseWriter } from '../src/runner/registry.ts'
 import type { StepOutcome } from '../src/runner/types.ts'
 
@@ -113,5 +114,30 @@ describe('a step reports the producer its own artifacts record', () => {
     // resolution rather than a replacement of every row.
     expect(packageRunFactsOf(store, runId).steps.find(step => step.stepId === 'D2-framework')?.producer)
       .toBe('fixture:framework')
+  })
+
+  it('separates what would run from what ran on the step projection a page reads', async () => {
+    // THE THIRD READ OF THE SAME ROW, and the last one that conflated them. `driveStep`'s
+    // `StepOutcome` and the package's run facts both resolve the producer from the artifacts; the
+    // projection the browser renders took the registry entry's brand and called it `producer`, so
+    // the panel reported a model-written draft as produced by the table tool the step executes —
+    // the same drift, one reader further out.
+    const { store, runId } = await driveWithModelProse()
+    const steps = new Map(stepProjectionsOf(store, runId).map(step => [step.stepId, step]))
+
+    expect(steps.get('D3-writing')?.producer).toBe('llm:test-provider/test-model')
+    // AND THE OTHER QUESTION IS STILL ANSWERABLE: the brand the entry declares is its own field, so
+    // a reader can tell what this deployment's D3 WOULD run under from what this run's D3 DID.
+    expect(steps.get('D3-writing')?.declaredProducer).toBe('three-line-table@0.1.2-alpha.4')
+    expect(steps.get('D3-writing')?.declaredProducer).not.toBe(steps.get('D3-writing')?.producer)
+
+    // THE OFFLINE STEPS AGREE, and that is a resolution rather than a copy: their artifacts carry
+    // the brand the entry declares, so both fields say the same thing for a different reason.
+    expect(steps.get('D2-framework')?.producer).toBe('fixture:framework')
+    expect(steps.get('D2-framework')?.declaredProducer).toBe('fixture:framework')
+
+    // A STEP THAT NEVER RAN HAS NO ARTIFACTS TO READ, so it reports its declared brand in both
+    // fields rather than a fabricated producer.
+    expect(steps.get('E2-submit')?.producer).toBe(steps.get('E2-submit')?.declaredProducer)
   })
 })

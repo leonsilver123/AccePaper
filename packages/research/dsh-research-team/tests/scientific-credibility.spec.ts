@@ -159,6 +159,7 @@ function manuscriptFacts(input: {
       manuscriptVersion: 1,
       declaredFormats: [],
       documents: [],
+      repairedFromVersion: undefined,
     },
   }
 }

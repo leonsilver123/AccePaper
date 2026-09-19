@@ -62,6 +62,7 @@ import {
   type ApprovalWireResult,
 } from '../src/approval.ts'
 import { runT19B } from '../src/runner/drive.ts'
+import { stepProjectionsOf } from '../src/runner/project-view.ts'
 import type { RunResult } from '../src/runner/types.ts'
 import type { ResearchRunPersistence, ResearchRunSnapshot } from '../src/types.ts'
 
@@ -145,7 +146,11 @@ function registerGatedRun(
 function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, run.runId)
   return {
-    run,
+    // THE RUN'S OWN PROJECTION, not the drive call's result. The two carry different step types —
+    // a drive result says how an ATTEMPT ended, the projection says what the run holds — and only
+    // the projection has both of a step's producer fields, so assigning the drive result here made
+    // the twin's `run` a different shape from the one the wire declares.
+    run: { runId: run.runId, steps: stepProjectionsOf(store, run.runId) },
     projectRevision: snapshot.revision,
     execution: 'stopped' as const,
     catalog: [],

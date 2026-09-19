@@ -156,8 +156,22 @@ describe('the identity a source is recorded under', () => {
   it('is stable across a rename of the citation key', () => {
     // A KEY THE RUN RENAMES IS NOT A DIFFERENT SOURCE. The citation key is what the manuscript
     // prints; the identity is where the paper came from, and it does not move when the first changes.
+    // THE RENAME IS PERFORMED HERE, in both places a rename touches — the entry's key and the key the
+    // run assigned — because the first version of this case minted the id twice from one call and so
+    // asserted nothing about renaming at all.
     const library = { type: 'user' as const, id: '0' }
-    expect(literatureIdOf(library, 'UA5MIGG3')).toBe(literatureIdOf(library, 'UA5MIGG3'))
+    const RENAMED = 'rocheTakeoverCriticalBrakes2020'
+    const before = checkBibtexEntry({ text: RETURNED, item: ITEM, citationKey: KEY })
+    const after = checkBibtexEntry({ text: RETURNED.replace(KEY, RENAMED), item: ITEM, citationKey: RENAMED })
+    if (!before.ok || !after.ok) throw new Error('expected both spellings of one entry to be accepted')
+    // The rename happened: the citation the package prints carries the new key.
+    expect(before.citation.citationKey).toBe(KEY)
+    expect(after.citation.citationKey).toBe(RENAMED)
+    // AND THE IDENTITY DID NOT MOVE, because the printed key is not an input to the mint: the
+    // renamed source is the source the run read.
+    expect(literatureIdOf(library, ITEM.itemKey)).toBe('zotero:user:0:UA5MIGG3')
+    // AND THE ITEM KEY DID NOT, so this is a rename rather than a mint that ignores its arguments.
+    expect(literatureIdOf(library, 'SOMETHINGELSE')).not.toBe(literatureIdOf(library, ITEM.itemKey))
   })
 })
 

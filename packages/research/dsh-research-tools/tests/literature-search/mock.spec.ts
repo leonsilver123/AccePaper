@@ -203,8 +203,19 @@ describe('T12 mock fixture contract — stable synthetic corpus ids', () => {
   })
 
   it('the shared stateless mock instance also answers fresh, deterministic results', async () => {
-    const ok = okOf(await mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
-    expect(ok.total).toBe(14)
-    expect(ok.hits[0]!.id).toBe('syn-lit-0001')
+    // STATELESSNESS IS A CLAIM ABOUT A SECOND CALL, so it is measured over two of them. The old body
+    // made ONE call against the shared instance and asserted its total, which a shared instance
+    // carrying a cursor or a spent outage seed would have passed just as well; "deterministic" was in
+    // the title and nowhere in the body.
+    const first = okOf(await mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
+    expect(first.total).toBe(14)
+    expect(first.hits[0]!.id).toBe('syn-lit-0001')
+    // THE SAME QUESTION TWICE IS THE SAME ANSWER, on the instance the deployment shares.
+    const second = okOf(await mockLiteratureSearchAdapter.search({ topic: 'synthetic' }))
+    expect(second).toEqual(first)
+    // AND A FRESH INSTANCE AGREES WITH IT, which is what "stateless" means: nothing this instance did
+    // before the call changes what it answers.
+    const fresh = okOf(await createMockLiteratureSearchAdapter().search({ topic: 'synthetic' }))
+    expect(fresh).toEqual(first)
   })
 })

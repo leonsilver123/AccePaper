@@ -40,7 +40,12 @@ function liveRun(store: ReturnType<typeof freshStore>, id: string): RunState {
 }
 
 describe('an approval covers the revision it was given for', () => {
-  it('records the inputs it binds, taken from the run rather than from the caller', () => {
+  // THE TITLE NAMES WHAT THE BODY CAN SHOW. It used to read "taken from the run rather than from the
+  // caller", which is a claim about an alternative the interface does not offer — `mintPrincipal`
+  // takes no target refs, so there is no caller-supplied value this assertion could have excluded.
+  // What it does establish is that the refs recorded are the registry's own, which is the half a
+  // reader can act on: a ref that does not resolve names nothing.
+  it('records the inputs it binds, as the registry held them', () => {
     const { store, id } = approvedRun()
     const approval = liveRun(store, id).steps.get('E2-submit')?.approval
     // BOTH OF THE GATE'S DECLARED INPUTS, and there are two because the document and the form set

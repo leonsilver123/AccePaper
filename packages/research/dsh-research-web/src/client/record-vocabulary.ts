@@ -94,6 +94,8 @@ export type PackageCheckCode =
   | 'artifacts-current' | 'deliverables-present' | 'run-saved'
   /** The typeset form is a render of a superseded document. */
   | 'manuscript-typeset'
+  /** The typeset form was re-rendered by the repair path, so no gate has judged this document. */
+  | 'manuscript-gated'
   /** A submission format the deployment declared has no document, or one that does not survive it. */
   | 'typeset-complete'
 
@@ -114,6 +116,7 @@ const PACKAGE_CHECK_KEYS: Readonly<Record<PackageCheckCode, ResearchKey>> = {
   'deliverables-present': 'packageCheck.deliverables-present',
   'run-saved': 'packageCheck.run-saved',
   'manuscript-typeset': 'packageCheck.manuscript-typeset',
+  'manuscript-gated': 'packageCheck.manuscript-gated',
   'typeset-complete': 'packageCheck.typeset-complete',
 }
 

@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getRunSnapshot, rollback, startStep, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, rollback, startStep, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 
 import { runT19B } from '../src/runner/drive.ts'
 import { stepProjectionsOf } from '../src/runner/project-view.ts'
@@ -47,7 +47,18 @@ describe('a running study reports its steps', () => {
     // The executor's declared identity travels with the step, so a reader knows what would run
     // before it has run.
     expect(steps.get('B1-method')?.kind).toBe(STEP_EXECUTOR_REGISTRY.get('B1-method')?.kind)
+    // WHAT WOULD RUN AND WHAT RAN ARE TWO FIELDS, not one. A step that has not run has no artifacts
+    // to read a producer off, so the two agree here — and the agreement is the whole assertion: a
+    // reader of a step that never ran is being told its declared brand, in a field that says so.
+    expect(steps.get('B1-method')?.declaredProducer).toBe(STEP_EXECUTOR_REGISTRY.get('B1-method')?.producer)
     expect(steps.get('B1-method')?.producer).toBe(STEP_EXECUTOR_REGISTRY.get('B1-method')?.producer)
+    // AND WHAT RAN IS WHAT THE STEP'S OWN ARTIFACTS SAY, read from the artifact rather than from the
+    // entry: A1 committed the landscape map, and its row names the brand that map carries. The
+    // steps whose channel is a deployment fact are the ones where the two fields differ, and
+    // `step-producer.spec.ts` drives D3 through a live-model writer to pin that.
+    const landscape = getArtifact(store, run.runId, 'landscape-map') as { readonly __producer: string }
+    expect(steps.get('A1-landscape')?.producer).toBe(landscape.__producer)
+    expect(steps.get('A1-landscape')?.declaredProducer).toBe(STEP_EXECUTOR_REGISTRY.get('A1-landscape')?.producer)
 
     // And what the finished steps committed is attributed to the step that wrote it.
     expect(steps.get('A1-landscape')?.artifacts.map(artifact => artifact.slug)).toContain('landscape-map')

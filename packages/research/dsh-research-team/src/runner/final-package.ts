@@ -33,6 +33,9 @@
 import { createHash } from 'node:crypto'
 import { approvalStalenessOf, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ApprovalRecord, EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { checkVenueRules } from './venue-rules.ts'
+import type { VenueRuleRefusalCode } from './venue-rules.ts'
+import type { JournalProfile } from './research-profile.ts'
 
 /**
  * The formats a submission is handed in.
@@ -62,6 +65,8 @@ export type FinalPackageCheckCode =
   | 'deliverables-present'
   /** The typeset form is a render of a superseded document, so it is not this paper's submission. */
   | 'manuscript-typeset'
+  /** The typeset form was re-rendered by the repair path, so no gate has judged this document. */
+  | 'manuscript-gated'
   /** A submission format the deployment declared has no document, or one that does not survive it. */
   | 'typeset-complete'
   /** The target journal's requirements have not been read, so nothing was checked against them. */
@@ -151,6 +156,20 @@ export interface TypesetFacts {
   /** The formats this deployment's compile was asked for here, as it declared them. */
   readonly declaredFormats: ReadonlyArray<string>
   readonly documents: ReadonlyArray<TypesetDocument>
+  /**
+   * The document version this form was RE-RENDERED from, when a repair produced it.
+   *
+   * THE REPAIR RE-RENDERS WITHOUT RE-TAKING THE GATES. `materializeManuscript` exists so a form that
+   * renders a superseded document can be brought up to date, and it does not run E1's gates over the
+   * document it renders: re-running them there would be an adjudication nothing records. So a form
+   * carrying this marker was produced by an operation no gate judged, which is a different fact from
+   * a form E1's own execution wrote — and `no-refused-sections`-style silence about it is how a
+   * hand-edited document could be approved and packaged as though the gates had seen it.
+   *
+   * Undefined means E1's own execution produced this form, which is the only state in which every
+   * condition about the manuscript has been decided by the pipeline.
+   */
+  readonly repairedFromVersion: number | undefined
 }
 
 /** Everything the conditions about the MANUSCRIPT read, gathered from the run. */
@@ -225,9 +244,22 @@ export interface FinalPackageFacts extends ManuscriptFacts {
    */
   readonly journalRules?: {
     readonly venueName: string
-    readonly established: number
+    /** The rules somebody read, whether the reading found a requirement or found none stated. */
+    readonly read: number
     readonly total: number
+    /** The rules nobody has read, by id — empty for a guide that states nothing about a subject. */
     readonly unverified: ReadonlyArray<string>
+    /**
+     * What the venue-rules decision refused, when it refused something.
+     *
+     * CARRIED RATHER THAN RE-DERIVED. `checkVenueRules` owns the three findings — read and stated,
+     * read and not stated, and never read — and only the last stands in the way of a submission. A
+     * check that re-counted the rules here would be a second opinion about which findings count, and
+     * the two disagreed: this file read "not verified" as "not read", so a guide that had been read
+     * in full and states nothing about one subject refused every submission of a paper written for
+     * that journal. The refusal is taken where the rules live and read here as the answer it is.
+     */
+    readonly refusal?: { readonly code: VenueRuleRefusalCode; readonly detail: string }
   }
   /**
    * The artifact versions this package was read from, and which of them the run has moved past.
@@ -301,6 +333,31 @@ export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPack
       code: 'typeset-complete',
       passed: missingDocuments(facts.typeset).length === 0 && brokenDocuments(facts.typeset).length === 0,
       detail: documentDetail(facts.typeset),
+    },
+    {
+      // NO GATE HAS JUDGED A DOCUMENT THIS RUN RE-RENDERED. `manuscript-typeset` above asks whether
+      // the form renders the document the run holds; this asks the question that repair does not
+      // answer: did any gate judge that document. The repair re-renders and does not re-take them, so
+      // a form it produced carries `materializedFrom` and every step's verdict still stands on the
+      // document it replaced — `every-step-closed` reads those verdicts as closed, and a person's
+      // approval binds a document version rather than a judgement. Approving is therefore a way to
+      // publish a paper nothing in this pipeline examined, which is the one thing the gates exist to
+      // prevent. REFUSED rather than reported, and refused HERE rather than in the repair, because
+      // the repair is also the legitimate answer to a form that fell behind its document.
+      //
+      // THE REMEDY IS RUNNING THE PIPELINE OVER THE DOCUMENT. E1's gates are adjudicated inside a
+      // step attempt and a settled attempt is never re-submitted (INV-VERDICT-IMMUTABLE), so a repair
+      // cannot become a passing one — the study is conducted again, and this sentence says so rather
+      // than leaving a reader to infer it.
+      code: 'manuscript-gated',
+      passed: facts.typeset.repairedFromVersion === undefined,
+      detail: facts.typeset.repairedFromVersion === undefined
+        ? 'the typeset form is the one the format step produced, so its gates judged this document'
+        : 'the typeset form was re-rendered from document version'
+          + ` ${String(facts.typeset.repairedFromVersion)}, and no gate has judged the document the run`
+          + ` holds (version ${String(facts.typeset.manuscriptVersion ?? 0)}) — the format step's`
+          + ' verdicts stand on the document it replaced, so this manuscript has to go through the'
+          + ' pipeline again before it may be published as the paper a journal receives',
     },
     {
       code: 'every-step-closed',
@@ -436,6 +493,7 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'production-evidence',
   'manuscript-produced',
   'manuscript-typeset',
+  'manuscript-gated',
   'every-step-closed',
   'no-refused-sections',
   'no-open-issues',
@@ -492,17 +550,18 @@ export function checkFinalPackage(facts: FinalPackageFacts): ReadonlyArray<Final
       // this; a record in which every rule is `unknown` does not, which is the state measured on
       // 2026-09-18 when three official pages answered HTTP 403 to this host.
       code: 'journal-rules-verified',
-      passed: facts.journalRules !== undefined && facts.journalRules.unverified.length === 0,
+      passed: facts.journalRules !== undefined && facts.journalRules.refusal === undefined,
       detail: facts.journalRules === undefined
         ? "this run carries no record of the target journal's requirements, so nothing about the"
           + ' manuscript was checked against them'
-        : facts.journalRules.unverified.length === 0
+        : facts.journalRules.refusal === undefined
           ? `every requirement recorded for '${facts.journalRules.venueName}' was read at its source`
-            + ` (${String(facts.journalRules.established)} of ${String(facts.journalRules.total)})`
-          : `${String(facts.journalRules.unverified.length)} of ${String(facts.journalRules.total)}`
-            + ` requirement(s) for '${facts.journalRules.venueName}' have not been read`
-            + ` (${facts.journalRules.unverified.join(', ')}) — a manuscript is published under the`
-            + ' rules that were read',
+            + ` (${String(facts.journalRules.read)} of ${String(facts.journalRules.total)})`
+          // THE DECISION'S OWN SENTENCE, so a reader acts on the reason the decision was taken:
+          // `checkVenueRules` distinguishes an absent profile, a guide nobody read, and the rules
+          // still awaiting a reading, and this file cannot restate those three without becoming the
+          // second opinion that used to refuse a guide that had been read in full.
+          : facts.journalRules.refusal.detail,
     },
     {
       // AN EXPORT IS A READING OF ONE STATE, and a state that has moved since is not the state the
@@ -668,20 +727,22 @@ function journalRulesOf(
     { readonly journal?: unknown } | undefined
   const journal = profile?.journal
   if (journal === null || typeof journal !== 'object') return {}
-  const { name, rules } = journal as { name?: unknown; rules?: unknown }
-  if (!Array.isArray(rules)) return {}
-  const unverified = rules.flatMap((entry): string[] => {
-    const rule = entry as { id?: unknown; verification?: unknown } | null
-    if (rule === null || typeof rule !== 'object') return []
-    if (rule.verification === 'verified') return []
-    return typeof rule.id === 'string' ? [rule.id] : []
-  })
+  const venue = journal as JournalProfile
+  if (!Array.isArray(venue.rules)) return {}
+  // THE DECISION IS TAKEN WHERE THE RULES LIVE. `checkVenueRules` is the one implementation of
+  // "which findings stand between this manuscript and publication", and this read hands it the
+  // profile rather than counting the rules again — see {@link FinalPackageFacts.journalRules}.
+  const refusals = checkVenueRules(venue)
+  const unverified = refusals.flatMap(refusal => [...refusal.unverified])
   return {
     journalRules: {
-      venueName: typeof name === 'string' ? name : 'the target journal',
-      total: rules.length,
-      established: rules.length - unverified.length,
+      venueName: typeof venue.name === 'string' ? venue.name : 'the target journal',
+      total: venue.rules.length,
+      read: venue.rules.length - unverified.length,
       unverified,
+      ...(refusals[0] === undefined
+        ? {}
+        : { refusal: { code: refusals[0].code, detail: refusals[0].detail } }),
     },
   }
 }
@@ -763,6 +824,12 @@ function typesetFactsOf(snapshot: ReturnType<typeof getRunSnapshot>, value: unkn
   return {
     renderedManuscriptVersion: typeof rendered.version === 'number' ? rendered.version : undefined,
     manuscriptVersion: snapshot.registry['manuscript']?.ref.version,
+    // WRITTEN ONLY BY THE REPAIR, and its absence is what makes a form E1's own execution. A number
+    // is not required for the FACT — the marker's presence is the fact — so a repair that had no
+    // earlier rendering to name (`materializedFrom: null`) still reports that it was a repair.
+    repairedFromVersion: typeof record?.materializedAt === 'string'
+      ? (typeof record.materializedFrom === 'number' ? record.materializedFrom : 0)
+      : undefined,
     declaredFormats: (Array.isArray(compilation.formats) ? compilation.formats : [])
       .filter((format): format is string => typeof format === 'string'),
     documents: (Array.isArray(compilation.documents) ? compilation.documents : [])

@@ -10,15 +10,17 @@
 
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { createRun, getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { DocumentCompiler } from '../src/runner/document-compile.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import type { ApprovalRecord } from '@deepseek-ai/dsh-research-core'
 import type { FinalPackageFacts, TypesetDocument } from '../src/runner/final-package.ts'
 import {
-  checkFinalPackage, finalPackageApprovalOf, finalPackageRefusalOf, finalPackageStateOf,
-  manuscriptFactsOf,
+  checkFinalPackage, finalPackageApprovalOf, finalPackageFactsOf, finalPackageRefusalOf,
+  finalPackageStateOf, manuscriptFactsOf,
 } from '../src/runner/final-package.ts'
+import { TRC_PROFILE, resolveResearchProfile, unreadRulesFor } from '../src/runner/research-profile.ts'
+import { checkVenueRules } from '../src/runner/venue-rules.ts'
 
 /** Facts for a run that satisfies every condition; each test moves exactly one of them. */
 function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFacts {
@@ -41,13 +43,14 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
       manuscriptVersion: 3,
       declaredFormats: [],
       documents: [],
+      repairedFromVersion: undefined,
     },
     // NO DELIVERABLES, because this deployment compiles nothing: the case that says "no document is
     // claimed" is the one below, and every other case here moves exactly one condition.
     deliverables: { produced: [], carried: [] },
     // EVERY RULE READ, because this is the case where every condition holds: the state in which the
     // journal's requirements were never established is the one the case below moves.
-    journalRules: { venueName: 'A journal', established: 8, total: 8, unverified: [] },
+    journalRules: { venueName: 'A journal', read: 8, total: 8, unverified: [] },
     saveError: undefined,
     ...overrides,
   }
@@ -315,7 +318,7 @@ describe("a typeset form that is not this run's submission", () => {
     // it, and the typeset form names the version it rendered. A form of a superseded version is a
     // submission of the draft the paper was, so it is a draft here rather than a final package.
     const facts = readyFacts({
-      typeset: { renderedManuscriptVersion: 2, manuscriptVersion: 3, declaredFormats: [], documents: [] },
+      typeset: { renderedManuscriptVersion: 2, manuscriptVersion: 3, declaredFormats: [], documents: [], repairedFromVersion: undefined },
     })
     const check = checkOf(facts, 'manuscript-typeset')
     expect(check.passed).toBe(false)
@@ -333,9 +336,39 @@ describe("a typeset form that is not this run's submission", () => {
         manuscriptVersion: undefined,
         declaredFormats: [],
         documents: [],
+        repairedFromVersion: undefined,
       },
     })
     expect(checkOf(facts, 'manuscript-typeset').passed).toBe(false)
+  })
+
+  it('refuses a form the repair re-rendered, because no gate judged that document', () => {
+    // THE REPAIR ANSWERS `manuscript-typeset` AND LEAVES A QUESTION IT CANNOT ANSWER. Re-rendering
+    // brings the form up to date with the document; it does not run E1's gates over that document,
+    // and it cannot — a settled attempt is never re-adjudicated. The two conditions are therefore
+    // separate, and a run whose only failure was the stale render used to become FINAL once it was
+    // repaired and approved: measured through the service, a hand-edited and repaired run reported
+    // nothing wrong but its profile and its review policy.
+    const repaired = readyFacts({
+      typeset: {
+        renderedManuscriptVersion: 4,
+        manuscriptVersion: 4,
+        declaredFormats: [],
+        documents: [],
+        repairedFromVersion: 3,
+      },
+    })
+    // The render IS of the document the run holds — this is not `manuscript-typeset` again.
+    expect(checkOf(repaired, 'manuscript-typeset').passed).toBe(true)
+    const check = checkOf(repaired, 'manuscript-gated')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('no gate has judged the document the run holds')
+    expect(check.detail).toContain('re-rendered from document version 3')
+    expect(finalPackageStateOf(checkFinalPackage(repaired))).toBe('draft')
+
+    // AND THE STATE IT CONTRASTS WITH, so this is a condition about a repair rather than about every
+    // form: one E1 produced itself passes it, which is the case every other test here holds.
+    expect(checkOf(readyFacts(), 'manuscript-gated').passed).toBe(true)
   })
 
   it('refuses a declared submission format the compile produced no document for', () => {
@@ -347,6 +380,7 @@ describe("a typeset form that is not this run's submission", () => {
         manuscriptVersion: 3,
         declaredFormats: ['html', 'latex', 'docx'],
         documents: [typesetDocument('docx')],
+        repairedFromVersion: undefined,
       },
     })
     const check = checkOf(facts, 'typeset-complete')
@@ -365,6 +399,7 @@ describe("a typeset form that is not this run's submission", () => {
         manuscriptVersion: 3,
         declaredFormats: ['docx'],
         documents: [typesetDocument('docx', { intact: false })],
+        repairedFromVersion: undefined,
       },
     })
     const check = checkOf(facts, 'typeset-complete')
@@ -381,6 +416,7 @@ describe("a typeset form that is not this run's submission", () => {
         manuscriptVersion: 3,
         declaredFormats: ['html'],
         documents: [typesetDocument('html')],
+        repairedFromVersion: undefined,
       },
     })
     const check = checkOf(facts, 'typeset-complete')
@@ -396,6 +432,7 @@ describe("a typeset form that is not this run's submission", () => {
         manuscriptVersion: 3,
         declaredFormats: ['latex', 'docx'],
         documents: [typesetDocument('docx'), typesetDocument('latex')],
+        repairedFromVersion: undefined,
       },
     })
     const check = checkOf(facts, 'typeset-complete')
@@ -425,6 +462,76 @@ describe('the facts a real run records about its typeset form', () => {
     const bytes = Buffer.from(carried?.base64 ?? '', 'base64')
     expect(carried?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'))
     expect(carried?.bytes).toBe(bytes.length)
+  })
+})
+
+describe('the journal conditions a run states', () => {
+  /**
+   * A run whose frozen spec carries `profile` as its research profile.
+   *
+   * The spec is written directly because that is what the read under test reads: a deployment's
+   * profile is resolved once at the start of a run and frozen there, and every later reader — this
+   * check, the export, a restart — is meant to take the frozen copy rather than today's
+   * configuration.
+   *
+   * @param profile - the profile to freeze into the run's spec.
+   * @returns a store holding one run, and its id.
+   */
+  function runUnder(profile: unknown): { readonly store: ResearchRunStore; readonly runId: string } {
+    const store: ResearchRunStore = new Map()
+    const runId = createRun(store)
+    const run = store.get(runId)
+    /* c8 ignore next -- createRun always leaves the run it just created in the store */
+    if (run === undefined) throw new Error('the run was not created')
+    run.spec['researchProfile'] = profile
+    return { store, runId }
+  }
+
+  it('reads the venue decision rather than counting the rules a second time', () => {
+    // THE TWO IMPLEMENTATIONS DISAGREED. `checkVenueRules` was corrected on 2026-09-18 to the three
+    // findings the profile records — read and stated, read and NOT stated, and never read — while
+    // this read still asked only whether a rule was `verified`. The shipped profile therefore
+    // reported its one `not_specified` rule as unread, and `journal-rules-verified` refused EVERY
+    // submission of a paper written for that journal: measured through the service, the check came
+    // back `1 of 9 requirement(s) ... have not been read (graphical-abstract)` on a guide that had
+    // been read in full. The assertion is the agreement itself, over the profile a deployment that
+    // configures no journal is actually given.
+    const { store, runId } = runUnder(resolveResearchProfile({}))
+    const facts = finalPackageFactsOf(store, runId, 'production', [], undefined, { read: [], moved: [] })
+    expect(checkVenueRules(TRC_PROFILE)).toEqual([])
+    expect(facts.journalRules?.refusal).toBeUndefined()
+    expect(facts.journalRules?.unverified).toEqual([])
+    expect(facts.journalRules?.read).toBe(TRC_PROFILE.rules.length)
+    const check = checkOf(facts, 'journal-rules-verified')
+    expect(check.passed, check.detail).toBe(true)
+  })
+
+  it('refuses an unread guide, and an empty one, in the decision own words', () => {
+    // THE OTHER TWO FINDINGS, so the agreement above is not the only thing pinned: a guide nobody
+    // read refuses, and a profile recording NO rules is an unread guide rather than a venue that
+    // requires nothing — a fact the counts alone cannot express, which is why the refusal travels
+    // with them instead of being re-derived from `unverified.length`.
+    const unreadJournal = {
+      id: 'x',
+      name: 'An unread journal',
+      rules: unreadRulesFor('https://example.invalid/g', '2026-01-01', 'timed out'),
+    }
+    const unread = runUnder(resolveResearchProfile({ journal: unreadJournal }))
+    const unreadFacts = finalPackageFactsOf(unread.store, unread.runId, 'production', [], undefined, { read: [], moved: [] })
+    const unreadCheck = checkOf(unreadFacts, 'journal-rules-verified')
+    expect(unreadCheck.passed).toBe(false)
+    // THE DECISION'S OWN SENTENCE, not a paraphrase of it: a reader acting on this refusal is acting
+    // on the same reason `checkVenueRules` gives, so the two cannot drift into naming different
+    // remedies for one state.
+    expect(unreadCheck.detail).toBe(checkVenueRules(unreadJournal)[0]?.detail)
+
+    const emptyJournal = { id: 'x', name: 'No rules', rules: [] }
+    const empty = runUnder(resolveResearchProfile({ journal: emptyJournal }))
+    const emptyFacts = finalPackageFactsOf(empty.store, empty.runId, 'production', [], undefined, { read: [], moved: [] })
+    const emptyCheck = checkOf(emptyFacts, 'journal-rules-verified')
+    expect(emptyCheck.passed).toBe(false)
+    expect(emptyCheck.detail).toBe(checkVenueRules(emptyJournal)[0]?.detail)
+    expect(emptyCheck.detail).toContain('no requirement recorded')
   })
 })
 

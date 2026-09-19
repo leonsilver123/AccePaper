@@ -350,10 +350,14 @@ describe('aggregateDisposition: silence is not a pass', () => {
     expect(result.reason).toContain('2 required')
   })
 
-  it('counts not_applicable WITH a detail as a report rather than a silence', () => {
-    // The check ran and reported an exemption; the detail is what makes it a report. The ingress
-    // parser refuses the detail-less form, so this is the only shape that reaches the aggregate
-    // from a stored record.
+  it('counts not_applicable as a reported exemption, with or without the detail', () => {
+    // WHAT THIS ESTABLISHES AND WHAT IT DOES NOT. The aggregate allows both shapes, because the
+    // difference between a report and a silence is made one layer up: the ingress parser REFUSES a
+    // `not_applicable` check with no detail (the case at `a not_applicable check with no detail` in
+    // this file), so the detail-less value below is one no stored record can carry — it is here to
+    // pin the aggregate's own rule, which is that the disposition and not the presence of a detail
+    // decides. The title used to claim the aggregate made the distinction, which it does not; the
+    // parser does, and it is asserted where the parser is.
     const withDetail = aggregateDisposition(
       [{ checkId: 'compute-budget', disposition: 'not_applicable', detail: 'no budget requested' }],
       ['compute-budget'],

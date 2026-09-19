@@ -159,9 +159,19 @@ describe('the revision is re-reviewed, not merely recorded', () => {
       expect(String(a?.evidence), stepId).toContain('manuscript')
     }
     // The A verdict names the version it judged, so a report cannot be read as approving a
-    // different draft from the one it saw.
-    const receipt = snap.steps['D4-rebuttal']?.commit
-    expect(snap.steps['D4-rebuttal']?.gateResults.A?.targetRefs).toEqual(receipt?.artifacts.map(a => a.ref))
+    // different draft from the one it saw. READ AGAINST THE REGISTRY, not against the step's own
+    // commit receipt: core's `bindVerdict` builds `targetRefs` out of that receipt, so comparing the
+    // two restates the constructor and cannot fail — the first version of this assertion did
+    // exactly that and passed on every run. The registry is the independent side: it is what the run
+    // HOLDS, and a verdict naming anything else is the defect the field exists to prevent.
+    const judged = snap.steps['D4-rebuttal']?.gateResults.A?.targetRefs ?? []
+    expect(judged.length).toBeGreaterThan(0)
+    for (const ref of judged) {
+      expect(snap.registry[ref.artifactId]?.ref.version, ref.artifactId).toBe(ref.version)
+      expect(snap.registry[ref.artifactId]?.ref.contentHash, ref.artifactId).toBe(ref.contentHash)
+    }
+    // And the manuscripts this run stands behind are among them, by slug rather than by count.
+    expect(judged.map(ref => ref.artifactId)).toContain('manuscript')
   })
 })
 

@@ -696,7 +696,33 @@ function parseArtifactRef(raw: unknown, what: string, slug: string): ArtifactRec
   }
 }
 
-function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
+/**
+ * The non-step producers this run's own log records publishing `slug`, as a set.
+ *
+ * A PUBLICATION IS ITS OWN EVIDENCE. `publishArtifactVersion` is the only writer that records a
+ * producer which is not a step, and it appends an `artifact-republished` event naming the slug and
+ * the producer. Reading the roster out of the run's log rather than out of a constant kept here is
+ * what makes the check complete: the constant can only ever name the producers THIS file knows
+ * about, and the ones a deployment adds are the ones that matter — a run whose manuscript had been
+ * imported, or whose typeset form had been re-rendered, was refused as unreadable by the very
+ * snapshot that recorded it.
+ *
+ * @param events - the run's parsed audit events.
+ * @param slug - the artifact whose publishers are wanted.
+ * @returns the producer names the log records for that slug.
+ */
+function republishedProducersOf(events: ReadonlyArray<AuditEvent>, slug: string): ReadonlySet<string> {
+  const producers = new Set<string>()
+  for (const event of events) {
+    if (event.kind !== 'artifact-republished') continue
+    const detail = event.detail as { readonly slug?: unknown; readonly producer?: unknown } | undefined
+    if (detail?.slug !== slug || typeof detail.producer !== 'string') continue
+    producers.add(detail.producer)
+  }
+  return producers
+}
+
+function parseRegistry(raw: unknown, events: ReadonlyArray<AuditEvent>): Record<string, ArtifactRecord> {
   const o = asRecord(raw, 'snapshot.registry')
   const registry: Record<string, ArtifactRecord> = {}
   for (const slug of Object.keys(o)) {
@@ -712,16 +738,27 @@ function parseRegistry(raw: unknown): Record<string, ArtifactRecord> {
       rec.producerStepId,
       `${what}.producerStepId`,
     )
-    // A PERSON IS A PRODUCER TOO. The check catches a record that names something the pipeline never
-    // ran — corruption, or a format from another build — and it must not also reject the one producer
-    // that is deliberately NOT a step: a manuscript a person published over E1's, which core's
-    // acceptance writes with `ACCEPTANCE_PRODUCER`. Refusing it made the snapshot unreadable, so a
-    // study whose manuscript had been accepted could not be restored AT ALL: `listRuns` threw, the
-    // picker came back empty, and the acceptance was durable only until the next `tryLoad`.
-    if (producerStepId !== ACCEPTANCE_PRODUCER && getStepDefinitionById(producerStepId) === undefined) {
+    // TWO KINDS OF NON-STEP PRODUCER, AND THE CHECK MUST ADMIT BOTH. It catches a record that names
+    // something the pipeline never ran — corruption, or a format from another build — and it must not
+    // also reject the two ways the product deliberately publishes without a step:
+    //   - an ACCEPTANCE, which core writes with `ACCEPTANCE_PRODUCER`. Refusing it made the snapshot
+    //     unreadable, so a study whose manuscript had been accepted could not be restored AT ALL:
+    //     `listRuns` threw, the picker came back empty, and the acceptance was durable only until the
+    //     next `tryLoad`.
+    //   - a REPUBLICATION, which the deployment performs for its own reasons — a person's file handed
+    //     back, a typeset form re-rendered under a document that moved — and whose producer name this
+    //     file cannot know. It reads the name out of the run's own log instead: see
+    //     {@link republishedProducersOf}. Fixing only the acceptance left the other two producers
+    //     rejected by the same check, so an imported or repaired run could be neither saved nor read.
+    if (
+      producerStepId !== ACCEPTANCE_PRODUCER
+      && getStepDefinitionById(producerStepId) === undefined
+      && !republishedProducersOf(events, slug).has(producerStepId)
+    ) {
       throw new SnapshotInvalidError(
-        `${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline, and is`
-        + ` not the acceptance producer '${ACCEPTANCE_PRODUCER}' either.`,
+        `${what}.producerStepId '${producerStepId}' is not a step of the live 16-step pipeline, is not`
+        + ` the acceptance producer '${ACCEPTANCE_PRODUCER}', and is not named by any`
+        + ` 'artifact-republished' record this run holds for '${slug}'.`,
       )
     }
     if (typeof rec.invalidated !== 'boolean') {
@@ -810,14 +847,17 @@ export function parseRunSnapshotPayload(raw: unknown): RunSnapshotPayload {
     }
     seen.add(step.stepId)
   }
+  // THE EVENTS ARE PARSED BEFORE THE REGISTRY because a published artifact's producer is checked
+  // against the publication the run recorded: see {@link parseRegistry}.
+  const events = parseEvents(o.events, runId)
   return {
     schemaVersion: asCount(o.schemaVersion, 'snapshot.schemaVersion'),
     savedAtIso: asString(o.savedAtIso, 'snapshot.savedAtIso'),
     revision: asCount(o.revision, 'snapshot.revision'),
     run: { runId, inputs, projectRevision, spec },
     steps,
-    registry: parseRegistry(o.registry),
-    events: parseEvents(o.events, runId),
+    registry: parseRegistry(o.registry, events),
+    events,
     consumedApprovalEventIds: asArray(
       o.consumedApprovalEventIds,
       'snapshot.consumedApprovalEventIds',

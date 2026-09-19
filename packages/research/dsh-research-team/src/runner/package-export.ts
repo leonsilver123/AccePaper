@@ -858,6 +858,18 @@ export function planRunPackage(
   run: PackageRunFacts,
   evidenceProfile: EvidenceProfile,
   options: {
+    /**
+     * Whether the caller is asking for the final package or a working draft.
+     *
+     * NOT READ HERE, and the field is kept rather than removed because the word is the same one two
+     * other things use — the package's own `state`, which the checks decide, and the compile mode a
+     * document is rendered in — and a reader who finds the three spelled alike should find it said
+     * where they differ. This function is the READING: it reports `state` from the run's records and
+     * writes whichever files the run holds. The refusal is the caller's, and it is taken in the
+     * operation that makes the decision (`finalPackageRefusalOf` in `exportRunPackageNow`), so a
+     * caller that passes `'final'` here and writes the files anyway has bypassed nothing that
+     * mattered — what it wrote is the draft this reading says it is.
+     */
     readonly mode: 'draft' | 'final'
     readonly saveError?: string
     /**

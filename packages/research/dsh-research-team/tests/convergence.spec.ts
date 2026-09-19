@@ -186,12 +186,31 @@ describe('summarizeConvergence — one auditable line per state', () => {
   })
 
   it('carries the state kind into the line for every state', () => {
+    // THE FOUR KINDS THE DECIDER CAN REACH, each pinned to the WHOLE line rather than to a prefix
+    // built from the state's own `kind`: `summarizeConvergence` renders every arm as
+    // `${state.kind}: ${state.basis}`, so a `startsWith` over the same field restated the template it
+    // was testing. `unobservable` is the one this case exists for — the list above states the other
+    // three exactly — and it is reached by a run that produced no verdict at all.
     const states: ReadonlyArray<ConvergenceState> = [
-      evaluateConvergence([]),
+      // `unobservable` is reached only through the option, which is the whole point of the split: a
+      // channel the DECLARATION says this step cannot see is a different answer from a channel that
+      // has not answered yet.
+      evaluateConvergence([], { unobservable: ['A', 'B', 'C'] }),
       evaluateConvergence([passed('A'), v('B', 'blocked')]),
       evaluateConvergence([v('A', 'failed')]),
       evaluateConvergence([v('A', 'abstained')]),
     ]
-    for (const state of states) expect(summarizeConvergence(state).startsWith(`${state.kind}: `)).toBe(true)
+    const lines = states.map(summarizeConvergence)
+    expect(states.map(state => state.kind))
+      .toEqual(['unobservable', 'pending', 'refuted', 'held'])
+    expect(lines[0]).toBe(`unobservable: ${states[0]?.basis ?? ''}`)
+    expect(lines[1]).toBe(`pending: ${states[1]?.basis ?? ''}`)
+    expect(lines[2]).toBe(`refuted: ${states[2]?.basis ?? ''}`)
+    expect(lines[3]).toBe(`held: ${states[3]?.basis ?? ''}`)
+    // AND EACH LINE NAMES ITS OWN KIND, which is the property the prefix form was reaching for: a
+    // renderer that printed one kind for every state would satisfy four interpolations of the same
+    // state's field, and not this.
+    expect(lines.map(line => line.split(':')[0]))
+      .toEqual(['unobservable', 'pending', 'refuted', 'held'])
   })
 })

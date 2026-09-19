@@ -681,6 +681,46 @@ describe('run-persistence: rejected snapshots', () => {
     await expect(persistence.tryLoad(freshCapability())).rejects.toBeInstanceOf(SnapshotInvalidError)
   })
 
+  it('loads a record whose artifact was REPUBLISHED, and refuses a producer no record names', async () => {
+    // THE SAME DEFECT ONE PRODUCER FURTHER OUT, and the reason the roster is read off the run rather
+    // than kept here. `publishArtifactVersion` writes a producer that is not a step and whose name
+    // this package cannot know — a deployment's own operation, such as the import of a hand-edited
+    // file or a re-render of the typeset form. The acceptance fix above admitted exactly one name, so
+    // those two were still refused: measured on a run whose document had been imported, the save was
+    // rejected and the approval after it came back `research/approval-save-failed`, which is the
+    // round trip's whole point failing at its last step.
+    await writeTampered((raw) => {
+      const registry = raw['registry'] as Record<string, Record<string, unknown>>
+      registry['landscape-map']!['producerStepId'] = 'a-deployment-operation'
+      // THE RUN'S OWN PUBLICATION RECORD, which is what makes the name legal: `publishArtifactVersion`
+      // appends this event naming the slug and the producer, so the snapshot carries its own evidence.
+      ;(raw['events'] as Array<Record<string, unknown>>).push({
+        kind: 'artifact-republished',
+        runId: RUN_ID,
+        ts: 1,
+        detail: { slug: 'landscape-map', producer: 'a-deployment-operation', basis: 'a person edited the file' },
+      })
+    })
+    const restored = await persistence.tryLoad(freshCapability())
+    expect(restored?.store.get(RUN_ID)?.registry['landscape-map']?.producerStepId)
+      .toBe('a-deployment-operation')
+
+    // A PUBLICATION RECORD IS EVIDENCE ONLY FOR THE ARTIFACT IT NAMES. The same producer, recorded
+    // against a different slug, must not license this one: an unrelated event is not a provenance.
+    await persistence.discard()
+    await writeTampered((raw) => {
+      const registry = raw['registry'] as Record<string, Record<string, unknown>>
+      registry['landscape-map']!['producerStepId'] = 'a-deployment-operation'
+      ;(raw['events'] as Array<Record<string, unknown>>).push({
+        kind: 'artifact-republished',
+        runId: RUN_ID,
+        ts: 1,
+        detail: { slug: 'typeset', producer: 'a-deployment-operation', basis: 'a different artifact' },
+      })
+    })
+    await expect(persistence.tryLoad(freshCapability())).rejects.toBeInstanceOf(SnapshotInvalidError)
+  })
+
   it('leaves a rejected snapshot readable and lets the caller start clean explicitly', async () => {
     await writeTampered((raw) => {
       raw['steps'] = 'not-an-array'

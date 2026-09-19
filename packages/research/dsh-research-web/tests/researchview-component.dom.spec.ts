@@ -9,7 +9,7 @@
  * the monorepo's other `*.client.spec.tsx` suites use), so the label below is
  * Integration-verified, never Runtime-verified.
  *
- * Covers: tab registration/guard, tab mount, 9 switchable panels, 16-step
+ * Covers: tab registration/guard, tab mount, every switchable panel, 16-step
  * status mapping, MOCK badge, artifact summaries, empty/error states, reload
  * re-render, unload/re-register lifecycle, and the U1 orientation block (what
  * the tab is, how to start a run, where the products go, and what to do next).
@@ -27,7 +27,7 @@ import {
 import { buildSummary } from '../src/loader.ts'
 import { RESEARCH_FIXTURE } from './support/fixture.ts'
 import { ResearchView } from '../src/client/ResearchView.tsx'
-import { ResearchWorkbench } from '../src/client/workbench/ResearchWorkbench.tsx'
+import { ResearchWorkbench, WORKBENCH_TABS } from '../src/client/workbench/ResearchWorkbench.tsx'
 import { apply } from '../src/client/index.ts'
 
 /**
@@ -762,28 +762,32 @@ describe('research workbench orientation', () => {
 // ===========================================================================
 // 11. Every workbench tab renders (T34 / B5).
 //
-// Before this spec only 3 of the 9 tabs were ever clicked, so the other six panel
-// components never executed under test. A panel that dereferences a missing field,
-// or throws while rendering, surfaces as a React console.error — which is what this
-// asserts against, so the check fails when a panel breaks rather than merely
-// confirming the click did not throw.
+// Before this spec only 3 of the tabs were ever clicked, so the other panel components
+// never executed under test. A panel that dereferences a missing field, or throws while
+// rendering, surfaces as a React console.error — which is what this asserts against, so
+// the check fails when a panel breaks rather than merely confirming the click did not
+// throw.
+//
+// THE ROSTER IS THE COMPONENT'S OWN. This spec used to hold a hand-written list of nine
+// labels, which is what it rendered and what its title claimed — while the workbench had
+// grown to eleven tabs, so the REVISION and QUALITY panels were never clicked at all. A
+// copy of a list is a list that stops being true; `WORKBENCH_TABS` is the one the
+// component renders from, and this reads it.
 // ===========================================================================
 describe('research workbench tab coverage', () => {
-  it('renders all nine tabs without logging a console error', () => {
+  it('renders every tab the workbench declares, without logging a console error', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       renderComp(createElement(ResearchWorkbench, { t, summary: buildSummary(RESEARCH_FIXTURE) }))
 
-      const tabLabels = [
-        'tab.summary', 'tab.pipeline', 'tab.figures', 'tab.tables', 'tab.roadmap',
-        'tab.gates', 'tab.adversarial', 'tab.approval', 'tab.recovery',
-      ] as const
-
-      for (const key of tabLabels) {
-        const button = screen.getByRole('button', { name: en[key] })
+      // A ROSTER THAT GREW IS THE FAILURE THIS CATCHES, so the size is asserted rather than
+      // assumed: an empty or truncated roster would make the loop below pass without a click.
+      expect(WORKBENCH_TABS.length).toBeGreaterThanOrEqual(11)
+      for (const tab of WORKBENCH_TABS) {
+        const button = screen.getByRole('button', { name: en[tab.labelKey] })
         fireEvent.click(button)
         // The tab strip survives the switch, i.e. the panel did not take the tree down.
-        expect(screen.getByRole('button', { name: en[key] })).toBeTruthy()
+        expect(screen.getByRole('button', { name: en[tab.labelKey] })).toBeTruthy()
       }
 
       expect(errorSpy).not.toHaveBeenCalled()

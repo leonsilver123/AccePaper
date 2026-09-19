@@ -11,9 +11,9 @@
 // else: no fabricated `StepOutcome`, no assertion around a missing field.
 
 import type { ResearchRunStore } from '@deepseek-ai/dsh-research-core'
-import { getRunSnapshot } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot } from '@deepseek-ai/dsh-research-core'
 
-import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
+import { STEP_EXECUTOR_REGISTRY, stepProducerOf } from './registry.ts'
 
 /**
  * How one step's last execution ended, from its `step-executed` record.
@@ -38,7 +38,30 @@ export interface StepProjection {
   readonly attemptId: number
   /** The executor's declared truthfulness level, from the registry. */
   readonly kind: string
+  /**
+   * WHAT PRODUCED THIS STEP, resolved from the artifacts it committed.
+   *
+   * NOT the entry's brand, which answers a different question — see {@link StepProjection.declaredProducer}.
+   * For the steps whose channel is a DEPLOYMENT fact the two differ: D3-writing's entry names the
+   * `three-line-table` capability it executes, while its manuscript records the channel that wrote
+   * the prose (`fixture:...` on the offline path, `llm:<provider>/<model>` when the deployment
+   * configured a prose writer). A row that read the entry therefore reported a model-written draft as
+   * produced by a table renderer, which is the drift `stepProducerOf` exists to close.
+   *
+   * The entry's brand is the answer for a step whose artifacts disagree or which never ran, which is
+   * the same fallback the driver and the package use.
+   */
   readonly producer: string
+  /**
+   * WHAT THIS STEP WOULD RUN UNDER, as its registry entry declares it.
+   *
+   * A DEPLOYMENT-LEVEL STATEMENT, not a record of this run: it names the executor, the tool and the
+   * channel the step is configured for, and it is the same string for every run of this deployment
+   * whether or not the step ever executed. Reported as its own field because it and
+   * {@link StepProjection.producer} are both a "producer" in ordinary speech and only one of them is
+   * a fact about the run on screen.
+   */
+  readonly declaredProducer: string
   readonly outputSlugs: ReadonlyArray<string>
   /** Artifacts this step has COMMITTED, with the producer that wrote them. */
   readonly artifacts: ReadonlyArray<{ readonly slug: string; readonly producedBy: string }>
@@ -75,6 +98,26 @@ export interface StepApprovalProjection {
    * thing that was decided about.
    */
   readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
+}
+
+/**
+ * One artifact's value, or undefined when this run holds none under that slug.
+ *
+ * `getArtifact` throws for a slug the run does not hold, and a step that has not run holds none of
+ * its outputs: the producer of such a step is its declared brand, and that is answered by the caller
+ * rather than by an exception from a lookup. The catch is one statement and can only see that lookup.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @param slug - the artifact to read.
+ * @returns the value, or undefined.
+ */
+function committedValueOf(store: ResearchRunStore, runId: string, slug: string): unknown {
+  try {
+    return getArtifact(store, runId, slug)
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -139,7 +182,14 @@ export function stepProjectionsOf(
       status: state?.status ?? 'pending',
       attemptId: state?.attemptId ?? 0,
       kind: entry.kind,
-      producer: entry.producer,
+      // THE ARTIFACTS DECIDE, read through the same function the driver's own row and the package's
+      // run facts use, so a step cannot be reported as produced by one thing in the panel and another
+      // in the summary. Read over the step's DECLARED outputs: an artifact a person published over —
+      // an accepted manuscript, a re-rendered typeset form — is filed under the producer that
+      // published it, and reading the registry's own grouping would drop it from the step whose work
+      // it is.
+      producer: stepProducerOf(entry, entry.outputSchema.map(output => committedValueOf(store, runId, output.slug))),
+      declaredProducer: entry.producer,
       outputSlugs: [...(state?.outputs ?? [])],
       artifacts: byStep.get(entry.stepId) ?? [],
       verdicts,

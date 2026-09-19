@@ -356,6 +356,18 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     for (const [path, content] of Object.entries(packageFiles)) {
       expect(content.length, path).toBeGreaterThan(0)
     }
+    // AND THE FILE ITSELF CARRIES THE PAPER, read against a source neither side of the equality can
+    // supply: the OUTLINE's own headings and the table's own measured rows. The two `toBe` checks
+    // below compare fields the one producer writes from one expression, so they guard "one file has
+    // one home" rather than the content — a writer that left `manuscript.md` as the raw D3 draft, or
+    // wrote the table's box-drawing render into it, would satisfy them.
+    for (const id of ['introduction', 'method', 'experiments', 'results']) {
+      const heading = (outline.sections as ReadonlyArray<{ id: string; heading: string }>)
+        .find(s => s.id === id)?.heading
+      expect(packageFiles['manuscript.md'], id).toContain(heading as string)
+    }
+    expect(packageFiles['manuscript.md']).toContain('HV-AV-HV')
+    expect(packageFiles['experiment-tables.md']).toContain('HV-AV-HV')
     expect(packageFiles['manuscript.md']).toBe(manuscript)
     expect(packageFiles['experiment-tables.md']).toBe(tableMarkdown)
     expect(Array.isArray(formatted.sectionHeadings)).toBe(true)

@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { getArtifact, getRunSnapshot, getStepDefinitions, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
-import { aggregateDisposition } from '@deepseek-ai/dsh-research-core'
+import { aggregateDisposition, inputDigestOf } from '@deepseek-ai/dsh-research-core'
 import type { GateCheck } from '@deepseek-ai/dsh-research-core'
 
 import { runT19B } from '../src/runner/drive.ts'
@@ -481,10 +481,22 @@ describe('the A verdict is bound to the manuscript version it judged', () => {
     const receipt = snap.steps['D3-writing']?.commit
     const verdict = snap.steps['D3-writing']?.gateResults.A
     expect(receipt).toBeDefined()
-    expect(verdict?.targetRefs).toEqual(receipt?.artifacts.map(artifact => artifact.ref))
+    // READ AGAINST THE REGISTRY. Core's `bindVerdict` fills both fields out of the commit receipt, so
+    // comparing them with it restates the constructor: the first version of this test did that and
+    // would have passed on a verdict that named nothing at all — `receipt?.artifacts` and
+    // `targets?.…` were the same array. The registry is the independent side, and a verdict naming a
+    // version the run does not hold is exactly the replay the fields exist to refuse.
+    const judged = verdict?.targetRefs ?? []
+    expect(judged.length).toBeGreaterThan(0)
+    for (const ref of judged) {
+      expect(snap.registry[ref.artifactId]?.ref.version, ref.artifactId).toBe(ref.version)
+      expect(snap.registry[ref.artifactId]?.ref.contentHash, ref.artifactId).toBe(ref.contentHash)
+    }
     // The digest is the other half: a manuscript whose inputs changed after it was written is a
-    // different document even when its own bytes are the same.
+    // different document even when its own bytes are the same. Also bound to the attempt, and also
+    // checked against a digest the test computes from the registry rather than read back.
     expect(verdict?.inputDigest).toBe(receipt?.inputDigest)
+    expect(verdict?.inputDigest).not.toBe(inputDigestOf(undefined))
   })
 })
 
