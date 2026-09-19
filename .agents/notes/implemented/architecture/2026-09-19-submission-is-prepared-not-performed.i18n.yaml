@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-19-submission-is-prepared-not-performed.md
+2026-09-19-submission-is-prepared-not-performed.md: 7dc9158a6eaffd92a69cd2bbc717e08ee93bd7fd
+2026-09-19-submission-is-prepared-not-performed.zh.md: 7c5bd6d91f947f1e9df5fb22d030fa170c70d385

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-19-the-panel-followed-no-theme-and-could-not-name-three-run-states.md
+2026-09-19-the-panel-followed-no-theme-and-could-not-name-three-run-states.md: 93b3e6ab5aa499f9a9b2d316775a691b5e71fb60
+2026-09-19-the-panel-followed-no-theme-and-could-not-name-three-run-states.zh.md: 142f214dbf91c79561e4c1fdd55a1b5c4410ce32
