@@ -13,13 +13,16 @@
  * disagrees with either version is refused, and re-binding is NOT the remedy — a judgement is a
  * reading somebody made, and only another reading can replace it.
  */
+import { createHash } from 'node:crypto'
+
 import { describe, expect, it } from 'vitest'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import {
-  bindJudgements, checkStatementBindings, judgementsFor, locateStatements,
+  bindJudgements, checkStatementBindings, judgementsFor, locateStatements, passageOf,
 } from '../src/runner/citation-bindings.ts'
 import type { CitationUse, SourceJudgement, Statement } from '../src/runner/citation-bindings.ts'
+import { EVIDENCE_CORPUS, corpusSource } from '../src/runner/evidence-corpus.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import type { FigureProvider } from '../src/runner/figure-provider.ts'
 
@@ -249,11 +252,11 @@ describe('what a section was asked for is part of the run', () => {
         instruction: string | null
         evidenceSupplied: ReadonlyArray<string>
         evidenceRequired: ReadonlyArray<string>
-        citations: ReadonlyArray<{ citeKey: string; evidenceVersion: string | null }>
+        citations: ReadonlyArray<{ citeKey: string; passage: string; evidenceVersion: string | null }>
       }>
       proseRequestVersion: string
     }
-    expect(draft.proseRequestVersion).toBe('prose-request-v2')
+    expect(draft.proseRequestVersion).toBe('prose-request-v3')
     const ids = draft.proseRequests.map(entry => entry.sectionId)
     expect(ids).toContain('introduction')
     expect(ids.length).toBeGreaterThan(1)
@@ -262,17 +265,59 @@ describe('what a section was asked for is part of the run', () => {
       // asked for material the run does not hold from one that was written from what it holds.
       expect(Array.isArray(request.evidenceSupplied)).toBe(true)
       expect(Array.isArray(request.evidenceRequired)).toBe(true)
-      // EVERY CITED SOURCE CARRIES THE VERSION OF THE PASSAGE the sentence was written against, which
-      // is what a later `citation-evidence-changed` refusal points back at.
+      // EVERY CITED SOURCE CARRIES THE PASSAGE THE JUDGEMENT WAS MADE FROM and the version of that
+      // passage. WHAT THE WRITER IS ASKED FOR IS NOT OBEDIENCE IT CANNOT GIVE: told to state what a
+      // source establishes, it has to be able to READ what the source establishes, and until this
+      // field existed the request carried the verdict and not one word of the evidence behind it.
       for (const citation of request.citations) {
         expect(citation.citeKey).toMatch(/^cite-/u)
-        expect(citation.evidenceVersion).toMatch(/^[0-9a-f]{64}$/u)
+        // The version is the SHA-256 OF THE PASSAGE SENT — not of some other text read from the same
+        // source. A request that recorded a version beside a different passage would leave a later
+        // `citation-evidence-changed` refusal pointing at words the writer was never shown.
+        const version = createHash('sha256').update(citation.passage, 'utf8').digest('hex')
+        expect(citation.evidenceVersion, citation.citeKey).toBe(version)
+        // AND IT IS THE PASSAGE, not a title or a summary: the corpus excerpt for that source, so a
+        // reader can check the sentence against the words the reviewer read.
+        expect(citation.passage.length, citation.citeKey).toBeGreaterThan(40)
+        expect(corpusSource(citation.citeKey.replace(/^cite-/u, ''))?.excerpt, citation.citeKey)
+          .toBe(citation.passage)
       }
     }
     // NO MODEL WAS CALLED on the shipped offline run, and the record says that rather than inventing
-    // an instruction: "asked nothing" and "the record lost the request" are different facts.
+    // an instruction: "asked nothing" and "the record lost the request" are different facts. The
+    // PASSAGE is on this path too — the roster a request records is what the writer was offered, and
+    // a path where no model answered recorded less prose rather than less evidence.
     expect(draft.proseRequests.every(request => request.channel === 'fixture')).toBe(true)
     expect(draft.proseRequests.every(request => request.instruction === null)).toBe(true)
+  })
+})
+
+describe('the passage a writer is handed is the passage its version describes', () => {
+  it('hands over the judgement passage verbatim, and refuses one its version does not hash to', () => {
+    // TWO FACTS, ONE SUBJECT. `quote` and `quoteSha256` are recorded independently, and every check
+    // downstream compares the VERSION against another version — nothing reads the passage to see that
+    // the version is about it. The writer is the consumer that makes the gap matter: the request
+    // records the version as the evidence behind a sentence, so the text handed over has to be the
+    // text that version was computed over.
+    const [judgement] = judgements()
+    expect(judgement).toBeDefined()
+    const subject = judgement as SourceJudgement
+    expect(passageOf(subject)).toBe(subject.quote)
+    // A CORPUS THAT CORRECTED ITS EXCERPT AND KEPT ITS HASH. Sent as it stands, the writer would be
+    // shown the new words while the request recorded the old version as their evidence, and the
+    // assessor's `partial` would be a refusal about a passage the writer never saw.
+    expect(() => passageOf({ ...subject, quote: 'a corrected excerpt' }))
+      .toThrow(/citation-passage-version-mismatch/u)
+  })
+
+  it('holds for every source the shipped corpus hands a writer', () => {
+    // THE SHIPPED PATH IS THE ONE THAT RUNS. The refusal above would stop a real run at D3 if any
+    // checked-in excerpt disagreed with its own hash, so the agreement is asserted over the corpus
+    // rather than assumed from the way the constants are written.
+    for (const source of EVIDENCE_CORPUS) {
+      expect(source.excerptHash, source.doi)
+        .toBe(createHash('sha256').update(source.excerpt, 'utf8').digest('hex'))
+    }
   })
 })
 

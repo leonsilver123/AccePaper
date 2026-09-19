@@ -186,7 +186,7 @@ import type {
 import type { FigureProvider } from './figure-provider.ts'
 import {
   bibliographyOf, bindJudgements, checkCitationKeys, checkCitationUse, checkManuscriptCitations,
-  checkStatementBindings, judgementsFor, locateStatements,
+  checkStatementBindings, judgementsFor, locateStatements, passageOf,
   citeKeyOf, renderCitationMarkers, reviewedSources,
 } from './citation-bindings.ts'
 import type { CitationUse, SourceJudgement, SourceRecord } from './citation-bindings.ts'
@@ -726,9 +726,10 @@ const D3_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION
  * A LOG ENTRY IS READ AGAINST THE SHAPE THAT PRODUCED IT, so the shape carries a version: what a
  * request recorded in v1 (the instruction, the evidence names, the citation roster with the version
  * of each passage) is a different set of facts from what a later one might, and a reader comparing
- * two runs has to be able to tell which they are holding.
+ * two runs has to be able to tell which they are holding. v3 hands the writer the PASSAGE each
+ * judgement was made from, where v2 recorded only its verdict and the scope of the reading.
  */
-const PROSE_REQUEST_VERSION = 'prose-request-v2'
+const PROSE_REQUEST_VERSION = 'prose-request-v3'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
@@ -754,6 +755,35 @@ function judgementVersionOf(
   judgements: ReadonlyArray<SourceJudgement>,
 ): string | null {
   return judgements.find(judgement => judgement.citeKey === citeKey)?.quoteSha256 ?? null
+}
+
+/**
+ * What one prose request records about every source the writer is offered.
+ *
+ * THE PASSAGE AND ITS VERSION ARE RECORDED TOGETHER, and that is the whole point of the pair: a
+ * sentence in the draft is later checked against the passage its citation rests on, and a reader
+ * asking "what was this sentence written from" has to find the TEXT the writer was shown, not only a
+ * verdict about the source. The version beside it is the one `judgementVersionOf` already recorded —
+ * the judgement's own `quoteSha256` — and it describes the passage here because the roster these
+ * records are drawn from refuses a passage its version does not describe (see `passageOf`).
+ *
+ * Both prose paths record this. The model route sends the same roster as request DATA; the fixture
+ * route sends nothing anywhere, so its record IS the request, and a path with no model on it is not a
+ * path where the writer was shown less.
+ *
+ * @param sources - the citation roster the writer may draw on.
+ * @param judgements - what the reviewed corpus establishes about this claim's sources.
+ * @returns one record per source, in roster order.
+ */
+function requestCitationsOf(
+  sources: ReadonlyArray<{ readonly citeKey: string; readonly passage: string }>,
+  judgements: ReadonlyArray<SourceJudgement>,
+): ReadonlyArray<Record<string, unknown>> {
+  return sources.map(source => ({
+    citeKey: source.citeKey,
+    passage: source.passage,
+    evidenceVersion: judgementVersionOf(source.citeKey, judgements),
+  }))
 }
 
 /** Artifact type carried by each declared output slug (audit vocabulary). */
@@ -2877,10 +2907,28 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
   // WHAT THE PAPER MAY CITE, for the writer's request and for the fallback prose. Not bindings: the
   // sentences they will be attached to are written below.
+  //
+  // THE PASSAGE TRAVELS WITH THE SOURCE, because the instruction the writer is given — state what
+  // this source establishes and nothing further — cannot be obeyed by a writer that has not been
+  // shown what the source says. It was not: the roster carried the VERDICT (`supported` /
+  // `contradicted`) and the reading's SCOPE, so a model was asked to rest a sentence on a passage it
+  // had never read. It wrote the plausible thing, attached the citation, and the sentence assessor —
+  // which does read the passage — refused it as `statement-beyond-scope` on every run that reached
+  // this step. The assessor was right and the writer was set up to fail.
+  //
+  // `readScope` AND `access` ARE CONSTRAINTS ON THE SENTENCE, not labels beside it: they are what
+  // `checkCitationUse` reads at binding time, and the instruction below states the same two rules in
+  // the same terms, so the writer is bounded by the rule that will judge it rather than by a
+  // paraphrase of it.
   const citableSources = judgements.map(judgement => ({
     citeKey: judgement.citeKey,
+    // THE PASSAGE THE JUDGEMENT WAS MADE FROM, read from the judgement itself. `passageOf` refuses a
+    // passage that does not hash to the version recorded beside it, so the `evidenceVersion` this
+    // request records stays describing the text the writer was shown.
+    passage: passageOf(judgement),
     establishes: judgement.support,
     readScope: judgement.readScope,
+    access: judgement.access,
     source: judgement.location,
   }))
   const duplicateKeys = checkCitationKeys(judgements)
@@ -2967,10 +3015,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         instruction: null,
         evidenceSupplied: Object.keys(evidence.supplied),
         evidenceRequired: evidence.required,
-        citations: citableSources.map(source => ({
-          citeKey: source.citeKey,
-          evidenceVersion: judgementVersionOf(source.citeKey, judgements),
-        })),
+        citations: requestCitationsOf(citableSources, judgements),
       })
       return { ...h, bodyText: ctx.runCtx.adapter.body(h.id, prose) }
     })
@@ -2983,17 +3028,14 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // withholding the result is how a plausible number gets invented, so the request is not
         // made and the absence is recorded instead.
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
-        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. A sentence that cites a source states what that source establishes and nothing further — not a conclusion the passage does not itself draw, and not a generalization beyond the case it reports; when what you want to say is this paper's own claim rather than a source's finding, write it as the paper's claim and leave it uncited. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
+        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. A sentence that cites a source states what that source establishes and nothing further — not a conclusion the passage does not itself draw, and not a generalization beyond the case it reports; when what you want to say is this paper's own claim rather than a source's finding, write it as the paper's claim and leave it uncited. Each source listed under \`citations\` carries the \`passage\` a reviewer read from it, and the sentence you write for that source must be true of that passage as quoted: where the passage does not state what you wanted to say, write less rather than more. \`readScope\` bounds the sentence the same way — a source read \`full-text\` was read whole, while one read \`abstract-only\` is a source whose abstract was all that could be read, so a sentence resting on it may state only what an abstract reports and must not claim what only the source's method, experiment or results could establish. \`access\` says whether the source could be read at all; where it is not \`read\`, the source is not evidence for any sentence. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
         proseRequests.push({
           sectionId: h.id,
           channel: proseLabelling(writer).source,
           instruction,
           evidenceSupplied: Object.keys(evidence.supplied),
           evidenceRequired: evidence.required,
-          citations: citableSources.map(source => ({
-            citeKey: source.citeKey,
-            evidenceVersion: judgementVersionOf(source.citeKey, judgements),
-          })),
+          citations: requestCitationsOf(citableSources, judgements),
         })
         return writer.write({
           stepId: 'D3-writing',

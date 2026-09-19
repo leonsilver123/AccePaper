@@ -473,6 +473,33 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
+/**
+ * The passage a judgement rests on, handed to a consumer that will be answerable for it.
+ *
+ * A JUDGEMENT IS TWO FACTS — the passage and the version of that passage — and a consumer that is
+ * shown only one of them cannot be held to the other. The prose writer is the consumer this exists
+ * for: it is asked to state what a source establishes, the request records `quoteSha256` as the
+ * version of the passage behind that source, and a later refusal for `citation-evidence-changed`
+ * points back at that version. Handing over a DIFFERENT text — truncated to fit a budget, re-wrapped,
+ * or read from somewhere else — leaves the recorded version describing a passage nobody was shown,
+ * which is exactly the traceability the version exists to give.
+ *
+ * @param judgement - one source's judgement.
+ * @returns the passage, verbatim.
+ * @throws {Error} when the passage does not hash to the judgement's own version.
+ */
+export function passageOf(judgement: SourceJudgement): string {
+  const version = sha256(judgement.quote)
+  if (version !== judgement.quoteSha256) {
+    throw new Error(
+      `[citation-passage-version-mismatch] '${judgement.citeKey}' carries a passage whose SHA-256 is`
+      + ` ${version} and records ${judgement.quoteSha256} as its version — the passage shown to a`
+      + ' writer would not be the passage the version was computed over',
+    )
+  }
+  return judgement.quote
+}
+
 /** What the reviewed corpus establishes about one claim version's sources, unattached. */
 export function judgementsFor(
   claimRef: string,

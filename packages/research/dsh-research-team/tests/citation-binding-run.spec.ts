@@ -12,6 +12,7 @@ import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai
 import { runT19B } from '../src/runner/drive.ts'
 import { DEFAULT_PLAN } from '../src/runner/study-plan.ts'
 import { loadCasePack, planCasePackInputs } from '../src/runner/case-pack.ts'
+import { corpusSource } from '../src/runner/evidence-corpus.ts'
 import { FIXED_TS, STEP_EXECUTOR_REGISTRY } from '../src/runner/registry.ts'
 import type { ExecCtx, ResearchProseRequest, ResearchProseWriter, RunContext } from '../src/runner/registry.ts'
 import { platoonAdapter } from '../src/runner/study-adapter.ts'
@@ -280,6 +281,72 @@ describe('a revision that rewrites a cited sentence', () => {
     for (const instruction of instructions) {
       expect(instruction).toContain('states what that source establishes and nothing further')
       expect(instruction).toContain('leave it uncited')
+      // AND THE RULE THAT WILL JUDGE THE SENTENCE IS STATED IN THE TERMS IT IS JUDGED IN.
+      // `checkCitationUse` refuses `citation-support-beyond-scope` when support is claimed from a
+      // source that was not read in full, and `citation-source-unavailable` when it was not read at
+      // all. The writer is bounded by those two and not by a loose paraphrase of them, so the scope
+      // vocabulary the rule uses appears in the instruction.
+      expect(instruction).toContain('full-text')
+      expect(instruction).toContain('abstract-only')
+      expect(instruction).toContain('access')
+    }
+  })
+})
+
+describe('the writer is shown the passages it is asked to cite', () => {
+  it('sends each source with the passage the judgement was made from, and the scope as a constraint', async () => {
+    // THE DEFECT THIS HOLDS SHUT, measured on the deployment. The instruction tells the writer to
+    // "state only what that source establishes and nothing further". IT COULD NOT OBEY IT: the request
+    // carried the VERDICT and the reading's scope and not one word the source said, so the model wrote
+    // the sentence that seemed right, attached the citation, and the sentence assessor — which DOES
+    // read the passage — refused it as `statement-beyond-scope` on every run that reached D3. The gate
+    // was working; the writer was set up to fail. This case reads the request the writer actually
+    // received, so the evidence reaching it is asserted where it is sent rather than where it is built.
+    const store: ResearchRunStore = new Map()
+    const requests: ResearchProseRequest[] = []
+    const inner = writerSaying(
+      `Prior work on this quantity has been reported ${REVIEWED_KEYS.map(key => `[@${key}]`).join(' ')}.`
+      + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
+    )
+    const capturing: ResearchProseWriter = {
+      channel: 'llm',
+      write(request: ResearchProseRequest) {
+        if (request.stepId === 'D3-writing') requests.push(request)
+        return inner.write(request)
+      },
+    }
+    await runT19B(store, {
+      studyPlan: DEFAULT_PLAN,
+      proseWriter: capturing,
+      casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
+    })
+    expect(requests.length).toBeGreaterThan(0)
+    for (const request of requests) {
+      const citations = request.context.citations as ReadonlyArray<{
+        citeKey: string
+        passage: string
+        establishes: string
+        readScope: string
+        access: string
+        source: string
+      }>
+      expect(citations.map(citation => citation.citeKey)).toEqual(REVIEWED_KEYS)
+      for (const citation of citations) {
+        const doi = citation.citeKey.replace(/^cite-/u, '')
+        // THE PASSAGE ITSELF, and it is the one the reviewer read from the source — not the title, not
+        // a summary of the finding, and not the reviewer's rationale, which says more than the passage
+        // does. A rationale handed over as evidence would ask the writer to state what the corpus
+        // RECORDED about the source rather than what the source establishes.
+        expect(citation.passage, citation.citeKey).toBe(corpusSource(doi)?.excerpt)
+        // THE SCOPE TRAVELS WITH IT, because it is a constraint on the sentence and not a label: a
+        // source read at `abstract-only` cannot carry the claim a full reading could, and the writer
+        // can only respect that if it is told which reading it holds.
+        expect(citation.readScope, citation.citeKey).toBe(corpusSource(doi)?.sourceAccess)
+        expect(citation.access, citation.citeKey).toBe('read')
+        // AND THE VERDICT STAYS A VERDICT, which is what tells a writer of a `contradicted` source to
+        // state what the source establishes rather than to agree with it.
+        expect(['supported', 'contradicted']).toContain(citation.establishes)
+      }
     }
   })
 })
