@@ -22,6 +22,7 @@ import type { ResearchProseWriter, RunContext, StepExecutorFn, Truthfulness } fr
 import type { DocumentCompiler } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
+import type { InstructionChecker } from './instruction-check.ts'
 import type { SourceRecord } from './citation-bindings.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
 import type { ReviewPolicy } from './review-policy.ts'
@@ -140,6 +141,17 @@ export interface DriveOptions {
    */
   readonly proseWriter?: ResearchProseWriter
   /**
+   * The deployment's reading of an instruction before it is sent, when it has one.
+   *
+   * A CAPABILITY LIKE THE OTHERS, and absent for the same reason: whether a machine can read an
+   * instruction and say whether it carries the evidence, the constraints and the format the task
+   * requires is a property of the deployment's reader. A deployment that names none sends every
+   * instruction unchecked and records no check, which is a fact a reader can act on. One that names
+   * a checker gets every prose send read first, and a send whose instruction is missing a required
+   * part is REFUSED rather than made.
+   */
+  readonly instructionCheck?: InstructionChecker
+  /**
    * The document compiler the deployment configured, handed to E1-format.
    *
    * INJECTED, NOT SPAWNED HERE. Whether a machine has a document toolchain is a deployment fact, so
@@ -223,6 +235,17 @@ export interface DriveOptions {
    */
   readonly revisionRounds?: number | undefined
   /**
+   * How many times `D3-writing` may ask the writer to write a section AGAIN.
+   *
+   * THE CONVERGENCE PATH, not a lower bar: refusal is the normal case at that step, so a bounded
+   * number of rounds feeds the reading's own reasons back to the writer, within the same evidence
+   * and under the same rules. A run still refused at the end stops and reports as it always did.
+   * Deployment configuration, for the reason {@link revisionRounds} is: how many times it is worth
+   * asking a model is a budget decision. Absent means the executor's own default; `0` is the step's
+   * behaviour before the loop existed — one write, one reading, and no rewrite.
+   */
+  readonly proseRounds?: number | undefined
+  /**
    * Called after each step that reached a terminal outcome, so a driver can persist the run's
    * state as it goes instead of only once at the end. A run that saved only when it finished lost
    * every step it had completed when the process died — including the ones that cost model calls.
@@ -267,6 +290,10 @@ export interface DriveStepOptions {
   readonly figureProvider?: FigureProvider
   /** The sentence-level reviewer; see {@link DriveOptions.statementAssessor}. */
   readonly statementAssessor?: StatementSupportAssessor
+  /** The pre-send instruction check; see {@link DriveOptions.instructionCheck}. */
+  readonly instructionCheck?: InstructionChecker
+  /** See {@link DriveOptions.proseRounds}. */
+  readonly proseRounds?: number | undefined
   /** The citable sources; see {@link DriveOptions.sources}. */
   readonly sources?: ReadonlyMap<string, SourceRecord>
   /** The revision verifier; see {@link DriveOptions.resolutionVerifier}. */

@@ -261,10 +261,11 @@ describe('what a section was asked for is part of the run', () => {
       }>
       proseRequestVersion: string
     }
-    // v4 IS THE SHAPE THIS RUN RECORDED: the roster carries `accessNote` beside the passage, so the
-    // request that produced a sentence the assessor refused for crediting a work with words read in a
-    // version of it is distinguishable from one written before the writer could know they differ.
-    expect(draft.proseRequestVersion).toBe('prose-request-v4')
+    // v5 IS THE SHAPE THIS RUN RECORDED: the roster states which sources the paper OWES a citation
+    // (v4 required every reviewed source to be cited), the request carries the round it belongs to,
+    // and the artifact carries what each rewrite round was told and changed. A request recorded
+    // before those rules existed is not read as one written under them.
+    expect(draft.proseRequestVersion).toBe('prose-request-v5')
     const ids = draft.proseRequests.map(entry => entry.sectionId)
     expect(ids).toContain('introduction')
     expect(ids.length).toBeGreaterThan(1)

@@ -10,12 +10,13 @@
 // REWRITE: every prompt's own words are unchanged by it, which is what lets the next change to one of
 // them be read as the change it is.
 //
-// WHAT THE SKELETON IS. One instruction is five parts, each answering one question a writer has:
-// what to write and for what it is; what this section owes its reader; the format the reply must be
-// in; what may be asserted and what a passage somebody read does and does not establish; and how a
-// source is named. A step with nothing to say in a part states no part, and the instruction is the
-// parts it does have joined in the order above — so a step with no citation rules reads as an
-// instruction about its own reply rather than as one carrying an empty section.
+// WHAT THE SKELETON IS. One instruction is six parts, each answering one question a writer has:
+// what to write and for what it is; what this section owes its reader; what a previous version of it
+// left undone; the format the reply must be in; what may be asserted and what a passage somebody read
+// does and does not establish; and how a source is named. A step with nothing to say in a part states
+// no part, and the instruction is the parts it does have joined in the order above — so a step with
+// no citation rules reads as an instruction about its own reply rather than as one carrying an empty
+// section, and a first-round instruction carries no revision part at all.
 //
 // It is not a template language. The parts are the step's own words; this module states the ORDER and
 // the JOIN, and nothing about any step.
@@ -23,15 +24,26 @@
 /**
  * The parts of one prose instruction, in the order they are assembled.
  *
- * The order is the order every instruction already read in: what to write, what it owes, what the
- * reply must look like, what may be asserted, and how a source is named. `output` sits before the two
- * rules parts because a writer reads its format before the rules its sentences are judged against.
+ * The order is the order every instruction already read in: what to write, what it owes, what a
+ * previous version left undone, what the reply must look like, what may be asserted, and how a source
+ * is named. `revision` sits with the two other parts about the TEXT — what it owes and what it left
+ * undone — and `output` sits before the two rules parts because a writer reads its format before the
+ * rules its sentences are judged against.
  */
 export interface InstructionParts {
   /** What to write, and what this run's own material is. */
   readonly task: string
   /** What the section owes its reader — an obligation the writer is not told is one it cannot discharge. */
   readonly contract?: string
+  /**
+   * What the version being replaced left undone, read from the run's own judgement of it.
+   *
+   * ABSENT ON A FIRST ROUND, and that absence is the fact: an instruction with no revision part asks
+   * for a text, and one carrying it asks for a text to be replaced because a reader refused it. What
+   * travels here is the refusal's own reason, VERBATIM, so the writer is answered in the terms it is
+   * judged in rather than in a paraphrase that would be a second set of rules to satisfy.
+   */
+  readonly revision?: string
   /**
    * The format the reply must be in, stated as a format.
    *
@@ -65,7 +77,7 @@ export const LINE_JOIN = '\n'
  * @returns the instruction.
  */
 export function instructionOf(parts: InstructionParts, separator: string): string {
-  return [parts.task, parts.contract, parts.output, parts.evidence, parts.citations]
+  return [parts.task, parts.contract, parts.revision, parts.output, parts.evidence, parts.citations]
     .filter((part): part is string => part !== undefined && part.length > 0)
     .join(separator)
 }

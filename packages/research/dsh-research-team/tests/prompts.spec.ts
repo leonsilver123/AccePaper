@@ -20,7 +20,7 @@ import { CLAIM_INSTRUCTION } from '../src/runner/prompts/a2-claim.ts'
 import { AGENDA_INSTRUCTION } from '../src/runner/prompts/a3-agenda.ts'
 import { METHOD_INSTRUCTION } from '../src/runner/prompts/b1-method.ts'
 import { frameworkInstruction } from '../src/runner/prompts/d2-framework.ts'
-import { sectionInstruction } from '../src/runner/prompts/d3-writing.ts'
+import { revisionInstruction, sectionInstruction, sectionRevisionOf } from '../src/runner/prompts/d3-writing.ts'
 import { D4_AUTHOR_INSTRUCTIONS_VERSION, REBUTTAL_INSTRUCTION } from '../src/runner/prompts/d4-rebuttal.ts'
 import { LINE_JOIN, PROSE_JOIN, instructionOf, labelledLines } from '../src/runner/prompts/skeleton.ts'
 import type { InstructionParts } from '../src/runner/prompts/skeleton.ts'
@@ -167,6 +167,56 @@ describe('the instruction D3 writes one section under', () => {
     expect(instruction).toContain('attributes the finding to the text you were shown')
     // THE CITATION SYNTAX IS THE PARSER'S: `citedKeysIn` reads `[@key]` and nothing else.
     expect(instruction).toContain('exactly as `[@citeKey]`')
-    expect(instruction).toContain('every source listed there and no other may be cited')
+    // AND THE OBLIGATION IS OVER THE SOURCES THE PAPER'S CLAIM RESTS ON, not over the whole roster.
+    // Measured on the deployment, 2026-09-20: with every reviewed source required to be cited, the
+    // introduction's first cited sentence attached the anchor's key to the study's own metric — "The
+    // quantity at stake is the smallest gap-to-closing-speed ratio ... [@cite-10.1109/tits.2026.3727135]"
+    // — and the sentence assessor refused it, because the passage "only concerns the reaction-time lag
+    // (a first-order lag) and the critical lag value above which safe CCC gains do not exist". The two
+    // rules could not both be obeyed, so the rule was replaced rather than the reading.
+    expect(instruction).toContain('no source outside that list may be cited')
+    expect(instruction).toContain('`establishes` is `supported`')
+    expect(instruction).toContain('must be cited somewhere in this manuscript')
+    expect(instruction).toContain('leave that source uncited rather than attach it to a sentence it does')
+    expect(instruction).not.toContain('every one of them must be cited')
+  })
+
+  it('asks for a rewrite with the reading of the last version quoted back, and changes nothing else', () => {
+    // THE REWRITE IS THE SAME REQUEST WITH THE REFUSAL ADDED. Anything else — a shorter set of rules,
+    // a softer one — would let a run converge by being judged differently, which is the one thing a
+    // convergence path in this pipeline may not do. The refusal travels VERBATIM: what the assessor
+    // wrote is what the writer is told.
+    const refusal = "'stmt-introduction-1' cites 'cite-10.1109/tits.2026.3727135', which was assessed"
+      + " 'unrelated': The passage only concerns the reaction-time lag (a first-order lag)."
+    const rewritten = revisionInstruction({
+      heading: 'Results',
+      claimRef: DEFAULT_PLAN.claim.ref,
+      plan,
+      sectionId: 'results',
+      refusals: [{ detail: refusal }],
+      uncited: ['cite-10.1150/uncited-1'],
+    })
+    expect(rewritten).toContain('Rewrite the "Results" section')
+    expect(rewritten).toContain(refusal)
+    expect(rewritten).toContain("'cite-10.1150/uncited-1'")
+    expect(rewritten).toContain('Return the complete replacement body for this section')
+    // THE FIRST ROUND'S TEXT SURVIVES: every part except the revision is byte-identical to it.
+    const first = sectionInstruction({
+      heading: 'Results',
+      claimRef: DEFAULT_PLAN.claim.ref,
+      plan,
+      sectionId: 'results',
+    })
+    for (const part of [
+      'Its job in this paper\'s argument is: report the measurement, including what it did not show.',
+      'The evidence this section must be written from is under `evidence`',
+      'Each source listed under `citations` carries the `passage`',
+      'Refer to the central claim as',
+    ]) {
+      expect(first, part).toContain(part)
+      expect(rewritten, part).toContain(part)
+    }
+    // AND A REVISION PART WITH NOTHING TO SAY IS ABSENT rather than empty in place.
+    expect(sectionRevisionOf({ refusals: [], uncited: [] })).toBe('')
   })
 })

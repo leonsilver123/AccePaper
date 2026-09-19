@@ -56,6 +56,19 @@ const REVIEWED_KEYS = [
 ]
 
 /**
+ * The reviewed sources whose passages the review found establish this claim.
+ *
+ * THE REVIEWED CORPUS HOLDS ONE: `10.1109/tits.2026.3727135`, whose assessment is `supports` and
+ * whose `anchor` flag is set. The other two were read and found NOT to support the claim, so the
+ * paper owes them no citation. See `citation-bindings.ts` for why the obligation is stated over
+ * this set rather than over the roster.
+ */
+const OWED_KEYS = ['cite-10.1109/tits.2026.3727135']
+
+/** The reviewed sources the paper may cite but owes nothing to. */
+const UNSUPPORTING_KEYS = ['cite-10.1016/j.trb.2025.103352', 'cite-10.1155/2017/3082781']
+
+/**
  * A writer that answers every prose step in that step's own format, and D3 with prose citing nothing.
  *
  * The replies for the other steps are the shape their instructions ask for — a writer that answers A2
@@ -152,13 +165,20 @@ describe('a run that cites its sources', () => {
 })
 
 describe('a run whose manuscript cites none of the sources it reviewed', () => {
-  it('is refused where the prose is written, naming every source it left unused', async () => {
+  it('is refused where the prose is written, naming the source whose evidence it left unstated', async () => {
     // THE DELIVERED PAPER'S SHAPE, refused. It used to be refused at E1, because the reference list
     // was built from the reviewed corpus whatever the body said — so the list could exist beside a
     // body that never cited it. NOW THE LIST IS DERIVED FROM THE BINDINGS, so an uncited reviewed
     // source produces no entry, and the defect has to be refused where it happens: `D3-writing`,
     // before an artifact is written. That is earlier and it names the real problem — the paper failed
     // to state a position its own evidence establishes.
+    //
+    // THE OBLIGATION IS OVER THE ANCHOR AND NOT OVER THE WHOLE ROSTER, which is the one thing this
+    // spec changed when the rule changed. The draft below cites NOTHING, so the anchor — the source
+    // the review found supports the claim — is owed a citation and does not have one, and the run is
+    // refused for exactly that. The two reviewed sources the review found do NOT support the claim
+    // are prior work the paper may cite, not evidence it rests on; a run that leaves those uncited is
+    // a different run, and the spec below drives it.
     const store: ResearchRunStore = new Map()
     // THE SAME SEED THE BROWSER RUN HAD: a caller-supplied plan and the deployment's pack. Without
     // them the run holds at A2's B gate, which is a different stop and would hide the one under test.
@@ -170,10 +190,38 @@ describe('a run whose manuscript cites none of the sources it reviewed', () => {
     const d3 = run.steps.find(step => step.stepId === 'D3-writing')
     expect(d3?.status).toBe('in_progress')
     expect(d3?.executeError).toContain('citation-source-uncited')
-    for (const key of REVIEWED_KEYS) expect(d3?.executeError, key).toContain(key)
+    for (const key of OWED_KEYS) expect(d3?.executeError, key).toContain(key)
     // AND NOTHING WAS PUBLISHED: a run stopped here has no draft, so no manuscript can follow it.
     expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
     expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
+  })
+
+  it('is NOT refused when the sources it leaves uncited are the ones that do not support the claim', async () => {
+    // THE OTHER SIDE OF THE SAME RULE. A source the review found does not support the claim is prior
+    // work this paper may cite; requiring a citation for it left the writer with nothing to do but
+    // attach it to the nearest sentence, which is the decoration the sentence assessor then refused.
+    // The run below cites the anchor and leaves the other two uncited, and it is not refused for
+    // that: the two are REPORTED as uncited rather than dropped, so a reader can see the judgement
+    // nobody used.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store, {
+      studyPlan: DEFAULT_PLAN,
+      proseWriter: writerSaying(
+        `Prior work established the direction of the delay effect ${OWED_KEYS.map(key => `[@${key}]`).join(' ')}`
+        + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
+      ),
+      casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
+    })
+    const d3 = run.steps.find(step => step.stepId === 'D3-writing')
+    expect(d3?.executeError).toBeUndefined()
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
+      uncitedSources: ReadonlyArray<string>
+      citations: ReadonlyArray<{ citeKey: string }>
+    }
+    // ONE BINDING PER SENTENCE THAT CITES, so the stub's same paragraph in every section is the same
+    // source cited six times — which is what the binding set is keyed by, cite key and sentence.
+    expect([...new Set(draft.citations.map(citation => citation.citeKey))]).toEqual(OWED_KEYS)
+    expect(draft.uncitedSources).toEqual(UNSUPPORTING_KEYS)
   })
 })
 

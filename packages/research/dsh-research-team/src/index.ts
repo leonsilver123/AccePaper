@@ -109,6 +109,7 @@ import { driveRun, prepareRun } from './runner/drive.ts'
 import { isFigureProvider } from './runner/figure-provider.ts'
 import type { FigureProvider } from './runner/figure-provider.ts'
 import type { StatementSupportAssessor } from './runner/statement-support.ts'
+import type { InstructionChecker } from './runner/instruction-check.ts'
 import type { BibliographyWriter } from './runner/bibliography.ts'
 import { sourcesForMode } from './runner/citation-bindings.ts'
 import type { SourceRecord } from './runner/citation-bindings.ts'
@@ -957,6 +958,20 @@ export class ResearchTeamService extends TypertRemoteService {
   private hostStatementAssessor(): StatementSupportAssessor | undefined {
     const research = this.ctx.get('research') as { statementAssessor?: StatementSupportAssessor } | undefined
     return research?.statementAssessor
+  }
+
+  /**
+   * The pre-send instruction reader this deployment named, when it named one.
+   *
+   * THE SAME SEAM AS THE ASSESSOR, read the same way: the deployment states whether its instructions
+   * are read before they are sent, and the driver hands the reader to every prose step. Absent means
+   * no instruction is checked, which the run records as the absence of a check.
+   *
+   * @returns the checker, or undefined.
+   */
+  private hostInstructionCheck(): InstructionChecker | undefined {
+    const research = this.ctx.get('research') as { instructionCheck?: InstructionChecker } | undefined
+    return research?.instructionCheck
   }
 
   /**
@@ -2097,6 +2112,7 @@ export class ResearchTeamService extends TypertRemoteService {
     // read a sentence against a passage, and whether it can read a revision against the issue it was
     // written for. A deployment that names neither still runs — it records that nothing read them.
     const statementAssessor = this.hostStatementAssessor()
+    const instructionCheck = this.hostInstructionCheck()
     const resolutionVerifier = this.hostResolutionVerifier()
     const reviewPolicy = this.hostReviewPolicy()
     // THE WORKING DIRECTORY AND THE READER THAT FILLS ITS `refs-pdf/`, resolved here with everything
@@ -2110,6 +2126,7 @@ export class ResearchTeamService extends TypertRemoteService {
       ...(documentCompiler !== undefined ? { documentCompiler } : {}),
       ...(figureProvider !== undefined ? { figureProvider } : {}),
       ...(statementAssessor === undefined ? {} : { statementAssessor }),
+      ...(instructionCheck === undefined ? {} : { instructionCheck }),
       ...(manuscriptDirectory === undefined ? {} : { manuscriptDirectory }),
       ...(referenceFiles === undefined ? {} : { referenceFiles }),
       // THE CITABLE SOURCES, from the registry this deployment configured. Passed always: a run told

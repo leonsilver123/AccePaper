@@ -172,8 +172,11 @@ import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from '
 import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
 import { assessStatements, checkStatementSupport } from './statement-support.ts'
+import type { StatementSupportRefusal } from './statement-support.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
 import type { StatementAssessment } from './statement-support.ts'
+import { sendCheckedProse } from './instruction-check.ts'
+import type { InstructionCheckRecord, InstructionChecker } from './instruction-check.ts'
 import { verifyPending, verifyResolution } from './resolution-verifier.ts'
 import type { ExecutionIdentity, ResolutionVerifier as ResolutionVerifierPort } from './resolution-verifier.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
@@ -189,13 +192,13 @@ import {
   checkStatementBindings, judgementsFor, locateStatements, passageOf,
   citeKeyOf, renderCitationMarkers, reviewedSources,
 } from './citation-bindings.ts'
-import type { CitationUse, SourceJudgement, SourceRecord } from './citation-bindings.ts'
+import type { CitationUse, SourceJudgement, SourceRecord, Statement } from './citation-bindings.ts'
 import { landscapeGapInstruction } from './prompts/a1-landscape.ts'
 import { CLAIM_INSTRUCTION } from './prompts/a2-claim.ts'
 import { AGENDA_INSTRUCTION } from './prompts/a3-agenda.ts'
 import { METHOD_INSTRUCTION } from './prompts/b1-method.ts'
 import { frameworkInstruction } from './prompts/d2-framework.ts'
-import { sectionInstruction } from './prompts/d3-writing.ts'
+import { revisionInstruction, sectionInstruction } from './prompts/d3-writing.ts'
 import { D4_AUTHOR_INSTRUCTIONS_VERSION, REBUTTAL_INSTRUCTION } from './prompts/d4-rebuttal.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
@@ -464,6 +467,14 @@ export interface ExecCtx {
    */
   readonly statementAssessor?: StatementSupportAssessor
   /**
+   * The deployment's reading of an instruction before it is sent, when it has one.
+   *
+   * Absent means the send is not checked — and NOT that every instruction was checked and cleared,
+   * which is why the check's record is absent from the artifacts rather than present-and-empty. See
+   * {@link InstructionChecker}.
+   */
+  readonly instructionCheck?: InstructionChecker
+  /**
    * The sources this run may cite, from the registry the deployment configured.
    *
    * ABSENT MEANS THE CHECKED-IN CORPUS, which is what every run read before there was a choice. A run
@@ -523,6 +534,19 @@ export interface ExecCtx {
    * fix a manuscript is a budget decision. Absent means {@link DEFAULT_REVISION_ROUNDS}.
    */
   readonly revisionRounds?: number
+  /**
+   * How many times `D3-writing` may ask the writer to write a section again.
+   *
+   * THE ROUNDS ARE THE CONVERGENCE PATH, not a licence to pass. Refusal is the normal case here —
+   * the evidence often does not establish the claim — so the step feeds the reading's own reasons
+   * back to the writer and writes again, within the same evidence, for a bounded number of rounds.
+   * A run that converges is a result; a run that does not is refused exactly as it was before this
+   * bound existed. Same shape and same reason as {@link revisionRounds}: how many times it is worth
+   * asking a model is a budget decision, and this packages ships a default.
+   *
+   * Absent means {@link DEFAULT_PROSE_ROUNDS}.
+   */
+  readonly proseRounds?: number
   /**
    * Optional real-model prose writer (T34). When absent, prose steps use the fixture
    * text. See {@link ResearchProseWriter}.
@@ -737,9 +761,13 @@ const D3_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION
  * judgement was made from, where v2 recorded only its verdict and the scope of the reading. v4 hands
  * it `accessNote` as well — what the text read is, when it is not the cited work — and names that
  * field in the instruction, so a run whose draft was refused for crediting the cited work with words
- * read in another version of it is distinguishable from one that was never told the two differ.
+ * read in another version of it is distinguishable from one that was never told the two differ. v5
+ * states the roster as a PERMISSION with an obligation inside it (only the sources whose reading
+ * established the claim are owed a citation) and adds the rewrite rounds and the pre-send check to
+ * the record, so a request written under "every reviewed source must be cited" is not read as one
+ * written under the rule that replaced it.
  */
-const PROSE_REQUEST_VERSION = 'prose-request-v4'
+const PROSE_REQUEST_VERSION = 'prose-request-v5'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
@@ -992,7 +1020,13 @@ function referenceEntriesFor(
 }
 
 /**
- * The prose route a step's text came from, as the artifact records it.
+ * The prose route a step's text came from, and the check its first send was given.
+ *
+ * THE CHECK IS THE FIRST SEND'S AND NOT THE STEP'S. A step may send many requests — D3 sends one per
+ * section and one more per rewrite round — and each request's own `instructionCheck` is the record
+ * that is about it. What travels here is the first, so a reader of the route alone can tell a step
+ * whose deployment reads instructions from one whose deployment does not; a reader asking about a
+ * particular section reads that section's request.
  *
  * A `*Source: 'model'` label used to be the whole claim, and it proved only that a
  * `ResearchProseWriter` object had been injected — any `{ write() }` satisfies the
@@ -1005,11 +1039,19 @@ function referenceEntriesFor(
  * @param result - the writer's result for this step.
  * @returns the recorded route, or a phrase saying the built-in text was used.
  */
-function proseRouteOf(result: { readonly provider: string; readonly model: string } | undefined): Record<string, unknown> {
+function proseRouteOf(
+  result: { readonly provider: string; readonly model: string } | undefined,
+  check?: InstructionCheckRecord,
+): Record<string, unknown> {
+  // THE PRE-SEND CHECK'S ANSWER TRAVELS WITH THE ROUTE, because both are facts about what THIS send
+  // was made under: which channel carried it, and what a reader said about the instruction it carried.
+  // A record of the route without the check cannot tell a send the deployment checked from one it
+  // never read.
+  const checked = check === undefined ? {} : { instructionCheck: check }
   if (result === undefined) {
-    return { producer: 'built-in fixture text (no prose writer configured)' }
+    return { producer: 'built-in fixture text (no prose writer configured)', ...checked }
   }
-  return { producer: `configured prose writer: ${result.provider}/${result.model}` }
+  return { producer: `configured prose writer: ${result.provider}/${result.model}`, ...checked }
 }
 
 /**
@@ -1341,7 +1383,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     gapSource = 'fixture'
     gapKind = 'fixture_executor'
   } else {
-    const analysis = await writer.write({
+    const request: ResearchProseRequest = {
       stepId: 'A1-landscape',
       instruction: landscapeGapInstruction({ topic: artifact.query.topic }),
       context: {
@@ -1350,8 +1392,10 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         papers: artifact.hits.slice(0, 30).map(hit => ({ title: hit.title, venue: hit.venue })),
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
-    gapRoute = proseRouteOf(analysis)
+    }
+    const { result: analysis, check } = await sendCheckedProse(
+      ctx.instructionCheck, request, () => writer.write(request))
+    gapRoute = proseRouteOf(analysis, check)
     gaps = analysis.text
       .split('\n')
       .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)\]])?\s*/, '').trim())
@@ -1539,12 +1583,15 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       derivedFrom: packClaim.derivedFrom,
     }
   } else if (writer !== undefined) {
-    const analysis = await writer.write({
+    const request: ResearchProseRequest = {
       stepId: 'A2-claim',
       instruction: CLAIM_INSTRUCTION,
       context: { ...planContextOf(planOf(ctx)), gaps },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
+    }
+    const { result: analysis, check } = await sendCheckedProse(
+      ctx.instructionCheck, request, () => writer.write(request))
+    claimRoute = proseRouteOf(analysis, check)
     const parsed = {
       assertion: labelledField(analysis.text, 'ASSERTION'),
       essentialDifference: labelledField(analysis.text, 'DIFFERENCE'),
@@ -1575,7 +1622,6 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     // is unbindable by construction. Widening the format is a separate change; until then the
     // C channel holds rather than grading a claim whose quantity nobody stated.
     metricKey = ''
-    claimRoute = proseRouteOf(analysis)
   }
 
   const invocation = await invoker.invoke(
@@ -1695,7 +1741,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let agendaRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
-    const analysis = await writer.write({
+    const request: ResearchProseRequest = {
       stepId: 'A3-agenda',
       instruction: AGENDA_INSTRUCTION,
       context: {
@@ -1704,7 +1750,10 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         prediction: predictionText,
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
+    }
+    const { result: analysis, check } = await sendCheckedProse(
+      ctx.instructionCheck, request, () => writer.write(request))
+    agendaRoute = proseRouteOf(analysis, check)
     const parsedPhases = labelledField(analysis.text, 'PHASES')
     const parsedContributions = labelledField(analysis.text, 'CONTRIBUTIONS')
     // An agenda with no stages, or a contribution list with nothing in it, is not an
@@ -1727,7 +1776,6 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     contributions = parsedContributionList.map((statement, index) => ({ id: `c${index + 1}`, statement }))
     plan = parsedPhaseList
     agendaSource = proseLabelling(writer).source
-    agendaRoute = proseRouteOf(analysis)
   }
 
   return {
@@ -1892,7 +1940,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   let methodRoute: Record<string, unknown> = proseRouteOf(undefined)
 
   if (writer !== undefined) {
-    const analysis = await writer.write({
+    const request: ResearchProseRequest = {
       stepId: 'B1-method',
       instruction: METHOD_INSTRUCTION,
       context: {
@@ -1901,7 +1949,10 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         prediction: predictionText,
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
+    }
+    const { result: analysis, check } = await sendCheckedProse(
+      ctx.instructionCheck, request, () => writer.write(request))
+    methodRoute = proseRouteOf(analysis, check)
     const parsedFamily = labelledField(analysis.text, 'FAMILY')
     const parsedSteps = labelledField(analysis.text, 'STEPS')
     const parsedMetric = labelledField(analysis.text, 'METRIC')
@@ -1930,7 +1981,6 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     metricDirection = parsedDirection
     // From the CHANNEL, like A1/A2/A3: a deterministic route calls no model.
     methodSource = proseLabelling(writer).source
-    methodRoute = proseRouteOf(analysis)
   }
 
   return {
@@ -2769,7 +2819,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
   const writer = ctx.proseWriter
   if (writer !== undefined) {
-    const analysis = await writer.write({
+    const request: ResearchProseRequest = {
       stepId: 'D2-framework',
       instruction: frameworkInstruction({ sectionIds: OUTLINE_SKELETON.map(section => section.id) }),
       context: {
@@ -2778,7 +2828,10 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         methodFamily: method?.family ?? null,
       },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    })
+    }
+    const { result: analysis, check } = await sendCheckedProse(
+      ctx.instructionCheck, request, () => writer.write(request))
+    outlineRoute = proseRouteOf(analysis, check)
     const parsedTitle = labelledField(analysis.text, 'TITLE')
     const parsedSections = labelledField(analysis.text, 'SECTIONS')
     if (parsedTitle === undefined || parsedSections === undefined) {
@@ -2799,7 +2852,6 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       headings[section.id] = parsedHeadings[index] as string
     })
     outlineSource = proseLabelling(writer).source
-    outlineRoute = proseRouteOf(analysis)
   }
 
   const outline: ReadonlyArray<PlanSection & { covers: ReadonlyArray<string> }> =
@@ -2836,6 +2888,34 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
 /** D3-writing: fixture draft whose sections mirror the D2 outline ids, with
  *  deterministic body text + a landscape-derived reference list. */
+/**
+ * How many times `D3-writing` may ask the writer to write a section again.
+ *
+ * Deployment configuration rather than a constant, for the reason `revisionRounds` is: how many times
+ * it is worth asking a model is a budget decision. The value is a bound and not a target — a round
+ * that converges on the first rewrite stops there, and a round that changes nothing stops too.
+ *
+ * @param ctx - the execution context.
+ * @returns the configured bound, or the shipped default when the deployment set none.
+ */
+function proseRewriteRoundsOf(ctx: ExecCtx): number {
+  const configured = ctx.proseRounds
+  return typeof configured === 'number' && Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_PROSE_ROUNDS
+}
+
+/**
+ * The shipped bound on rewrite rounds.
+ *
+ * TWO: the first rewrite is the one that matters — the reading has named the sentences and said why —
+ * and the second is the one that lets a writer that fixed most of them finish. A third is a model
+ * asked the same question again, and the loop's own no-progress test usually stops it before this
+ * bound is reached at all. A deployment that wants a different bound sets `proseRounds`; a deployment
+ * that wants none sets `0`, which is the step's behaviour before this loop existed.
+ */
+const DEFAULT_PROSE_ROUNDS = 2
+
 async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const { claimRef } = canonicalOf(ctx)
   const outline = readInput(ctx, 'paper-outline')
@@ -2945,7 +3025,9 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // writer the configuration selected — the label alone only proves that SOME writer was
   // injected, which any `{ write() }` object satisfies.
   const writer = ctx.proseWriter
-  let sections: ManuscriptSection[]
+  // NOTHING IS WRITTEN YET, which is what an empty body says: the branch below fills these in, and a
+  // section whose required evidence is missing keeps the empty body it starts with.
+  let sections: ManuscriptSection[] = headings.map(h => ({ ...h, bodyText: '' }))
   let proseSource: 'fixture' | 'model' | 'deterministic'
   let proseRoute: Record<string, unknown> = proseRouteOf(undefined)
   let producer: string = D3_PRODUCER
@@ -2974,12 +3056,32 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // VERSION of each passage — so a judgement later refused for a changed passage is traceable to the
   // request that asked for the sentence resting on it.
   const proseRequests: Array<Record<string, unknown>> = []
+  // WHAT EACH REWRITE ROUND WAS TOLD AND WHAT IT CHANGED. Empty when no round ran, which is a
+  // different fact from a round that changed nothing; the entries say which is which.
+  const proseRounds: Array<Record<string, unknown>> = []
+  /** The reading of the manuscript, made once per round and kept across rounds. */
+  let statements: ReadonlyArray<Statement> = []
+  let assessments: ReadonlyArray<StatementAssessment> = []
+  /** The deployment's sentence-level reviewer, when it has one; see the check made after the write. */
+  const assessor = ctx.statementAssessor
+  /**
+   * The sources this paper OWES a citation: the ones the review found support the claim.
+   *
+   * THE OBLIGATION IS OVER THESE AND NOT OVER THE WHOLE ROSTER. The roster is what this run reviewed,
+   * and a source the review found does not support the claim is prior work the paper may cite, not
+   * evidence the paper rests on. Requiring a citation for one of those is what produced the
+   * decoration the reading refused — see `prompts/d3-writing.ts` for the run that measured it.
+   */
+  const owedCiteKeys: ReadonlySet<string> = new Set(
+    judgements.filter(judgement => judgement.support === 'supported').map(judgement => judgement.citeKey),
+  )
   if (writer === undefined) {
     const prose = proseContext(planOf(ctx), ctx, judgements)
     sections = headings.map((h) => {
       const evidence = evidenceFor(h.id)
       if (evidence.missing.length > 0) return { ...h, bodyText: '' }
       proseRequests.push({
+        round: 1,
         sectionId: h.id,
         channel: 'fixture',
         // No instruction reaches a model on this path, and the field says so rather than being
@@ -2992,29 +3094,67 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       return { ...h, bodyText: ctx.runCtx.adapter.body(h.id, prose) }
     })
     proseSource = 'fixture'
+    statements = locateStatements(sections)
+    assessments = assessor === undefined ? [] : await assessStatements(assessor, statements, judgements)
   } else {
-    const written = await Promise.all(
-      headings.map((h) => {
+    // ── THE WRITE, THE READING, AND THE ROUNDS ────────────────────────────────────────────────
+    //
+    // REFUSAL IS THE NORMAL CASE HERE, so the step needs a way to converge rather than a way to pass.
+    // One round is one write of each section plus one reading of what was written, and a refused
+    // round is answered by WRITING AGAIN WITH THE READING'S OWN REASONS — same evidence, same rules,
+    // same check. Nothing about the judgement is relaxed between rounds: the last round is read by
+    // the check the first one was, and a run still refused at the end stops and reports exactly as it
+    // did before this loop existed. A run that converges is a result; a run that honestly does not is
+    // equally a result, and the artifact carries every round either way.
+    const maxRewrites = proseRewriteRoundsOf(ctx)
+    /** Each section's body as the last round left it. A section never written has no entry. */
+    const bodies = new Map<string, string>()
+    /** What the last reading refused, grouped by the section the refused sentence sits in. */
+    let refusalsBySection = new Map<string, Array<{ readonly detail: string }>>()
+    /** The owed sources no sentence cited, which is a refusal about the MANUSCRIPT. */
+    let owedUncited: ReadonlyArray<string> = []
+    let roundRefusals: ReadonlyArray<StatementSupportRefusal> = []
+    let firstWrite: ResearchProseResult | undefined
+    /** The check the FIRST send of this step was given; every later send's is on its own record. */
+    let firstCheck: InstructionCheckRecord | undefined
+    let stoppedBecause = 'converged'
+    for (let round = 1; round <= maxRewrites + 1; round += 1) {
+      const rewriting = round > 1
+      // WHICH SECTIONS THIS ROUND WRITES. The first round writes them all. A round answering a
+      // sentence-level refusal writes the sections those sentences sit in; a round answering the
+      // manuscript-level one (a source the paper owes a citation and no sentence cites) writes every
+      // section, because the reading has not said WHICH section should state that position and the
+      // writer is the one that can tell.
+      const manuscriptWide = rewriting && owedUncited.length > 0
+      const targets = rewriting
+        ? headings.filter(h => manuscriptWide || refusalsBySection.has(h.id))
+        : headings
+      const written = await Promise.all(targets.map(async (h) => {
         const evidence = evidenceFor(h.id)
         // A REFUSED SECTION IS NOT WRITTEN AT ALL. Asking the model for a Results section while
         // withholding the result is how a plausible number gets invented, so the request is not
         // made and the absence is recorded instead.
-        if (evidence.missing.length > 0) return Promise.resolve(undefined)
-        const instruction = sectionInstruction({
-          heading: h.heading,
-          claimRef,
-          plan: argumentPlan,
-          sectionId: h.id,
-        })
-        proseRequests.push({
-          sectionId: h.id,
-          channel: proseLabelling(writer).source,
-          instruction,
-          evidenceSupplied: Object.keys(evidence.supplied),
-          evidenceRequired: evidence.required,
-          citations: requestCitationsOf(citableSources, judgements),
-        })
-        return writer.write({
+        if (evidence.missing.length > 0) return undefined
+        const refusals = refusalsBySection.get(h.id) ?? []
+        const instruction = rewriting
+          ? revisionInstruction({
+            heading: h.heading,
+            claimRef,
+            plan: argumentPlan,
+            sectionId: h.id,
+            refusals,
+            uncited: manuscriptWide ? owedUncited : [],
+          })
+          : sectionInstruction({
+            heading: h.heading,
+            claimRef,
+            plan: argumentPlan,
+            sectionId: h.id,
+          })
+        // THE EVIDENCE IS THE SAME ON A REWRITE, deliberately: a rewrite is told what its last
+        // version got wrong and nothing else new, so it converges by saying less rather than by
+        // being given more to say.
+        const request: ResearchProseRequest = {
           stepId: 'D3-writing',
           instruction,
           // The evidence travels as DATA, not as prose the model has to parse. `citable` is the
@@ -3032,23 +3172,117 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
             citations: citableSources,
             evidence: evidence.supplied,
             requiredEvidence: evidence.required,
+            round,
           },
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-        })
-      }),
-    )
-    sections = headings.map((h, i) => {
-      const evidence = evidenceFor(h.id)
-      const body = written[i]?.text
-      return { ...h, bodyText: evidence.missing.length > 0 || body === undefined ? '' : body }
-    })
+        }
+        const record: Record<string, unknown> = {
+          round,
+          sectionId: h.id,
+          channel: proseLabelling(writer).source,
+          instruction,
+          evidenceSupplied: Object.keys(evidence.supplied),
+          evidenceRequired: evidence.required,
+          citations: requestCitationsOf(citableSources, judgements),
+        }
+        proseRequests.push(record)
+        const sent = await sendCheckedProse(ctx.instructionCheck, request, () => writer.write(request))
+        // THE CHECK'S ANSWER IS PART OF THE REQUEST'S RECORD, beside the instruction it was made
+        // about: a reader can then tell a send this deployment read from one it never looked at.
+        if (sent.check !== undefined) record.instructionCheck = sent.check
+        if (firstWrite === undefined) {
+          firstWrite = sent.result
+          firstCheck = sent.check
+        }
+        return { sectionId: h.id, heading: h.heading, before: bodies.get(h.id) ?? '', after: sent.result.text }
+      }))
+      for (const entry of written) {
+        if (entry !== undefined) bodies.set(entry.sectionId, entry.after)
+      }
+      sections = headings.map(h => ({ ...h, bodyText: bodies.get(h.id) ?? '' }))
+      statements = locateStatements(sections)
+      // A VERDICT ABOUT A DIFFERENT VERSION IS NOT A VERDICT ABOUT THIS ONE, which is why the
+      // carried-over assessments are re-read rather than reused: `assessStatements` keeps only the
+      // ones whose sentence, passage and reader are all unchanged, and reads every other pair again.
+      assessments = assessor === undefined
+        ? []
+        : await assessStatements(assessor, statements, judgements, assessments)
+      roundRefusals = assessor === undefined
+        ? []
+        : checkStatementSupport(assessments, statements, judgements)
+      owedUncited = bindJudgements(judgements, statements, assessments).uncited
+        .filter(judgement => owedCiteKeys.has(judgement.citeKey))
+        .map(judgement => judgement.citeKey)
+      const changed = written.flatMap(entry => entry === undefined ? [] : [{
+        sectionId: entry.sectionId,
+        before: entry.before,
+        after: entry.after,
+        changed: entry.before !== entry.after,
+      }])
+      proseRounds.push({
+        round,
+        wrote: targets.map(h => h.id),
+        readAgain: rewriting,
+        // WHAT THIS ROUND WAS TOLD, verbatim, so a reader can see what the writer was answering.
+        told: rewriting
+          ? {
+            refusals: targets.flatMap(h => (refusalsBySection.get(h.id) ?? []).map(r => r.detail)),
+            uncitedSources: manuscriptWide ? [...owedUncited] : [],
+          }
+          : null,
+        // WHAT IT CHANGED, by section: a hash before and after, so "the round wrote again" and "the
+        // round wrote the same text again" are different facts on the record.
+        changed: changed.map(entry => ({
+          sectionId: entry.sectionId,
+          beforeSha256: bodyHashOf(entry.before),
+          afterSha256: bodyHashOf(entry.after),
+          changed: entry.changed,
+        })),
+        refusedAfter: roundRefusals.map(refusal => ({
+          code: refusal.code,
+          statementId: refusal.statementId,
+          citeKey: refusal.citeKey,
+        })),
+        uncitedAfter: [...owedUncited],
+      })
+      if (roundRefusals.length === 0 && owedUncited.length === 0) {
+        stoppedBecause = 'converged'
+        break
+      }
+      if (round >= maxRewrites + 1) {
+        stoppedBecause = 'budget'
+        break
+      }
+      // NO PROGRESS IS MEASURED, and it stops the loop early: a round that wrote the same text again
+      // will be refused for the same reason, and asking a third time spends a model call to get the
+      // answer already on the table.
+      if (changed.every(entry => !entry.changed)) {
+        stoppedBecause = 'no-progress'
+        break
+      }
+      refusalsBySection = new Map<string, Array<{ readonly detail: string }>>()
+      for (const refusal of roundRefusals) {
+        const sectionId = statements.find(statement => statement.statementId === refusal.statementId)?.sectionId
+        if (sectionId === undefined) continue
+        refusalsBySection.set(sectionId, [
+          ...(refusalsBySection.get(sectionId) ?? []),
+          { detail: refusal.detail },
+        ])
+      }
+    }
+    // A ROUND THAT WAS TOLD TO CHANGE SOMETHING AND CHANGED NOTHING IS STILL A ROUND. Recording the
+    // stop reason on the last entry keeps "the reading was satisfied" apart from "the budget ran out"
+    // and from "the writer repeated itself" — three endings a reader has to be able to tell apart.
+    const lastRound = proseRounds[proseRounds.length - 1]
+    if (lastRound !== undefined) lastRound.stoppedBecause = stoppedBecause
     proseSource = proseLabelling(writer).source
-    const first = written.find(entry => entry !== undefined)
-    proseRoute = proseRouteOf(first)
+    proseRoute = proseRouteOf(firstWrite, firstCheck)
     // The prefix names the channel, not an assumption about it: the deterministic route is not an
     // LLM call, and a producer string reading `llm:` beside `proseSource: 'deterministic'` is two
     // fields of one artifact contradicting each other.
-    if (first !== undefined) producer = `${proseSource === 'model' ? 'llm' : 'deterministic'}:${first.provider}/${first.model}`
+    if (firstWrite !== undefined) {
+      producer = `${proseSource === 'model' ? 'llm' : 'deterministic'}:${firstWrite.provider}/${firstWrite.model}`
+    }
   }
   // WHERE EACH STATEMENT IS, AND WHAT IT IS BOUND TO — in that order.
   //
@@ -3057,18 +3291,11 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // sentence and the EVIDENCE VERSION of the passage it rests on, both as they stand now, so a
   // revision that rewrites the sentence leaves a judgement about text nobody has read — which
   // `checkStatementBindings` refuses at E1 rather than letting the citation transfer silently.
-  const statements = locateStatements(sections)
-  // THE SENTENCE'S OWN READING, when the deployment has a reviewer that can make one. A claim-level
-  // verdict is evidence about the claim and not about the sentence citing the source, and the
-  // difference is not academic: a sentence that states more than the claim did, or states it about a
-  // different system, inherits a `supported` it never earned. Where an assessor is configured, every
-  // citing sentence is assessed against its own text and the refusals below are fatal; where none is,
-  // nothing is inherited either — the bindings carry the claim's verdict and the draft records that no
-  // sentence-level reading was made, which is what `checkStatementSupport` reports.
-  const assessor = ctx.statementAssessor
-  const assessments = assessor === undefined
-    ? []
-    : await assessStatements(assessor, statements, judgements)
+  //
+  // THE SENTENCE'S OWN READING was made above, once per round, by the deployment's assessor when it
+  // has one. A claim-level verdict is evidence about the claim and not about the sentence citing the
+  // source, and the difference is not academic: a sentence that states more than the claim did, or
+  // states it about a different system, inherits a `supported` it never earned.
   // THE REFUSAL APPLIES WHERE A READING WAS POSSIBLE. A deployment with an assessor made one reading
   // per citing sentence, so a sentence it did not cover — or covered at a version that has since been
   // rewritten — is a sentence nothing verified, and that is fatal. A deployment with NO assessor is a
@@ -3086,17 +3313,23 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     )
   }
   const bound = bindJudgements(judgements, statements, assessments)
-  // A REVIEWED SOURCE NO SENTENCE CITES IS REFUSED, not dropped from the reference list. The two ways
-  // to reach it are a manuscript that never stated a position its own evidence supports and a source
-  // that does not bear on this paper — and the second is a judgement that should not have been made,
-  // which a reader has to fix rather than a list that quietly omits it. The REFERENCE LIST is derived
-  // from the bindings below, so an omission here would make the defect invisible instead of refused.
-  if (bound.uncited.length > 0) {
+  // A SOURCE THIS PAPER OWES A CITATION AND NO SENTENCE CITES IS REFUSED, not dropped from the
+  // reference list — but the obligation is over the sources the review found support the claim, and
+  // not over the whole roster. THAT NARROWING IS THE POINT OF THE FIELD BELOW: the roster is what
+  // this run READ, and a source that bears on no sentence the paper needs cannot be cited truthfully,
+  // so requiring a citation for it left the writer with nothing to do but decorate the nearest
+  // sentence — which is what the sentence assessor then refused. What survives is the refusal's own
+  // intent, unchanged and still fatal: a paper whose own supporting evidence goes uncited states no
+  // position its evidence establishes. The uncited sources that carry no such obligation are still
+  // REPORTED (`uncitedSources` on the artifact) rather than dropped, because "a judgement nobody
+  // used" is a fact a reader has to see.
+  const owedUncited = bound.uncited.filter(judgement => owedCiteKeys.has(judgement.citeKey))
+  if (owedUncited.length > 0) {
     throw new Error(
       '[D3-writing] [citation-source-uncited] '
-      + `${bound.uncited.map(judgement => `'${judgement.citeKey}'`).join(', ')} `
-      + 'carry a reviewed judgement about this claim and no sentence in the draft cites them — the'
-      + ' paper states no position its own evidence establishes, or the judgement does not bear on it',
+      + `${owedUncited.map(judgement => `'${judgement.citeKey}'`).join(', ')} `
+      + 'carry a reviewed judgement that their passages establish this claim, and no sentence in the'
+      + ' draft cites them — the paper states no position its own evidence establishes',
     )
   }
   const citations = bound.uses
@@ -3176,6 +3409,17 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // is what makes "which request produced the sentence whose judgement was refused" answerable
         // from the run rather than from a log nobody kept.
         proseRequests,
+        /**
+         * WHAT EACH REWRITE ROUND WAS TOLD AND WHAT IT CHANGED.
+         *
+         * A RUN THAT CONVERGED AND A RUN THAT REPEATED ITSELF BOTH END WITH PROSE, and only this
+         * record tells them apart: the round's `told` is the reading's own refusals verbatim, its
+         * `changed` is a hash before and after per section, and `stoppedBecause` says whether the
+         * reading was satisfied, the budget ran out, or the writer wrote the same text again. It is
+         * empty when no round ran, which is the step's behaviour under a deployment that configured
+         * no writer or set `proseRounds: 0`.
+         */
+        proseRounds,
         proseRequestVersion: PROSE_REQUEST_VERSION,
         // WHAT EACH SECTION WAS WRITTEN FROM, and which sections could not be written. A reader
         // holding only the prose cannot tell a section backed by the run's measurement from one the
@@ -3304,6 +3548,16 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const proseRequestVersion = draft?.proseRequestVersion
   const sectionEvidence = Array.isArray(draft?.sectionEvidence) ? draft.sectionEvidence : []
   const refusedSections = Array.isArray(draft?.refusedSections) ? draft.refusedSections : []
+  // AND THE ROUNDS THAT PRODUCED IT, for the same reason: a revision republishes the writing record,
+  // and a manuscript that arrived at E1 with its rewrite rounds missing would report a draft that was
+  // written once as one that was written once and converged.
+  const proseRounds = Array.isArray(draft?.proseRounds) ? draft.proseRounds : []
+  // AND THE REVIEWED SOURCES NO SENTENCE CITED. D3 REPORTS them rather than dropping them, and this
+  // step dropped the report: a judgement nobody used is either a manuscript that failed to state a
+  // position it holds or a source that does not bear on the paper, and only a reader can say which —
+  // so a reader of the current manuscript has to be able to see it. It is the reviewed counterpart of
+  // the reference list, which is likewise derived from what the sentences cite.
+  const uncitedSources = Array.isArray(draft?.uncitedSources) ? draft.uncitedSources : []
   // AND THE TABLE TOOL'S OWN OUTPUT, for the same reason: this step recomputes no table, and the
   // package's `experiment-tables.md` is D3's rendering of it. A republisher that dropped it left the
   // package without the file, which is the "declared but not produced" defect stated the other way
@@ -3455,7 +3709,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     /** The SECTIONS the previous round left open; see the no-progress test below. */
     let open: ReadonlyArray<string> = []
     for (let round = 1; round <= maxRounds; round += 1) {
-      const analysis = await writer.write({
+      const request: ResearchProseRequest = {
         stepId: 'D4-rebuttal',
         instruction: REBUTTAL_INSTRUCTION,
         // The bodies travel so a patch can be written against them, and the section ids travel so a
@@ -3471,7 +3725,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           round,
         },
         ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-      })
+      }
+      const { result: analysis, check } = await sendCheckedProse(
+        ctx.instructionCheck, request, () => writer.write(request))
+      rebuttalRoute = proseRouteOf(analysis, check)
       // A MALFORMED REPLY IS REFUSED, not partially read. `assertWellFormed` names the exchanges the
       // reply did not state completely; before this, they were dropped on the floor and the step
       // passed with an empty `openIssues`, which is the difference between "the author accepted three
@@ -3495,7 +3752,6 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         requiresRevision: issue.patchState === 'replacement',
       }))
       rebuttalSource = proseLabelling(writer).source
-      rebuttalRoute = proseRouteOf(analysis)
       if (rebuttalSource === 'model') author = modelExecution(analysis)
 
       // The basis each patch is written against is THIS round's body, not the draft's.
@@ -3647,6 +3903,8 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         ...(typeof proseRequestVersion === 'string' ? { proseRequestVersion } : {}),
         sectionEvidence,
         refusedSections,
+        proseRounds,
+        uncitedSources,
         // THE READINGS TRAVEL WITH THE MANUSCRIPT THEY WERE MADE ABOUT. D4 rebuilt the revised draft
         // without this field, so a run under a deployment that HAD read every sentence arrived at E1
         // looking like one that could not — and E1, reading the absence as "no assessor", skipped the

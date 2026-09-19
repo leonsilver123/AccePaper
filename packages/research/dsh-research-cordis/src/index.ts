@@ -54,6 +54,7 @@ import { createDeterministicAdapter } from './deterministic-llm.ts'
 import type { DeterministicProseConfig } from './deterministic-llm.ts'
 import { LlmProseWriter, type LlmProseWriterConfig } from './llm-prose-writer.ts'
 import { LlmReviewer, type LlmReviewerConfig } from './llm-reviewer.ts'
+import { LlmInstructionChecker, type LlmInstructionCheckerConfig } from './llm-instruction-check.ts'
 import { MatplotlibProvider } from './matplotlib-provider.ts'
 import type { SourceRegistration, SourceRegistryMode } from '@deepseek-ai/dsh-research-core'
 import { CitationJsBibliographyWriter } from './bibliography-writer.ts'
@@ -384,6 +385,16 @@ export interface Config {
    * is making a decision it is allowed to make.
    */
   readonly review?: ReviewChannel
+  /**
+   * The pre-send check: who reads an instruction and says whether it carries what the task requires.
+   *
+   * ABSENT BY DEFAULT, for the same reason the other channels are. A deployment that names one has
+   * every prose request read before it is sent, and an instruction the reading finds missing a
+   * required part is REFUSED rather than sent — see {@link LlmInstructionChecker}, which decides and
+   * defaults to nothing. A deployment that names none sends unchecked and records no check, which is a
+   * fact a reader can act on rather than a clearance nobody made.
+   */
+  readonly instructionCheck?: InstructionCheckChannel
 }
 
 /**
@@ -403,6 +414,16 @@ export interface ReviewChannel {
    */
   readonly minimumRounds?: number
 }
+
+/**
+ * The pre-send check a deployment names, when it has one.
+ *
+ * The same routing fields as the review channel and no `instructionsVersion`: this reader's rules are
+ * the required parts the step states, which travel in the request rather than in a version the
+ * deployment holds — see {@link LlmInstructionChecker}.
+ */
+export interface InstructionCheckChannel
+  extends Omit<LlmInstructionCheckerConfig, 'cwd'> {}
 
 /**
  * The drawing capability a deployment names, when it has one.
@@ -616,6 +637,15 @@ export class ResearchEngine extends Service {
    * assessed — rather than a check that quietly does not happen.
    */
   readonly statementAssessor: LlmReviewer | undefined
+  /**
+   * The pre-send instruction reader this deployment named, or undefined when it named none.
+   *
+   * Public for the same reason {@link ResearchEngine.statementAssessor} is: the runner-side service
+   * reads it and hands it to every step that sends prose, so one deployment-level choice governs
+   * whether an instruction is read before it goes out. Undefined is a state the run records — no
+   * check was made — rather than a check that quietly did not happen.
+   */
+  readonly instructionCheck: LlmInstructionChecker | undefined
   /**
    * The `.bib` renderer this deployment supplies.
    *
@@ -868,6 +898,11 @@ export class ResearchEngine extends Service {
         })
     this.statementAssessor = reviewerFor(review?.assessor)
     this.resolutionVerifier = reviewerFor(review?.verifier)
+    // THE PRE-SEND CHECK, on the same `sessionCwd`: a deployment that wants its instructions read
+    // before they are sent names a route here, and one that does not sends unchecked.
+    this.instructionCheck = config.instructionCheck === undefined
+      ? undefined
+      : new LlmInstructionChecker(ctx, { ...config.instructionCheck, cwd: this.sessionCwd })
     // REFUSED HERE, where the value enters, rather than where the review cycle would read it: a floor
     // below one is a misconfiguration that reads as "the manuscript needed no reading at all".
     const minimumRounds = review?.minimumRounds

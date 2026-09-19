@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-20-seven-patterns-and-what-a-sweep-found.md
-2026-09-20-seven-patterns-and-what-a-sweep-found.md: e4145792c98a775405562331e417ade1f09458e5
+2026-09-20-seven-patterns-and-what-a-sweep-found.md: c9774cd8acd80b1ea68a848c452e5a6e1b1bc0f0
 2026-09-20-seven-patterns-and-what-a-sweep-found.zh.md: c972378c7fc45801141cd21f6529df9d741f359d
