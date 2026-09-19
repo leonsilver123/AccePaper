@@ -10,6 +10,8 @@
 
 - **在对话里说出的要求能到达运行,而决定不能**(2026-09-19):`record-change-request`(dsh-research-team 注册的唯一一个工具)把人在对话里提出的要求变成一条盖着 `source: 'conversation'` 的持久修订请求,面板把它显示为**助手记录的**,从不显示为"你确认过的"。**这里没有的**:批准、驳回与投稿根本不能走这条路 —— 它们是决定,走主机那条经过浏览器认证的通道 —— 而且人在对话里说的其他东西(研究方向、判定阈值、换一个语料)还没有门,仍然要在面板里填写或在启动运行时说明。
 
+- **运行在磁盘上的那份文档进了摘要页,而包条件的词汇表改成对着宿主校验**(2026-09-19):运行现在把稿件投影到工作目录(`manuscript.md`、`.docx` / `.tex` / `.pdf`、`figures/`、`assets/`),落盘产物一节把它渲染出来(`data-research-manuscript-directory`):目录路径、磁盘上那份投影的是哪一版文档、运行自己持有的又是哪一版,以及**两条"对不上"的事实分开陈述**,因为补救办法不同 —— 磁盘上字节已不是当初写入的那些的文件(`data-research-manuscript-edited`)靠重新投影修,运行走过了目录投影的那一版(`data-research-manuscript-moved`)靠重渲染修。**投影失败**(`data-research-manuscript-projection-error`)同样渲染,而且它没有别的去处:投影抛异常不会让步骤失败,所以这个面板是它唯一会被看到的地方。宿主还会把这两条事实拼成一句 `drift`,孪生不声明、页面也不渲染 —— 读者看到的文案归本包的语言字典所有。最终包的条件也不再落后:`tests/package-check-vocabulary.spec.ts` **跑宿主自己的 `checkFinalPackage`**,要求它报出的每一条条件在两种语言里都有名字,所以宿主下一次新增条件会让这个测试失败,而不是以裸标识符出现在页面上(`manuscript-typeset` 与 `typeset-complete` 此前正是这样出现的)。
+
 - **质量报告到达页面,并带着它的覆盖清单**(2026-09-17,Q08/M11):`ResearchPackageExport` 增加 `quality?: PaperQualityReport`,`exportRunPackage` 从清单填充它 —— **没有新的 `@Remote` 方法**,字段搭在已有结果上,assembly bundle 内联的那组描述符不变(那正是曾让页面报 `listRuns is not a function` 的陷阱)。客户端孪生同步;`toRunSummary` 把报告从 deliverables 提成面板直接读的四个字段;`selectQuality(summary)`(无 React 的选择器层)喂给 `QualityPanel.tsx`,后者渲染**三张列表**:发现(带规则的 detail **与逐字证据**)、**每条检查及其结果**(`defect-found` / `no-defect-found` / `not-applicable` / `not-executed`)与答不出来的理由、以及没有任何规则能回答的问题。没有导出包的运行会说「没有报告」,而不是渲染一份空的发现列表。发现与结果的标签是**写出来的、不是拼出来的**,所以新增一个 code 在补上双语之前是编译错误。**这里没有的**:发现的 `where` 是论文印出来的标签,不是指向稿件的链接 —— 把发现定位到正文里需要页面持有各节正文,而快照没有;面板只报告不做决定,所以回答一条发现仍然要用它旁边的修订面板。
 
 

@@ -178,6 +178,130 @@ describe('summaryInputFrom — what the run left on disk', () => {
   })
 })
 
+/** One wire snapshot of a run with nothing on it but the working directory under test. */
+function snapshotWith(directory: {
+  readonly directory: string
+  readonly projected: boolean
+  readonly projectedVersion: number | null
+  readonly currentVersion: number | null
+  readonly runMoved: boolean
+  readonly edited: ReadonlyArray<string>
+  readonly projectionError?: string
+}) {
+  return summaryInputFrom({
+    run: { runId: 'run-1', steps: [] },
+    catalog: [],
+    gates: [],
+    artifacts: [],
+    steps: [],
+    manuscriptDirectory: directory,
+  })
+}
+
+describe('summaryInputFrom — the run\'s working directory', () => {
+  it('carries the directory, the version it projects and the version the run holds', () => {
+    // The one document the run maintains on disk. Which version of the document the copy on disk IS
+    // is the first thing a person about to edit it has to know, and the wire carried both versions
+    // while the view named neither.
+    const input = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: true,
+      projectedVersion: 2,
+      currentVersion: 3,
+      runMoved: true,
+      edited: [],
+    })
+
+    expect(input.manuscriptDirectory).toEqual({
+      directory: 'H:/manuscripts/run-1',
+      projected: true,
+      projectedVersion: 2,
+      currentVersion: 3,
+      runMoved: true,
+      edited: [],
+      projectionError: null,
+    })
+  })
+
+  it('keeps a file changed on disk and a run that moved as two facts', () => {
+    // THE TWO HAVE DIFFERENT REMEDIES — a re-projection for the files, a re-render for the run — so a
+    // mapping that folded them into one "out of sync" would send the reader to the wrong repair. Each
+    // case here holds one fact and not the other.
+    const filesOnly = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: true,
+      projectedVersion: 3,
+      currentVersion: 3,
+      runMoved: false,
+      edited: ['manuscript.docx', 'manuscript.tex'],
+    }).manuscriptDirectory
+    expect(filesOnly?.edited).toEqual(['manuscript.docx', 'manuscript.tex'])
+    expect(filesOnly?.runMoved).toBe(false)
+
+    const runOnly = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: true,
+      projectedVersion: 3,
+      currentVersion: 5,
+      runMoved: true,
+      edited: [],
+    }).manuscriptDirectory
+    expect(runOnly?.runMoved).toBe(true)
+    expect(runOnly?.edited).toEqual([])
+  })
+
+  it('carries a failed projection rather than leaving it to the step status', () => {
+    // A projection that failed does NOT fail the step, so the panel is the only place it is seen. The
+    // host reads it off the run's own audit log, which is why a run taken back from a file still
+    // reports the failure the run recorded.
+    const reported = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: false,
+      projectedVersion: null,
+      currentVersion: 1,
+      runMoved: false,
+      edited: [],
+      projectionError: 'ENOSPC: no space left on device, write',
+    }).manuscriptDirectory
+    expect(reported?.projectionError).toContain('ENOSPC')
+    // And a directory nothing failed on reports NO failure, not an empty one: the page renders a
+    // failure on the host's report of one and on nothing else.
+    const clean = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: true,
+      projectedVersion: 1,
+      currentVersion: 1,
+      runMoved: false,
+      edited: [],
+    }).manuscriptDirectory
+    expect(clean?.projectionError).toBeNull()
+  })
+
+  it('reports no directory when the host named none', () => {
+    // Null is not a directory that projects nothing — that one arrives with `projected: false`, and
+    // the two must not be collapsed in the other direction either.
+    const input = summaryInputFrom({
+      run: { runId: 'run-1', steps: [] },
+      catalog: [],
+      gates: [],
+      artifacts: [],
+      steps: [],
+    })
+    expect(input.manuscriptDirectory).toBeUndefined()
+    expect(toRunSummary(input).manuscriptDirectory).toBeNull()
+
+    const projectsNothing = snapshotWith({
+      directory: 'H:/manuscripts/run-1',
+      projected: false,
+      projectedVersion: null,
+      currentVersion: null,
+      runMoved: false,
+      edited: [],
+    })
+    expect(toRunSummary(projectsNothing).manuscriptDirectory?.projected).toBe(false)
+  })
+})
+
 describe('summaryInputFrom — a step that failed mid-execution', () => {
   it('carries the execution error, so the view can name the cause', () => {
     // An independent audit fed a real response through this mapping and found the step reaching

@@ -42,6 +42,7 @@ import type {
   StepView,
   TrinityComponent,
   PaperQualityReportView,
+  ManuscriptDirectoryView,
 } from './summary.ts'
 import { RUN_EXECUTIONS } from './summary.ts'
 
@@ -135,6 +136,32 @@ export interface WireStepApproval {
   readonly targetRefs: ReadonlyArray<{ readonly artifactId: string; readonly version: number }>
 }
 
+/**
+ * The run's working directory as the wire carries it.
+ *
+ * THE WIRE ALSO CARRIES A `drift` SENTENCE, and this twin does not declare it: the host composes it
+ * from exactly {@link edited} and {@link runMoved}, and the page composes its own from the same two
+ * facts because the copy a reader sees is owned by this package's locale. Carrying the host's
+ * sentence as well would put the same two facts on screen twice, once in the reader's language and
+ * once not.
+ */
+export interface WireManuscriptDirectory {
+  /** The directory the run's document is written to. */
+  readonly directory: string
+  /** Whether the directory holds a manifest this build can read. */
+  readonly projected: boolean
+  /** The document version the directory projects, or null when it projects none. */
+  readonly projectedVersion: number | null
+  /** The document version the run holds now, or null when it holds none. */
+  readonly currentVersion: number | null
+  /** Whether the run holds a version the directory does not project. */
+  readonly runMoved: boolean
+  /** Files on disk whose bytes are not the ones the manifest recorded. */
+  readonly edited: ReadonlyArray<string>
+  /** Why the last projection failed, when one did. */
+  readonly projectionError?: string
+}
+
 /** The complete payload one `run` returns. */
 export interface WireRunSnapshot {
   readonly run: {
@@ -189,6 +216,15 @@ export interface WireRunSnapshot {
    */
   readonly execution?: string
   readonly executionError?: string
+  /**
+   * The run's working directory: where its document is, and what is wrong with it.
+   *
+   * OPTIONAL on the same terms as the fields above: a host that predates the field still satisfies
+   * this declaration. Null and absent are read alike — neither names a directory, and a deployment
+   * that configured none is a different fact from a directory that projects nothing, which arrives
+   * as an object with `projected: false`.
+   */
+  readonly manuscriptDirectory?: WireManuscriptDirectory | null
 }
 
 /**
@@ -661,6 +697,33 @@ export function summaryInputFrom(snapshot: WireRunSnapshot): RunSummaryInput {
     ...(typeof snapshot.profileEligible === 'boolean' ? { profileEligible: snapshot.profileEligible } : {}),
     ...(typeof snapshot.submissionReady === 'boolean' ? { submissionReady: snapshot.submissionReady } : {}),
     ...(typeof snapshot.readinessNote === 'string' ? { readinessNote: snapshot.readinessNote } : {}),
+    // THE RUN'S DOCUMENT ON DISK, carried through field by field so the two drift facts stay two:
+    // the page states a re-projection and a re-render as the different repairs they are.
+    ...(snapshot.manuscriptDirectory === undefined || snapshot.manuscriptDirectory === null
+      ? {}
+      : { manuscriptDirectory: manuscriptDirectoryOf(snapshot.manuscriptDirectory) }),
+  }
+}
+
+/**
+ * The run's working directory, from the snapshot's own record.
+ *
+ * REPORT, DO NOT DEFAULT, in the one place a default would be reachable: `projectionError` is
+ * absent on a host that recorded no failure and null here, so the page renders a failure on the
+ * host's report of one and on nothing else — the same rule `saveFailure` follows.
+ *
+ * @param wire - the field as the snapshot carries it.
+ * @returns the view model, with every fact the host named and nothing invented.
+ */
+function manuscriptDirectoryOf(wire: WireManuscriptDirectory): ManuscriptDirectoryView {
+  return {
+    directory: wire.directory,
+    projected: wire.projected,
+    projectedVersion: wire.projectedVersion,
+    currentVersion: wire.currentVersion,
+    runMoved: wire.runMoved,
+    edited: wire.edited,
+    projectionError: wire.projectionError ?? null,
   }
 }
 

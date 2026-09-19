@@ -64,6 +64,32 @@ function packageView(overrides: Partial<DeliverableView> = {}): DeliverableView 
   }
 }
 
+/** One working directory, as the host reports it. */
+function directoryView(overrides: Partial<NonNullable<RunSummaryInput['manuscriptDirectory']>> = {}) {
+  return {
+    directory: 'H:/manuscripts/run_package_001',
+    projected: true,
+    projectedVersion: 3,
+    currentVersion: 3,
+    runMoved: false,
+    edited: [],
+    projectionError: null,
+    ...overrides,
+  }
+}
+
+/** A summary carrying the run's working directory and nothing else. */
+function summaryWithDirectory(directory: NonNullable<RunSummaryInput['manuscriptDirectory']>) {
+  const input: RunSummaryInput = {
+    runId: 'run_package_001',
+    source: 'live',
+    status: 'awaiting-approval',
+    steps: [], artifacts: [], gates: [], abstentions: [], degradations: [], deliverables: [],
+    manuscriptDirectory: directory,
+  }
+  return toRunSummary(input)
+}
+
 afterEach(cleanup)
 
 describe('the summary states which package this is', () => {
@@ -141,5 +167,68 @@ describe('the summary states which package this is', () => {
     })
     // The refusal is shown BESIDE the files that are still there, not instead of them.
     expect(document.querySelector('[data-research-package-check="production-evidence"]')).not.toBeNull()
+  })
+})
+
+describe('the summary states the document the run maintains on disk', () => {
+  it('names the directory and the version of the document it projects', () => {
+    render(createElement(SummaryPanel, { summary: summaryWithDirectory(directoryView()), t }))
+
+    const node = document.querySelector('[data-research-manuscript-directory]')
+    expect(node?.getAttribute('data-research-manuscript-directory')).toBe('H:/manuscripts/run_package_001')
+    // The path is on screen, because the reader this is for is about to go and open the file.
+    expect(node?.textContent).toContain('H:/manuscripts/run_package_001')
+    expect(node?.textContent).toContain('the directory projects document version 3')
+    // Neither drift fact holds, so neither is claimed.
+    expect(document.querySelector('[data-research-manuscript-moved]')).toBeNull()
+    expect(document.querySelector('[data-research-manuscript-edited]')).toBeNull()
+  })
+
+  it('states a file changed on disk and a run that moved apart, each with its own remedy', () => {
+    // THE TWO ARE NOT ONE "OUT OF SYNC": a file whose bytes changed is repaired by re-projecting, and
+    // a run that moved past the projected version is repaired by re-rendering. A page that showed one
+    // flag would send the reader to the wrong repair, so both are asserted here with their own words.
+    render(createElement(SummaryPanel, {
+      summary: summaryWithDirectory(directoryView({
+        projectedVersion: 3,
+        currentVersion: 5,
+        runMoved: true,
+        edited: ['manuscript.docx', 'manuscript.tex'],
+      })),
+      t,
+    }))
+
+    const moved = document.querySelector('[data-research-manuscript-moved]')
+    expect(moved?.textContent).toContain('projects document version 3')
+    expect(moved?.textContent).toContain('holds version 5')
+    expect(moved?.textContent).toContain('re-render')
+
+    const edited = document.querySelector('[data-research-manuscript-edited]')
+    expect(edited?.textContent).toContain('manuscript.docx, manuscript.tex')
+    expect(edited?.textContent).toContain('re-projecting')
+  })
+
+  it('renders a failed projection, which no step status reports', () => {
+    // A projection failure does not fail the step, so this panel is the only place it is ever seen.
+    render(createElement(SummaryPanel, {
+      summary: summaryWithDirectory(directoryView({
+        projected: false,
+        projectedVersion: null,
+        projectionError: 'ENOSPC: no space left on device, write',
+      })),
+      t,
+    }))
+
+    const failed = document.querySelector('[data-research-manuscript-projection-error]')
+    expect(failed?.textContent).toContain('ENOSPC')
+    // A projection that failed says nothing about which version landed, and the page does not claim
+    // one: it states that nothing has been projected into the directory.
+    expect(document.querySelector('[data-research-manuscript-directory]')?.textContent)
+      .toContain(en['deliverables.manuscriptNotProjected'])
+  })
+
+  it('renders nothing about a directory when the host named none', () => {
+    render(createElement(SummaryPanel, { summary: summaryWith(packageView()), t }))
+    expect(document.querySelector('[data-research-manuscript-directory]')).toBeNull()
   })
 })

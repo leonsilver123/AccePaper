@@ -81,6 +81,14 @@ export const zh = {
   'deliverables.exporting': '正在导出…',
   'deliverables.exportRefused': '导出被拒绝:{message}',
   'deliverables.directory': '目录:{directory}',
+  // 运行在磁盘上维护的那一份文档。两条"对不上"的事实各说各的,因为补救办法不同:文件被动过是重新投影,
+  // 运行走过了目录投影的那一版是重渲染。投影失败单独一条,它不落在漂移上 —— 漂移说的是投影过一次的目录。
+  'deliverables.manuscriptDirectory': '工作目录:{directory}',
+  'deliverables.manuscriptProjected': '目录投影的是文档版本 {version}',
+  'deliverables.manuscriptNotProjected': '目录里没有能读的清单,还没有投影过任何版本',
+  'deliverables.manuscriptMoved': '目录投影的是文档版本 {projected},运行现在持有版本 {current}:编译出的文件渲染的是运行已经走过的版本,要重渲染,不是重新投影',
+  'deliverables.manuscriptEdited': '这些文件在磁盘上已经不是写入时的字节:{files} —— 重新投影会重写它们,改过的文件通过导入交回',
+  'deliverables.manuscriptProjectionFailed': '上一次投影失败:{message}',
   'steps.total': '共 {total} 步',
   'steps.byStatus': '通过 {passed} · 进行中 {in_progress} · 等人工 {gated} · 走不通 {blocked} · 失败 {failed} · 未开始 {pending}',
   'step.attempt': '第 {n} 次尝试',
@@ -415,6 +423,8 @@ export const zh = {
   'packageCheck.artifacts-current': '产物都是当前版本',
   'packageCheck.deliverables-present': '落地文件已写出',
   'packageCheck.run-saved': '这次运行已落盘',
+  'packageCheck.manuscript-typeset': '排版稿渲染的正是这次运行当前持有的那一版文档',
+  'packageCheck.typeset-complete': '部署声明的投稿格式都有对应文件,且字节与编译记录一致',
 } as const
 
 /** The research dictionary key union. */
@@ -506,6 +516,15 @@ export const en: Record<ResearchKey, string> = {
   'deliverables.exporting': 'Exporting…',
   'deliverables.exportRefused': 'Export refused: {message}',
   'deliverables.directory': 'directory: {directory}',
+  // The one document the run maintains on disk. The two staleness facts are stated apart because
+  // their remedies differ, and a projection failure is its own line: drift is a directory that WAS
+  // projected, a failure is one that was not.
+  'deliverables.manuscriptDirectory': 'working directory: {directory}',
+  'deliverables.manuscriptProjected': 'the directory projects document version {version}',
+  'deliverables.manuscriptNotProjected': 'the directory holds no manifest this build can read, so nothing has been projected into it',
+  'deliverables.manuscriptMoved': 'the directory projects document version {projected} and the run now holds version {current}: the compiled files render a version the run has left, so the remedy is a re-render and not a re-projection',
+  'deliverables.manuscriptEdited': 'these files on disk are no longer the bytes this directory was written with: {files} — re-projecting rewrites them, and an edit to hand back goes through the import',
+  'deliverables.manuscriptProjectionFailed': 'the last projection failed: {message}',
   'steps.total': '{total} steps',
   'steps.byStatus': 'passed {passed} · in-progress {in_progress} · gated {gated} · blocked {blocked} · failed {failed} · pending {pending}',
   'step.attempt': 'attempt {n}',
@@ -825,4 +844,6 @@ export const en: Record<ResearchKey, string> = {
   'packageCheck.artifacts-current': 'every artifact is the current version',
   'packageCheck.deliverables-present': 'the files were written to disk',
   'packageCheck.run-saved': 'the run reached the disk',
+  'packageCheck.manuscript-typeset': 'the typeset form renders the version of the document the run holds',
+  'packageCheck.typeset-complete': 'every submission format the deployment declared has its document, carrying the bytes the compile recorded',
 }

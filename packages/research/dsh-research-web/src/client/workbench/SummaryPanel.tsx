@@ -25,6 +25,9 @@ export interface SummaryPanelProps extends PanelProps {
 export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps) {
   const [exporting, setExporting] = useState<'draft' | 'final' | undefined>(undefined)
   const [exportError, setExportError] = useState<string | undefined>(undefined)
+  // The run's working directory, when the host reports one. Null is the host naming none, which is
+  // not a directory that projects nothing — that one arrives with `projected: false`.
+  const manuscript = summary.manuscriptDirectory
 
   const exportPackage = (mode: 'draft' | 'final'): void => {
     if (onExportPackage === undefined || exporting !== undefined) return
@@ -297,6 +300,47 @@ export function SummaryPanel({ summary, t, onExportPackage }: SummaryPanelProps)
                 )}
               </li>
             ))}
+          </ul>
+        )}
+        {/* THE ONE DOCUMENT THE RUN MAINTAINS, beside the package and the snapshot. A person who
+            opens `manuscript.docx` to fix a sentence has to know which version of the document that
+            copy is and whether anything has moved since the run wrote it — and a projection that
+            failed does NOT fail the step, so this is the only place it is ever seen.
+            THE TWO DRIFT FACTS ARE STATED SEPARATELY, because they have different remedies: a file
+            changed on disk is re-projected, a run that moved past the projected version is
+            re-rendered. One "out of sync" line would send the reader to the wrong repair. */}
+        {manuscript !== null && (
+          <ul className={css.list} data-research-manuscript-directory={manuscript.directory}>
+            <li className={css.row}>
+              <span className={css.name}>
+                {t('deliverables.manuscriptDirectory', { directory: manuscript.directory })}
+              </span>
+              <span className={css.note}>
+                {manuscript.projected && manuscript.projectedVersion !== null
+                  ? t('deliverables.manuscriptProjected', { version: String(manuscript.projectedVersion) })
+                  : t('deliverables.manuscriptNotProjected')}
+              </span>
+              {manuscript.runMoved && (
+                <span className={`${css.tag} ${css['s-gated']}`} data-research-manuscript-moved="">
+                  {t('deliverables.manuscriptMoved', {
+                    projected: String(manuscript.projectedVersion),
+                    current: String(manuscript.currentVersion),
+                  })}
+                </span>
+              )}
+              {manuscript.edited.length > 0 && (
+                <span className={css.tag} data-research-manuscript-edited="">
+                  {t('deliverables.manuscriptEdited', { files: manuscript.edited.join(', ') })}
+                </span>
+              )}
+              {/* The failure is not folded into the drift above: a directory with drifted files is
+                  a directory that WAS projected, and a projection that threw is one that was not. */}
+              {manuscript.projectionError !== null && (
+                <span className={`${css.tag} ${css['s-failed']}`} data-research-manuscript-projection-error="">
+                  {t('deliverables.manuscriptProjectionFailed', { message: manuscript.projectionError })}
+                </span>
+              )}
+            </li>
           </ul>
         )}
         {/* THE CONTROLS BELONG TO THE RUN, not to a package file that exists yet: a study taken back

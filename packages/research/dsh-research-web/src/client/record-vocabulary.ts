@@ -79,6 +79,12 @@ const ARTIFACT_NAME_KEYS: Readonly<Record<ArtifactSlug, ResearchKey>> = {
  * These are the answers to "why is this still a working draft", so a reader who is told that is owed
  * the sentence saying which condition is unmet — in their own language, because
  * `no-refused-sections` is the answer to a question about THEIR manuscript.
+ *
+ * THE HOST'S OWN ANSWER IS THE COMPLETENESS CHECK. The union is a hand-written twin, because this
+ * package depends on no research package at runtime, so `tests/package-check-vocabulary.spec.ts`
+ * runs the host's `checkFinalPackage` and requires a name here for every condition it returns — in
+ * both languages. The two the host gained last (`manuscript-typeset`, `typeset-complete`) reached
+ * the page as raw identifiers until that spec existed.
  */
 export type PackageCheckCode =
   | 'production-evidence' | 'manuscript-produced' | 'every-step-closed'
@@ -86,6 +92,10 @@ export type PackageCheckCode =
   | 'compiled-document-complete' | 'review-complete'
   | 'approval-recorded' | 'required-files-present' | 'journal-rules-verified'
   | 'artifacts-current' | 'deliverables-present' | 'run-saved'
+  /** The typeset form is a render of a superseded document. */
+  | 'manuscript-typeset'
+  /** A submission format the deployment declared has no document, or one that does not survive it. */
+  | 'typeset-complete'
 
 /** What each condition is called, in the reader's language. */
 const PACKAGE_CHECK_KEYS: Readonly<Record<PackageCheckCode, ResearchKey>> = {
@@ -103,6 +113,8 @@ const PACKAGE_CHECK_KEYS: Readonly<Record<PackageCheckCode, ResearchKey>> = {
   'artifacts-current': 'packageCheck.artifacts-current',
   'deliverables-present': 'packageCheck.deliverables-present',
   'run-saved': 'packageCheck.run-saved',
+  'manuscript-typeset': 'packageCheck.manuscript-typeset',
+  'typeset-complete': 'packageCheck.typeset-complete',
 }
 
 /**

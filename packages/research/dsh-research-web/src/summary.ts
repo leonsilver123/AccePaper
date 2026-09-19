@@ -271,6 +271,14 @@ export interface RunSummaryInput {
   readonly submissionReady?: boolean
   /** Why the run is not ready, in the host's own words. */
   readonly readinessNote?: string
+  /**
+   * The run's working directory, when the host reports one.
+   *
+   * Absent means the host named none — a deployment that configured no directory says nothing here,
+   * which is a different fact from a directory that projects nothing (which arrives with
+   * `projected: false`).
+   */
+  readonly manuscriptDirectory?: ManuscriptDirectoryView
   /** Whether the host still has a driver on this run; see {@link RunExecution}. */
   readonly execution?: string
   /** Why the driver stopped with a failure, when it did. */
@@ -378,6 +386,43 @@ export interface PaperQualityReportView {
   readonly summary: string
 }
 
+/**
+ * The run's working directory, as the page renders it.
+ *
+ * THE DOCUMENT THE RUN MAINTAINS, on disk, between steps. A person who intends to edit
+ * `manuscript.docx` has to know which version of the document the copy on disk is, whether anything
+ * on disk has been changed since the run wrote it, and whether a projection failed.
+ *
+ * TWO STALENESS FACTS, KEPT APART. {@link edited} is about the FILES — bytes on disk that are not
+ * the ones the directory was written with, which a re-projection repairs. {@link runMoved} is about
+ * the RUN — the directory projects a document version the run has left, which a re-render repairs.
+ * A view that reported one "out of sync" flag would send the reader to the wrong one of the two.
+ *
+ * {@link projectionError} has no other home: a projection that failed does not fail the step, so
+ * the panel is the only place it is ever seen.
+ */
+export interface ManuscriptDirectoryView {
+  /** The directory the run's document is written to. */
+  readonly directory: string
+  /** Whether the directory holds a manifest this build can read. */
+  readonly projected: boolean
+  /** The document version the directory projects, or null when it projects none. */
+  readonly projectedVersion: number | null
+  /** The document version the run holds now, or null when it holds none. */
+  readonly currentVersion: number | null
+  /** Whether the run holds a version the directory does not project. */
+  readonly runMoved: boolean
+  /** Files on disk whose bytes are not the ones the manifest recorded. */
+  readonly edited: ReadonlyArray<string>
+  /**
+   * Why the last projection failed, or null when none was reported.
+   *
+   * Read off the run's own audit log by the host, so a run read back from its file in a later
+   * process reports the failure the run recorded.
+   */
+  readonly projectionError: string | null
+}
+
 /** Derived + raw presentation model handed to the view. */
 export interface RunSummary {
   readonly runId: string
@@ -398,6 +443,15 @@ export interface RunSummary {
   readonly profileEligible: boolean | null
   readonly submissionReady: boolean | null
   readonly readinessNote: string | null
+  /**
+   * The run's working directory, or null when the host named none.
+   *
+   * Null is not "a directory that projects nothing": a host that reports no directory has told the
+   * reader nothing about one, and rendering its silence as an empty directory would state a fact
+   * nobody observed. The two facts are distinct on the wire too — see
+   * {@link ManuscriptDirectoryView.projected}.
+   */
+  readonly manuscriptDirectory: ManuscriptDirectoryView | null
   /**
    * Whether a driver is on the run, or null when the host named none.
    *
@@ -524,6 +578,9 @@ export function toRunSummary(input: RunSummaryInput): RunSummary {
     profileEligible: input.profileEligible ?? null,
     submissionReady: input.submissionReady ?? null,
     readinessNote: input.readinessNote ?? null,
+    // REPORT, do not default: absent means the host named no directory, which is not the same as a
+    // directory that projects no document.
+    manuscriptDirectory: input.manuscriptDirectory ?? null,
     // REPORT, do not default. An unrecognised value is a host saying something this build cannot
     // name; folding it into `stopped` would show a running study as an abandoned one.
     execution: RUN_EXECUTIONS.find(execution => execution === input.execution) ?? null,
