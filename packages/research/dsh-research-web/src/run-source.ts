@@ -43,6 +43,7 @@ import type {
   TrinityComponent,
   PaperQualityReportView,
 } from './summary.ts'
+import { RUN_EXECUTIONS } from './summary.ts'
 
 /** One gate verdict as the wire carries it. Twin of the Host's projection. */
 export interface WireGateVerdict {
@@ -401,7 +402,8 @@ const STEP_STATUSES: ReadonlyArray<StepStatus> = ['pending', 'in_progress', 'gat
 const PHASES: ReadonlyArray<Phase> = ['A', 'B', 'C', 'D', 'E']
 const COMPONENTS: ReadonlyArray<TrinityComponent> = ['A', 'B', 'C']
 
-const RUN_EXECUTIONS: ReadonlyArray<RunExecution> = ['running', 'stopped', 'failed']
+// THE LIST LIVES IN `summary.ts`, beside the union it has to cover. A second copy here is what
+// let both fall behind the Host's states without anything failing to notice.
 
 function asStepStatus(value: string): StepStatus {
   // REPORT, do not default. Defaulting to `pending` showed a step the Host had advanced as 未开始

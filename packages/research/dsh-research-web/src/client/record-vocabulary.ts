@@ -41,7 +41,7 @@ export type ArtifactSlug =
   | 'paper-outline'
   | 'manuscript'
   | 'rebuttal'
-  | 'formatted-manuscript'
+  | 'typeset'
   | 'submission-record'
 
 /** What each artifact is called, in the reader's language. */
@@ -69,7 +69,7 @@ const ARTIFACT_NAME_KEYS: Readonly<Record<ArtifactSlug, ResearchKey>> = {
   'paper-outline': 'artifactName.paper-outline',
   manuscript: 'artifactName.manuscript',
   rebuttal: 'artifactName.rebuttal',
-  'formatted-manuscript': 'artifactName.formatted-manuscript',
+  typeset: 'artifactName.typeset',
   'submission-record': 'artifactName.submission-record',
 }
 

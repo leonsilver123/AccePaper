@@ -11,9 +11,9 @@ export const zh = {
   'run.action': '运行流水线',
   'run.id': '运行 {runId}',
   'run.execution.running': '执行中:本进程正在驱动它',
+  'run.execution.unreadable': '读不懂:磁盘上有一份这个版本解析不了的存档',
   'run.execution.stopped': '已停止:本进程没有驱动它的执行器',
   'run.execution.failed': '执行失败',
-  'run.execution.unreadable': '读不懂:磁盘上有一份这个版本解析不了的存档',
   'run.running': '运行中…',
   'run.revision': '项目版本 {revision}',
   // 一次运行的标识与驱动状态:回答"我问的是哪一次""还有东西在跑吗",收在展开里而不是和
@@ -385,7 +385,7 @@ export const zh = {
   'artifactName.paper-outline': '论文大纲',
   'artifactName.manuscript': '论文稿件',
   'artifactName.rebuttal': '答辩意见',
-  'artifactName.formatted-manuscript': '排版后的稿件',
+  'artifactName.typeset': '排版后的稿件',
   'artifactName.submission-record': '投稿记录',
 
   // --- 每一步展开后看到的东西 ---
@@ -795,7 +795,7 @@ export const en: Record<ResearchKey, string> = {
   'artifactName.paper-outline': 'paper outline',
   'artifactName.manuscript': 'manuscript',
   'artifactName.rebuttal': 'rebuttal',
-  'artifactName.formatted-manuscript': 'formatted manuscript',
+  'artifactName.typeset': 'typeset manuscript',
   'artifactName.submission-record': 'submission record',
 
   // --- What one step's expansion holds ---

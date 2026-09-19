@@ -1,4 +1,10 @@
 .root {
+  /* This sheet scrolls and paints module surfaces (the rows below), so its
+     scrollbar states the l2 elevation pair; see ui-theme styles/scrollbar.css
+     for the rebinding contract. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -16,8 +22,8 @@
   padding: 2px 8px;
   border-radius: 999px;
   corner-shape: round;
-  background: #fff4e5;
-  color: #b25e00;
+  background: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-label-primary);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -38,7 +44,7 @@
 .header .runId {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: #5b6470;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .statusPill {
@@ -50,14 +56,14 @@
   text-transform: capitalize;
 }
 
-.status-running { background: #e6f0ff; color: #1f6feb; }
-.status-completed { background: #e7f7ec; color: #1a7f37; }
-.status-abstained { background: #fdeef0; color: #c2410c; }
-.status-failed { background: #fdeef0; color: #c2410c; }
-.status-degraded { background: #fff4e5; color: #b25e00; }
+.status-running { background: var(--dsw-alias-state-business-tertiary); color: var(--dsw-alias-label-primary); }
+.status-completed { background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-label-primary); }
+.status-abstained { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
+.status-failed { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
+.status-degraded { background: var(--dsw-alias-state-warn-tertiary); color: var(--dsw-alias-label-primary); }
 
 .section {
-  border: 1px solid #e6e8ec;
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   padding: 12px;
 }
@@ -68,7 +74,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #5b6470;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .stepList, .gateList, .artifactList, .abstentionList, .degradationList {
@@ -87,12 +93,12 @@
   align-items: center;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #f7f8fa;
+  background: var(--dsw-alias-bg-module-platform);
 }
 
 .stepIndex {
   font-variant-numeric: tabular-nums;
-  color: #5b6470;
+  color: var(--dsw-alias-label-secondary);
   font-weight: 600;
 }
 
@@ -102,7 +108,7 @@
 }
 
 .stepName small {
-  color: #8a93a0;
+  color: var(--dsw-alias-label-caption);
   font-size: 11px;
 }
 
@@ -120,32 +126,32 @@
   font-weight: 600;
 }
 
-.s-pending { background: #eef0f3; color: #5b6470; }
-.s-in_progress { background: #e6f0ff; color: #1f6feb; }
-.s-gated { background: #fff4e5; color: #b25e00; }
-.s-passed { background: #e7f7ec; color: #1a7f37; }
-.s-blocked { background: #fdeef0; color: #c2410c; }
-.s-failed { background: #fdeef0; color: #c2410c; }
+.s-pending { background: var(--dsw-alias-button-ghost-active-fill); color: var(--dsw-alias-label-secondary); }
+.s-in_progress { background: var(--dsw-alias-state-business-tertiary); color: var(--dsw-alias-label-primary); }
+.s-gated { background: var(--dsw-alias-state-warn-tertiary); color: var(--dsw-alias-label-primary); }
+.s-passed { background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-label-primary); }
+.s-blocked { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
+.s-failed { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
 
-.gate-passed { background: #e7f7ec; color: #1a7f37; }
-.gate-blocked { background: #fdeef0; color: #c2410c; }
-.gate-failed { background: #fdeef0; color: #c2410c; }
-.gate-abstained { background: #fdeef0; color: #c2410c; }
+.gate-passed { background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-label-primary); }
+.gate-blocked { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
+.gate-failed { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
+.gate-abstained { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-label-primary); }
 
 .humanGate {
-  background: #f3e8ff;
-  color: #7c3aed;
+  background: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-label-primary);
 }
 
 .holdReason {
   font-size: 11px;
-  color: #b25e00;
+  color: var(--dsw-alias-state-warn-label);
 }
 
 .artifactRow, .gateRow, .abstentionRow, .degradationRow {
   padding: 6px 8px;
   border-radius: 6px;
-  background: #f7f8fa;
+  background: var(--dsw-alias-bg-module-platform);
 }
 
 .artifactRow .slug {
@@ -155,7 +161,7 @@
 }
 
 .artifactRow .summary {
-  color: #5b6470;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
 }
 
@@ -165,17 +171,17 @@
 }
 
 .humanPending {
-  border-color: #e0c3ff;
-  background: #faf5ff;
+  border-color: var(--dsw-alias-state-warn-secondary);
+  background: var(--dsw-alias-state-warn-tertiary);
 }
 
 .note {
-  color: #5b6470;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   margin: 0 0 6px;
 }
 
 .empty {
-  color: #8a93a0;
+  color: var(--dsw-alias-label-caption);
   font-style: italic;
 }

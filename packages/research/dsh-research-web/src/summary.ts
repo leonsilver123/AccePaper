@@ -235,9 +235,23 @@ export interface DegradationNote {
  * once when the page is reloaded mid-flight — and a reader told only one of those learns the wrong
  * thing.
  */
-export type RunExecution = 'running' | 'stopped' | 'failed'
+export type RunExecution = 'running' | 'stopped' | 'failed' | 'unreadable'
 
-const RUN_EXECUTIONS: ReadonlyArray<RunExecution> = ['running', 'stopped', 'failed']
+/**
+ * Every state the Host can name, in the order the view tests against them.
+ *
+ * ONE HOME. This list was written twice — here and in `run-source.ts` — and both copies fell behind
+ * the Host's `ResearchRunExecution` when it gained `unreadable`: a run whose stored snapshot this
+ * build cannot parse was displayed as an unrecognised state, with its own dictionary entry
+ * (`run.execution.unreadable`, in both languages) sitting right there unreachable. A twin union that
+ * drifts is the failure this file's own header warns about, so the drift is now a TYPE error rather
+ * than a screen nobody reads twice.
+ */
+export const RUN_EXECUTIONS = ['running', 'stopped', 'failed', 'unreadable'] as const satisfies ReadonlyArray<RunExecution>
+
+type MissingExecution = Exclude<RunExecution, (typeof RUN_EXECUTIONS)[number]>
+const EVERY_EXECUTION_IS_LISTED: MissingExecution extends never ? true : never = true
+void EVERY_EXECUTION_IS_LISTED
 
 /** Flattened input the view consumes. A T19-B runner snapshot maps into this. */
 export interface RunSummaryInput {
