@@ -43,12 +43,7 @@ Seven defects were fixed one at a time in the research layer on 2026-09-19/20, e
 - A repaired run is exportable as a draft and refused as the package a journal receives, with the reason stated. `start-run.spec.ts`'s approval case now expects two unmet conditions where it expected three, because the third — the journal's — is the one this change fixed.
 - The panel and `run-summary.md` now agree about a step's producer, because both read it from the artifacts; the declared brand is beside it under its own name.
 - Five spec files were strengthened rather than pruned. The tests that were tautologies now fail when their subject breaks, which was not true before — each was verified by reverting the fix and watching it fail.
-- The verification limit is stated rather than implied: `packages/research/dsh-research-web/tests/package-check-vocabulary.spec.ts` is what forced the client vocabulary entry for `manuscript-gated`, so a new condition reaches the screen named in both languages or not at all. Two statements in `packages/research/dsh-research-team/README.md` — committed in `edc5a636` while this work was
-in flight, and owned by another writer — are now stale and are left for that writer: the "What is not here"
-paragraph still says `materializeManuscript` re-renders without re-running E1's gates and that "what a hand
-edit costs is caught by the approval", which is the state before `manuscript-gated`; and the journal paragraph
-describes `checkVenueRules` as the decision without saying that `final-package.ts` now reads it rather than
-counting the rules a second time.
+- The verification limit is stated rather than implied: `packages/research/dsh-research-web/tests/package-check-vocabulary.spec.ts` is what forced the client vocabulary entry for `manuscript-gated`, so a new condition reaches the screen named in both languages or not at all. Two statements in `packages/research/dsh-research-team/README.md` — committed in `edc5a636` while this work was in flight, and owned by another writer — are now stale and are left for that writer: the "What is not here" paragraph still says `materializeManuscript` re-renders without re-running E1's gates and that "what a hand edit costs is caught by the approval", which is the state before `manuscript-gated`; and the journal paragraph describes `checkVenueRules` as the decision without saying that `final-package.ts` now reads it rather than counting the rules a second time.
 
 ## Files
 

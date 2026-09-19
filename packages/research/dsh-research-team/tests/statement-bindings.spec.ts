@@ -252,11 +252,19 @@ describe('what a section was asked for is part of the run', () => {
         instruction: string | null
         evidenceSupplied: ReadonlyArray<string>
         evidenceRequired: ReadonlyArray<string>
-        citations: ReadonlyArray<{ citeKey: string; passage: string; evidenceVersion: string | null }>
+        citations: ReadonlyArray<{
+          citeKey: string
+          passage: string
+          accessNote: string
+          evidenceVersion: string | null
+        }>
       }>
       proseRequestVersion: string
     }
-    expect(draft.proseRequestVersion).toBe('prose-request-v3')
+    // v4 IS THE SHAPE THIS RUN RECORDED: the roster carries `accessNote` beside the passage, so the
+    // request that produced a sentence the assessor refused for crediting a work with words read in a
+    // version of it is distinguishable from one written before the writer could know they differ.
+    expect(draft.proseRequestVersion).toBe('prose-request-v4')
     const ids = draft.proseRequests.map(entry => entry.sectionId)
     expect(ids).toContain('introduction')
     expect(ids.length).toBeGreaterThan(1)
@@ -281,6 +289,11 @@ describe('what a section was asked for is part of the run', () => {
         expect(citation.passage.length, citation.citeKey).toBeGreaterThan(40)
         expect(corpusSource(citation.citeKey.replace(/^cite-/u, ''))?.excerpt, citation.citeKey)
           .toBe(citation.passage)
+        // AND WHAT THE TEXT READ IS, beside it: a reader comparing two drafts has to be able to see
+        // which one was written knowing that the citation named the published article while the
+        // passage came from the author's preprint of it.
+        expect(citation.accessNote, citation.citeKey)
+          .toBe(corpusSource(citation.citeKey.replace(/^cite-/u, ''))?.accessNote)
       }
     }
     // NO MODEL WAS CALLED on the shipped offline run, and the record says that rather than inventing
@@ -318,6 +331,20 @@ describe('the passage a writer is handed is the passage its version describes', 
       expect(source.excerptHash, source.doi)
         .toBe(createHash('sha256').update(source.excerpt, 'utf8').digest('hex'))
     }
+  })
+
+  it('hands over what the text read is, when it is not the work the citation names', () => {
+    // THE CITATION NAMES ONE WORK AND THE PASSAGE WAS READ IN ANOTHER. A judgement carrying the key,
+    // the passage and the scope but not this fact leaves a consumer to assume the two are the same
+    // text, which is how a real run's sentence came to credit the published article with words read
+    // in the author's preprint of it — refused by the sentence assessor, correctly.
+    for (const judgement of judgements()) {
+      const corpus = corpusSource(judgement.citeKey.replace(/^cite-/u, ''))
+      expect(judgement.accessNote, judgement.citeKey).toBe(corpus?.accessNote)
+    }
+    const preprint = judgements().find(judgement => judgement.accessNote.includes('preprint'))
+    expect(preprint, 'no judgement says its passage came from a preprint').toBeDefined()
+    expect(preprint?.accessNote).toContain('the DOI is the article of record')
   })
 })
 

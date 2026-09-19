@@ -38,6 +38,9 @@ const BINDING: CitationUse = {
   support: 'supported',
   readScope: 'full-text',
   access: 'read',
+  // READ FROM THE PUBLISHED ARTICLE ITSELF, so there is nothing the citation and the passage disagree
+  // about. A judgement whose passage came from a preprint states that here.
+  accessNote: '',
   judgedBy: 'reviewer',
 }
 

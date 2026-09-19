@@ -29,6 +29,8 @@ T19-B 运行器把一项研究驱动过 16 步:红队舰队、带 CAS 修订的�
 
 `runner/registry.ts` 是 16 步执行器的审计真源:每个条目声明 `stepId` / `executor` / `producer` / `truthfulness` / `timeoutMs` / `gateRequirement` / `recoveryPolicy`,且输入输出 schema 与闸门要求都从 core 的冻结定义派生,以防与 16 步定义漂移。
 
+`runner/prompts/` 存放七个散文步骤递到模型面前的那段文字 —— 每步一个模块(A1 / A2 / A3 / B1 / D2 / D3 / D4),共用一个 `prompts/skeleton.ts`:它规定一条指令由哪五个部分装配(任务、本节欠读者什么、回复的格式、证据规则、引用规则)、装配顺序,以及"某步对某个部分无话可说时该部分缺席而非留空"这条规则。指令是模型可见文本,由 `tests/prompts.spec.ts` 逐字钉住;指令里陈述的那些规则从其归属处读取(`argument-plan.ts` 给出某节的职责与义务,`citation-bindings.ts` 给出一次引用可以主张什么),而不是在此复述。
+
 <a id="model-experience"></a>
 ## 模型体验
 
@@ -78,6 +80,8 @@ write out of scope for <memberId>: <path>
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>
+
+- **提示词有了唯一的住处,而决定归属的那条事实能到达写作者**(2026-09-20):七个散文步骤此前把指令写成 `runner/registry.ts` 里的内联模板字符串,模型可见文本离它所陈述的规则有五千行之遥;现在它们按步分居 `runner/prompts/` 下的模块,共用 `prompts/skeleton.ts`。**这次抽取是一次搬移,并且有证据**:搬移前后各捕获了一次真实驱动运行发出的每一条指令,逐字节相同,且 `tests/prompts.spec.ts` 逐字钉住每一条。唯一文本发生变化的是 D3 的指令,原因正是三次运行停在那里的原因:引用名册带着 cite key、段落与阅读范围,却没有 `CorpusSource.accessNote` —— 于是段落读自已发表文章的 arXiv 作者预印本的那次运行,写出了把那些结论记到已发表 DOI 名下的句子,句子评估者拒绝了它(`... was read in arXiv:2409.06884v1 rather than in the cited work, so the sentence's attribution of those findings to cite-10.1109/tits.2026.3727135 is not established`)。现在 `SourceJudgement` 与 `CitationUse` 都带 `accessNote`,D3 名册与记录下来的 `proseRequests` 条目都带它,指令按判定该句所用的同一个词陈述它 —— 结论由被读到的那份文本确立,句子就把结论归属给那份文本 —— 且 `PROSE_REQUEST_VERSION` 为 `prose-request-v4`。**这里没有的东西**:本包无法机械判定**归属**,因为那是读句子的意思,而这一层不用正则扫描成稿文本去还原意思,所以约束是讲给写作者的,由部署自己的句子评估者裁定 —— 那条异议正来自那里;另外,逐步的提示词版本只在有东西记录它时才存在(D4 的作者指令版本、D3 的散文请求版本),因为五个没人读的常量就是五个没人校验的字符串。
 
 - **某一步的记录点名的是真正生产它的东西,而组合本身经 Loader 测试**(2026-09-19):登记表条目声明的是该步运行**在什么品牌之下**(`D3-writing` 的条目点名它执行的 `three-line-table` 能力),而产物记录的是写出它的那条通道 —— 部署配置了 prose writer 时是 `llm:<provider>/<model>` —— 所以只按条目拼出来的步骤行会把模型写出的稿件报成由某个工具生产。`stepProducerOf`(在 `runner/registry.ts`)改从该步已提交的产物解析生产者,与级别字段同一个出处;`drive.ts` 与 `package-export.ts` 的 run facts 都读它,而这正是 `run-summary.md` 渲染的那一样。**从未运行过的步,或产物之间不一致的步,保留条目自己的品牌。** 本可以发现组合那一侧的测试骨架是 `tests/loader-composition.spec.ts`:它把一份仅测试用的 `cordis.yml` 经 Loader 启动,挂上真实的 team 插件与一个替身引擎(`tests/fixtures/loader-boot/engine-stub.ts`),后者的目录来自配置 —— 因为某个注入名或某个配置字段不再解析得出来,对一套用 `ctx.plugin(...)` 自己提供服务的测试是完全不可见的。
 

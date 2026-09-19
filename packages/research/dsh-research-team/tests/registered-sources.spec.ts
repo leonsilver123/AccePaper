@@ -100,6 +100,7 @@ describe('the support gate over a source this run read', () => {
     support: 'supported',
     readScope: 'full-text',
     access: 'read',
+    accessNote: '',
     judgedBy: 'the live reading of the configured library',
   }
 
@@ -185,6 +186,7 @@ describe('a citation of a source this run read', () => {
       support: 'supported',
       readScope: 'full-text',
       access: 'read',
+      accessNote: '',
       judgedBy: 'the live reading',
     }
     expect(checkCitationUse(judgement, record)).toEqual([])
@@ -211,6 +213,7 @@ describe('a citation of a source this run read', () => {
       support: 'supported',
       readScope: 'full-text',
       access: 'read',
+      accessNote: '',
       judgedBy: 'the live reading',
     }
     expect(checkCitationUse(judgement, retracted).map(refusal => refusal.code))

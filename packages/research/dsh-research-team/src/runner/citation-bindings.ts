@@ -146,6 +146,16 @@ export interface CitationUse {
   readonly readScope: CitationReadScope
   /** Whether the source could be reached at all. */
   readonly access: CitationAccess
+  /**
+   * What the text read is, when it is not the cited work itself — see
+   * {@link SourceJudgement.accessNote}, which this travels with.
+   *
+   * THE CITATION RECORDS ONE READING, so it records the whole of it: where the passage was read
+   * (`location`) names the version's URI, and this says what that version IS relative to the work the
+   * key names. A reader asking whether a sentence was written from the published article or from an
+   * author's preprint of it reads this, and `bindJudgements` carries it over unchanged.
+   */
+  readonly accessNote: string
   /** Who judged the support relationship: a person, or the deployment's own reviewer. */
   readonly judgedBy: string
 }
@@ -420,6 +430,18 @@ export interface SourceJudgement {
   readonly support: CitationSupport
   readonly readScope: CitationReadScope
   readonly access: CitationAccess
+  /**
+   * WHAT THE TEXT READ IS, when it is not the cited work itself — an author preprint of the published
+   * article, say. Empty when the passage was read from the work the citation names.
+   *
+   * THE CITATION NAMES ONE WORK AND THE PASSAGE WAS READ IN ANOTHER, which is the ordinary shape of a
+   * DOI-keyed citation whose text was fetched from a preprint, and the two are not interchangeable
+   * evidence: a sentence resting on the passage states what THAT TEXT establishes. A consumer handed
+   * the passage and the cite key but not this fact cannot tell that the two differ, so it writes — or
+   * judges — a sentence crediting the cited work with words nobody read there. The fact travels beside
+   * the passage because it is a property of the same reading.
+   */
+  readonly accessNote: string
   readonly judgedBy: string
 }
 
@@ -528,6 +550,9 @@ export function judgementsFor(
         support: assessment.verdict === 'supports' ? 'supported' as const : 'contradicted' as const,
         readScope,
         access: 'read' as const,
+        // WHAT THE TEXT READ IS, carried with the passage it describes: the cite key names the work of
+        // record, and this says whether the words above were read in that work or in a version of it.
+        accessNote: corpus.accessNote,
         judgedBy: assessment.reviewer,
       }]
     })
@@ -590,6 +615,7 @@ export function bindJudgements(
         support: assessed?.support ?? judgement.support,
         readScope: assessed?.readScope ?? judgement.readScope,
         access: judgement.access,
+        accessNote: judgement.accessNote,
         judgedBy: judgement.judgedBy,
       })
     }

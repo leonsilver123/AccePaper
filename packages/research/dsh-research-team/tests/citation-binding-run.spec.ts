@@ -289,6 +289,12 @@ describe('a revision that rewrites a cited sentence', () => {
       expect(instruction).toContain('full-text')
       expect(instruction).toContain('abstract-only')
       expect(instruction).toContain('access')
+      // AND THE THIRD FACT THE ROSTER CARRIES, for the same reason: the citation names the work of
+      // record and the passage was read in a version of it, and a writer that is not told the two are
+      // different texts writes the sentence that credits the published article with words nobody read
+      // there. The instruction names the field, as it names `readScope` and `access`.
+      expect(instruction).toContain('accessNote')
+      expect(instruction).toContain('attributes the finding to the text you were shown')
     }
   })
 })
@@ -328,6 +334,7 @@ describe('the writer is shown the passages it is asked to cite', () => {
         establishes: string
         readScope: string
         access: string
+        accessNote: string
         source: string
       }>
       expect(citations.map(citation => citation.citeKey)).toEqual(REVIEWED_KEYS)
@@ -343,10 +350,22 @@ describe('the writer is shown the passages it is asked to cite', () => {
         // can only respect that if it is told which reading it holds.
         expect(citation.readScope, citation.citeKey).toBe(corpusSource(doi)?.sourceAccess)
         expect(citation.access, citation.citeKey).toBe('read')
+        // WHAT THE TEXT READ IS, when it is not the cited work. Two of the three shipped sources were
+        // read from the author's preprint of the published article, and a writer shown the cite key and
+        // the arXiv URI but not this fact has no way to know the citation and the passage are two
+        // versions of one work — which is the sentence the assessor refused, with reason.
+        expect(citation.accessNote, citation.citeKey).toBe(corpusSource(doi)?.accessNote)
         // AND THE VERDICT STAYS A VERDICT, which is what tells a writer of a `contradicted` source to
         // state what the source establishes rather than to agree with it.
         expect(['supported', 'contradicted']).toContain(citation.establishes)
       }
     }
+    // THE FACT IS NOT IN THE ROSTER BY ACCIDENT: the source whose sentence the assessor refused is one
+    // of the two read from a preprint, and the roster says so in the corpus's own words.
+    const refusedRequest = requests[0]
+    const preprint = (refusedRequest?.context.citations as ReadonlyArray<{ citeKey: string; accessNote: string }>)
+      .find(citation => citation.citeKey === 'cite-10.1109/tits.2026.3727135')
+    expect(preprint?.accessNote).toContain('arXiv:2409.06884v1')
+    expect(preprint?.accessNote).toContain('the DOI is the article of record')
   })
 })

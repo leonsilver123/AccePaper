@@ -190,6 +190,13 @@ import {
   citeKeyOf, renderCitationMarkers, reviewedSources,
 } from './citation-bindings.ts'
 import type { CitationUse, SourceJudgement, SourceRecord } from './citation-bindings.ts'
+import { landscapeGapInstruction } from './prompts/a1-landscape.ts'
+import { CLAIM_INSTRUCTION } from './prompts/a2-claim.ts'
+import { AGENDA_INSTRUCTION } from './prompts/a3-agenda.ts'
+import { METHOD_INSTRUCTION } from './prompts/b1-method.ts'
+import { frameworkInstruction } from './prompts/d2-framework.ts'
+import { sectionInstruction } from './prompts/d3-writing.ts'
+import { D4_AUTHOR_INSTRUCTIONS_VERSION, REBUTTAL_INSTRUCTION } from './prompts/d4-rebuttal.ts'
 import { evaluatePrediction } from './prediction-gate.ts'
 
 /** Truthfulness classification of an executor / gate channel (5-level ruling). */
@@ -727,9 +734,12 @@ const D3_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION
  * request recorded in v1 (the instruction, the evidence names, the citation roster with the version
  * of each passage) is a different set of facts from what a later one might, and a reader comparing
  * two runs has to be able to tell which they are holding. v3 hands the writer the PASSAGE each
- * judgement was made from, where v2 recorded only its verdict and the scope of the reading.
+ * judgement was made from, where v2 recorded only its verdict and the scope of the reading. v4 hands
+ * it `accessNote` as well — what the text read is, when it is not the cited work — and names that
+ * field in the instruction, so a run whose draft was refused for crediting the cited work with words
+ * read in another version of it is distinguishable from one that was never told the two differ.
  */
-const PROSE_REQUEST_VERSION = 'prose-request-v3'
+const PROSE_REQUEST_VERSION = 'prose-request-v4'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
@@ -767,6 +777,10 @@ function judgementVersionOf(
  * the judgement's own `quoteSha256` — and it describes the passage here because the roster these
  * records are drawn from refuses a passage its version does not describe (see `passageOf`).
  *
+ * `accessNote` IS RECORDED BECAUSE IT IS SENT. It states what the text read is when it is not the
+ * cited work, so a reader comparing two drafts can see which one was written knowing that the
+ * citation and the passage were two versions of one work.
+ *
  * Both prose paths record this. The model route sends the same roster as request DATA; the fixture
  * route sends nothing anywhere, so its record IS the request, and a path with no model on it is not a
  * path where the writer was shown less.
@@ -776,12 +790,17 @@ function judgementVersionOf(
  * @returns one record per source, in roster order.
  */
 function requestCitationsOf(
-  sources: ReadonlyArray<{ readonly citeKey: string; readonly passage: string }>,
+  sources: ReadonlyArray<{
+    readonly citeKey: string
+    readonly passage: string
+    readonly accessNote: string
+  }>,
   judgements: ReadonlyArray<SourceJudgement>,
 ): ReadonlyArray<Record<string, unknown>> {
   return sources.map(source => ({
     citeKey: source.citeKey,
     passage: source.passage,
+    accessNote: source.accessNote,
     evidenceVersion: judgementVersionOf(source.citeKey, judgements),
   }))
 }
@@ -973,23 +992,6 @@ function referenceEntriesFor(
 }
 
 /**
- * The obligations one section owes, written as the instruction a writer can follow.
- *
- * AN OBLIGATION THE WRITER IS NOT TOLD IS AN OBLIGATION IT CANNOT DISCHARGE, and E1 refuses the
- * manuscript for it. The words are the obligation's own statement — the same text the refusal quotes
- * — so what the writer was asked for and what it is judged against cannot be two different things.
- *
- * @param plan - the argument plan the draft is written under.
- * @param sectionId - the section about to be written.
- * @returns one sentence per obligation, or an empty string for a section that owes none.
- */
-function obligationsInstructionOf(plan: ArgumentPlan, sectionId: string): string {
-  const contract = plan.sections.find(section => section.id === sectionId)
-  if (contract === undefined || contract.obligations.length === 0) return ''
-  return `This section must ${contract.obligations.map(o => o.statement).join('; and must ')}. `
-}
-
-/**
  * The prose route a step's text came from, as the artifact records it.
  *
  * A `*Source: 'model'` label used to be the whole claim, and it proved only that a
@@ -1030,7 +1032,7 @@ function modelExecution(result: { readonly provider: string; readonly model: str
     // own defence of the revision, which is the condition `verification-same-session` refuses.
     sessionId: `research-prose-${randomUUID()}`,
     role: 'prose-author',
-    instructionsVersion: AUTHOR_INSTRUCTIONS_VERSION,
+    instructionsVersion: D4_AUTHOR_INSTRUCTIONS_VERSION,
     provider: result.provider,
     model: result.model,
   }
@@ -1055,15 +1057,6 @@ function fixtureExecution(producer: string, instructionsVersion: string): Execut
     provider: 'fixture',
   }
 }
-
-/**
- * The version of the instructions the AUTHORING role is given.
- *
- * A string, not a date: "the same rules" is what makes two executions the same task, and two runs on
- * one day are two runs. A deployment that changes what it asks its author to do changes this, and
- * verifications taken under the old rules stop matching the ones the new author produces.
- */
-const AUTHOR_INSTRUCTIONS_VERSION = 'd4-author-instructions-1'
 
 /**
  * The research this run carries.
@@ -1350,7 +1343,7 @@ async function a1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   } else {
     const analysis = await writer.write({
       stepId: 'A1-landscape',
-      instruction: `Identify the research gaps that the following papers leave open with respect to "${artifact.query.topic}". Return one gap per line. No numbering, no preamble, no closing commentary.`,
+      instruction: landscapeGapInstruction({ topic: artifact.query.topic }),
       context: {
         ...planContextOf(planOf(ctx)),
         topic: artifact.query.topic,
@@ -1548,14 +1541,7 @@ async function a2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   } else if (writer !== undefined) {
     const analysis = await writer.write({
       stepId: 'A2-claim',
-      instruction: [
-        'Answer ONE of the research gaps below with a falsifiable central claim.',
-        'Reply with exactly these four lines and nothing else:',
-        'ASSERTION: <one sentence claim>',
-        'DIFFERENCE: <what makes this essentially different from prior work>',
-        'EXPERIMENT: <the experiment that would falsify it>',
-        'PREDICTION: <the measurable prediction, with a numeric threshold>',
-      ].join('\n'),
+      instruction: CLAIM_INSTRUCTION,
       context: { ...planContextOf(planOf(ctx)), gaps },
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     })
@@ -1711,12 +1697,7 @@ async function a3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   if (writer !== undefined) {
     const analysis = await writer.write({
       stepId: 'A3-agenda',
-      instruction: [
-        'Derive the research agenda and the contribution list that the claim commits this study to delivering.',
-        'Reply with exactly these two labelled blocks and nothing else:',
-        'PHASES: <phase> | <phase> | <phase>',
-        'CONTRIBUTIONS: <one contribution> || <another contribution>',
-      ].join('\n'),
+      instruction: AGENDA_INSTRUCTION,
       context: {
         ...planContextOf(planOf(ctx)),
         claim: claim?.assertion ?? claimRef,
@@ -1913,14 +1894,7 @@ async function b1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   if (writer !== undefined) {
     const analysis = await writer.write({
       stepId: 'B1-method',
-      instruction: [
-        'Derive the method that makes the central claim testable.',
-        'Reply with exactly these four lines and nothing else:',
-        'FAMILY: <the method family, one phrase>',
-        'STEPS: <step> | <step> | <step>',
-        'METRIC: <the single primary metric name>',
-        'DIRECTION: <"lower is better" or "higher is better">',
-      ].join('\n'),
+      instruction: METHOD_INSTRUCTION,
       context: {
         ...planContextOf(planOf(ctx)),
         claim: claimArtifact?.assertion ?? claimRef,
@@ -2797,18 +2771,7 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   if (writer !== undefined) {
     const analysis = await writer.write({
       stepId: 'D2-framework',
-      instruction: [
-        'Write the title and section headings for the paper that reports this work.',
-        'Reply with exactly these two lines and nothing else:',
-        'TITLE: <a specific paper title>',
-        // One placeholder per heading the outline needs, so the declared format says HOW MANY
-        // values it wants. It used to read "7 headings separated by ' | '" in prose, which a
-        // reader understands and a rule cannot: the deployment's offline route answered with the
-        // separator it saw named, produced two headings, and D2 refused the outline. A format
-        // line has to be answerable, not just describable.
-        `SECTIONS: ${OUTLINE_SKELETON.map(() => '<heading>').join(' | ')}`,
-        `  (one per placeholder, in this order: ${OUTLINE_SKELETON.map(s => s.id).join(', ')})`,
-      ].join('\n'),
+      instruction: frameworkInstruction({ sectionIds: OUTLINE_SKELETON.map(section => section.id) }),
       context: {
         ...planContextOf(planOf(ctx)),
         claim: claim?.assertion ?? claimRef,
@@ -2920,6 +2883,14 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // `checkCitationUse` reads at binding time, and the instruction below states the same two rules in
   // the same terms, so the writer is bounded by the rule that will judge it rather than by a
   // paraphrase of it.
+  //
+  // `accessNote` IS THE THIRD OF THOSE FACTS, and the same defect dropped it: the cite key names the
+  // work of record while the passage was read in a version of it — an author preprint, mostly — and a
+  // writer shown only the key and the arXiv URI has nothing telling it that the two are different
+  // texts. MEASURED ON A REAL RUN, 2026-09-20: the sentence assessor refused the draft because the
+  // passage "was read in arXiv:2409.06884v1 rather than in the cited work, so the sentence's
+  // attribution of those findings to cite-10.1109/tits.2026.3727135 is not established". The assessor
+  // was right, and the fact that settles the attribution was in the corpus entry all along.
   const citableSources = judgements.map(judgement => ({
     citeKey: judgement.citeKey,
     // THE PASSAGE THE JUDGEMENT WAS MADE FROM, read from the judgement itself. `passageOf` refuses a
@@ -2929,6 +2900,7 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     establishes: judgement.support,
     readScope: judgement.readScope,
     access: judgement.access,
+    accessNote: judgement.accessNote,
     source: judgement.location,
   }))
   const duplicateKeys = checkCitationKeys(judgements)
@@ -3028,7 +3000,12 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // withholding the result is how a plausible number gets invented, so the request is not
         // made and the absence is recorded instead.
         if (evidence.missing.length > 0) return Promise.resolve(undefined)
-        const instruction = `Write the "${h.heading}" section of a research paper. Its job in this paper's argument is: ${contractFor(h.id)?.job ?? 'undefined'}. ${obligationsInstructionOf(argumentPlan, h.id)}Refer to the central claim as ${claimRef}. Return prose only — no heading, no commentary. The numbered items this paper may refer to are listed in the context under \`citable\`; refer to one by its exact label when the section is about it. The evidence this section must be written from is under \`evidence\`: state only what it holds, and do not introduce a number, a unit or a source it does not contain. A sentence that cites a source states what that source establishes and nothing further — not a conclusion the passage does not itself draw, and not a generalization beyond the case it reports; when what you want to say is this paper's own claim rather than a source's finding, write it as the paper's claim and leave it uncited. Each source listed under \`citations\` carries the \`passage\` a reviewer read from it, and the sentence you write for that source must be true of that passage as quoted: where the passage does not state what you wanted to say, write less rather than more. \`readScope\` bounds the sentence the same way — a source read \`full-text\` was read whole, while one read \`abstract-only\` is a source whose abstract was all that could be read, so a sentence resting on it may state only what an abstract reports and must not claim what only the source's method, experiment or results could establish. \`access\` says whether the source could be read at all; where it is not \`read\`, the source is not evidence for any sentence. When a sentence rests on a reviewed source listed under \`citations\`, name that source by writing its \`citeKey\` in square brackets exactly as \`[@citeKey]\`; every source listed there and no other may be cited, and every one of them must be cited somewhere in this manuscript.`
+        const instruction = sectionInstruction({
+          heading: h.heading,
+          claimRef,
+          plan: argumentPlan,
+          sectionId: h.id,
+        })
         proseRequests.push({
           sectionId: h.id,
           channel: proseLabelling(writer).source,
@@ -3480,16 +3457,7 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     for (let round = 1; round <= maxRounds; round += 1) {
       const analysis = await writer.write({
         stepId: 'D4-rebuttal',
-        instruction: [
-          'Write the review exchanges this paper must answer.',
-          'Reply with one exchange per group of FOUR lines, at least two exchanges:',
-          'CONCERN: <reviewer concern>',
-          'SECTION: <the id of the section the concern is about>',
-          'RESPONSE: <the author response, using only the measurements given in the context>',
-          'PATCH: <the complete replacement body for that section, or exactly NONE when the answer '
-          + 'changes no text>',
-          'A PATCH replaces the whole section, so it must keep every sentence the section still needs.',
-        ].join('\n'),
+        instruction: REBUTTAL_INSTRUCTION,
         // The bodies travel so a patch can be written against them, and the section ids travel so a
         // reply can name one without inventing the outline.
         context: {

@@ -35,6 +35,7 @@ function judgement(): SourceJudgement {
     support: 'supported',
     readScope: 'full-text',
     access: 'read',
+    accessNote: '',
     judgedBy: 'reviewer',
   }
 }

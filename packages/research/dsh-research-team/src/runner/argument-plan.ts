@@ -358,6 +358,27 @@ export function contractFor(sectionId: string): SectionContract | undefined {
 }
 
 /**
+ * The obligations one section owes, written as the instruction a writer can follow.
+ *
+ * AN OBLIGATION THE WRITER IS NOT TOLD IS AN OBLIGATION IT CANNOT DISCHARGE, and E1 refuses the
+ * manuscript for it. The words are the obligation's own statement — the same text the refusal quotes
+ * — so what the writer was asked for and what it is judged against cannot be two different things.
+ *
+ * IT IS READ FROM THE PLAN AND NOT FROM THE TABLE, because the plan is what carries the obligations
+ * this run's outcome attached: `contractFor` states what every section of this id owes, and the plan
+ * adds the ones a refutation obliges the sections that report it to discharge.
+ *
+ * @param plan - the argument plan the draft is written under.
+ * @param sectionId - the section about to be written.
+ * @returns one sentence per obligation, or an empty string for a section that owes none.
+ */
+export function obligationsInstructionOf(plan: ArgumentPlan, sectionId: string): string {
+  const contract = plan.sections.find(section => section.id === sectionId)
+  if (contract === undefined || contract.obligations.length === 0) return ''
+  return `This section must ${contract.obligations.map(o => o.statement).join('; and must ')}.`
+}
+
+/**
  * What a section owes, and whether it discharged it.
  *
  * A SECTION THAT OMITS AN OBLIGATION IS REFUSED, and the two that matter most are stated here: the
