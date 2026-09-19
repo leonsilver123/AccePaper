@@ -271,7 +271,7 @@ describe.skipIf(DRAWER === undefined)('a run whose deployment draws its own floa
       // formats through pandoc are process spawns that do not.
       timeoutMs: 300_000,
     })
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       packageFiles: Record<string, string>
       compilation: {
         tool: string | null

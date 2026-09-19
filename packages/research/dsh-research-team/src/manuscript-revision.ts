@@ -139,8 +139,21 @@ export interface RevisionReviewRecord {
 export interface RevisionReviewMaterial {
   /** Every number the run itself declares or measured, as strings. */
   readonly knownNumbers: ReadonlyArray<string>
-  /** The reference labels the manuscript carries, e.g. `1`, `2`. */
+  /**
+   * The reference labels the manuscript carries, e.g. `1`, `2`.
+   *
+   * The numbering the RENDERED manuscript prints its entries under, which is what a candidate that
+   * copied a number out of the text carries.
+   */
   readonly referenceLabels: ReadonlyArray<string>
+  /**
+   * The cite keys the manuscript's reference list defines, e.g. `Meng2021`.
+   *
+   * The markers the DOCUMENT's own prose carries, which is the form a candidate is written from — so
+   * a candidate is checked in both vocabularies against the same list. A check that knew only one of
+   * them would pass whatever a writer emitted in the other.
+   */
+  readonly referenceKeys: ReadonlyArray<string>
   /** The headings the official manuscript had, so a candidate cannot add or drop a section. */
   readonly headings: ReadonlyArray<string>
 }
@@ -366,12 +379,22 @@ export function reviewCandidate(
       : `numbers nothing in this run measured or declared: ${[...unknownNumbers].join(', ')}`,
   })
 
+  // A MARKER IS RESOLVED IN THE VOCABULARY IT IS WRITTEN IN. The document's prose carries cite keys
+  // (`[@Meng2021]`) and the rendered manuscript carries the numbers its reference list assigned
+  // (`[2]`); a candidate is written from the document and may therefore carry either, so both forms
+  // are checked against the same list. Knowing one form only would pass whatever a writer emitted in
+  // the other — which is how a citation to nothing reaches a person who asked for one sentence to be
+  // rephrased.
   const labels = new Set(material.referenceLabels)
+  const keys = new Set(material.referenceKeys)
   const unknownLabels = new Set<string>()
   for (const section of candidate.sections) {
     if (!section.changed) continue
     for (const match of section.bodyText.matchAll(/\[(\d+)\]/g)) {
       if (!labels.has(match[1] as string)) unknownLabels.add(match[1] as string)
+    }
+    for (const match of section.bodyText.matchAll(/\[@([^[\]]+)\]/g)) {
+      if (!keys.has(match[1] as string)) unknownLabels.add(`@${match[1] as string}`)
     }
   }
   findings.push({

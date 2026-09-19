@@ -9,15 +9,15 @@
 // WHAT IT RENDERS. The document model, not the assembled Markdown: the sections' blocks become
 // Markdown paragraphs, the figures their own SVG (inlined by pandoc's self-contained mode), the
 // equations display mathematics, and the citation markers the numbers the reference list assigned.
-// The numbering is the MANUSCRIPT's — assigned once by E1 — so this file decides typography and
-// nothing else.
+// The numbering is the MANUSCRIPT's — assigned once when the document is written — so this file
+// decides typography and nothing else.
 //
 // WHAT IT REFUSES. The formats it can produce are PROBED at construction, so a deployment without a
 // LaTeX engine does not offer `pdf` and a caller asking for one is refused with that reason rather
 // than handed an empty file. A pandoc that exits non-zero is reported with its own stderr.
 //
-// WHAT IT IS NOT. It does not fetch, does not validate citations (E1 refuses an unresolved one before
-// this runs) and does not decide whether the document is any good.
+// WHAT IT IS NOT. It does not fetch, does not validate citations (the compile seam refuses an
+// unresolved one before this runs) and does not decide whether the document is any good.
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

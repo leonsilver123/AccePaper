@@ -162,7 +162,7 @@ describe('the paper carries the figures this study needs', () => {
 describe('the manuscript is about the queueing study', () => {
   it('states the quantity, the change and the mechanism the run actually measured', async () => {
     const { store, runId } = await latencyRun()
-    const manuscript = String(artifactOf(store, runId, 'formatted-manuscript').manuscript)
+    const manuscript = String(artifactOf(store, runId, 'typeset').manuscript)
     expect(manuscript).toContain('95th-percentile request latency')
     expect(manuscript).toContain('coalesc')
     // THE PLATOON STUDY'S VOCABULARY IS ABSENT. This is the check that a "second study" is not the
@@ -175,7 +175,7 @@ describe('the manuscript is about the queueing study', () => {
 
   it('carries the equations the queueing implementation computed', async () => {
     const { store, runId } = await latencyRun()
-    const manuscript = String(artifactOf(store, runId, 'formatted-manuscript').manuscript)
+    const manuscript = String(artifactOf(store, runId, 'typeset').manuscript)
     expect(manuscript).toContain('Nearest-rank percentile')
     expect(manuscript).not.toContain('Intelligent Driver Model')
   })

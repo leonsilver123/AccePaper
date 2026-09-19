@@ -95,7 +95,7 @@ import { requireMetricDeclaration } from './runner/metrics.ts'
 import { readinessOfRun } from './runner/submission-readiness.ts'
 import { resolveResearchProfile } from './runner/research-profile.ts'
 import type { JournalProfile, ResearchProfile } from './runner/research-profile.ts'
-import type { DocumentCompiler } from './runner/document-compile.ts'
+import type { DocumentCompiler, ManuscriptDocument } from './runner/document-compile.ts'
 import { stepProjectionsOf } from './runner/project-view.ts'
 import { chainDigest, EMPTY_LOG, envelopeOf, liveRunOf, readRunCursor, runCursorOf, RUN_FOLLOW_TICK_MS } from './runner/run-events.ts'
 import { requireCommandId, startCommandDigest, type StartCommandRecord } from './runner/start-commands.ts'
@@ -162,12 +162,13 @@ import {
 } from './approval.ts'
 import {
   buildCandidate, candidateHashOf, createRevisionRequest, readRevision, reviewCandidate,
-  revisionStoreOf, sectionsOf, writeAcceptance, writeCandidate, writeReview, writeRevisionRequest,
+  revisionStoreOf, writeAcceptance, writeCandidate, writeReview, writeRevisionRequest,
   writeSection,
 } from './manuscript-revision.ts'
 import { acceptManuscriptCandidate } from '@deepseek-ai/dsh-research-core'
 import type {
-  RevisionCandidateRecord, RevisionReviewMaterial, RevisionSource, RevisionStore,
+  ManuscriptSectionParts, RevisionCandidateRecord, RevisionReviewMaterial, RevisionSource,
+  RevisionStore,
 } from './manuscript-revision.ts'
 import type { ApprovalDecision } from './approval.ts'
 import { changeRequestTool, CONVERSATION_REQUEST_SOURCE } from './change-request-tool.ts'
@@ -452,6 +453,39 @@ interface StoredRun {
 function findStoredStore(found: StoredRun | null): ResearchRunStore {
   if (found === null) throw new Error('[research] no run was restored to read events from')
   return found.restored.store
+}
+
+/**
+ * The document with a candidate's prose in it, everything else exactly as it was.
+ *
+ * THE PROSE BLOCKS ARE REPLACED, NOT REBUILT. A section that the candidate wrote for keeps the
+ * equations, the figures and the table the document already placed in it, so accepting a revision
+ * changes the sentences a person read and no float, no reference and no number the study produced.
+ * A section the candidate says nothing about is returned untouched — the candidate is a set of
+ * replacement bodies, and a section it does not name was not revised.
+ *
+ * @param document - the document the run holds.
+ * @param bodies - the accepted body per section id.
+ * @returns the document as the acceptance publishes it.
+ */
+function documentWithProse(
+  document: ManuscriptDocument,
+  bodies: ReadonlyMap<string, string>,
+): ManuscriptDocument {
+  return {
+    ...document,
+    sections: document.sections.map((section) => {
+      const body = bodies.get(section.id)
+      if (body === undefined) return section
+      return {
+        ...section,
+        blocks: [
+          { kind: 'prose', text: body },
+          ...section.blocks.filter(block => block.kind !== 'prose'),
+        ],
+      }
+    }),
+  }
 }
 
 /** Wait one follow interval. */
@@ -2023,7 +2057,7 @@ export class ResearchTeamService extends TypertRemoteService {
     if (input.instruction.trim() === '') {
       throw new Error('[revision-instruction-empty] a request to change the manuscript must say what to change')
     }
-    const sections = sectionsOf(this.manuscriptMarkdownOf(input.runId))
+    const sections = this.manuscriptSectionsOf(input.runId)
     if (sections.length === 0) {
       throw new Error(
         `[revision-no-manuscript] run '${input.runId}' has no manuscript yet — there is nothing to revise`,
@@ -2114,7 +2148,7 @@ export class ResearchTeamService extends TypertRemoteService {
         '[revision-no-writer] this deployment configured no prose channel, so no candidate text can be written',
       )
     }
-    const current = sectionsOf(this.manuscriptMarkdownOf(request.runId))
+    const current = this.manuscriptSectionsOf(request.runId)
     const byId = new Map(current.map(section => [section.sectionId, section]))
     const context = { instruction: read.request.instruction, sectionIds: read.request.sections.map(section => section.sectionId) }
     const written = new Map<string, string>()
@@ -2186,7 +2220,7 @@ export class ResearchTeamService extends TypertRemoteService {
       throw new Error(`[revision-unknown] this deployment holds no candidate '${request.candidateId}'`)
     }
     const review = read.reviews.find(entry => entry.candidateId === candidate.candidateId)
-    const current = getRunSnapshot(active.store, request.runId).registry['formatted-manuscript']
+    const current = getRunSnapshot(active.store, request.runId).registry['manuscript']
     if (current === undefined) {
       throw new Error(`[revision-no-manuscript] run '${request.runId}' has no manuscript to accept over`)
     }
@@ -2199,7 +2233,7 @@ export class ResearchTeamService extends TypertRemoteService {
     // THE VALUE IS ASSEMBLED HERE, from the candidate's sections over the manuscript the run holds:
     // a caller that handed over its own manuscript would be publishing whatever it liked, and the
     // version check below would be checking it against itself.
-    const manuscriptValue = getArtifact(active.store, request.runId, 'formatted-manuscript')
+    const manuscriptValue = getArtifact(active.store, request.runId, 'manuscript')
     const assembled = this.assembledManuscript(manuscriptValue, candidate)
     const receipt = acceptManuscriptCandidate(active.store, {
       runId: request.runId,
@@ -2271,28 +2305,38 @@ export class ResearchTeamService extends TypertRemoteService {
   /**
    * The manuscript a candidate produces, assembled over the value the run holds.
    *
-   * Every key of the E1 artifact is kept and only the manuscript text is rebuilt, so the accepted
-   * version still describes the same study: a value rebuilt from the candidate alone would drop the
-   * counts, the float roster and the package files, and the run's own readers would find the fields
-   * they depend on missing.
+   * Every key of the manuscript artifact is kept and the candidate's bodies replace the sections they
+   * were written for, so the accepted version still describes the same study: a value rebuilt from
+   * the candidate alone would drop the citations, the reference list, the argument plan and the
+   * document's floats, and the run's own readers would find the fields they depend on missing.
+   *
+   * THE DOCUMENT IS REBUILT WITH THE SECTIONS, because the two are one artifact's two records of one
+   * text: a version whose sections carried the accepted prose while its document still carried the
+   * prose D4 wrote would compile — and print — the manuscript that was NOT accepted. Every other part
+   * of the document (the floats, the equations, the references) is kept exactly as it was, so this
+   * publishes a change of prose and nothing else.
+   *
+   * @param value - the manuscript artifact's value, as the run holds it.
+   * @param candidate - the reviewed candidate whose bodies are being published.
+   * @returns the accepted manuscript value.
    */
   private assembledManuscript(value: unknown, candidate: RevisionCandidateRecord): unknown {
     const record = typeof value === 'object' && value !== null ? { ...(value as Record<string, unknown>) } : {}
-    const original = typeof record['manuscript'] === 'string' ? record['manuscript'] : ''
-    // THE PART BEFORE THE FIRST SECTION IS KEPT. A manuscript opens with its title and any preamble,
-    // and `sectionsOf` splits on `## ` headings — rebuilding from the sections alone would publish a
-    // document that had lost its title, which is a change nobody asked for and nobody reviewed.
-    const firstHeading = original.indexOf('\n## ')
-    const preamble = firstHeading === -1 ? '' : original.slice(0, firstHeading)
-    const sections = candidate.sections.map(section => [
-      `## ${section.heading}`,
-      '',
-      section.bodyText,
-      '',
-    ].join('\n')).join('\n')
+    const bodies = new Map(candidate.sections.map(section => [section.sectionId, section.bodyText]))
+    const sections = Array.isArray(record['sections'])
+      ? (record['sections'] as ReadonlyArray<Record<string, unknown>>).map((section) => {
+        const id = section['id']
+        const body = typeof id === 'string' ? bodies.get(id) : undefined
+        return body === undefined ? section : { ...section, bodyText: body }
+      })
+      : record['sections']
+    const document = record['document']
     return {
       ...record,
-      manuscript: `${preamble === '' ? '' : `${preamble}\n\n`}${sections}`,
+      sections,
+      ...(document === null || typeof document !== 'object'
+        ? {}
+        : { document: documentWithProse(document as ManuscriptDocument, bodies) }),
       acceptedCandidateId: candidate.candidateId,
     }
   }
@@ -2340,7 +2384,7 @@ export class ResearchTeamService extends TypertRemoteService {
     // NO DURABLE ROOT MEANS NO REVISION RECORD. Holding it in memory would ask the person to make
     // the request again after a restart, which is worse than telling them this deployment keeps none.
     if (store === undefined) return
-    const sections = sectionsOf(this.manuscriptMarkdownOf(receipt.runId))
+    const sections = this.manuscriptSectionsOf(receipt.runId)
     if (sections.length === 0) return
     await writeRevisionRequest(store, createRevisionRequest({
       requestId: randomUUID(),
@@ -2386,15 +2430,40 @@ export class ResearchTeamService extends TypertRemoteService {
   /** The version the run's manuscript artifact is at, or 0 when the run has none. */
   private manuscriptVersionOf(runId: string): number {
     const active = this.heldRun(runId)
-    return getRunSnapshot(active.store, runId).registry['formatted-manuscript']?.ref.version ?? 0
+    return getRunSnapshot(active.store, runId).registry['manuscript']?.ref.version ?? 0
   }
 
-  /** The official manuscript's markdown, as the run's own artifact holds it. */
-  private manuscriptMarkdownOf(runId: string): string {
+  /**
+   * The manuscript's sections, as the run's own DOCUMENT holds them.
+   *
+   * THIS READS THE SLUG AN ACCEPTANCE REPLACES, and that is the property it exists for: a request
+   * records the version of each section it read, and a candidate is refused when a section has moved
+   * — which is what stops a late candidate from publishing, over an accepted manuscript, text that
+   * answers the one before it. Reading the rendering instead made an acceptance invisible here: the
+   * document moved and the Markdown it was rendered from did not.
+   *
+   * THE DOCUMENT IS ALSO THE BETTER SOURCE for what a section IS. It carries the section ids the
+   * outline declared and the prose without the equations E1 appends for the assembled Markdown, so a
+   * section's body hash is a hash of what the writing step wrote rather than of what one renderer
+   * made of it.
+   *
+   * @param runId - the run to read.
+   * @returns one entry per section, or an empty list when the run holds no document with sections.
+   */
+  private manuscriptSectionsOf(runId: string): ReadonlyArray<ManuscriptSectionParts> {
     const active = this.heldRun(runId)
-    const value = getArtifact(active.store, runId, 'formatted-manuscript')
-    const record = typeof value === 'object' && value !== null ? (value as { manuscript?: unknown }) : undefined
-    return typeof record?.manuscript === 'string' ? record.manuscript : ''
+    const value = getArtifact(active.store, runId, 'manuscript')
+    const sections = typeof value === 'object' && value !== null
+      ? (value as { sections?: unknown }).sections
+      : undefined
+    if (!Array.isArray(sections)) return []
+    return sections.flatMap((section): ManuscriptSectionParts[] => {
+      const record = section as { id?: unknown; heading?: unknown; bodyText?: unknown }
+      return typeof record.id === 'string' && typeof record.heading === 'string'
+        && typeof record.bodyText === 'string'
+        ? [{ sectionId: record.id, heading: record.heading, bodyText: record.bodyText }]
+        : []
+    })
   }
 
   /**
@@ -2405,8 +2474,7 @@ export class ResearchTeamService extends TypertRemoteService {
    */
   private reviewMaterialOf(runId: string): RevisionReviewMaterial {
     const active = this.heldRun(runId)
-    const markdown = this.manuscriptMarkdownOf(runId)
-    const sections = sectionsOf(markdown)
+    const sections = this.manuscriptSectionsOf(runId)
     // EVERY NUMBER THE RUN HOLDS, from its own registry rather than from the text under test: the
     // check is "this number came from somewhere in this study", and a value the candidate invented
     // is exactly what it must not find.
@@ -2418,11 +2486,27 @@ export class ResearchTeamService extends TypertRemoteService {
         for (const match of JSON.stringify(value).match(/-?\d+(?:\.\d+)?/g) ?? []) numbers.add(match)
       }
     }
+    // WHAT THE MANUSCRIPT'S OWN REFERENCE LIST DEFINES: the numbers it prints its entries under and
+    // the cite keys it cites them by. Read from the DOCUMENT's list rather than scraped off the
+    // rendered text, because a candidate is written over the document's prose — whose markers are
+    // cite keys — and a marker in either form has to resolve against the same list.
+    const list = getArtifact(active.store, runId, 'manuscript')
+    const referenceList = typeof list === 'object' && list !== null
+      ? (list as { references?: unknown }).references
+      : undefined
     const labels = new Set<string>()
-    for (const match of markdown.matchAll(/\[(\d+)\]/g)) labels.add(match[1] as string)
+    const keys = new Set<string>()
+    if (Array.isArray(referenceList)) {
+      referenceList.forEach((entry, index) => {
+        const record = entry as { citeKey?: unknown; number?: unknown }
+        labels.add(String(typeof record.number === 'number' ? record.number : index + 1))
+        if (typeof record.citeKey === 'string') keys.add(record.citeKey)
+      })
+    }
     return {
       knownNumbers: [...numbers],
       referenceLabels: [...labels],
+      referenceKeys: [...keys],
       headings: sections.map(section => section.heading),
     }
   }

@@ -99,14 +99,63 @@ async function figurePlan(): Promise<Record<string, unknown>> {
   return out['figure-plan'] as Record<string, unknown>
 }
 
+/** A context whose claim is bound to the study's quantity, as a driven run's context is. */
+function boundRunCtx(): RunContext {
+  return {
+    ...freshRunCtx(),
+    claimId: CANONICAL.claimId,
+    claimRef: CANONICAL.claimRef,
+    predictionText: CANONICAL.prediction,
+    metricKey: MEASURED_METRIC.key,
+    // WHAT THE CLAIM COMMITS TO, without which C1 refuses to execute at all: a measurement that no
+    // declared direction can adjudicate is not an experiment, and the C channel holds on it.
+    ...(DEFAULT_PLAN.commitment === undefined ? {} : { commitment: DEFAULT_PLAN.commitment }),
+  }
+}
+
 /**
- * The `revised-draft` input E1-format declares, carrying the plan D1 really produced.
+ * The inputs D3-writing is driven with: the plan D1 really produced, and the evidence its sections
+ * are WRITTEN FROM.
+ *
+ * THE SECTIONS ARE NOT OPTIONAL FIXTURES. A section whose required evidence is absent is refused
+ * rather than filled, so driving D3 without B1's method spec and C1's measured record would hand E1 a
+ * manuscript with an empty abstract, results and conclusion — and E1 refuses a section that does not
+ * discharge the argument plan. Those are the inputs a driven run arrives with, so they are the inputs
+ * this spec supplies.
+ *
+ * @returns one entry per slug this spec supplies.
+ */
+async function draftInputs(): Promise<Record<string, unknown>> {
+  const ctx = boundRunCtx()
+  const method = (await STEP_EXECUTOR_REGISTRY.get('B1-method')?.executor(
+    execCtx('B1-method', ctx),
+  )) as Record<string, unknown>
+  const measured = (await STEP_EXECUTOR_REGISTRY.get('C1-mvp')?.executor(
+    execCtx('C1-mvp', ctx),
+  )) as Record<string, unknown>
+  return {
+    'figure-plan': await figurePlan(),
+    'method-spec': method['method-spec'],
+    'result-version': measured['result-version'],
+  }
+}
+
+/**
+ * The `manuscript` artifact E1-format declares, AS D3-WRITING REALLY WRITES IT.
+ *
+ * THE MANUSCRIPT CARRIES THE DOCUMENT NOW, so a hand-built stand-in would drive E1 outside its
+ * declared preconditions — E1 renders the document off this artifact and refuses a manuscript that
+ * carries none. Driving D3 is how this spec gets one that is really its output, rather than a
+ * literal that would keep passing after the shape moved.
  *
  * @returns one entry per declared input slug.
  */
 async function revisedDraftInputs(): Promise<Record<string, unknown>> {
-  const plan = await figurePlan()
-  return { 'manuscript': { renderedFigures: plan.figures } }
+  const inputs = await draftInputs()
+  const out = (await STEP_EXECUTOR_REGISTRY.get('D3-writing')?.executor(
+    execCtxWith('D3-writing', inputs),
+  )) as Record<string, unknown>
+  return { ...inputs, manuscript: out['manuscript'] }
 }
 
 describe('T19-B registry — 16-step coverage derived from core', () => {
@@ -319,7 +368,10 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     'A2-claim': CLAIM_CONSTRUCT_TOOL_ID,
     'C3-boundary': ABLATION_TOOL_ID,
     'D1-figure-map': FIGURE_TOOL_ID,
-    'E1-format': THREE_LINE_TABLE_TOOL_ID,
+    // THE TABLE MOVED TO THE STEP THAT WRITES THE PAPER. It used to be E1's, and E1 rendered it
+    // because the table looked like a formatting concern; a document that is authoritative before it
+    // is typeset has to carry its table already, so D3 invokes the capability now.
+    'D3-writing': THREE_LINE_TABLE_TOOL_ID,
   }
 
   /**
@@ -339,7 +391,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
       'A2-claim',
       'C3-boundary',
       'D1-figure-map',
-      'E1-format',
+      'D3-writing',
     ])
     expect(real).toEqual(expect.arrayContaining(Object.keys(EXPECTED_REAL_TOOLS)))
   })
@@ -351,7 +403,9 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     const local = [...STEP_EXECUTOR_REGISTRY.values()]
       .filter(e => e.kind === 'local_computation')
       .map(e => e.stepId)
-    expect(local).toEqual(['A4-venue', 'B2-data', ...REAL_RUNTIME_STEPS_WITHOUT_TOOL])
+    // E1 joined them: it renders the document it reads and drives the deployment's compile seam, and
+    // it invokes no catalogue tool at all any more.
+    expect(local).toEqual(['A4-venue', 'B2-data', ...REAL_RUNTIME_STEPS_WITHOUT_TOOL, 'E1-format'])
   })
 
   it('brands each real-tool producer with the tool id@version', () => {
@@ -366,7 +420,9 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     async (stepId) => {
       const entry = STEP_EXECUTOR_REGISTRY.get(stepId)
       expect(entry).toBeDefined()
-      const inputs = stepId === 'E1-format' ? await revisedDraftInputs() : {}
+      const inputs = stepId === 'E1-format' ? await revisedDraftInputs()
+        : stepId === 'D3-writing' ? await draftInputs()
+          : {}
       const out = await entry?.executor(execCtxWith(stepId, inputs))
       const declared = STEP_OUTPUT_MAP[stepId] ?? []
       expect(Object.keys(out ?? {}).sort()).toEqual([...declared].sort())
@@ -390,7 +446,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
   it('numbers the manuscript the way the plan did, and reports what the prose never names', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
     const out = (await entry?.executor(execCtxWith('E1-format', await revisedDraftInputs()))) as Record<string, Record<string, unknown>>
-    const doc = out['formatted-manuscript']!
+    const doc = out['typeset']!
     const manuscript = String(doc.manuscript)
     // The captions carry the labels the plan assigned, so a sentence citing `Table 1` names the
     // caption printed here rather than one this step made up.
@@ -398,13 +454,18 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
     expect(manuscript).toContain('**Figure 2.**')
     expect(manuscript).toContain('**Table 1.**')
     expect(manuscript).toContain('**Equation 1 — ')
-    // THE PROSE NAMES THE EQUATIONS, because the Method section states them and this step's fallback
-    // writes that section from the model's own equations. It does NOT name the figures: this spec
-    // supplies no figure-plan input, so there are no figure labels to name — and the artifact says so
-    // instead of the assembler adding a sentence no step wrote.
+    // WHAT THE PROSE NAMES IS A FACT ABOUT THE MANUSCRIPT, and this one names everything: the draft
+    // this spec drives D3 to write is given the figure plan and the equations, so its sections cite
+    // the floats they are about and the method section states the equations. The report says so
+    // rather than the assembler adding a sentence no step wrote.
+    //
+    // THE EMPTY `uncited` LIST IS THE POINT OF THIS ASSERTION, not a weaker one: a report that named
+    // only what it found would read the same whether the prose cited every float or the check had
+    // stopped running. `paper-quality.spec.ts` covers the other direction — a float no sentence names
+    // — and this covers the case where the report must be able to say "nothing is missing".
     const cross = doc.crossReferences as { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
-    expect(cross.cited).toEqual(['Equation 1', 'Equation 2', 'Equation 3'])
-    expect(cross.uncited).toEqual(['Figure 1', 'Figure 2', 'Table 1'])
+    expect(cross.cited).toEqual(['Figure 1', 'Figure 2', 'Table 1', 'Equation 1', 'Equation 2', 'Equation 3'])
+    expect(cross.uncited).toEqual([])
     expect(doc.floatsNotRendered).toEqual([])
   })
 
@@ -464,7 +525,7 @@ describe('T19-B registry — real tool integration is falsifiable', () => {
   it('E1-format really assembled a manuscript WITH a three-line table sub-render', async () => {
     const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
     const out = (await entry?.executor(execCtxWith('E1-format', await revisedDraftInputs()))) as Record<string, Record<string, unknown>>
-    const doc = out['formatted-manuscript']!
+    const doc = out['typeset']!
     // The E1 artifact is the FORMATTED MANUSCRIPT, not merely the table (T19-S):
     // the table is a sub-capability embedded inside a longer assembled manuscript.
     expect(String(doc.manuscript)).toContain('## Results')
@@ -512,14 +573,14 @@ describe('T19-B registry — fixture executors are honest about being fixtures',
       && e.stepId !== 'B2-data' && e.stepId !== 'B3-baseline' && e.stepId !== 'C2-trinity-loop')
     .map(e => e.stepId)
 
-  it('leaves 8 steps as unconditional fixture executors', () => {
+  it('leaves the steps that run nothing but this package as fixture executors', () => {
     // C1-mvp left this list when the C channel began running its experiment for real
-    // (traffic-sim); B2-data left it because its level now tracks dataset presence.
+    // (traffic-sim); B2-data left it because its level now tracks dataset presence; D3-writing left it
+    // when the three-line-table capability moved there and the step began executing a catalogue tool.
     expect(fixtureSteps).toEqual([
       'A3-agenda',
       'B1-method',
       'D2-framework',
-      'D3-writing',
       'D4-rebuttal',
     ])
   })

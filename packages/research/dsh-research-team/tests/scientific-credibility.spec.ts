@@ -61,7 +61,7 @@ describe('a measurement that contradicts the claim', () => {
     // something a person can act on.
     const steps = getStepDefinitions().map(definition => definition.id)
     expect(steps.length).toBe(16)
-    expect(artifact(store, runId, 'formatted-manuscript')).toBeDefined()
+    expect(artifact(store, runId, 'typeset')).toBeDefined()
   })
 
   it('keeps the measured numbers as numbers, so a reader is not left with the prose', async () => {

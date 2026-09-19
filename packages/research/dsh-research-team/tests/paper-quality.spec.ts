@@ -231,7 +231,7 @@ describe('the same baseline on a different research task', () => {
     const draft = getArtifact(store, run.runId, 'manuscript') as {
       sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
     }
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       crossReferences: { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
       floatsNotRendered: ReadonlyArray<string>
       manuscriptCounts: { references: number }
@@ -274,7 +274,7 @@ describe('the shipped run, read by the baseline', () => {
     const draft = getArtifact(store, run.runId, 'manuscript') as {
       sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
     }
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       crossReferences: { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
       floatsNotRendered: ReadonlyArray<string>
       manuscriptCounts: { references: number }

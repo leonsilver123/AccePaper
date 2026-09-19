@@ -220,7 +220,7 @@ describe('a run under a deployment that reads sentences', () => {
     expect(d3?.executeError).toContain('the passage reports the opposite')
     // AND NOTHING WAS PUBLISHED: no draft, so no manuscript can follow it.
     expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 
   it('records that no sentence was read when the deployment names no assessor', async () => {
@@ -289,7 +289,7 @@ describe('the readings travel with the manuscript, and the policy decides', () =
     expect(d3?.status).toBe('passed')
     expect(e1?.status).toBe('in_progress')
     expect(e1?.executeError).toContain('statement-unassessed')
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 })
 

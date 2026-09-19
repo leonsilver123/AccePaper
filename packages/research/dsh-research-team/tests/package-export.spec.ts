@@ -475,7 +475,7 @@ describe('a package that says which state it describes', () => {
     const { store, run } = await realRun()
     const manifest = planRunPackage(store, run, 'evaluation').manifest
     expect(manifest.artifactRefs.map(entry => entry.slug))
-      .toContain('formatted-manuscript')
+      .toContain('typeset')
     for (const entry of manifest.artifactRefs) expect(entry.version).toBeGreaterThan(0)
     expect(manifest.checks.find(check => check.code === 'artifacts-current')?.passed).toBe(true)
   })
@@ -494,7 +494,7 @@ describe('a package that says which state it describes', () => {
 
     const check = second.checks.find(entry => entry.code === 'artifacts-current')
     expect(check?.passed).toBe(false)
-    expect(check?.detail).toContain('formatted-manuscript')
+    expect(check?.detail).toContain('typeset')
     // AND THE PACKAGE IS NOT FINAL, whatever else holds: a reading of a state the run has left is not
     // the package to hand anyone.
     expect(second.state).toBe('draft')

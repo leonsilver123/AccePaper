@@ -43,10 +43,16 @@ describe('an approval covers the revision it was given for', () => {
   it('records the inputs it binds, taken from the run rather than from the caller', () => {
     const { store, id } = approvedRun()
     const approval = liveRun(store, id).steps.get('E2-submit')?.approval
-    expect(approval?.targetRefs).toHaveLength(1)
-    expect(approval?.targetRefs[0]?.artifactId).toBe('formatted-manuscript')
-    // The ref is the registry's own, so a reader can look it up.
-    expect(approval?.targetRefs[0]).toEqual(liveRun(store, id).registry['formatted-manuscript']?.ref)
+    // BOTH OF THE GATE'S DECLARED INPUTS, and there are two because the document and the form set
+    // from it are separate artifacts: a person approves the paper AND the file a journal receives,
+    // and an approval that bound only one of them would cover a decision about the other.
+    expect(approval?.targetRefs).toHaveLength(2)
+    expect(approval?.targetRefs.map(ref => ref.artifactId).sort()).toEqual(['manuscript', 'typeset'])
+    // The refs are the registry's own, so a reader can look one up.
+    expect(new Set(approval?.targetRefs.map(ref => JSON.stringify(ref)))).toEqual(new Set([
+      JSON.stringify(liveRun(store, id).registry['manuscript']?.ref),
+      JSON.stringify(liveRun(store, id).registry['typeset']?.ref),
+    ]))
   })
 
   it('reports nothing while the inputs still hold the revision that was approved', () => {
@@ -60,15 +66,15 @@ describe('an approval covers the revision it was given for', () => {
     // approval would have kept reading as a decision about the new one.
     const { store, id } = approvedRun()
     const run = liveRun(store, id)
-    const before = run.registry['formatted-manuscript']?.ref
+    const before = run.registry['manuscript']?.ref
     if (before === undefined) throw new Error('spec: no manuscript')
-    run.registry['formatted-manuscript'] = {
-      ...run.registry['formatted-manuscript']!,
+    run.registry['manuscript'] = {
+      ...run.registry['manuscript']!,
       ref: { ...before, version: (before.version + 1) as typeof before.version, contentHash: 'a'.repeat(64) as typeof before.contentHash },
     }
 
     const stale = approvalStalenessOf(store, id, 'E2-submit')
-    expect(stale).toMatch(/'formatted-manuscript' moved from version/u)
+    expect(stale).toMatch(/'manuscript' moved from version/u)
     expect(stale).toContain(before.contentHash.slice(0, 12))
     expect(stale).toContain('a'.repeat(12))
   })
@@ -76,9 +82,9 @@ describe('an approval covers the revision it was given for', () => {
   it('reports a revision whose CONTENT changed at the same version number', () => {
     const { store, id } = approvedRun()
     const run = liveRun(store, id)
-    const before = run.registry['formatted-manuscript']!.ref
-    run.registry['formatted-manuscript'] = {
-      ...run.registry['formatted-manuscript']!,
+    const before = run.registry['manuscript']!.ref
+    run.registry['manuscript'] = {
+      ...run.registry['manuscript']!,
       ref: { ...before, contentHash: 'b'.repeat(64) as typeof before.contentHash },
     }
 
@@ -88,7 +94,7 @@ describe('an approval covers the revision it was given for', () => {
   it('reports an input that disappeared rather than passing it over', () => {
     const { store, id } = approvedRun()
     const run = liveRun(store, id)
-    delete run.registry['formatted-manuscript']
+    delete run.registry['manuscript']
     expect(approvalStalenessOf(store, id, 'E2-submit')).toMatch(/is gone from the run/u)
   })
 

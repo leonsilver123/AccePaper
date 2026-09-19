@@ -569,7 +569,10 @@ export function manuscriptFactsOf(
   const definitions = getStepDefinitions()
   return {
     profile,
-    manuscriptProduced: snapshot.registry['formatted-manuscript'] !== undefined,
+    // THE TYPESET ARTIFACT, which is what a journal is handed: the document itself lives under
+    // `manuscript`, and a run whose writing steps passed but whose formatting did not would have a
+    // paper and no submission.
+    manuscriptProduced: snapshot.registry['typeset'] !== undefined,
     unfinishedSteps: definitions
       .filter(definition => (snapshot.steps[definition.id]?.status ?? 'pending') !== 'passed')
       .map(definition => `${definition.id} (${snapshot.steps[definition.id]?.status ?? 'pending'})`),
@@ -599,7 +602,7 @@ function compilationOf(
   store: ResearchRunStore,
   runId: string,
 ): { readonly tool: string | null; readonly dropped: ReadonlyArray<string> } {
-  const value = readArtifact(store, runId, 'formatted-manuscript')
+  const value = readArtifact(store, runId, 'typeset')
   if (value === null || typeof value !== 'object') return { tool: null, dropped: [] }
   const recorded = (value as { compilation?: unknown }).compilation
   if (recorded === null || typeof recorded !== 'object') return { tool: null, dropped: [] }
@@ -629,7 +632,7 @@ function compilationOf(
  * @returns the document paths, in the order the compile produced them.
  */
 function compiledDeliverablesOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
-  const value = readArtifact(store, runId, 'formatted-manuscript')
+  const value = readArtifact(store, runId, 'typeset')
   if (value === null || typeof value !== 'object') return []
   const recorded = (value as { compilation?: unknown }).compilation
   if (recorded === null || typeof recorded !== 'object') return []
@@ -669,7 +672,7 @@ function reviewOf(
 
 /** The files the run's own manuscript artifact declares, in its own order. */
 function declaredPackageFilesOf(store: ResearchRunStore, runId: string): ReadonlyArray<string> {
-  const value = readArtifact(store, runId, 'formatted-manuscript')
+  const value = readArtifact(store, runId, 'typeset')
   if (value === null || typeof value !== 'object') return []
   const files = (value as { packageFiles?: unknown }).packageFiles
   return files !== null && typeof files === 'object' && !Array.isArray(files) ? Object.keys(files) : []

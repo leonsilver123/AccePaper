@@ -461,7 +461,7 @@ describe('the A gate refuses a doctored manuscript in a driven run', () => {
     // The manuscript D3 wrote stays the only one written — a blocked step's output is in the
     // registry, so what says the number went no further is that no LATER step republished it.
     expect(getRunSnapshot(store, run.runId).registry['manuscript']?.producerStepId).toBe('D3-writing')
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 
   it('reviews the claim material on the steps that run before a manuscript exists', async () => {

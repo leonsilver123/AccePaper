@@ -102,13 +102,18 @@ describe('T34 — 16 步单步可运行验证', () => {
     const fixture = rows.filter(r => r.kind === 'fixture_executor').map(r => r.stepId)
     const humanGate = rows.filter(r => r.kind === 'humanGate').map(r => r.stepId)
 
-    // 与 registry 的声明一致:5 步真的执行了目录里的工具函数 / 3 步用本包自己的代码
-    // 算出真实测量(无工具、无外部系统)/ 7 步 fixture / 1 人工门。
+    // 与 registry 的声明一致:5 步真的执行了目录里的工具函数 / 6 步用本包自己的代码
+    // 算出真实测量(无工具、无外部系统)/ 4 步 fixture / 1 人工门。
     // `real_tool_fixture_input` 的含义是"工具函数执行了",报告把它印成
     // "Real tool functions executed" —— 所以本地计算不能挂在这个等级下。
-    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format'])
-    expect(localComputation).toEqual(['A4-venue', 'B2-data', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop'])
-    expect(fixture).toHaveLength(5)
+    // 三线表能力从 E1-format 移到 D3-writing 之后:写文档的那一步调用渲染表
+    // 的工具(工具属于工具本身,不属于步骤),排版那一步不再调用任何目录工具,
+    // 它按 manuscript 里的 document 渲染。
+    expect(realTool).toEqual(['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'D3-writing'])
+    expect(localComputation).toEqual([
+      'A4-venue', 'B2-data', 'B3-baseline', 'C1-mvp', 'C2-trinity-loop', 'E1-format',
+    ])
+    expect(fixture).toHaveLength(4)
     expect(humanGate).toEqual(['E2-submit'])
   })
 })

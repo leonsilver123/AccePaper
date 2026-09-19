@@ -335,7 +335,7 @@ export function unembeddableFloats(
 }
 
 /**
- * The manuscript as a document, built from the parts E1 assembled.
+ * The manuscript as a document, built from the parts the writing steps produced.
  *
  * THE PARTS ARE ALREADY TYPED WHERE THEY ARE MADE: the sections carry their ids and headings, the
  * floats carry their labels and their rendered content, and the references carry the cite keys the
@@ -360,9 +360,10 @@ export function documentOf(input: {
   return {
     title: input.title,
     sections: input.sections.map((section) => {
-      // THE EQUATIONS BELONG TO THE SECTION THAT STATES THEM. E1 appends them to the Method section's
-      // text; the document carries them as blocks of their own, so a backend renders display
-      // mathematics rather than a code block that happens to look like it.
+      // THE EQUATIONS BELONG TO THE SECTION THAT STATES THEM. D3 writes them into the document, and
+      // E1 appends the same block to the Method section's rendered text; carrying them as blocks of
+      // their own is what lets a backend render display mathematics rather than a code block that
+      // happens to look like it.
       const blocks: DocumentBlock[] = [{ kind: 'prose', text: section.bodyText }]
       if (section.id === 'method') {
         blocks.push(...input.equations.map(equation => ({

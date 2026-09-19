@@ -171,7 +171,12 @@ export const STEPS: readonly StepDefinition[] = [
     // `paper-outline` is read by this step's executor and was not declared — see D2-framework for
     // what an undeclared read costs.
     inputs: ['manuscript', 'venue', 'venue-scope', 'paper-outline', 'result-version'],
-    outputs: ['formatted-manuscript'],
+    // THE TYPESET FORM IS ITS OWN ARTIFACT, and the document it renders is not. Before this, one
+    // slug carried the manuscript markdown, the compile report and the compiled bytes at once, so
+    // "the document" and "what a compiler made of it" were one thing a reader had to take apart —
+    // and the step that compiled it also assembled it, which is why a document could reach a
+    // compiler in a state no other step had approved.
+    outputs: ['typeset'],
     gate: ['B'],
     falsifiable: null,
     humanGate: false,
@@ -179,7 +184,10 @@ export const STEPS: readonly StepDefinition[] = [
   {
     id: 'E2-submit', index: 16, phase: 'E', name: '投稿确认',
     purpose: '由你来确认是否投稿 —— 这一步永远不会自动完成',
-    inputs: ['formatted-manuscript'],
+    // A PERSON APPROVES THE DOCUMENT AND WHAT WAS SET FROM IT, so an approval binds both refs: the
+    // manuscript the run stands behind and the typeset form the journal would receive. Binding only
+    // the typeset form would let the document move under a decision about it.
+    inputs: ['manuscript', 'typeset'],
     outputs: ['submission-record'],
     gate: [],
     falsifiable: null,

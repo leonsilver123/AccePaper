@@ -90,12 +90,12 @@ describe('submissionReadinessOf', () => {
     // the decision — by a later step, a recovery from another snapshot, or a hand — is not that
     // document, and a run whose material changed under its approval has not been approved.
     const readiness = submissionReadinessOf(facts({
-      staleApproval: "'formatted-manuscript' moved from version 1 (aaaa…) to version 2 (bbbb…)",
+      staleApproval: "'typeset' moved from version 1 (aaaa…) to version 2 (bbbb…)",
     }))
     expect(readiness.ready).toBe(false)
     expect(readiness.profileEligible).toBe(true)
     expect(readiness.reason).toContain('changed after the decision')
-    expect(readiness.reason).toContain('formatted-manuscript')
+    expect(readiness.reason).toContain('typeset')
   })
 
   it('stays ready when no approval went stale', () => {

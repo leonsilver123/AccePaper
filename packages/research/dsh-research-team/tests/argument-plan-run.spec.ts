@@ -186,6 +186,6 @@ describe('a run whose sections do not report the outcome', () => {
     expect(e1?.status).toBe('in_progress')
     expect(e1?.executeError).toContain('argument-obligation-unmet')
     expect(e1?.executeError).toContain("the 'results' section owes 'states-measured-change'")
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 })

@@ -66,7 +66,7 @@ describe('a production run carries real material to the human gate', () => {
     expect(draft?.references?.every(entry => typeof entry.year === 'number')).toBe(true)
 
     // And it reaches the document a reader gets, not only the artifact behind it.
-    const manuscript = getArtifact(store, runId, 'formatted-manuscript') as
+    const manuscript = getArtifact(store, runId, 'typeset') as
       | { manuscript?: string }
       | undefined
     const years = draft?.references?.map(entry => String(entry.year)) ?? []
@@ -123,7 +123,7 @@ describe('an injected error stops the run where it is read', () => {
     // D3 wrote it and its gate refused the STEP — which is why the check is on who produced it and
     // not on whether it is there.
     expect(getRunSnapshot(store, run.runId).registry['manuscript']?.producerStepId).toBe('D3-writing')
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
     expect(readinessOfRun(store, run.runId, 'production').ready).toBe(false)
   })
 
@@ -167,7 +167,7 @@ describe('readiness is not approval', () => {
     const plan = planRunPackage(store, run, 'production')
     expect(plan.manifest.profileEligible).toBe(true)
     expect(plan.manifest.submissionReady).toBe(false)
-    expect(getArtifact(store, runId, 'formatted-manuscript')).toBeDefined()
+    expect(getArtifact(store, runId, 'typeset')).toBeDefined()
     // The reason names the gate, not a missing artifact: the material is all there and a person has
     // not approved it.
     expect(plan.manifest.readinessNote).toMatch(/E2-submit/)
@@ -179,7 +179,7 @@ describe('readiness is not approval', () => {
     const plan = planRunPackage(store, run, 'evaluation')
     expect(plan.manifest.profileEligible).toBe(false)
     expect(plan.manifest.submissionReady).toBe(false)
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeDefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeDefined()
   })
 
   it('writes both facts into the summary a reader of the package sees', async () => {

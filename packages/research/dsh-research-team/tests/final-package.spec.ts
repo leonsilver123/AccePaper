@@ -27,7 +27,7 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     staleApproval: undefined,
     declaredFiles: ['manuscript.md', 'experiment-tables.md'],
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
-    artifactRefs: { read: ['formatted-manuscript@1'], moved: [] },
+    artifactRefs: { read: ['typeset@1'], moved: [] },
     compilation: { tool: null, dropped: [] },
     // NO DELIVERABLES, because this deployment compiles nothing: the case that says "no document is
     // claimed" is the one below, and every other case here moves exactly one condition.
@@ -53,7 +53,7 @@ function approval(decision: ApprovalRecord['decision'] = 'approved'): ApprovalRe
     // Branded at the wire/parser boundary in production; a spec builds the ref directly, the way the
     // core's own specs do.
     targetRefs: [{
-      artifactId: 'formatted-manuscript' as never,
+      artifactId: 'typeset' as never,
       version: 3 as never,
       contentHash: 'abc123' as never,
     }],
@@ -117,7 +117,7 @@ describe('a final package is what every condition holds', () => {
     // THE MIXED-VERSION CASE: the decision was made about refs the run no longer holds, so the
     // package would carry a manuscript this person never approved under their name.
     const check = checkOf(
-      readyFacts({ staleApproval: "'formatted-manuscript' moved from version 3 to version 4" }),
+      readyFacts({ staleApproval: "'typeset' moved from version 3 to version 4" }),
       'approval-current',
     )
     expect(check.passed).toBe(false)
@@ -164,7 +164,7 @@ describe('the approval a package carries', () => {
       decision: 'approved',
       approvalEventId: 'event-1',
       decidedAt: 1_700_000_000_000,
-      targets: [{ artifactId: 'formatted-manuscript', version: 3, contentHash: 'abc123' }],
+      targets: [{ artifactId: 'typeset', version: 3, contentHash: 'abc123' }],
     })
   })
 
@@ -232,7 +232,7 @@ describe('a package that replaces a moved reading, re-checked and re-approved', 
   // that differed from the previous export could never be final again.
 
   /** The state of a run whose artifacts have moved since the package on disk was read. */
-  const moved = { read: ['formatted-manuscript@1', 'figure-plan@1'], moved: ['formatted-manuscript'] }
+  const moved = { read: ['typeset@1', 'figure-plan@1'], moved: ['typeset'] }
 
   it('refuses a late export of an old version, naming the artifact that moved', () => {
     // NOBODY RE-EXAMINED THE MOVE. The package would replace a reading of an artifact the run has
@@ -240,7 +240,7 @@ describe('a package that replaces a moved reading, re-checked and re-approved', 
     const facts = readyFacts({ artifactRefs: moved, approval: undefined })
     const check = checkOf(facts, 'artifacts-current')
     expect(check.passed).toBe(false)
-    expect(check.detail).toContain('formatted-manuscript')
+    expect(check.detail).toContain('typeset')
     expect(check.detail).toContain('re-export')
     // AND THE STATE IS DRAFT: a reading of a state the run has left is not the package to hand anyone.
     expect(finalPackageStateOf(checkFinalPackage(facts))).toBe('draft')
@@ -252,7 +252,7 @@ describe('a package that replaces a moved reading, re-checked and re-approved', 
     // refusal does not rest on this check alone.
     const facts = readyFacts({
       artifactRefs: moved,
-      staleApproval: "'formatted-manuscript' moved from version 3 to version 4",
+      staleApproval: "'typeset' moved from version 3 to version 4",
     })
     expect(checkOf(facts, 'approval-current').passed).toBe(false)
     expect(checkOf(facts, 'artifacts-current').passed).toBe(false)
@@ -268,7 +268,7 @@ describe('a package that replaces a moved reading, re-checked and re-approved', 
     expect(checks.filter(check => !check.passed)).toEqual([])
     expect(finalPackageStateOf(checks)).toBe('final')
     const check = checkOf(facts, 'artifacts-current')
-    expect(check.detail).toContain('formatted-manuscript')
+    expect(check.detail).toContain('typeset')
     expect(check.detail).toContain('covers the run as it stands')
   })
 

@@ -252,7 +252,7 @@ describe('a refused section makes the run not ready', () => {
     expect(a1?.executeError).toContain(DEFAULT_PLAN.direction)
     expect(a1?.executeError).toContain('NOT an outage')
     expect(getArtifact(store, run.runId, 'landscape-map')).toBeUndefined()
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
 
     // And readiness reports the run it actually is: eligible, and not ready, with no manuscript.
     const readiness = readinessOfRun(store, run.runId, 'production')

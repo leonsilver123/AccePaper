@@ -42,14 +42,15 @@ import type { RunResult, StepOutcome } from '../../src/runner/types.ts'
 
 const CORE_ORDER: ReadonlyArray<string> = getStepDefinitions().map(d => d.id)
 // T19-S canonical alignment: ablation (C3) is the real-tool boundary probe;
-// B3-baseline is baseline+SOTA (honest fixture); E1-format assembles the
-// formatted manuscript (three-line-table is its real table sub-capability).
+// B3-baseline is baseline+SOTA (honest fixture).
+// SUPERSEDED 2026-09-19: three-line-table was E1-format's sub-capability and is now D3-writing's —
+// the table belongs to the document, and the document is written before it is typeset.
 /**
  * Steps whose executor runs a function from the research TOOL catalogue. This is
  * the set the level `real_tool_fixture_input` names, and the set the run report
  * prints as "Real tool functions executed".
  */
-const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'E1-format']
+const REAL_TOOL_STEPS = ['A1-landscape', 'A2-claim', 'C3-boundary', 'D1-figure-map', 'D3-writing']
 
 interface Driven {
   readonly store: ResearchRunStore
@@ -106,6 +107,7 @@ describe('T19-B happy path — all 16 steps drive through the core engine', () =
 describe('T19-B happy path — real tool execution is provable from the artifacts', () => {
   it('persists the real tool producer brand on every real-tool artifact', async () => {
     const { store, run } = await happyRun()
+    const snap = getRunSnapshot(store, run.runId)
     for (const stepId of REAL_TOOL_STEPS) {
       const entry = STEP_EXECUTOR_REGISTRY.get(stepId)
       expect(entry?.kind).toBe('real_tool_fixture_input')
@@ -113,8 +115,12 @@ describe('T19-B happy path — real tool execution is provable from the artifact
       expect(outcome.usedRealTool).toBe(true)
       expect(outcome.artifacts.length).toBeGreaterThan(0)
       for (const art of outcome.artifacts) {
-        // The evidence comes from the PERSISTED artifact, not from the registry.
-        const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
+        // THE VALUE THIS STEP COMMITTED, not the slug's current one. `manuscript` has two producers
+        // now — D3 writes it and D4 republishes it — so the registry holds D4's copy while the brand
+        // this assertion is about belongs to the value D3 wrote. Reading the step's own attempt is
+        // what makes "this step's artifact carries the tool's brand" a claim about this step.
+        const value = (snap.steps[stepId]?.artifacts[art.slug]
+          ?? getArtifact(store, run.runId, art.slug)) as Record<string, unknown>
         expect(value.__producer, `${stepId}/${art.slug}`).toBe(entry?.producer)
         expect(value.__kind).toBe('real_tool_fixture_input')
         expect(art.producedBy).toBe(entry?.producer)
@@ -128,7 +134,10 @@ describe('T19-B happy path — real tool execution is provable from the artifact
     const fixtureSteps = run.steps.filter(
       s => s.kind === 'fixture_executor' && s.stepId !== 'E2-submit' && s.stepId !== 'B2-data',
     )
-    expect(fixtureSteps.length).toBe(5)
+    // D3-writing left this set when the three-line-table capability moved to it: the step that writes
+    // the document invokes the tool that renders its table, and a step that executes a catalogue tool
+    // may not report itself as a deterministic fixture.
+    expect(fixtureSteps.length).toBe(4)
     for (const s of fixtureSteps) {
       for (const art of s.artifacts) {
         const value = getArtifact(store, run.runId, art.slug) as Record<string, unknown>
@@ -276,7 +285,7 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
     }
     const draft = draftValue as Record<string, unknown>
     const revised = artifactOf(store, run.runId, 'manuscript')
-    const formatted = artifactOf(store, run.runId, 'formatted-manuscript')
+    const formatted = artifactOf(store, run.runId, 'typeset')
 
     const outlineIds = (outline.sections as ReadonlyArray<{ id: string }>).map(s => s.id)
     expect(outlineIds).toContain('results')
@@ -356,7 +365,7 @@ describe('T19-S happy path — canonical BUSINESS artifacts (step semantics, not
 
   it('E2-submit stays gated — the formatted manuscript is the last artifact', async () => {
     const { store, run } = await happyRun()
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeDefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeDefined()
     expect(getArtifact(store, run.runId, 'submission-record')).toBeUndefined()
     expect(outcomeOf(run, 'E2-submit').status).toBe('gated')
   })
@@ -529,9 +538,10 @@ describe('T19-B happy path — auditable reports', () => {
     expect((json.truthfulnessCounts as Record<string, number>).real_tool_fixture_input)
       .toBe(REAL_TOOL_STEPS.length)
     // A4-venue joined this level when its venue became a computation over the
-    // retrieved corpus rather than a literal.
-    expect((json.truthfulnessCounts as Record<string, number>).local_computation).toBe(5)
-    expect((json.truthfulnessCounts as Record<string, number>).fixture_executor).toBe(5)
+    // retrieved corpus rather than a literal; E1-format joined it when the table moved to D3 and the
+    // step that renders the package stopped invoking any catalogue tool.
+    expect((json.truthfulnessCounts as Record<string, number>).local_computation).toBe(6)
+    expect((json.truthfulnessCounts as Record<string, number>).fixture_executor).toBe(4)
     expect((json.truthfulnessCounts as Record<string, number>).live_external).toBe(0)
     expect(Array.isArray(json.auditTimeline)).toBe(true)
     expect(json.artifactManifest).toBeDefined()

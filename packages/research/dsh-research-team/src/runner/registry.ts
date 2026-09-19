@@ -20,9 +20,11 @@
 //     boundary probing).
 //   - D1-figure-map wires all three figure families its canonical purpose names
 //     (数据图/三线表/路线图): real figure + three-line-table + roadmap renders.
-//   - E1-format no longer IS `renderThreeLineTable`: E1 assembles the formatted
-//     manuscript + reproducible package; three-line-table is only its table
-//     sub-capability.
+//   - E1-format no longer IS `renderThreeLineTable`: E1 renders the document the
+//     manuscript artifact carries. SUPERSEDED ON 2026-09-19: the T19-S ruling kept
+//     the table inside E1 as a sub-capability, and the table has since moved to
+//     D3-writing — a document that is authoritative before it is typeset has to
+//     already carry its table. E1 now invokes no catalogue tool at all.
 //   - `ARTIFACT_TYPE_BY_SLUG['baseline-results']` is `baseline-measurement-set`
 //     (it was wrongly typed as an ablation set).
 //
@@ -178,7 +180,9 @@ import type { ResolutionVerifier } from './resolution-verifier.ts'
 import { DEFAULT_REVIEW_POLICY, reviewSatisfaction } from './review-policy.ts'
 import type { ReviewPolicy, ReviewedRound } from './review-policy.ts'
 import { compileManuscript, documentOf } from './document-compile.ts'
-import type { DocumentBlock, DocumentCompiler } from './document-compile.ts'
+import type {
+  DocumentBlock, DocumentCompiler, DocumentReference, ManuscriptDocument,
+} from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import {
   bibliographyOf, bindJudgements, checkCitationKeys, checkCitationUse, checkManuscriptCitations,
@@ -611,8 +615,8 @@ export const SCENARIO = {
   datasetId: 'case-pack-traffic/claim.json',
 } as const
 
-/** Writer-section model shared by D2/D3/D4/E1 (paper-outline → draft →
- *  revised-draft → formatted-manuscript). Plain data; deterministic. */
+/** Writer-section model shared by D2/D3/D4/E1 (paper-outline → manuscript →
+ *  the same manuscript with its revision applied → typeset). Plain data; deterministic. */
 interface ManuscriptSection extends PlanSection {
   readonly bodyText: string
 }
@@ -661,7 +665,11 @@ const C2_PRODUCER = 'convergence:trinity-loop'
 const C3_PRODUCER = `${ABLATION_TOOL_ID}@${ABLATION_TOOL_VERSION}`
 const D1_PRODUCER = `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`
 const D2_PRODUCER = 'fixture:framework'
-const D3_PRODUCER = 'fixture:writing'
+// D3's shipped path writes its prose from this package's fixture sentences AND renders the
+// manuscript's results table with the real three-line-table tool, so it is branded with the tool it
+// executes rather than `fixture:*` — a `fixture:` brand beside `real_tool_fixture_input` is the
+// two-sided contradiction the registry's brand check refuses (`runner-registry.spec.ts`).
+const D3_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`
 
 /**
  * The version of the record a prose request leaves behind.
@@ -675,7 +683,11 @@ const PROSE_REQUEST_VERSION = 'prose-request-v2'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
-const E1_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`
+// E1 runs no catalogue tool and is not the fixture either: it renders the document the writing steps
+// produced and packages what one compile made of it, so its brand names that work. It used to carry
+// the three-line-table brand, which was true while the table was rendered here and became a claim
+// about a tool this step no longer invokes.
+const E1_PRODUCER = 'render:typeset-package'
 
 /**
  * The VERSION of the passage one cite key's judgement rests on, or null when nothing establishes it.
@@ -722,7 +734,9 @@ const ARTIFACT_TYPE_BY_SLUG: Readonly<Record<string, string>> = {
   'paper-outline': 'paper-outline',
   'manuscript': 'manuscript-draft',
   'rebuttal': 'rebuttal-record',
-  'formatted-manuscript': 'formatted-manuscript',
+  // What E1 renders: the assembled Markdown package and what one compile produced from the
+  // document. The DOCUMENT itself is `manuscript` above — one document, one slug.
+  'typeset': 'typeset-package',
   'submission-record': 'submission-record',
 }
 
@@ -3022,6 +3036,52 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const sectionEvidence = headings.map(h => evidenceFor(h.id))
   const refused = sectionEvidence.filter(entry => entry.missing.length > 0)
 
+  // THE RESULTS TABLE IS PART OF THE DOCUMENT, SO IT IS RENDERED WHERE THE DOCUMENT IS WRITTEN.
+  //
+  // THIS REVERSES THE T19-S RULING THAT PUT IT IN E1, and the reason is what the two steps can know.
+  // T19-S read the table as a FORMATTING concern — a paper gets a three-line table when it is set —
+  // and the ruling stands as far as it goes: the capability belongs to the tool, not to the step, and
+  // E1 never was `renderThreeLineTable`. What it missed is that a document which is authoritative
+  // before it is typeset has to CONTAIN its table already. E1 could only render one by reading the
+  // run's measurements itself, which made E1 the second step to decide what the paper's numbers are
+  // and let the compiled document carry a table the manuscript Markdown did not. D3 writes the
+  // document; the table is one of its blocks; so D3 renders it, as its own invocation of the tool.
+  const tableInvoker = ctx.invoker ?? new DirectResearchToolInvoker('d3-fixture')
+  const tableInvocation = await tableInvoker.invoke(
+    'three-line-table',
+    { model: ctx.runCtx.adapter.table(d3Outcome.measured), target: 'markdown' },
+    { timestamp: FIXED_TS },
+  )
+  if (!tableInvocation.ok) {
+    throw new Error(`[D3-writing] three-line-table invocation failed: ${tableInvocation.message}`)
+  }
+  const tableRender = tableInvocation.artifact as ReturnType<typeof renderThreeLineTable>
+  // THE MANUSCRIPT'S OWN FLOATS, composed once here: the Markdown the package prints and the document
+  // a compiler renders are two renderings of one list, and a table laid out in one of them and read
+  // from the plan in the other is how the two come to describe different papers.
+  const title = typeof outline?.title === 'string' ? outline.title : planOf(ctx).title
+  const tableMarkdown = pipeTableOf(tableRender.table)
+  const floats = composeFloats(planFloats(renderedFigures), {
+    ...(tableMarkdown === undefined ? {} : { markdown: tableMarkdown }),
+    raw: tableRender.render.text,
+    note: tableNoteOf(ctx),
+  }, '[D3-writing]')
+  // THE DOCUMENT ITSELF, which every later step reads and republishes and E1 renders. It is a
+  // ManuscriptDocument and not a field of this artifact: what the steps after this one hand on, check
+  // and compile is the document, and the sections beside it are the writing record this step owes.
+  const referenceEntries = formattedReferenceEntries(references)
+  const document = documentOf({
+    title,
+    sections: sections.map(section => ({
+      id: section.id,
+      heading: section.heading,
+      bodyText: section.bodyText,
+    })),
+    floats: floats.document,
+    equations: equationBlocksOf(ctx),
+    references: numberedReferenceEntries(referenceEntries),
+  })
+
   // THE KEY IS THE OUTPUT SLUG — what `commitStepOutputs` matches against the step's declared
   // outputs (INV-OUTPUT-CONTRACT). Renaming the value's `slug` field alone leaves the commit naming
   // an artifact no step declares, which the engine refuses as `DSH_COMMIT_OUTPUT_NOT_DECLARED`.
@@ -3082,12 +3142,33 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // section was asked for and which argument the run had when it wrote them.
         argumentPlan,
         renderedFigures,
+        // THE DOCUMENT THIS STEP WROTE — sections with their blocks, the floats in the plan's order,
+        // the equations the method states, and the references keyed the way the prose cites them.
+        // Every later step reads THIS rather than re-deriving a document from the parts: D4 revises
+        // it, E1 renders it, and the acceptance replaces it.
+        document,
+        // WHAT THE TABLE TOOL PRODUCED, which is not what the paper prints. The document's table
+        // block carries a pipe table because that is what a Markdown reader draws; the tool's own
+        // rendering is the box-drawing form the package's `experiment-tables.md` holds, and its
+        // binding hash is the provenance of the render. Recorded here because this is the step that
+        // invoked it, so a reader can tell a table this run rendered from one nothing produced.
+        tableRender: {
+          tool: `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`,
+          markdown: tableRender.render.text,
+          bindingHash: tableRender.bindingHash,
+        },
         note: proseSource === 'fixture'
           ? 'synthetic manuscript draft — sections mirror the D2 outline ids; no drafting model call in this wave'
           : 'manuscript draft whose section bodies came from a real model call',
       },
       producer,
-      proseKindOf(proseSource),
+      // THE REAL three-line-table tool function ran over this draft's table, so the fixture path is
+      // `real_tool_fixture_input` and not `fixture_executor`: the level names what this executor did,
+      // and a step that executes a catalogue tool may not report itself as a deterministic fixture.
+      // With a prose writer the artifact names the channel that wrote the text instead
+      // (`live_external` / `mock_external`), which is the level this registry's own header reserves
+      // for deployment-varying facts.
+      proseSource === 'fixture' ? 'real_tool_fixture_input' : proseKindOf(proseSource),
     ),
   }
 }
@@ -3153,6 +3234,18 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const proseRequestVersion = draft?.proseRequestVersion
   const sectionEvidence = Array.isArray(draft?.sectionEvidence) ? draft.sectionEvidence : []
   const refusedSections = Array.isArray(draft?.refusedSections) ? draft.refusedSections : []
+  // AND THE TABLE TOOL'S OWN OUTPUT, for the same reason: this step recomputes no table, and the
+  // package's `experiment-tables.md` is D3's rendering of it. A republisher that dropped it left the
+  // package without the file, which is the "declared but not produced" defect stated the other way
+  // round.
+  const tableRender = draft?.tableRender
+  // AND THE DOCUMENT THIS STEP REPUBLISHES. E1 renders it and the acceptance replaces it, so a
+  // revision that dropped it would leave the typeset artifact describing the text D3 wrote — the
+  // revision's own sections would be in the artifact and nowhere a compiler could see them. It is
+  // REBUILT rather than carried verbatim because its prose blocks are the revised bodies; its floats,
+  // equations and references are the ones it already carries, so no part of it is re-derived from
+  // the plan here.
+  const carriedDocument = draft?.document as ManuscriptDocument | undefined
   const d4Outcome = measureOutcomeWithSource(ctx)
   const measured = d4Outcome.measured
 
@@ -3411,6 +3504,22 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // flag a caller set.
   const record = buildRevisionRecord(points)
   const revised: ReadonlyArray<ManuscriptSection & { readonly revised: boolean }> = applied.sections
+  // The document as this step republishes it: the revised bodies, everything else as it read it.
+  const republished = carriedDocument === undefined
+    ? {}
+    : {
+      document: documentOf({
+        title: carriedDocument.title,
+        sections: revised.map(section => ({
+          id: section.id,
+          heading: section.heading,
+          bodyText: section.bodyText,
+        })),
+        floats: documentFloatsOf(carriedDocument),
+        equations: equationBlocksOf(ctx),
+        references: carriedDocument.references,
+      }),
+    }
   return {
     rebuttal: tagArtifact(
       {
@@ -3496,6 +3605,10 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
           }),
         ...(argumentPlan === undefined ? {} : { argumentPlan }),
         renderedFigures,
+        // WHAT THIS STEP SET IS THE DOCUMENT THAT WAS REVISED — see `republished` above — and the
+        // table render it carries, which this step recomputes nothing about.
+        ...republished,
+        ...(tableRender === undefined ? {} : { tableRender }),
         resultSource: d4Outcome.source,
         resultRef: d4Outcome.contentHash,
         note: 'revised draft — same section ids as the D3 draft, with `revised` set only on the sections a patch actually changed',
@@ -3506,56 +3619,59 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   }
 }
 
-/** E1-format: ASSEMBLES the formatted manuscript + reproducible package from the
- *  revised draft + venue scope. three-line-table is the REAL table sub-capability
- *  inside the assembly — E1 is the format STEP, not the table tool (T19-S fix). */
-async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
-  const { claimRef } = canonicalOf(ctx)
-  const venue = readInput(ctx, 'venue')
-  const venueScope = readInput(ctx, 'venue-scope')
-  const revised = readInput(ctx, 'manuscript')
-  const outline = readInput(ctx, 'paper-outline')
-  // The manuscript carries the outline's title, so the assembled document is this
-  // paper rather than a generic skeleton.
-  const title = typeof outline?.title === 'string' ? outline.title : planOf(ctx).title
-  const venueName = typeof venue?.name === 'string' ? venue.name : SCENARIO.venueName
-  const venueId = typeof venue?.venueId === 'string' ? venue.venueId : SCENARIO.venueId
-  const rawMatches = venueScope?.matches
-  const scopeMatches = Array.isArray(rawMatches)
-    ? rawMatches.filter((m): m is string => typeof m === 'string')
-    : []
-  const sections = sectionsOf(revised, planOf(ctx), ctx)
-
-  // Real three-line-table sub-capability: the manuscript results table, built from
-  // the SAME measurements the experiment produced — read off the run's record, so the
-  // table and the prose cannot come from two different computations. WHICH table is the study's:
-  // its columns and rows come from the adapter, so this step renders the table the study asked for
-  // rather than one whose headers name a quantity some other study measured.
-  const e1Outcome = measureOutcomeWithSource(ctx)
-  const invoker = ctx.invoker ?? new DirectResearchToolInvoker('e1-fixture')
-  const invocation = await invoker.invoke(
-    'three-line-table',
-    { model: ctx.runCtx.adapter.table(e1Outcome.measured), target: 'markdown' },
-    { timestamp: FIXED_TS },
+/**
+ * The results table as a Markdown pipe table, or `undefined` when it cannot be laid out as one.
+ *
+ * THE TOOL'S OWN "markdown" RENDERING IS NOT THIS: it draws a fixed-width table with box-drawing
+ * rules, which a Markdown reader shows as a code block rather than as a table. This is built from the
+ * structured model the tool returned, not by re-parsing its text.
+ *
+ * @param model - the table model the three-line-table capability returned.
+ * @returns the pipe table, or `undefined` when it carries no columns or a row whose width differs
+ *   from the header's — the caller states that fact rather than reshaping the table.
+ */
+function pipeTableOf(
+  model: ReturnType<typeof renderThreeLineTable>['table'],
+): string | undefined {
+  const header = model.columns.map(
+    column => column.unit === undefined ? column.header : `${column.header} (${column.unit})`,
   )
-  if (!invocation.ok) {
-    throw new Error(`[E1-format] three-line-table invocation failed: ${invocation.message}`)
-  }
-  const artifact = invocation.artifact as ReturnType<typeof renderThreeLineTable>
+  const rows = model.rows.map((row) => {
+    const cells: string[] = []
+    row.forEach((cell, index) => {
+      const column = model.columns[Math.min(index, model.columns.length - 1)]
+      if (column === undefined) return
+      cells.push(threeLineTableCellText(cell, column, THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN))
+      // A pipe table cannot merge cells, so a colSpan cell is followed by empty cells to keep every
+      // row the same width — `markdownPipeTable` refuses a row that disagrees with its header.
+      for (let extra = 1; extra < (cell.colSpan ?? 1); extra += 1) cells.push('')
+    })
+    return cells
+  })
+  return header.length > 0 && rows.every(row => row.length === header.length)
+    ? markdownPipeTable(header, rows)
+    : undefined
+}
 
-  const scopeLine = scopeMatches.length > 0 ? `Scope match: ${scopeMatches.join('; ')}.` : ''
-  // The references come from the draft, which built them from the retrieved
-  // records. This line used to pass a literal empty array, so every assembled
-  // manuscript reported zero references while its own references section described
-  // a landscape scan — the document contradicted itself.
-  const rawRefs = (revised?.references as ReadonlyArray<unknown> | undefined) ?? []
-  // Built from the FIELDS, not by joining whatever happened to be present. The previous version
-  // omitted an absent field silently: a record with no authors began with its title, which reads as
-  // a complete citation, and a record with no venue ran two sentences together. `formatReference`
-  // states what is missing instead, and `numberedReferences` at the assembler gives each entry the
-  // number an in-text marker uses — the SAME number, because the key mapping below is built from the
-  // same array in the same order.
-  const referenceEntries = rawRefs.map((raw) => {
+/**
+ * The reference list, formatted, in the order the manuscript cites its sources.
+ *
+ * Built from the FIELDS, not by joining whatever happened to be present: a record with no authors
+ * would begin with its title, which reads as a complete citation, and one with no venue would run two
+ * sentences together. `formatReference` states what is missing instead. The numbering is the array
+ * position, so the entries here and the numbers an in-text marker uses are one array read twice.
+ *
+ * ONE FUNCTION BECAUSE IT IS ONE LIST: D3 builds the document's references with it and E1 renders the
+ * numbered list the Markdown prints with it, so the citations a compiled document resolves and the
+ * entries the paper prints cannot be two readings of the record.
+ *
+ * @param rawRefs - the reference records the manuscript carries.
+ * @returns one entry per record, carrying the key it is cited under when it has one.
+ */
+function formattedReferenceEntries(
+  rawRefs: ReadonlyArray<unknown>,
+): ReadonlyArray<{ readonly citeKey: string | undefined; readonly formatted: string }> {
+  return rawRefs.map((raw) => {
     const ref = raw as {
       citeKey?: unknown
       title?: unknown
@@ -3577,6 +3693,279 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       }),
     }
   })
+}
+
+/**
+ * The document's reference list: the formatted entries and the number each prints under.
+ *
+ * @param entries - the formatted entries, in citation order.
+ * @returns one reference per entry that carries a cite key, numbered from 1.
+ */
+function numberedReferenceEntries(
+  entries: ReadonlyArray<{ readonly citeKey: string | undefined; readonly formatted: string }>,
+): ReadonlyArray<DocumentReference> {
+  return entries.flatMap((entry, index) =>
+    entry.citeKey === undefined
+      ? []
+      : [{ citeKey: entry.citeKey, entry: entry.formatted, number: index + 1 }])
+}
+
+/**
+ * The floats a document carries, in the order it carries them.
+ *
+ * THIS IS HOW A LATER REPUBLISHER REBUILDS THE DOCUMENT without re-deriving a float list: a revision
+ * changes the prose, and the floats, the equations and the references it already carries are carried
+ * through. Prose and equations are excluded because `documentOf` composes them itself — from the
+ * section bodies the caller passes and from the equations the study declares.
+ *
+ * @param document - the document as the run holds it.
+ * @returns its labelled floats, in order.
+ */
+function documentFloatsOf(document: ManuscriptDocument): ReadonlyArray<DocumentBlock> {
+  return document.sections.flatMap(section =>
+    section.blocks.filter(block => block.kind !== 'prose' && block.kind !== 'equation'))
+}
+
+/** The study's equations, as the document states them. */
+function equationBlocksOf(ctx: ExecCtx): ReadonlyArray<{ readonly label: string; readonly latex: string }> {
+  return ctx.runCtx.adapter.implementation.equations
+    .map(equation => ({ label: equation.name, latex: equation.latex }))
+}
+
+/**
+ * What the results table is a table OF, as the caption states it.
+ *
+ * NAMED BY THE RUN, NOT BY A STEP: which arms were measured and under what conditions is the study's
+ * own fact, and a caption naming the platoon study's would sit under a queueing study's table.
+ */
+function tableNoteOf(ctx: ExecCtx): string {
+  return `Measured by running ${ctx.runCtx.adapter.implementation.id}'s two arms under the same declared conditions.`
+}
+
+/**
+ * The floats one manuscript carries, rendered both ways at once.
+ *
+ * A FLOAT LIST IS ONE FACT WITH TWO RENDERINGS: the Markdown blocks the package's `manuscript.md`
+ * prints, and the document blocks a compiler renders. They used to be built by two steps from the
+ * same plan — D3's document and E1's Markdown — and a label, a caption or a rendering could reach one
+ * and not the other. One function returns both, so the pair cannot disagree: they are two readings of
+ * one array, produced together.
+ *
+ * THE TABLE IS THE CALLER'S, because only the caller knows where it came from: D3 lays it out from
+ * the tool's structured model the moment it invokes the capability, and E1 takes the block the
+ * document already carries. A table the renderer cannot lay out is passed with no `markdown`: the
+ * tool's own rendering stands in for it in the Markdown, the label is reported as not rendered, and
+ * the document carries no table block — which is the same fact stated in all three places.
+ *
+ * @param plan - the plan's labelled floats, in plan order.
+ * @param table - the table as the caller has it: its pipe Markdown when it could be laid out, the
+ *   tool's own rendering either way, and the caption's second sentence.
+ * @param step - the step label a refusal is raised under, e.g. `[E1-format]`.
+ * @returns both float lists, the renderings the package writes as its own files, and what the plan
+ *   declares that the manuscript does not carry.
+ * @throws {Error} when the plan declares no three-line-table, so a table would carry a number no plan
+ *   assigned.
+ */
+function composeFloats(
+  plan: ReadonlyArray<FigurePlanEntry & { readonly label: string; readonly title: string }>,
+  table: { readonly markdown?: string; readonly raw: string; readonly note: string },
+  step: string,
+): {
+  /** The package's float blocks, in plan order, with the table last. */
+  readonly markdown: ReadonlyArray<string>
+  /** The document's float blocks, in plan order, with the table in the place the plan put it. */
+  readonly document: ReadonlyArray<DocumentBlock>
+  readonly figureSvg: string
+  readonly roadmapSvg: string
+  readonly roadmapMermaid: string
+  readonly rendered: ReadonlyArray<CitableFloat>
+  readonly notRendered: ReadonlyArray<string>
+} {
+  // NUMBERED, CAPTIONED, AND LINKED — the paper shapes. The number and the caption come from the
+  // plan, not from a counter here: D1 assigned them when it decided which floats exist, so a caption
+  // reading `Figure 1` and a sentence citing `Figure 1` cannot name different things. A figure is a
+  // file or an inline diagram, never both, and `figureBlock` refuses the other cases rather than
+  // rendering a broken image.
+  const markdown: string[] = []
+  const blocks: DocumentBlock[] = []
+  // THE ROADMAP AS A PICTURE, when the deployment's provider drew one. A drawn roadmap is a FIGURE —
+  // it has the same two renderings a data figure has and the formats take them the same way — while
+  // an undrawn one stays the diagram source its tool produced. Treating the second as the first is
+  // how a document comes to claim a figure it does not carry.
+  let figureSvg = ''
+  let roadmapSvg = ''
+  let roadmapMermaid = ''
+  // Floats the plan declares that this manuscript will not carry, named rather than passed over: a
+  // reader comparing the plan with the paper would otherwise find a figure with no explanation.
+  const notRendered: string[] = []
+  // What the manuscript really holds, for the cross-reference report.
+  const rendered: CitableFloat[] = []
+  // Where the table belongs among the blocks, in the plan's order: laid out from the tool's model
+  // rather than from the plan's rendered text, so it is spliced in rather than appended.
+  let tableIndex = blocks.length
+  for (const entry of plan) {
+    if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
+      figureSvg = entry.svg
+      markdown.push(figureBlock({
+        label: entry.label,
+        title: entry.title,
+        path: figureAssetPath(entry.label),
+        note: 'Rendered by the figure tool from the measurements this run produced.',
+      }))
+      blocks.push({
+        kind: 'figure',
+        label: entry.label,
+        caption: entry.title,
+        svg: entry.svg,
+        ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
+      })
+      rendered.push({ label: entry.label, title: entry.title })
+      continue
+    }
+    if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
+      roadmapMermaid = entry.content.trim()
+      if (entry.diagramDrawn === true && typeof entry.svg === 'string') {
+        roadmapSvg = entry.svg
+        markdown.push(figureBlock({
+          label: entry.label,
+          title: entry.title,
+          path: figureAssetPath(entry.label),
+          note: 'Drawn from the roadmap this run planned, by the deployment\'s figure provider.',
+        }))
+        blocks.push({
+          kind: 'figure',
+          label: entry.label,
+          caption: entry.title,
+          svg: entry.svg,
+          ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
+        })
+        rendered.push({ label: entry.label, title: entry.title })
+        continue
+      }
+      markdown.push(figureBlock({
+        label: entry.label,
+        title: entry.title,
+        mermaid: roadmapMermaid,
+      }))
+      blocks.push({
+        kind: 'diagram',
+        label: entry.label,
+        caption: entry.title,
+        mermaid: roadmapMermaid,
+      })
+      rendered.push({ label: entry.label, title: entry.title })
+      continue
+    }
+    if (entry.kind === 'three-line-table') {
+      tableIndex = blocks.length
+      continue
+    }
+    notRendered.push(entry.label)
+  }
+  // The plan is where a manuscript learns what its table is called, so a plan that declares no table
+  // means the manuscript and the plan disagree about what it holds — refused rather than papered over
+  // with a number no plan assigned.
+  const planned = plan.find(entry => entry.kind === 'three-line-table')
+  if (planned === undefined) {
+    throw new Error(
+      `${step} the figure-plan declares no three-line-table, so the results table this manuscript `
+      + 'carries would carry a number no plan assigned',
+    )
+  }
+  if (table.markdown === undefined) {
+    // A table whose rows do not cover its columns is one this renderer cannot lay out, so the tool's
+    // own rendering is used. Stated rather than passed over, because the reader would otherwise see a
+    // code block where the paper should have a table.
+    markdown.push(table.raw)
+    notRendered.push(planned.label)
+  } else {
+    markdown.push(tableBlock({
+      label: planned.label,
+      title: planned.title.length === 0 ? 'Measured results' : planned.title,
+      markdown: table.markdown,
+      note: table.note,
+    }))
+    blocks.splice(tableIndex, 0, {
+      kind: 'table',
+      label: planned.label,
+      caption: planned.title,
+      markdown: table.markdown,
+    })
+    rendered.push({ label: planned.label, title: planned.title })
+  }
+  return { markdown, document: blocks, figureSvg, roadmapSvg, roadmapMermaid, rendered, notRendered }
+}
+
+/**
+ * E1-format: RENDERS the document the run holds, and packages what one compile produced.
+ *
+ * THE DOCUMENT IS AUTHORITATIVE BEFORE THIS STEP RUNS. D3 writes it, D4 republishes it with the
+ * revision applied, and this step takes the `document` field off that artifact and compiles THAT.
+ * It does not assemble a document from parts; the run's own records reach it only for the packaging
+ * around the document — the venue's scope line, the numbering of the reference list, and the
+ * cross-reference report about the prose.
+ *
+ * WHAT THIS REPLACED, AND WHY. Until this unit E1 built the document itself: it invoked the
+ * three-line-table capability over the run's measurements, composed the floats and only then handed
+ * the result to the compiler. Two consequences followed. The document a compiler received existed
+ * nowhere a reader could compare it with the paper; and E1 became the second step to decide what the
+ * paper's numbers are, so the compiled document and the manuscript Markdown could describe tables no
+ * single step had produced. The T19-S ruling — "E1 is the format STEP, not the table tool" — still
+ * holds: the table is a capability of the TOOL, and D3 now invokes it as its own. What the ruling got
+ * wrong was the step it belonged to: a table added at typesetting time is not part of the document a
+ * reader approves.
+ *
+ * @param ctx - the execution context.
+ * @returns the `typeset` artifact: the assembled Markdown package, and everything the deployment's
+ *   compiler produced from the document.
+ * @throws {Error} when the manuscript artifact carries no document, when the compiler's request is
+ *   refused, or when one of the manuscript's citation, statement-binding, sentence-support or
+ *   argument-plan obligations is not discharged.
+ */
+async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
+  const { claimRef } = canonicalOf(ctx)
+  const venue = readInput(ctx, 'venue')
+  const venueScope = readInput(ctx, 'venue-scope')
+  const revised = readInput(ctx, 'manuscript')
+  const outline = readInput(ctx, 'paper-outline')
+  // The manuscript carries the outline's title, so the assembled document is this
+  // paper rather than a generic skeleton.
+  const title = typeof outline?.title === 'string' ? outline.title : planOf(ctx).title
+  const venueName = typeof venue?.name === 'string' ? venue.name : SCENARIO.venueName
+  const venueId = typeof venue?.venueId === 'string' ? venue.venueId : SCENARIO.venueId
+  const rawMatches = venueScope?.matches
+  const scopeMatches = Array.isArray(rawMatches)
+    ? rawMatches.filter((m): m is string => typeof m === 'string')
+    : []
+  const sections = sectionsOf(revised, planOf(ctx), ctx)
+  // WHAT THIS STEP RENDERS, AND THE REFUSAL THAT SAYS SO. A manuscript without a document is one no
+  // writing step produced — rendering the Markdown from its sections alone would publish a package
+  // whose compiled form describes a paper no step wrote, which is the state this artifact exists to
+  // rule out rather than to create.
+  const carriedDocument = revised?.document
+  if (carriedDocument === null || typeof carriedDocument !== 'object') {
+    throw new Error('[E1-format] the manuscript artifact carries no document to render')
+  }
+  const document = carriedDocument as ManuscriptDocument
+  // WHAT D3'S INVOCATION OF THE TABLE TOOL PRODUCED. The document carries the table as a block; the
+  // tool's own rendering and its binding hash are the record of the render, and the package's
+  // `experiment-tables.md` is that rendering. Read from the manuscript rather than by running the
+  // tool again: a second invocation is a second table, and this step did not render it.
+  const tableRecord = (revised?.tableRender ?? {}) as {
+    readonly markdown?: unknown
+    readonly bindingHash?: unknown
+  }
+
+  const scopeLine = scopeMatches.length > 0 ? `Scope match: ${scopeMatches.join('; ')}.` : ''
+  // The references come from the draft, which built them from the retrieved
+  // records. This line used to pass a literal empty array, so every assembled
+  // manuscript reported zero references while its own references section described
+  // a landscape scan — the document contradicted itself.
+  const rawRefs = (revised?.references as ReadonlyArray<unknown> | undefined) ?? []
+  // Rendered by the SAME function D3 built the document's reference list with, so the numbered list
+  // this Markdown prints and the entries the compiled document resolves a citation against are one
+  // construction of one array.
+  const referenceEntries = formattedReferenceEntries(rawRefs)
   // WHAT THE PAPER CITES AND WHAT IT PRINTS MUST BE THE SAME SET, and this is the last place both
   // are in hand before the manuscript is published as an artifact. A sentence citing a key the list
   // does not carry cannot be resolved by a reader; an entry nothing cites is a search result wearing
@@ -3702,164 +4091,27 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const sectionsForAssembly = referenceEntries.length > 0
     ? withEquations.filter(section => section.id !== 'references')
     : withEquations
-  // The manuscript carries the figures D1 actually rendered: the data figure as the
-  // svg it produced, the roadmap as the mermaid block it produced, then the results
-  // table. Until this, the Figures section held the table alone and the rendered
-  // figure and roadmap were emitted as artifacts the paper never mentioned.
+  // THE MANUSCRIPT'S FLOATS, AS THE PACKAGE PRINTS THEM. Composed by the SAME function D3 composed
+  // the document's floats with, over the same `renderedFigures` the document was built from, so the
+  // Markdown the package carries and the compiled document are two renderings of one list rather
+  // than two constructions of it. The table is not re-laid out here: it is the block the DOCUMENT
+  // carries, and the tool's own rendering of it travels beside the document's as the package's
+  // `experiment-tables.md`.
   const rendered = Array.isArray(revised?.renderedFigures)
     ? (revised.renderedFigures as ReadonlyArray<FigurePlanEntry>)
     : []
-  const figureBlocks: string[] = []
-  // Kept separately as well as inline: the package writes each part as its own file with its
-  // own source, so the figure's provenance never stands in for the table's or the roadmap's.
-  let figureSvg = ''
-  let roadmapMermaid = ''
-  // THE ROADMAP AS A PICTURE, when the deployment's provider drew one. A drawn roadmap is a FIGURE —
-  // it has the same two renderings a data figure has and the formats take them the same way — while
-  // an undrawn one stays the diagram source its tool produced. Without this the drawing D1 paid for
-  // was dropped here, and every compiled document carried a float no format can embed (`a diagram is
-  // carried as its own source`), which is what kept a run with a figure provider at `draft`.
-  let roadmapSvg = ''
-  // The document's floats, built where the Markdown's are so a label, a caption or a rendering cannot
-  // reach one and not the other. See `documentOf`: this is the only place that says how the parts
-  // compose, and a second construction of the same list is how a compiled document comes to describe
-  // a manuscript the Markdown does not.
-  const documentFloats: DocumentBlock[] = []
-  // Where the table belongs among them, in the plan's order. It is laid out below, so its position is
-  // recorded here and it is spliced in there rather than appended.
-  let tableFloatIndex = documentFloats.length
-  // NUMBERED, CAPTIONED, AND LINKED — the paper shapes. Before this the data figure was pushed as
-  // raw inline SVG with no number and no caption, and the roadmap as an unlabelled mermaid block, so
-  // nothing in the prose could refer to either. A figure is a file or an inline diagram, never both;
-  // `figureBlock` refuses the other cases rather than rendering a broken image.
-  //
-  // THE NUMBER AND THE CAPTION COME FROM THE PLAN, not from a counter here: D1 assigned them when it
-  // decided which floats exist and D3 offered the same labels to the prose channel, so a caption
-  // reading `Figure 1` and a sentence citing `Figure 1` cannot name different things.
-  const floats = planFloats(rendered)
-  // Floats the plan declares that this manuscript will not carry, named rather than passed over: a
-  // reader comparing the plan with the paper would otherwise find a figure with no explanation.
-  const floatsNotRendered: string[] = []
-  // What the manuscript really holds, for the cross-reference report below.
-  const renderedFloats: CitableFloat[] = []
-  for (const entry of floats) {
-    if (entry.kind === 'data-figure' && typeof entry.svg === 'string') {
-      figureSvg = entry.svg
-      figureBlocks.push(figureBlock({
-        label: entry.label,
-        title: entry.title,
-        path: figureAssetPath(entry.label),
-        note: 'Rendered by the figure tool from the measurements this run produced.',
-      }))
-      documentFloats.push({
-        kind: 'figure',
-        label: entry.label,
-        caption: entry.title,
-        svg: entry.svg,
-        ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
-      })
-      renderedFloats.push({ label: entry.label, title: entry.title })
-      continue
-    }
-    if (entry.kind === 'roadmap' && typeof entry.content === 'string' && entry.format === 'mermaid') {
-      roadmapMermaid = entry.content.trim()
-      // A DRAWN ROADMAP IS A FIGURE; an undrawn one is the source its tool produced. The two are not
-      // the same float: the first can be embedded by every format this deployment can produce, the
-      // second by none, and reporting the second as the first is how a document comes to claim a
-      // figure it does not carry.
-      if (entry.diagramDrawn === true && typeof entry.svg === 'string') {
-        roadmapSvg = entry.svg
-        figureBlocks.push(figureBlock({
-          label: entry.label,
-          title: entry.title,
-          path: figureAssetPath(entry.label),
-          note: 'Drawn from the roadmap this run planned, by the deployment\'s figure provider.',
-        }))
-        documentFloats.push({
-          kind: 'figure',
-          label: entry.label,
-          caption: entry.title,
-          svg: entry.svg,
-          ...(typeof entry.pngBase64 === 'string' ? { pngBase64: entry.pngBase64 } : {}),
-        })
-        renderedFloats.push({ label: entry.label, title: entry.title })
-        continue
-      }
-      figureBlocks.push(figureBlock({
-        label: entry.label,
-        title: entry.title,
-        mermaid: roadmapMermaid,
-      }))
-      documentFloats.push({
-        kind: 'diagram',
-        label: entry.label,
-        caption: entry.title,
-        mermaid: roadmapMermaid,
-      })
-      renderedFloats.push({ label: entry.label, title: entry.title })
-      continue
-    }
-    // The table is laid out after this loop, from the structured model the tool returned rather than
-    // from the plan's rendered text, so it is not a miss here — but its PLACE among the floats is
-    // the plan's, recorded here so the document prints the floats in the order the plan numbered
-    // them rather than moving the table to the end.
-    if (entry.kind === 'three-line-table') {
-      tableFloatIndex = documentFloats.length
-      continue
-    }
-    floatsNotRendered.push(entry.label)
-  }
-  // THE TABLE, AS A TABLE. The tool's own "markdown" rendering draws box-drawing rules, which a
-  // Markdown reader shows as a code block; a paper needs a pipe table. Built from the structured
-  // model the tool returned, not by re-parsing its text.
-  const tableModel = artifact.table
-  const tableHeader = tableModel.columns.map(
-    column => column.unit === undefined ? column.header : `${column.header} (${column.unit})`,
-  )
-  const tableRows = tableModel.rows.map((row) => {
-    const cells: string[] = []
-    row.forEach((cell, index) => {
-      const column = tableModel.columns[Math.min(index, tableModel.columns.length - 1)]
-      if (column === undefined) return
-      const renderedCell = threeLineTableCellText(cell, column, THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN)
-      cells.push(renderedCell)
-      // A pipe table cannot merge cells, so a colSpan cell is followed by empty cells to keep every
-      // row the same width — `markdownPipeTable` refuses a row that disagrees with its header.
-      for (let extra = 1; extra < (cell.colSpan ?? 1); extra += 1) cells.push('')
-    })
-    return cells
-  })
-  const tableMarkdown = tableHeader.length > 0 && tableRows.every(row => row.length === tableHeader.length)
-    ? markdownPipeTable(tableHeader, tableRows)
-    : undefined
-  // The plan is where this step learns what the table it renders is called, so a plan that declares
-  // no table means the two disagree about what the manuscript holds — reported rather than papered
-  // over with a number this step made up.
-  const plannedTable = floats.find(entry => entry.kind === 'three-line-table')
-  if (plannedTable === undefined) {
-    throw new Error(
-      '[E1-format] the figure-plan declares no three-line-table, so the results table this step '
-      + 'renders would carry a number no plan assigned',
-    )
-  }
-  if (tableMarkdown === undefined) {
-    // A table whose rows do not cover its columns is one this renderer cannot lay out, so the tool's
-    // own rendering is used. Stated here rather than passed over, because the reader would otherwise
-    // see a code block where the paper should have a table.
-    figureBlocks.push(artifact.render.text)
-    floatsNotRendered.push(plannedTable.label)
-  } else {
-    figureBlocks.push(tableBlock({
-      label: plannedTable.label,
-      title: plannedTable.title.length === 0 ? 'Measured results' : plannedTable.title,
-      markdown: tableMarkdown,
-      // NAMED BY THE RUN, NOT BY THIS STEP: which arms were measured and under what conditions is
-      // the study's own fact, and a caption naming the platoon study's would sit under a
-      // queueing study's table.
-      note: `Measured by running ${ctx.runCtx.adapter.implementation.id}'s two arms under the same declared conditions.`,
-    }))
-    renderedFloats.push({ label: plannedTable.label, title: plannedTable.title })
-  }
+  const documentTable = document.sections
+    .flatMap(section => section.blocks)
+    .find(block => block.kind === 'table')
+  const plannedFloats = planFloats(rendered)
+  const floats = composeFloats(plannedFloats, {
+    ...(documentTable === undefined ? {} : { markdown: documentTable.markdown }),
+    raw: typeof tableRecord.markdown === 'string' ? tableRecord.markdown : '',
+    note: tableNoteOf(ctx),
+  }, '[E1-format]')
+  const figureBlocks = floats.markdown
+  const { figureSvg, roadmapSvg, roadmapMermaid, notRendered: floatsNotRendered } = floats
+  const renderedFloats = floats.rendered
   const assembled = assembleManuscript({
     title,
     sections: sectionsForAssembly,
@@ -3882,40 +4134,6 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // reproducibility, manifest) and writes the whole set to disk. A path whose upstream step
   // did not run has no content and is OMITTED, never declared empty — the earlier version of
   // this artifact listed five filenames no step wrote, which read as run output.
-  // THE DOCUMENT, AND THE COMPILE CHAIN. The parts this step assembled are handed to a compiler as a
-  // DOCUMENT — sections with their blocks, floats with their labels, equations as display mathematics,
-  // references keyed the way the prose cites them — so a backend renders the document rather than
-  // re-parsing the assembled Markdown. The compile is a seam the deployment fills: this package spawns
-  // nothing, and a deployment that configured no compiler records that fact instead of failing a run
-  // that still holds a complete Markdown manuscript.
-  const document = documentOf({
-    title,
-    sections: sections.map(section => ({
-      id: section.id,
-      heading: section.heading,
-      bodyText: section.bodyText,
-    })),
-    // The floats the loop above built, in the plan's own order, with the table spliced in at the
-    // place the plan put it — it is laid out from the tool's structured model rather than from the
-    // plan's rendered text, so it is composed here instead of in that loop.
-    floats: [
-      ...documentFloats.slice(0, tableFloatIndex),
-      ...(tableMarkdown === undefined
-        ? []
-        : [{
-          kind: 'table' as const,
-          label: plannedTable.label,
-          caption: plannedTable.title,
-          markdown: tableMarkdown,
-        }]),
-      ...documentFloats.slice(tableFloatIndex),
-    ],
-    equations: ctx.runCtx.adapter.implementation.equations.map(equation => ({ label: equation.name, latex: equation.latex })),
-    references: referenceEntries.flatMap((entry, index) =>
-      entry.citeKey === undefined
-        ? []
-        : [{ citeKey: entry.citeKey, entry: entry.formatted, number: index + 1 }]),
-  })
   // EVERY FILE ONE COMPILE PRODUCED, EACH WITH WHAT IT IS. A compiled document and a figure the
   // document embeds are both files of the same compile, and they are not the same kind of thing: the
   // `.docx` is the deliverable and the `.png` belongs to it. The kind is taken from where the compile
@@ -3950,8 +4168,11 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ? (['html', 'latex', 'docx', 'pdf'] as const)
     : (['html', 'latex', 'docx'] as const)
   for (const format of compileFormats) {
-    // A DRAFT, at this point in the run: the manuscript this step assembles has not been approved, so
-    // what it compiles is a working document. A float that cannot be embedded is recorded here and
+    // WHAT IS COMPILED IS THE DOCUMENT THE MANUSCRIPT ARTIFACT CARRIES — not a document this step
+    // assembled. That is the whole point of the split: a compiler renders what the writing steps
+    // approved, and this step's own contribution is the rendering, not the paper.
+    // A DRAFT, at this point in the run: that document has not been approved by a person yet, so what
+    // it compiles is a working document. A float that cannot be embedded is recorded here and
     // REFUSED when a submission-grade compile is asked for at export time.
     const result = await compileManuscript({ document, format, mode: 'draft' }, ctx.documentCompiler)
     if (result.ok) {
@@ -3988,16 +4209,19 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       ])),
     'manuscript.md': {
       content: assembled.markdown,
-      source: 'assembleManuscript(revised-draft + venue scope + references)',
+      source: 'assembleManuscript(manuscript + venue scope + references)',
     },
+    // THE TOOL'S OWN RENDERING of the table, which is not the pipe table the paper prints: this file
+    // is the run's record of what the three-line-table capability produced at D3, carried here so a
+    // reader can compare the render with the form it took in the document.
     'experiment-tables.md': {
-      content: artifact.render.text,
-      source: `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION}`,
+      content: typeof tableRecord.markdown === 'string' ? tableRecord.markdown : '',
+      source: `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION} (invoked at D3-writing)`,
     },
     ...(figureSvg.length === 0
       ? {}
       : {
-        [figureAssetPath(floats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1')]: {
+        [figureAssetPath(plannedFloats.find(entry => entry.kind === 'data-figure')?.label ?? 'Figure 1')]: {
           content: figureSvg,
           source: `${FIGURE_TOOL_ID}@${FIGURE_TOOL_VERSION}`,
         },
@@ -4008,7 +4232,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     ...(roadmapSvg.length === 0
       ? {}
       : {
-        [figureAssetPath(floats.find(entry => entry.kind === 'roadmap')?.label ?? 'Figure 2')]: {
+        [figureAssetPath(plannedFloats.find(entry => entry.kind === 'roadmap')?.label ?? 'Figure 2')]: {
           content: roadmapSvg,
           source: `${ROADMAP_TOOL_ID}@${ROADMAP_TOOL_VERSION} (drawn by the deployment's figure provider)`,
         },
@@ -4031,7 +4255,7 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     },
   })
   return {
-    'formatted-manuscript': tagArtifact(
+    'typeset': tagArtifact(
       {
         title,
         // WHAT RENDERED IT, AND WHAT COULD NOT. A package that named only `manuscript.html` would
@@ -4081,8 +4305,12 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // Floats the plan declares that this manuscript does not carry, by label.
         floatsNotRendered,
         sectionHeadings: sections.map(s => s.heading),
-        tableMarkdown: artifact.render.text,
-        bindingHash: artifact.bindingHash,
+        // THE TABLE TOOL'S OWN OUTPUT, and where it came from. D3 invoked the capability and the
+        // manuscript records the render and its binding hash; this artifact carries them forward
+        // because the package's `experiment-tables.md` is that same rendering, and a reader of the
+        // typeset form is who compares it with the table the document prints.
+        tableMarkdown: typeof tableRecord.markdown === 'string' ? tableRecord.markdown : '',
+        bindingHash: typeof tableRecord.bindingHash === 'string' ? tableRecord.bindingHash : '',
         // The package's OWN files, as CONTENT. E1 produces exactly these four; the run
         // exporter adds the run-level files (summary, step record, claim-evidence,
         // citations, experiment, reproducibility, manifest) and writes the whole set to
@@ -4091,11 +4319,10 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
         // read as run output beside a produced manuscript.
         packageFiles: pkg.files,
         packageSources: pkg.sources,
-        note: 'formatted-manuscript ASSEMBLED by the E1-format executor from the revised draft + venue scope; the results table is rendered by the REAL renderThreeLineTable sub-capability — the tool is E1\'s table capability, not the format step itself',
+        note: 'typeset RENDERED by the E1-format executor from the document the manuscript artifact carries + venue scope; the results table is the document\'s own block, rendered by the real three-line-table capability at D3-writing',
       },
       E1_PRODUCER,
-      'real_tool_fixture_input',
-      { provenance: invocation.provenance, invokerTruthfulness: invocation.truthfulness },
+      'local_computation',
     ),
   }
 }
@@ -4382,8 +4609,13 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'D3-writing',
-    kind: 'fixture_executor',
-    basis: 'no drafting tool exists (no model call in this wave); the executor emits a deterministic synthetic draft whose section ids mirror the D2 outline',
+    // The prose is a fixture in this wave and the DOCUMENT is where the table is now rendered: the
+    // executor runs the REAL `three-line-table` tool over the study's own measurements, so the shipped
+    // path executes a catalogue tool and may not report itself as a deterministic fixture. The level
+    // names what ran; the artifact names the channel that wrote the prose (`proseSource`), because a
+    // deployment with a writer is a deployment fact the artifact carries and the registry cannot.
+    kind: 'real_tool_fixture_input',
+    basis: 'no drafting tool exists (no model call in this wave), so the section bodies are this package\'s fixture sentences; the REAL `three-line-table` tool function runs inside this step to render the manuscript\'s results table, which becomes the document\'s table block — a table belongs to the document, and the document is written here',
     producer: D3_PRODUCER,
     timeoutMs: FIXTURE_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',
@@ -4400,8 +4632,13 @@ const ENTRY_SPECS: ReadonlyArray<EntrySpec> = [
   },
   {
     stepId: 'E1-format',
-    kind: 'real_tool_fixture_input',
-    basis: 'T19-S: E1 is the format STEP — the executor ASSEMBLES the formatted manuscript + reproducible package from the revised draft and venue scope; the REAL renderThreeLineTable sub-capability renders the results tables inside the assembly (a tool is a capability, never the step itself)',
+    // NO CATALOGUE TOOL RUNS HERE ANY MORE. E1 renders the document the manuscript artifact carries
+    // and drives the deployment's compile seam; the results table is a block of that document, put
+    // there by D3. It used to be filed as `real_tool_fixture_input` because it invoked
+    // `renderThreeLineTable` itself, and that line is what this unit removed — the step that renders
+    // the table is the step that writes the paper, not the step that typesets it.
+    kind: 'local_computation',
+    basis: 'E1 is the format STEP: the executor ASSEMBLES the reproducible package and renders the Markdown from the DOCUMENT the manuscript artifact carries. No research tool from the catalogue runs — the document, and the table inside it, were rendered at D3-writing — and the compile is a seam the deployment fills, so the step\'s own product is computed by this package\'s code over its inputs',
     producer: E1_PRODUCER,
     timeoutMs: REAL_TOOL_TIMEOUT_MS,
     recoveryPolicy: 'rollback_and_retry',

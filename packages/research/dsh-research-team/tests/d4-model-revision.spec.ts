@@ -645,6 +645,6 @@ describe('D4 driven by a model reply', () => {
     const manuscript = getRunSnapshot(store, run.runId).registry['manuscript']
     expect(manuscript?.producerStepId).toBe('D3-writing')
     expect(manuscript?.ref.version).toBe(1)
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 })

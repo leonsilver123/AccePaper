@@ -226,7 +226,7 @@ describe('a run that compiles its document', () => {
     // the compiled files, with the tool that produced them.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, { documentCompiler: stubCompiler() })
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       packageFiles: Record<string, string>
       compilation: { tool: string | null; compiled: ReadonlyArray<string>; refusals: ReadonlyArray<string> }
     }
@@ -248,7 +248,7 @@ describe('a run that compiles its document', () => {
       figureProvider: drawingProvider(),
       documentCompiler: recorded.compiler,
     })
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       packageFiles: Record<string, string>
       compilation: {
         floatsEmbedded: Record<string, ReadonlyArray<string>>
@@ -281,7 +281,7 @@ describe('a run that compiles its document', () => {
     const store: ResearchRunStore = new Map()
     const recorded = recordingCompiler()
     const run = await runT19B(store, { documentCompiler: recorded.compiler })
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       packageFiles: Record<string, string>
       compilation: { floatsDropped: ReadonlyArray<{ label: string; reason: string }> }
     }
@@ -298,7 +298,7 @@ describe('a run that compiles its document', () => {
     // package can tell "not compiled" from "compiled badly" because the reason is on the artifact.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       packageFiles: Record<string, string>
       compilation: { tool: string | null; refusals: ReadonlyArray<string> }
     }

@@ -185,6 +185,7 @@ describe('a review is bound to the candidate it judged', () => {
   const material = {
     knownNumbers: ['12.10', '15', '0.1'],
     referenceLabels: ['1'],
+    referenceKeys: ['Meng2021'],
     headings: HEADINGS,
   }
 
@@ -225,6 +226,17 @@ describe('a review is bound to the candidate it judged', () => {
     const review = reviewCandidate(candidateWith('As shown elsewhere [7], the bound holds.'),
       { ...material, referenceLabels: ['1'] })
     expect(review.findings.find(finding => finding.check === 'citations')?.passed).toBe(false)
+  })
+
+  it('refuses a cite key the reference list does not define', () => {
+    // THE FORM THE DOCUMENT'S OWN PROSE USES. A candidate is written over the document's sections, so
+    // its markers are cite keys; a check that looked only for `[7]` would pass every one of them, and
+    // the label it failed to resolve would reach the person as a citation to a work nobody has.
+    const review = reviewCandidate(candidateWith('As shown elsewhere [@Nobody2099], the bound holds.'),
+      material)
+    const citations = review.findings.find(finding => finding.check === 'citations')
+    expect(citations?.passed).toBe(false)
+    expect(citations?.detail).toContain('@Nobody2099')
   })
 
   it('refuses a candidate that drops a section', () => {

@@ -110,7 +110,7 @@ describe('a run that cites its sources', () => {
   it('prints the sources its sentences cite, and no others', async () => {
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store)
-    const manuscript = getArtifact(store, run.runId, 'formatted-manuscript') as {
+    const manuscript = getArtifact(store, run.runId, 'typeset') as {
       manuscript: string
       manuscriptCounts: { references: number }
       crossReferences: { cited: ReadonlyArray<string>; uncited: ReadonlyArray<string> }
@@ -165,7 +165,7 @@ describe('a run whose manuscript cites none of the sources it reviewed', () => {
     for (const key of REVIEWED_KEYS) expect(d3?.executeError, key).toContain(key)
     // AND NOTHING WAS PUBLISHED: a run stopped here has no draft, so no manuscript can follow it.
     expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
-    expect(getArtifact(store, run.runId, 'formatted-manuscript')).toBeUndefined()
+    expect(getArtifact(store, run.runId, 'typeset')).toBeUndefined()
   })
 })
 

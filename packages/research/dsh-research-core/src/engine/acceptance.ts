@@ -2,7 +2,8 @@
  * Accepting a reviewed manuscript candidate as the run's official manuscript.
  *
  * WHY THIS IS NOT A COMMIT. `commitStepOutputs` writes a step's declared outputs inside its own
- * in-progress attempt, and E1-format committed long before anyone read the paper. Publishing a
+ * in-progress attempt, and D3-writing committed the document long before anyone read the paper.
+ * Publishing a
  * candidate over that artifact therefore has no attempt to write through: rolling the step back to
  * `in_progress` to make room would report the study as at a state it never reached, and a per-slug
  * write beside the commit receipt would leave the registry and the receipt describing different
@@ -26,8 +27,15 @@ import type { ArtifactRef } from '../domain/artifact.ts'
 import type { ResearchRunStore, RunState } from './types.ts'
 import { nextProjectRevision } from '../domain/project.ts'
 
-/** The manuscript artifact a candidate replaces. */
-export const ACCEPTED_MANUSCRIPT_SLUG = 'formatted-manuscript'
+/**
+ * The manuscript artifact a candidate replaces.
+ *
+ * IT IS THE DOCUMENT, not the form a compiler made of it. One document under one slug carries one
+ * version counter, and an acceptance publishes a new version of THAT document: a candidate assembled
+ * over the typeset artifact would be a change to a rendering, and the next thing to read the document
+ * would read the version nobody accepted.
+ */
+export const ACCEPTED_MANUSCRIPT_SLUG = 'manuscript'
 
 /** The producer recorded on an accepted manuscript: a person deciding, not a step executing. */
 export const ACCEPTANCE_PRODUCER = 'human-acceptance'

@@ -1377,12 +1377,12 @@ describe('what a process accepted, the next process reads off the disk', () => {
       expect(listed.map(entry => entry.runId)).toContain(reported.runId)
       expect(listed.find(entry => entry.runId === reported.runId)?.execution).toBe('stopped')
 
-      // LOADED, with the manuscript a person published: the version moved past the one E1 wrote, and
-      // the producer names the person rather than a step.
+      // LOADED, with the manuscript a person published: the version moved past the one the writing
+      // steps left, and the producer names the person rather than a step.
       const snapshot = await next.service.runSnapshot({ runId: reported.runId })
-      // THE MANUSCRIPT A PERSON PUBLISHED, named by the producer rather than by a step: E1 wrote the
-      // first one, and this one is not its.
-      const manuscript = snapshot?.artifacts.find(artifact => artifact.slug === 'formatted-manuscript')
+      // THE MANUSCRIPT A PERSON PUBLISHED, named by the producer rather than by a step: D3 wrote the
+      // first one, D4 republished it, and this one is neither's.
+      const manuscript = snapshot?.artifacts.find(artifact => artifact.slug === 'manuscript')
       expect(manuscript?.producerStepId).toBe('human-acceptance')
 
       // THE RECORD ON DISK AGREES, and the text it published is the text in the manuscript.
@@ -1395,8 +1395,8 @@ describe('what a process accepted, the next process reads off the disk', () => {
       const onDisk = JSON.parse(readFileSync(join(root, reported.runId, 'research-run-snapshot.json'), 'utf8')) as {
         registry: Record<string, { producerStepId: string; ref: { version: number } }>
       }
-      expect(onDisk.registry['formatted-manuscript']?.producerStepId).toBe('human-acceptance')
-      expect(onDisk.registry['formatted-manuscript']?.ref.version).toBe(reported.acceptance?.manuscriptVersion)
+      expect(onDisk.registry['manuscript']?.producerStepId).toBe('human-acceptance')
+      expect(onDisk.registry['manuscript']?.ref.version).toBe(reported.acceptance?.manuscriptVersion)
     } finally {
       await next.dispose()
     }

@@ -365,7 +365,7 @@ function declaredMetricsOf(
  */
 const PACKAGED_SLUGS: ReadonlyArray<string> = [
   'claim', 'landscape-map', 'method-spec', 'mvp-results', 'baseline-results',
-  'figure-plan', 'manuscript', 'result-version', 'formatted-manuscript',
+  'figure-plan', 'manuscript', 'result-version', 'typeset',
 ]
 
 /**
@@ -467,7 +467,7 @@ export function planRunPackage(
 ): { readonly runId: string; readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest } {
   const { runId } = run
   const readiness: SubmissionReadiness = readinessOfRun(store, runId, evidenceProfile)
-  const manuscript = artifactRecord(store, runId, 'formatted-manuscript')
+  const typeset = artifactRecord(store, runId, 'typeset')
   const claim = artifactRecord(store, runId, 'claim')
   const landscape = artifactRecord(store, runId, 'landscape-map')
   const experiment = artifactRecord(store, runId, 'mvp-results')
@@ -478,8 +478,10 @@ export function planRunPackage(
 
   const files: PackageFile[] = []
 
-  // E1 produced these contents itself; a package without them is the old proposal again.
-  const produced = manuscript?.packageFiles
+  // E1 produced these contents itself; a package without them is the old proposal again. They live on
+  // the TYPESET artifact, which is what E1 renders and packages: the document itself is under
+  // `manuscript` and carries no package files.
+  const produced = typeset?.packageFiles
   if (produced !== null && typeof produced === 'object' && !Array.isArray(produced)) {
     for (const [path, content] of Object.entries(produced as Record<string, unknown>)) {
       if (typeof content === 'string' && content.length > 0) files.push({ path, content: `${content.replace(/\n+$/u, '')}\n` })
@@ -492,7 +494,7 @@ export function planRunPackage(
   // they are outputs of the same step, and a second home for them would be a second thing to keep in
   // step. Both lists are written the same way — the split is about what a reader is told, not about
   // what the package holds.
-  const compileRecord = (manuscript as {
+  const compileRecord = (typeset as {
     compilation?: { documents?: unknown; assets?: unknown }
   } | undefined)?.compilation
   for (const list of [compileRecord?.documents, compileRecord?.assets]) {
@@ -554,7 +556,7 @@ export function planRunPackage(
     content: jsonFile({
       plan: artifactRecord(store, runId, 'figure-plan') ?? null,
       note: 'The figures this package carries, the question each answers, and the record its values'
-        + ' came from. `compilation` on the manuscript artifact names the floats a compiled document'
+        + ' came from. `compilation` on the typeset artifact names the floats a compiled document'
         + ' could not embed.',
     }),
   })
@@ -641,11 +643,11 @@ export function planRunPackage(
       ? (draftArtifact.sections as ReadonlyArray<{ id: string; heading: string; bodyText: string }>)
       : [],
     crossReferences: {
-      cited: (manuscript?.crossReferences as { cited?: ReadonlyArray<string> } | undefined)?.cited ?? [],
-      uncited: (manuscript?.crossReferences as { uncited?: ReadonlyArray<string> } | undefined)?.uncited ?? [],
+      cited: (typeset?.crossReferences as { cited?: ReadonlyArray<string> } | undefined)?.cited ?? [],
+      uncited: (typeset?.crossReferences as { uncited?: ReadonlyArray<string> } | undefined)?.uncited ?? [],
     },
-    floatsNotRendered: (manuscript?.floatsNotRendered as ReadonlyArray<string> | undefined) ?? [],
-    referenceCount: (manuscript?.manuscriptCounts as { references?: number } | undefined)?.references ?? 0,
+    floatsNotRendered: (typeset?.floatsNotRendered as ReadonlyArray<string> | undefined) ?? [],
+    referenceCount: (typeset?.manuscriptCounts as { references?: number } | undefined)?.references ?? 0,
     ...(metric === undefined ? {} : { metric }),
   })
 
