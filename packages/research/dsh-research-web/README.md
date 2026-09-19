@@ -1,12 +1,34 @@
+---
+description: "The research workbench view: a conversation tab rendering a run's stages, panels, approvals and revisions, for a person reading a study in the browser."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-web
 
 English | [中文](README.zh.md)
+
+## Summary
+
+The research workbench as a session view beside `chat` and `trajectory`: a run is rendered as a stage surface plus eleven panels — summary, pipeline, figures, tables, roadmap, gates, adversarial, approval, revision, quality and recovery. Panels are derived from a run summary by pure selectors, and the copy lives in the `zh` and `en` dictionaries, so the surface is testable without Cordis. The host half is deliberately inert, and the browser half mounts the view into the `conversation.view` seat the host core declares. Decisions a person makes here — approve, reject, request changes, accept a manuscript — travel the host's authenticated channel, and each control renders the answer the backend recorded rather than one derived from what it sent.
+
+## Table of Contents
+
+- [The workbench view](#the-workbench-view)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="the-workbench-view"></a>
+## The workbench view
 
 The dual-face plugin of the research workbench. The host half is deliberately inert (it performs no host registration), while the browser half registers a `conversation.view` entry — a session view beside `chat` and `trajectory`, through a seat the host core already declares — and renders a run as a stage surface plus eleven panels: Summary / Pipeline / Figures / Tables / Roadmap / Gates / Adversarial / Approval / Revision / Quality / Recovery. No panel is open until one is asked for: the stage surface says which step the run is at and what that step is for, and the panels are the detail behind it.
 
 The panels are derived from a run summary by pure selectors in `panels.ts`, and `summary.ts` is a dependency-free view model, so both are unit-testable without Cordis. Copy goes through the `zh` / `en` dictionaries in `client/locales.ts`, following the client's locale-ownership convention.
 
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **A requirement stated in the conversation reaches the run; a decision does not** (2026-09-19): `record-change-request`, the one tool `dsh-research-team` registers, turns what the person asked for in the chat into a durable revision request stamped `source: 'conversation'`, and the panel shows it as **recorded by the agent**, never as something the person confirmed. **What is not here**: approving, rejecting and submitting cannot travel that way at all — they are decisions and go through the host's authenticated browser channel — and nothing else the person says in the conversation (a research direction, a metric threshold, a different corpus) has a door yet, so those are still typed into the panel or stated when a run starts.
 
@@ -42,3 +64,15 @@ No invariant companion is published because the package publishes no runtime inv
 - **The approval panel is likewise only Integration-verified**: its submitter is covered by jsdom specs against a stubbed Connection service, and `dsh-research-team/tests/approval.spec.ts` covers the backend checks and each invariant in §8.1; what was verified on a real socket is **the channel itself** (no cookie → 401 and the handler is not called; token exchanged for a cookie → 200 and a backend record written; forged cookie → 401), not this click in a browser.
 - **The `summary` payload shape is a structural twin declared by this package.** The service compiles on the Host face and this package on the Client face, and a client bundle takes no cross-plugin value dependency, so `WireRunSnapshot` in `run-source.ts` is a **restatement** rather than an import. A field name that differs between the two sides makes the view silently empty. The host-side integration spec asserts exactly the same set of field names.
 - **The MOCK badge follows the data source** (`summary.isMock`), and no production path produces a fixture-sourced summary any more: `run-source.ts` labels every run it maps `live`. The badge is therefore reachable only for a host that injects a fixture-labelled summary, which today means the specs.
+
+-----
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

@@ -1,6 +1,27 @@
+---
+description: "一次研究运行的红队舰队、带 CAS 修订的任务板、写入范围守卫与 16 步运行器,以及 agent 用来把会话中的变更请求记下来的那个工具。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-team
 
 [English](README.md) | 中文
+
+## 概述
+
+T19-B 运行器把一项研究驱动过 16 步:红队舰队、带 CAS 修订的任务板、写入范围守卫、会话投影,以及把每一步的产出者与闸门要求都从冻结的 16 步定义派生的执行器注册表。部署经 `ctx.agentTeams` 抵达它,同一个服务也承载该运行的 Remote 面 —— 启动、跟随、审批、修订、导出。它注册了一个 agent 可调用的工具 `record-change-request`,把人会在对话里提出的要求变成一条持久的修订请求,且无法表达任何决定。它还声明了客户端投影所渲染的四个 `research/*` 会话事件。
+
+## 目录
+
+- [运行器与它的注册表](#the-runner-and-its-registry)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+-----
+
+<a id="the-runner-and-its-registry"></a>
+## 运行器与它的注册表
 
 `ctx.agentTeams` 服务与 T19-B 运行器:红队舰队、带 CAS 修订的任务板、写入范围守卫、会话投影,以及把 16 步驱动起来的执行器注册表(`runner/`)。
 
@@ -8,7 +29,55 @@
 
 `runner/registry.ts` 是 16 步执行器的审计真源:每个条目声明 `stepId` / `executor` / `producer` / `truthfulness` / `timeoutMs` / `gateRequirement` / `recoveryPolicy`,且输入输出 schema 与闸门要求都从 core 的冻结定义派生,以防与 16 步定义漂移。
 
+<a id="model-experience"></a>
+## 模型体验
+
+### 对话变更请求工具
+
+#### 模型看到什么
+
+`ctx.tools` 上注册着一条工具定义:`record-change-request`,两个必填字符串参数(`runId`、`instruction`)与一个可选字符串数组(`targets`)。没有任何参数表达决定,因此批准无法经它完成。每次被接受的调用都以 JSON 作答记录下来的请求,其 `source` 是常量 `conversation`,其 note 如下。本包加入 `SessionEventMap` 的四个 `research/*` 事件,以及它注册的客户端投影,都是仅写日志的记录:模型请求携带的是派生出的消息,而投影不出任何消息的事件不在其中。
+
+##### 作答 note
+
+```markdown
+Recorded from the conversation. Approving or rejecting this run is the person's own decision and happens in the research panel, not here.
+```
+
+#### Token 影响
+
+固定。每次携带工具列表的请求都要付一次这条定义,每次被接受的调用有一个 JSON 作答被保留,直到压缩把它遮蔽。
+
+#### KV Cache 影响
+
+定义是前缀稳定的;作答追加在可复用前缀之后,因此一次调用不会使复用失效。
+
+### 写入范围拒绝
+
+#### 模型看到什么
+
+本包安装的守卫在写入越出调用方的范围时以一句话作答而不执行该写入,这句话就是该次调用的错误结果。
+
+##### 拒绝文本
+
+```markdown
+research team guard denied tool <toolName> for <agentId>: cannot attribute the caller to a research team membership
+research team member denied tool <toolName>: not a scope-checked member tool
+research team member denied tool <toolName>: no path argument to scope-check
+write out of scope for <memberId>: <path>
+```
+
+#### Token 影响
+
+每次被拒的调用留一句固定文本,直到压缩把它遮蔽。
+
+#### KV Cache 影响
+
+仅追加;拒绝文本位于可复用请求前缀之后,不会使它失效。
+
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **某一步的记录点名的是真正生产它的东西,而组合本身经 Loader 测试**(2026-09-19):登记表条目声明的是该步运行**在什么品牌之下**(`D3-writing` 的条目点名它执行的 `three-line-table` 能力),而产物记录的是写出它的那条通道 —— 部署配置了 prose writer 时是 `llm:<provider>/<model>` —— 所以只按条目拼出来的步骤行会把模型写出的稿件报成由某个工具生产。`stepProducerOf`(在 `runner/registry.ts`)改从该步已提交的产物解析生产者,与级别字段同一个出处;`drive.ts` 与 `package-export.ts` 的 run facts 都读它,而这正是 `run-summary.md` 渲染的那一样。**从未运行过的步,或产物之间不一致的步,保留条目自己的品牌。** 本可以发现组合那一侧的测试骨架是 `tests/loader-composition.spec.ts`:它把一份仅测试用的 `cordis.yml` 经 Loader 启动,挂上真实的 team 插件与一个替身引擎(`tests/fixtures/loader-boot/engine-stub.ts`),后者的目录来自配置 —— 因为某个注入名或某个配置字段不再解析得出来,对一套用 `ctx.plugin(...)` 自己提供服务的测试是完全不可见的。
 
@@ -128,3 +197,15 @@
 - **人工审批的接线在 `src/approval.ts`**(2026-09-14):`E2-submit` 是唯一 `humanGate` 步,core 只经 `@deepseek-ai/dsh-research-core/host` 暴露能把 `gated` 变成 `passed` 的通道,该文件就是它的调用方。`runPipeline` 结束后把 run 的 store 与再投影函数交给 `rememberRun`,审批通道 `/research-approval` 的 `decide` 端点随后按 run / step / `humanGate` / 当前 `gated` 状态 / **当前 attempt** 逐项核对,再经 `HostApprovalChannel.submit` 让 core 写入 `ApprovalRecord` 与 `human-approval` 审计事件。**身份不取自请求体**:注册走 `ctx.connection.rpc.handle`,由宿主在自己的路由上先做浏览器认证(HMAC 签名的会话 cookie,其源头是 `dsh web` 打印的进程令牌),请求体只有 `runId` / `stepId` / `attempt` / `decision` 四个字段被读取,`actor` / `status` / `principalId` 一律不读。与 core 的 `./host` 一样,**这不是进程级隔离**:同进程内已持有 `Context` 的代码仍可直接调用;真正的隔离需要 IPC 身份,JavaScript API 给不了。
 - **审批面不从包入口导出**(2026-09-14):`src/approval.ts` 故意不进 `index.ts` 的 re-export 列表,`ResearchTeamService` 上也没有对应的 Remote 方法。一个普通工具调用因此没有名字可以指过去,决定只能经那条已认证的路由到达。
 - **构建顺序有坑**:`tsdown.config.ts` 的 `clean` 必须**只列本包真正产出的文件**。Client pass 在 Host pass 之后用同一份配置运行,`lib/*.js` 通配会删掉 Host pass 生成的 `typert.host.js` / `typert.remote-client.js`,而 Client pass 不会重新生成它们。
+
+-----
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+无。
+
+</details>

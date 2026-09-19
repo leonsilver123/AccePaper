@@ -1,12 +1,34 @@
+---
+description: "研究工作台视图:一个会话标签页,渲染一次运行的阶段、面板、审批与修订,供人在浏览器里读一项研究。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-web
 
 [English](README.md) | 中文
+
+## 概述
+
+研究工作台作为与 `chat`、`trajectory` 并排的会话视图:一次运行被渲染成一个阶段视图加十一个面板 —— 综述、流水线、图、表、路线图、闸门、对抗、审批、修订、质量与恢复。面板由纯 selector 从一份 run summary 派生,文案落在 `zh` / `en` 字典里,因此这个表层无需 Cordis 即可测试。host 半边刻意惰性,浏览器半边把视图挂进宿主核心本来就声明的 `conversation.view` 座位。人在这里做的决定 —— 批准、驳回、要求修改、接受一份稿件 —— 走主机经过认证的通道,而每个控件渲染的是后端记录下来的答复,不是从自己发出的内容推导出来的。
+
+## 目录
+
+- [工作台视图](#the-workbench-view)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+-----
+
+<a id="the-workbench-view"></a>
+## 工作台视图
 
 科研工作台的双面插件。host 半边刻意惰性(不做任何宿主注册),浏览器半边注册一个 `conversation.view` 条目 —— 与 `chat`、`trajectory` 并排的会话视图,走宿主核心本来就声明的座位 —— 把一次运行渲染成一个阶段视图加十一个面板:综述 / 流水线 / 图 / 表 / 路线图 / 闸门 / 对抗 / 审批 / 修订 / 质量 / 恢复。不主动打开任何面板:阶段视图说明运行走到哪一步、那一步是做什么的,面板是它背后的细节。
 
 面板由 `panels.ts` 的纯 selector 从一份 run summary 派生,`summary.ts` 是无依赖的视图模型,因此两者无需 Cordis 即可单测。文案经 `client/locales.ts` 的 `zh` / `en` 字典,符合客户端的本地化归属约定。
 
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **在对话里说出的要求能到达运行,而决定不能**(2026-09-19):`record-change-request`(dsh-research-team 注册的唯一一个工具)把人在对话里提出的要求变成一条盖着 `source: 'conversation'` 的持久修订请求,面板把它显示为**助手记录的**,从不显示为"你确认过的"。**这里没有的**:批准、驳回与投稿根本不能走这条路 —— 它们是决定,走主机那条经过浏览器认证的通道 —— 而且人在对话里说的其他东西(研究方向、判定阈值、换一个语料)还没有门,仍然要在面板里填写或在启动运行时说明。
 
@@ -42,3 +64,15 @@
 - **审批面板同样只是 Integration-verified**:它的提交器由 jsdom spec 对着一个 mock 的 Connection 服务覆盖,`dsh-research-team/tests/approval.spec.ts` 覆盖后端核对与 §8.1 各条不变量;真实 socket 上验过的是**通道本身**(无 cookie → 401 且处理器不被调用,令牌换 cookie → 200 并写入后端记录,伪造 cookie → 401),不是浏览器里的这一次点击。
 - **`summary` 的载荷形状是本包声明的结构孪生**。服务在 Host 面编译、本包在 Client 面,而客户端 bundle 不取跨插件值依赖,所以 `run-source.ts` 里的 `WireRunSnapshot` 是**复述**而不是导入。两边字段名不一致会让视图静默变空。Host 侧的集成 spec 断言的正是同一组字段名。
 - **MOCK 徽标跟随数据来源**(`summary.isMock`),而且已**没有任何生产路径**会产出 fixture 来源的摘要:`run-source.ts` 映射出来的 run 一律标 `live`。因此该徽标只对"注入一份 fixture 摘要的宿主"可达,今天就是那些 spec。
+
+-----
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+无。
+
+</details>

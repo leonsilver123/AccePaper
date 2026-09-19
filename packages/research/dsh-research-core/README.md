@@ -1,6 +1,26 @@
+---
+description: "The 16-step research state machine, gate adjudication, citation identity chain and run snapshot store, for the adapter that drives a run."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-core
 
 English | [中文](README.zh.md)
+
+## Summary
+
+The state machine behind a research run: 16 steps in five phases, L0 literature tiering, the citation identity chain, A/B/C gate adjudication, and the snapshot store that keeps a run's state durable. It has zero runtime dependencies and zero Cordis — a host supplies the clock, the network, and the inputs to every gate verdict — so the same kernel runs in a test, in a browser-driven deployment, or in a recovery script. Human approval is reachable only through the `./host` subpath, and the public entry point withholds the mutable step singletons and the raw transition verbs. Its premise is that AI-generated scientific claims are untrustworthy, so `abstained` outranks every other outcome and never upgrades to `passed`.
+
+## Table of Contents
+
+- [The state machine](#the-state-machine)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="the-state-machine"></a>
+## The state machine
 
 The pure-logic kernel of the AI research-paper production system: the 16-step state machine, L0 literature tiering, the citation identity chain, A/B/C gate adjudication, and the run-state snapshot store. Zero runtime dependencies, zero Cordis, unit-testable in any host.
 
@@ -9,6 +29,8 @@ The design premise is that **AI-generated scientific claims are untrustworthy**,
 The public entry point deliberately does not export `approveHumanGate` / `transition` / `submitHumanApproval` or the mutable step singletons; human approval is reachable only through the `./host` subpath, and that subpath exposes only the restricted production entry points.
 
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **An artifact names the project revision it was produced under** (2026-09-16): `ArtifactRecord` (and the value-free `ArtifactRecordMeta` a snapshot projects) carry `projectRevision`, written at the commit that published the artifacts and by the one-artifact seam as the run's current revision. **`ref.version` could not stand in for it**: that counts revisions of ONE artifact, so two artifacts from one commit share a project revision while having unrelated version numbers. The field is REQUIRED in the snapshot format — a snapshot without it is refused rather than defaulted, because naming a project revision an artifact may never have belonged to destroys the only fact the field carries. **Three readers consume it**: `runner/package-export.ts` writes it into the export manifest, the Remote projection carries it to the browser, and the workbench names it beside the run — so a reader can tell whether the page and the download describe one state of the study or two. **What is still missing**: nothing reads it PER ARTIFACT yet; the artifact metadata reaches the wire without it.
 - **An approval binds a revision, and it used to bind a name** (2026-09-16): `ApprovalRecord` now carries `targetRefs` — the step's inputs, frozen at the moment of the decision from the run's own registry and never taken from the caller — and `approvalStalenessOf` compares them with what the registry holds now, naming the revision that moved. Before this the record held `{run_id, step_id, attempt_id, principalId, approval_event_id, decision, timestamp}` and no content at all, so a person approved the manuscript in front of them and the record said only that attempt N might proceed: a document that moved afterwards was still covered by a decision about a different one. The same file already compared byte-for-byte in `submitGateVerdict`; the approval path compared nothing. **A record written before this restores with no targets**, so its decision binds nothing and cannot be called stale — the behaviour it was made under, rather than targets invented for it.
@@ -22,3 +44,15 @@ The public entry point deliberately does not export `approveHumanGate` / `transi
 - The `ResearchError` base class is also imported by sibling pure-logic modules such as the gate. This is a deliberate near-term arrangement (a shared base class, no runtime cycle); in the long run it should move to a neutral module to decouple further.
 
 No invariant companion is published: this package's cross-module invariants are asserted directly by its own specs, and it ships no `./invariant` entry for one to accompany.
+
+-----
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

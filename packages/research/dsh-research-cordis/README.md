@@ -1,6 +1,24 @@
+---
+description: "The Cordis adapter that exposes the 16-step research engine as ctx.research and registers the seven research tools on the host tool runtime, for deployments running the research pipeline."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-cordis
 
 English | [中文](README.zh.md)
+
+## Summary
+
+`dsh-research-cordis` gives a deployment the research engine: `ctx.research` carries the 16-step state machine, its gate adjudication and its artifact registry, while the channels and directories the engine runs on — the retrieval catalogue, the citation resolver, the prose route, the document toolchain, the drawing interpreter, and where a run reads and writes — are stated once in its `Config`. It also registers the seven research tools on the host's `ctx.tools`, so a run reaches them through the host tool runtime as well as through its own executor path. Choose it when a profile must run the research pipeline; `dsh-research-tools` and `dsh-research-core` are its libraries rather than rows to mount. `evidenceProfile` decides what this deployment's evidence is allowed to be, so one package carries an offline demonstration and a submission-graded study.
+
+## Table of Contents
+
+- [Deployment-level configuration](#deployment-level-configuration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
 
 The Cordis adapter for `dsh-research-core`: it exposes the 16-step engine as the `ctx.research` service and registers the seven research tools on the host's real `ctx.tools`.
 
@@ -22,7 +40,67 @@ Each field represents **one** deployment-level choice, decided once by the engin
 
 `workspace` is not optional: `{{cwd}}` is a **strict** system-prompt variable, and every shipped bundle's persona references it. A session with no working directory fails at the **prompt-assembly** stage — **before** any request reaches a provider. The `prose` row does **not** restate the directory (`ProseChannelConfig` `Omit`s it), so each deployment states it in exactly one place.
 
+<a id="model-experience"></a>
+## Model Experience
+
+### The seven registered research tools
+
+#### What the model sees
+
+On a deployment that mounts this plugin, the seven definitions sit in the shared `ctx.tools` registry, so each contributes its name, description and parameter schema to the tool list a model request carries: `literature-search`, `citation-verify`, `claim-construct`, `ablation`, `figure`, `three-line-table` and `roadmap`. A description is the catalogue's summary sentence followed by one exposure sentence, and the parameters are the closed set declared here — `spec` for `figure`, and `model` plus `target` for `three-line-table`, for example.
+
+##### Exposure sentences
+
+```markdown
+Model-callable (pure render over declared data).
+Pipeline-only research tool (registered for discovery; not exposed to agents).
+```
+
+#### Token effect
+
+Fixed. Seven definitions with one short description and a small parameter object each are paid again on every request that carries the tool list; nothing here grows with a run.
+
+#### KV Cache effect
+
+Prefix-stable. A registration is byte-identical for the life of the plugin and does not invalidate reuse; a version or exposure change rewrites the definition block and can invalidate reuse from the first changed token.
+
+### The pipeline-only refusal
+
+#### What the model sees
+
+A call the agent loop makes to one of the four `pipeline_only` tools is denied before dispatch, and the model receives the refusal as that call's error result.
+
+##### Pipeline-only refusal
+
+```markdown
+[<toolId>] is pipeline-only (injected-adapter/fixture input); it is registered for discovery and internal pipeline use only — not executable through the agent tool runtime
+```
+
+#### Token effect
+
+One fixed sentence per denied call, retained in history until a compaction shadows it.
+
+#### KV Cache effect
+
+Append-only; the refusal follows the reusable request prefix and does not invalidate it.
+
+### Prose and review routes
+
+#### What the model sees
+
+The text-producing steps and the two review seams reach a model through an agent session this package creates on the route `Config.prose` and `Config.review` name; the request carries the system prompt the composed tree contributes and the caller's own instruction, and this package adds no prompt text of its own — it decides which provider and model the session runs on.
+
+#### Token effect
+
+No fixed tokens come from this package. Each request costs what the composed system prompt and the caller's instruction cost, and the package decides the route rather than the text.
+
+#### KV Cache effect
+
+Independent per session: each call is its own model request with its own prefix, so it neither reuses nor invalidates another session's cache entries.
+
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **A working directory holds the one document a run maintains, and it needs a document toolchain** (2026-09-19): `manuscriptDirectory` resolves the way the three directories beside it do — a DEPLOYMENT setting, because `runPipeline` is a Remote method and a request-supplied path would let a browser choose where the host writes files. Its whole purpose is to hold a document a person edits and hands back, so **a deployment that names it with no `document` is refused AT LOAD**, with the reason, rather than discovering it at the last step of the first run. **`PandocCompiler.read` is the other direction of the compile seam**: a `.tex` goes in as text and a `.docx` as bytes, and what comes back is Markdown plus what the conversion did NOT carry — a Word comment is detected by the `word/comments.xml` part the OOXML package really contains, so the loss is reported when the file has one rather than claimed for every `.docx`. A PDF and an HTML file are refused as formats that cannot be read back: one is a rendering and the other is not the document a person edits. **What is not here**: the loss list is what this reader detected, not a proof that nothing else was lost — a Word feature pandoc converts wrongly rather than dropping is not named.
 
@@ -51,3 +129,15 @@ Each field represents **one** deployment-level choice, decided once by the engin
   - The prohibitions are unchanged: do not forge an Agent, call host private methods, deep-import internal modules, or restore agent-less pass-through.
 
 No invariant companion is published: the adapter's effect and teardown relations are asserted by its own lifecycle and registration specs, so nothing is published as an `./invariant` companion.
+
+-----
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

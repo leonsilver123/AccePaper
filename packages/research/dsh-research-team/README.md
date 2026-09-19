@@ -1,6 +1,27 @@
+---
+description: "The red-team fleet, compare-and-set task board, write-scope guard and 16-step runner of a research run, plus the tool an agent calls to record a change request from the conversation."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-team
 
 English | [中文](README.zh.md)
+
+## Summary
+
+The T19-B runner drives a study through the 16 steps: the red-team fleet, the task board with compare-and-set revisions, the write-scope guard, the session projection, and the executor registry that derives every step's producer and gate requirement from the frozen 16-step definition. A deployment reaches it as `ctx.agentTeams`, and the same service carries the run's Remote surface — start, follow, approve, revise, export. It registers one tool an agent can call, `record-change-request`, which turns what a person asked for in the conversation into a durable revision request and can express no decision. It also declares the four `research/*` session events the client projection renders.
+
+## Table of Contents
+
+- [The runner and its registry](#the-runner-and-its-registry)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="the-runner-and-its-registry"></a>
+## The runner and its registry
 
 The `ctx.agentTeams` service and the T19-B runner: the red-team fleet, the task board with CAS revisions, the write-scope guard, the session projection, and the executor registry (`runner/`) that drives the 16 steps.
 
@@ -8,7 +29,55 @@ The layering is explicit: a pure-logic layer (`types` / `revision` / `projection
 
 `runner/registry.ts` is the audit source of truth for the 16-step executors: each entry declares `stepId` / `executor` / `producer` / `truthfulness` / `timeoutMs` / `gateRequirement` / `recoveryPolicy`, and both the input/output schemas and the gate requirements are derived from core's frozen definitions so they cannot drift from the 16-step definition.
 
+<a id="model-experience"></a>
+## Model Experience
+
+### The conversation change-request tool
+
+#### What the model sees
+
+One tool definition registered on `ctx.tools`: `record-change-request`, with two required string parameters (`runId`, `instruction`) and one optional string array (`targets`). No parameter expresses a decision, so an approval cannot be taken through it. Every accepted call answers with the recorded request as JSON, whose `source` is the constant `conversation` and whose note reads as follows. The four `research/*` events this package adds to `SessionEventMap`, and the client projection it registers, are log-only records: a model request carries derived messages, and an event that projects to no message is not among them.
+
+##### Answer note
+
+```markdown
+Recorded from the conversation. Approving or rejecting this run is the person's own decision and happens in the research panel, not here.
+```
+
+#### Token effect
+
+Fixed. One definition is paid on every request that carries the tool list, and one JSON answer per accepted call is retained until a compaction shadows it.
+
+#### KV Cache effect
+
+Prefix-stable for the definition; the answer is appended after the reusable prefix, so a call does not invalidate reuse.
+
+### The write-scope refusals
+
+#### What the model sees
+
+The guard this package installs answers with a sentence instead of executing a write that leaves the caller's scope, and that sentence is the call's error result.
+
+##### Refusal sentences
+
+```markdown
+research team guard denied tool <toolName> for <agentId>: cannot attribute the caller to a research team membership
+research team member denied tool <toolName>: not a scope-checked member tool
+research team member denied tool <toolName>: no path argument to scope-check
+write out of scope for <memberId>: <path>
+```
+
+#### Token effect
+
+One fixed sentence per denied call, retained in history until a compaction shadows it.
+
+#### KV Cache effect
+
+Append-only; a refusal follows the reusable request prefix and does not invalidate it.
+
 ## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **A step's record names what produced it, and the composition is tested through the Loader** (2026-09-19): a registry entry declares the brand a step runs UNDER (`D3-writing`'s entry names the `three-line-table` capability it executes), while the artifact records the channel that wrote it — `llm:<provider>/<model>` when the deployment configured a prose writer — so a step row compiled from the entry alone reported a model-written draft as produced by a tool. `stepProducerOf` (in `runner/registry.ts`) resolves the producer from the artifacts the step committed, in the one place the level already did, and `drive.ts` and `package-export.ts`'s run facts both read it, which is what `run-summary.md` renders. **A step that never ran, or whose artifacts disagree, keeps the entry's brand.** The harness that would have caught the composition side of this is `tests/loader-composition.spec.ts`: it boots a test-only `cordis.yml` through the Loader with the real team plugin and a stand-in engine (`tests/fixtures/loader-boot/engine-stub.ts`) whose directories come from the configuration, because an injected name or a config field that stops resolving is invisible to a suite that provides its services with `ctx.plugin(...)`.
 
@@ -128,3 +197,15 @@ No invariant companion is published: the team fold and authorization relations a
 - **The human-approval wiring is in `src/approval.ts`** (2026-09-14): `E2-submit` is the only `humanGate` step, core exposes the channel that can turn `gated` into `passed` only through `@deepseek-ai/dsh-research-core/host`, and this file is its caller. After `runPipeline` finishes it hands the run's store and re-projection function to `rememberRun`; the `decide` endpoint of the `/research-approval` approval channel then checks run / step / `humanGate` / current `gated` status / **current attempt** item by item, and only then lets core write the `ApprovalRecord` and the `human-approval` audit event through `HostApprovalChannel.submit`. **Identity is not taken from the request body**: registration goes through `ctx.connection.rpc.handle`, and the host performs browser authentication on its own route first (an HMAC-signed session cookie whose origin is the process token `dsh web` prints); only the four fields `runId` / `stepId` / `attempt` / `decision` are read from the request body, and `actor` / `status` / `principalId` are never read. As with core's `./host`, **this is not process-level isolation**: code in the same process that already holds a `Context` can still call it directly; real isolation would need IPC identity, which a JavaScript API cannot provide.
 - **The approval surface is not exported from the package entry** (2026-09-14): `src/approval.ts` deliberately does not join `index.ts`'s re-export list, and `ResearchTeamService` carries no corresponding Remote method. An ordinary tool call therefore has no name to point at, and the decision can arrive only through that authenticated route.
 - **The build order is order-sensitive**: `clean` in `tsdown.config.ts` must list **only the files this package genuinely produces**. The Client pass runs with the same config after the Host pass, and a `lib/*.js` wildcard would delete the `typert.host.js` / `typert.remote-client.js` that the Host pass generated, which the Client pass will not regenerate.
+
+-----
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

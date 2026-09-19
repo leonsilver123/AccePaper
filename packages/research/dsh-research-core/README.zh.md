@@ -1,6 +1,26 @@
+---
+description: "研究运行的 16 步状态机、闸门裁决、引文身份链与运行快照存储,供驱动一次运行的适配器使用。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-core
 
 [English](README.md) | 中文
+
+## 概述
+
+一次研究运行背后的状态机:五个阶段的 16 步、L0 文献分级、引文身份链、A/B/C 闸门裁决,以及让运行状态持久的快照存储。它零运行时依赖、零 Cordis —— 时钟、网络与每条闸门裁决的输入都由宿主提供 —— 所以同一内核可以跑在测试里、浏览器驱动的部署里,或一个恢复脚本里。人审批只经 `./host` 子路径可达,公共入口刻意不交出可变的步骤单例与裸的迁移动词。它的前提是 AI 生成的科学论断不可信,因此 `abstained` 的优先级高于其他任何结果,且永不可升级为 `passed`。
+
+## 目录
+
+- [状态机](#the-state-machine)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+-----
+
+<a id="the-state-machine"></a>
+## 状态机
 
 AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级、引文身份链、A/B/C 闸门裁决,以及运行状态快照存储。零运行时依赖、零 Cordis,可在任何宿主中单元测试。
 
@@ -11,6 +31,8 @@ AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级�
 公共入口刻意不导出 `approveHumanGate` / `transition` / `submitHumanApproval` 与可变的步骤单例;人审批只经 `./host` 子路径可达,而该子路径只暴露受限的生产入口。
 
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **产物会说出它产出于哪个项目版本**(2026-09-16):`ArtifactRecord`(以及快照投影出的、不含值的 `ArtifactRecordMeta`)带上 `projectRevision` —— 在发布这些产物的那次提交处写入,一路由逐条写的接缝写成运行当时的版本。**`ref.version` 替代不了它**:那个数的是**某一个**产物的第几版,于是一次提交产出的两个产物共享一个项目版本、却有着互不相关的版本号。这个字段在快照格式里是**必填**的 —— 没有它的快照会被拒绝而不是被默认填充,因为给一个产物安上一个它可能从未属于过的项目版本,会毁掉这个字段所承载的唯一事实。**三个读取者已经在用**:`runner/package-export.ts` 把它写进导出 manifest,Remote 投影把它带到浏览器,工作台把它标在运行旁边 —— 于是一个读者能分辨页面与下载说的是这份研究的同一个状态,还是两个。**仍然缺的**:还没有东西**逐个产物**地读它;产物元数据到达 wire 时没有带它。
 - **批准绑定的是一个版本,而它过去绑定的是一个名字**(2026-09-16):`ApprovalRecord` 现在带 `targetRefs` —— 该步的输入,在做出决定的那一刻从运行自己的 registry 冻结,绝不取自调用方 —— 而 `approvalStalenessOf` 拿它与 registry 现在持有的比对,并点名移动了的那个版本。在这之前,记录里只有 `{run_id, step_id, attempt_id, principalId, approval_event_id, decision, timestamp}`,一点内容都没有:一个人批准的是摆在他面前的那份手稿,而记录只写着第 N 次 attempt 可以继续 —— 之后移动过的文档,仍然被一条关于**另一份**文档的决定覆盖着。同一个文件里的 `submitGateVerdict` 早就逐字节比对了,而批准那条路什么都不比。**在本次改动之前写下的记录恢复时没有 targets**,所以它的决定不绑任何东西、也不会被判过期 —— 那是它做出时所处的行为,而不是替它编造出来的 targets。
@@ -24,3 +46,15 @@ AI 科研论文生产系统的纯逻辑内核:16 步状态机、L0 文献分级�
 - `ResearchError` 基类同时被闸门等纯逻辑兄弟模块导入。这是有意的近期安排(共享基类、无运行时环),长期应迁到中性模块以进一步解耦。
 
 不发布不变式伴生入口:本包的跨模块不变式由其自身的 spec 直接断言,它也没有可供伴生的 `./invariant` 入口。
+
+-----
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+无。
+
+</details>

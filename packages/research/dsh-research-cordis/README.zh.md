@@ -1,11 +1,30 @@
+---
+description: "把 16 步研究引擎暴露为 ctx.research、并把七个研究工具注册到宿主工具运行时上的 Cordis 适配器,供运行研究流水线的部署使用。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-research-cordis
 
 [English](README.md) | 中文
+
+## 概述
+
+`dsh-research-cordis` 把研究引擎交给部署:`ctx.research` 承载 16 步状态机、闸门裁决与 artifact 注册表,而引擎赖以运行的通道与目录 —— 检索目录、引文解析器、prose 路由、文档工具链、绘图解释器,以及一次运行读写的位置 —— 在它的 `Config` 里一次说清。它同时把七个研究工具注册到宿主的 `ctx.tools` 上,因此一次运行既可经宿主工具运行时、也可经自己的执行器路径到达它们。profile 需要跑研究流水线时选它;`dsh-research-tools` 与 `dsh-research-core` 是它的库,不是要挂载的行。`evidenceProfile` 决定本部署的证据被允许是什么,因此同一个包既承载离线演示,也承载按投稿判定的研究。
+
+## 目录
+
+- [部署级配置](#deployment-level-configuration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+-----
 
 `dsh-research-core` 的 Cordis 适配器:把 16 步引擎暴露为 `ctx.research` 服务,并把七个研究工具注册到宿主真实的 `ctx.tools`。
 
 本包是**薄适配层**:状态机委托给它,工具注册连同事务性回滚、可撤销句柄与模块私有能力一起在此实现。服务同时委托 T07/T08/T09 的纯结果面(`classifyL0` / `verifyCitation` / `evaluateGate` / `getGateIntent`),这些方法不触碰任何 run 状态。
 
+<a id="deployment-level-configuration"></a>
 ## 部署级配置
 
 每个字段代表**一个**部署级选择,由引擎一次决定、全流水线共用:
@@ -22,7 +41,67 @@
 
 `workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达提供方**之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
 
+<a id="model-experience"></a>
+## 模型体验
+
+### 已注册的七个研究工具
+
+#### 模型看到什么
+
+在挂载本插件的部署上,七条定义都待在共享的 `ctx.tools` 注册表里,因此每条都把自己的名字、描述与参数 schema 贡献给模型请求所携带的工具列表:`literature-search`、`citation-verify`、`claim-construct`、`ablation`、`figure`、`three-line-table` 与 `roadmap`。描述是目录的标语句后接一句暴露说明,参数则是此处声明的封闭集合 —— 例如 `figure` 的 `spec`,`three-line-table` 的 `model` 与 `target`。
+
+##### 暴露说明句
+
+```markdown
+Model-callable (pure render over declared data).
+Pipeline-only research tool (registered for discovery; not exposed to agents).
+```
+
+#### Token 影响
+
+固定。七条定义各带一句短描述与一个小参数对象,在承载工具列表的每个请求里都要再付一次;这里没有任何东西随运行增长。
+
+#### KV Cache 影响
+
+前缀稳定。一次注册在插件生命期内逐字节一致,不会使复用失效;改动版本或暴露会重写这组定义,并可能从第一个改变的 token 起使复用失效。
+
+### 仅流水线工具的拒绝
+
+#### 模型看到什么
+
+agent loop 对四个 `pipeline_only` 工具之一的调用会在分发前被拒绝,模型收到的是该次调用的错误结果。
+
+##### 仅流水线工具的拒绝文本
+
+```markdown
+[<toolId>] is pipeline-only (injected-adapter/fixture input); it is registered for discovery and internal pipeline use only — not executable through the agent tool runtime
+```
+
+#### Token 影响
+
+每次被拒的调用留一句固定文本,直到压缩把它遮蔽。
+
+#### KV Cache 影响
+
+仅追加;拒绝文本位于可复用请求前缀之后,不会使它失效。
+
+### 正文与复核路由
+
+#### 模型看到什么
+
+产出正文的步骤与那两条复核缝,经本包在 `Config.prose` 与 `Config.review` 指定的路由上创建的 agent 会话抵达模型;请求携带组合树贡献的系统提示词与调用方自己的指令,本包不添加任何自己的提示词文本 —— 它决定会话跑在哪个提供方与模型上。
+
+#### Token 影响
+
+本包不带来固定 token。每个请求的花费是组合出的系统提示词与调用方指令的花费,本包决定的是路由而不是文本。
+
+#### KV Cache 影响
+
+每个会话彼此独立:每次调用都是自己的模型请求、自己的前缀,因此既不复用、也不使别的会话的缓存条目失效。
+
 ## 已知限制与延期工作
+
+<a id="known-limitations-and-deferred-work"></a>
 
 - **工作目录装着一次 run 维护的那一份文档,而它需要一套文档工具链**(2026-09-19):`manuscriptDirectory` 与它旁边三个目录同样解析 —— 一个**部署**设置,因为 `runPipeline` 是 Remote 方法,由请求给出的路径等于让浏览器决定宿主往哪写文件。它的全部用途就是装一份人可以编辑、再交回来的文档,因此**点名它却不点名 `document` 的部署在加载时就被拒**,理由一并给出,而不是在第一次 run 的最后一步才发现。**`PandocCompiler.read` 是编译那道缝的另一个方向**:`.tex` 以文本进、`.docx` 以字节进,回来的是 Markdown 加上这次转换**没有**带回来的东西 —— Word 批注靠 OOXML 包里真实存在的 `word/comments.xml` 部件来判定,所以那是该文件确实有时才报的损失,而不是对每个 `.docx` 都宣称的损失。PDF 与 HTML 都以「读不回来的格式」被拒:一个是渲染产物,另一个不是人编辑的那份文档。**这里没有的**:这张损失表是这个读者**检测到**的东西,不是「其它什么都没丢」的证明 —— pandoc 转换错了却没丢掉的那个 Word 特性不会被点名。
 
@@ -51,3 +130,15 @@
   - 红线不变:不得伪造 Agent、调用宿主私有方法、深度导入内部模块、恢复 agent-less 放行。
 
 不发布不变式伴生入口:适配器的效果与拆除关系由其自身的生命周期与注册 spec 断言,因此没有任何东西作为 `./invariant` 伴生入口发布。
+
+-----
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+无。
+
+</details>
