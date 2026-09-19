@@ -10,8 +10,34 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkWrittenFiles, writeStagedDirectory } from '../src/runner/staged-directory.ts'
+
+/**
+ * The next rename onto this path fails, once.
+ *
+ * THE SWAP IS INJECTED AT THE FILE-SYSTEM CALL because no state a caller can create makes it fail on
+ * every platform this suite runs on: the previous directory is moved aside first, so the destination
+ * is free by the time the swap runs, and the two renames need the same parent and the same
+ * permissions. A lock inside the staged directory blocks the rename on Windows only — verified by
+ * hand — so a real-state test would leave the rollback uncovered on the POSIX lanes. What is under
+ * test is the response to the failure, and this is where the real one arrives from.
+ */
+const swap = vi.hoisted(() => ({ failTo: '' }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    renameSync(from: Parameters<typeof actual.renameSync>[0], to: Parameters<typeof actual.renameSync>[1]): void {
+      if (swap.failTo !== '' && String(to) === swap.failTo) {
+        swap.failTo = ''
+        throw Object.assign(new Error('simulated EPERM on the swap'), { code: 'EPERM' })
+      }
+      actual.renameSync(from, to)
+    },
+  }
+})
 
 const roots: string[] = []
 
@@ -23,6 +49,9 @@ function workspace(): string {
 }
 
 afterEach(() => {
+  // The injected failure is one-shot and cleared by the rename that consumed it; clearing it here too
+  // keeps a case that threw before its swap from arming the next one.
+  swap.failTo = ''
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -87,6 +116,52 @@ describe('a failed write leaves the directory that was there', () => {
     expect(() => writeStagedDirectory(plan([{ path: 'manuscript.md', content: '' }]), join(root, 'out')))
       .toThrow(/manuscript\.md was written empty/u)
     expect(existsSync(join(root, 'out'))).toBe(false)
+  })
+
+  it('puts the directory that was there back when the swap itself fails', () => {
+    // THE SWAP IS THE ONE STEP THAT CANNOT BE UNDONE BY DELETING SOMETHING. The previous directory has
+    // already been moved aside, so a rename that fails here would otherwise leave NO directory at all
+    // — and the rollback's job is that the failure mode is "the directory is the one from before".
+    const root = workspace()
+    const target = join(root, 'out')
+    const published = writeStagedDirectory(plan([{ path: 'manuscript.md', content: '# kept\n' }]), target)
+
+    swap.failTo = target
+    expect(() => writeStagedDirectory(plan([{ path: 'manuscript.md', content: '# replaced\n' }]), target))
+      .toThrow(/simulated EPERM on the swap/u)
+    swap.failTo = ''
+
+    // THE DIRECTORY ON DISK IS STILL THE ONE THAT WAS PUBLISHED, entry by entry.
+    expect(readFileSync(join(target, 'manuscript.md'), 'utf8')).toBe('# kept\n')
+    expect(checkWrittenFiles(target, published.files).filter(check => check.status !== 'ok')).toEqual([])
+    expect(readdirSync(root).filter(name => name.includes('staging-') || name.includes('superseded-'))).toEqual([])
+  })
+
+  it('has nothing to put back when the swap fails and the directory was never there', () => {
+    // THE OTHER SIDE OF THE SAME ROLLBACK: there is no previous directory, so nothing is restored and
+    // the target stays absent rather than being created by the failure.
+    const root = workspace()
+    const target = join(root, 'out')
+
+    swap.failTo = target
+    expect(() => writeStagedDirectory(plan([{ path: 'manuscript.md', content: '# first\n' }]), target))
+      .toThrow(/simulated EPERM on the swap/u)
+    swap.failTo = ''
+
+    expect(existsSync(target)).toBe(false)
+    expect(readdirSync(root).filter(name => name.includes('staging-') || name.includes('superseded-'))).toEqual([])
+  })
+
+  it('refuses the directory it staged when the manifest it wrote does not describe what landed', () => {
+    // THE MANIFEST IS WRITTEN LAST, so an entry naming the manifest itself is the one plan that
+    // overwrites the bytes its own digest was taken over — which is exactly the check's subject: a
+    // staged directory whose entries no longer match the manifest beside them is not published.
+    const root = workspace()
+    const target = join(root, 'out')
+    expect(() => writeStagedDirectory(plan([{ path: 'manifest.json', content: '{}\n' }]), target))
+      .toThrow(/does not match its own manifest: manifest\.json \(/u)
+    expect(existsSync(target)).toBe(false)
+    expect(readdirSync(root).filter(name => name.includes('staging-'))).toEqual([])
   })
 })
 

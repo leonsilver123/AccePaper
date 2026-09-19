@@ -103,16 +103,15 @@ import {
   ROADMAP_TOOL_VERSION,
   THREE_LINE_TABLE_TOOL_ID,
   THREE_LINE_TABLE_TOOL_VERSION,
-  THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN,
   constructClaim,
   mockLiteratureSearchAdapter,
   renderFigure,
   renderRoadmap,
   renderThreeLineTable,
-  threeLineTableCellText,
   runAblation,
   runLiteratureSearch,
 } from '@deepseek-ai/dsh-research-tools'
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 
 import { assembleManuscript } from './manuscript.ts'
 import {
@@ -125,6 +124,7 @@ import {
   numberFloats,
   numberedReferences,
   tableBlock,
+  tableCellsOf,
 } from './paper-format.ts'
 import type { CitableFloat } from './paper-format.ts'
 
@@ -560,6 +560,36 @@ export interface StepExecutorEntry {
   /** Gate the step must satisfy (derived from the core step definition). */
   readonly gateRequirement: GateRequirement
   readonly recoveryPolicy: RecoveryPolicy
+}
+
+/**
+ * What actually produced a step, read off the artifacts it committed.
+ *
+ * A REGISTRY ENTRY DECLARES WHAT A STEP RUNS UNDER; an artifact records what wrote it, and for the
+ * steps whose channel is a DEPLOYMENT fact the two differ. D3-writing is the one that made this
+ * worth a function: its entry names the `three-line-table` capability it executes, while its
+ * manuscript records the channel that wrote the prose — `fixture:...` under the shipped offline
+ * path, `llm:<provider>/<model>` when the deployment configured a prose writer. A step row compiled
+ * from the entry therefore reported a live model's draft as produced by a tool, which is the drift
+ * the runner's brand checks exist to prevent, one level up.
+ *
+ * THE ARTIFACTS DECIDE ONLY WHEN THEY AGREE. A step whose outputs carry different producers (or
+ * none) has no single answer to read off, and the entry's declared brand stands — which is also
+ * what a step that never ran reports.
+ *
+ * @param entry - the step's registry entry, whose brand is the fallback.
+ * @param values - the artifact values this step committed, one per declared output.
+ * @returns the producer brand the step's own artifacts carry, or the entry's when they disagree.
+ */
+export function stepProducerOf(entry: StepExecutorEntry, values: ReadonlyArray<unknown>): string {
+  const declared = new Set<string>()
+  for (const value of values) {
+    const producedBy = value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>).__producer
+      : undefined
+    if (typeof producedBy === 'string' && producedBy !== '') declared.add(producedBy)
+  }
+  return declared.size === 1 ? [...declared][0] as string : entry.producer
 }
 
 /**
@@ -3081,7 +3111,9 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   const title = typeof outline?.title === 'string' ? outline.title : planOf(ctx).title
   const tableMarkdown = pipeTableOf(tableRender.table)
   const floats = composeFloats(planFloats(renderedFigures), {
-    ...(tableMarkdown === undefined ? {} : { markdown: tableMarkdown }),
+    // THE MODEL AND ITS RENDERING TRAVEL TOGETHER: the document carries both, so the package's CSV
+    // twin is written from the model rather than re-read out of the Markdown this rendered.
+    ...(tableMarkdown === undefined ? {} : { laidOut: { model: tableRender.table, markdown: tableMarkdown } }),
     raw: tableRender.render.text,
     note: tableNoteOf(ctx),
   }, '[D3-writing]')
@@ -3643,32 +3675,19 @@ async function d4Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
  *
  * THE TOOL'S OWN "markdown" RENDERING IS NOT THIS: it draws a fixed-width table with box-drawing
  * rules, which a Markdown reader shows as a code block rather than as a table. This is built from the
- * structured model the tool returned, not by re-parsing its text.
+ * structured model the tool returned, not by re-parsing its text — the same model the package's CSV
+ * twin is written from, through {@link tableCellsOf}.
  *
  * @param model - the table model the three-line-table capability returned.
  * @returns the pipe table, or `undefined` when it carries no columns or a row whose width differs
  *   from the header's — the caller states that fact rather than reshaping the table.
  */
 function pipeTableOf(
-  model: ReturnType<typeof renderThreeLineTable>['table'],
+  model: ThreeLineTableModel,
 ): string | undefined {
-  const header = model.columns.map(
-    column => column.unit === undefined ? column.header : `${column.header} (${column.unit})`,
-  )
-  const rows = model.rows.map((row) => {
-    const cells: string[] = []
-    row.forEach((cell, index) => {
-      const column = model.columns[Math.min(index, model.columns.length - 1)]
-      if (column === undefined) return
-      cells.push(threeLineTableCellText(cell, column, THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN))
-      // A pipe table cannot merge cells, so a colSpan cell is followed by empty cells to keep every
-      // row the same width — `markdownPipeTable` refuses a row that disagrees with its header.
-      for (let extra = 1; extra < (cell.colSpan ?? 1); extra += 1) cells.push('')
-    })
-    return cells
-  })
-  return header.length > 0 && rows.every(row => row.length === header.length)
-    ? markdownPipeTable(header, rows)
+  const cells = tableCellsOf(model)
+  return cells.header.length > 0 && cells.rows.every(row => row.length === cells.header.length)
+    ? markdownPipeTable(cells.header, cells.rows)
     : undefined
 }
 
@@ -3772,12 +3791,14 @@ function tableNoteOf(ctx: ExecCtx): string {
  *
  * THE TABLE IS THE CALLER'S, because only the caller knows where it came from: D3 lays it out from
  * the tool's structured model the moment it invokes the capability, and E1 takes the block the
- * document already carries. A table the renderer cannot lay out is passed with no `markdown`: the
- * tool's own rendering stands in for it in the Markdown, the label is reported as not rendered, and
- * the document carries no table block — which is the same fact stated in all three places.
+ * document already carries. A table the renderer cannot lay out is passed with neither the model nor
+ * the Markdown: the tool's own rendering stands in for it in the Markdown, the label is reported as
+ * not rendered, and the document carries no table block — which is the same fact stated in all three
+ * places.
  *
  * @param plan - the plan's labelled floats, in plan order.
- * @param table - the table as the caller has it: its pipe Markdown when it could be laid out, the
+ * @param table - the table as the caller has it: the structured model with the pipe Markdown rendered
+ *   from it when it could be laid out (the two travel together — one is the other's source), the
  *   tool's own rendering either way, and the caption's second sentence.
  * @param step - the step label a refusal is raised under, e.g. `[E1-format]`.
  * @returns both float lists, the renderings the package writes as its own files, and what the plan
@@ -3787,7 +3808,16 @@ function tableNoteOf(ctx: ExecCtx): string {
  */
 function composeFloats(
   plan: ReadonlyArray<FigurePlanEntry & { readonly label: string; readonly title: string }>,
-  table: { readonly markdown?: string; readonly raw: string; readonly note: string },
+  table: {
+    readonly raw: string
+    readonly note: string
+    /**
+     * The table this caller laid out, when it could be: the model the tool returned and the pipe
+     * Markdown rendered from it. ONE FIELD, because the two are one fact stated twice — a caller that
+     * has the rendering has the model it came from, and nothing else may fill either one in.
+     */
+    readonly laidOut?: { readonly model: ThreeLineTableModel; readonly markdown: string }
+  },
   step: string,
 ): {
   /** The package's float blocks, in plan order, with the table last. */
@@ -3891,24 +3921,29 @@ function composeFloats(
       + 'carries would carry a number no plan assigned',
     )
   }
-  if (table.markdown === undefined) {
+  if (table.laidOut === undefined) {
     // A table whose rows do not cover its columns is one this renderer cannot lay out, so the tool's
     // own rendering is used. Stated rather than passed over, because the reader would otherwise see a
     // code block where the paper should have a table.
     markdown.push(table.raw)
     notRendered.push(planned.label)
   } else {
+    const { model, markdown: printed } = table.laidOut
     markdown.push(tableBlock({
       label: planned.label,
       title: planned.title.length === 0 ? 'Measured results' : planned.title,
-      markdown: table.markdown,
+      markdown: printed,
       note: table.note,
     }))
+    // THE MODEL TRAVELS WITH ITS RENDERING, so the document carries the table rather than a picture
+    // of it: a republisher that rebuilds this document's prose carries this block unchanged, and the
+    // package's CSV twin is written from the model instead of re-read out of the flattened Markdown.
     blocks.splice(tableIndex, 0, {
       kind: 'table',
       label: planned.label,
       caption: planned.title,
-      markdown: table.markdown,
+      markdown: printed,
+      model,
     })
     rendered.push({ label: planned.label, title: planned.title })
   }
@@ -4131,7 +4166,11 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
     .find(block => block.kind === 'table')
   const plannedFloats = planFloats(rendered)
   const floats = composeFloats(plannedFloats, {
-    ...(documentTable === undefined ? {} : { markdown: documentTable.markdown }),
+    // The block the document carries, model and rendering together: this step composes the package's
+    // float list from it, and it lays no table out of its own.
+    ...(documentTable === undefined
+      ? {}
+      : { laidOut: { model: documentTable.model, markdown: documentTable.markdown } }),
     raw: typeof tableRecord.markdown === 'string' ? tableRecord.markdown : '',
     note: tableNoteOf(ctx),
   }, '[E1-format]')

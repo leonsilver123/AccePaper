@@ -364,7 +364,18 @@ function renderDocument(): ManuscriptDocument {
         { kind: 'figure', label: 'Figure 2', caption: 'A drawing.', svg: '<svg/>', pngBase64: 'AAAA' },
         { kind: 'diagram', label: 'Figure 3', caption: 'A roadmap.', mermaid: 'graph TD' },
         { kind: 'equation', label: 'Equation 1', latex: 's^{*} = s_{0}' },
-        { kind: 'table', label: 'Table 1', caption: 'The numbers.', markdown: '| a |\n|---|\n| 1 |' },
+        {
+          kind: 'table',
+          label: 'Table 1',
+          caption: 'The numbers.',
+          markdown: '| a |\n|---|\n| 1 |',
+          // The model the printed table is a rendering of; the block carries both, because the
+          // package's CSV twin is written from the model rather than from this Markdown.
+          model: {
+            columns: [{ header: 'a' }],
+            rows: [[{ kind: 'text', text: '1' }]],
+          },
+        },
       ],
     }],
     references: [{ citeKey: 'k', entry: 'Chen, Y. Safe and stable. 2026.', number: 1 }],

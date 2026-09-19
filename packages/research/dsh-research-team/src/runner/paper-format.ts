@@ -10,8 +10,9 @@
  * unnumbered strings with no in-text marker anywhere in the prose. None of that is a paper, and all
  * of it is fixed by rendering the blocks properly before assembly.
  *
- * EVERY RENDERER HERE IS PURE and its output is Markdown, so the shape of the exported artifact is
- * testable without running the pipeline.
+ * EVERY RENDERER HERE IS PURE, and its output is Markdown — or, for {@link tableCellsOf}, the cells
+ * a format then escapes for itself — so the shape of the exported artifact is testable without
+ * running the pipeline.
  *
  * THE NUMBERING LIVES HERE TOO, and for the same reason: a caption's number and an in-text
  * reference to it are one fact. The figure plan numbers its floats through {@link numberFloats} and
@@ -21,6 +22,12 @@
  *
  * @module @deepseek-ai/dsh-research-team/runner/paper-format
  */
+
+import {
+  THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN,
+  threeLineTableCellText,
+} from '@deepseek-ai/dsh-research-tools'
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 
 /**
  * A figure the manuscript embeds, and its caption.
@@ -184,6 +191,52 @@ function escapeCell(text: string): string {
   return text.replaceAll('|', '\\|').replaceAll('\n', ' ').trim()
 }
 
+/** A table's cells, as the model states them, before any format's escaping. */
+export interface TableCells {
+  /** Column headers, with each column's unit appended where it declares one. */
+  readonly header: ReadonlyArray<string>
+  /** Body rows, every one of them as wide as {@link header}. */
+  readonly rows: ReadonlyArray<ReadonlyArray<string>>
+}
+
+/**
+ * Read a table's cells out of the structured model the rendering tool produced.
+ *
+ * ONE SOURCE FOR EVERY FORM OF THE TABLE. The tool returns a model (`columns` / `rows`) and this
+ * turns it into the cell texts a reader meets; the Markdown the paper prints escapes them for
+ * Markdown, and the CSV twin quotes them for CSV. Both used to be derived from one another — the CSV
+ * was parsed back out of the printed pipe table — and that reader could not restore what the pipe
+ * renderer had already flattened, so a cell carrying a newline reached the CSV as a space.
+ *
+ * WHAT THIS DOES NOT DO is escape or flatten anything: the cells are the text the model states, and a
+ * format applies its own escaping afterwards.
+ *
+ * A cell spanning several columns is followed by as many empty cells as it spans, because neither a
+ * pipe table nor a CSV record has a way to merge cells: the row has to be as wide as the header for
+ * the table to be the table its own columns describe.
+ *
+ * @param model - the table model the `three-line-table` capability returned.
+ * @returns the header and the body rows, in the model's order.
+ */
+export function tableCellsOf(model: ThreeLineTableModel): TableCells {
+  const header = model.columns.map(
+    column => column.unit === undefined ? column.header : `${column.header} (${column.unit})`,
+  )
+  const rows = model.rows.map((row) => {
+    const cells: string[] = []
+    row.forEach((cell, index) => {
+      // The column a cell belongs to is the one the previous spans ended at; the last column is the
+      // bound so a row that carries more cells than the header names no column this table has.
+      const column = model.columns[Math.min(index, model.columns.length - 1)]
+      if (column === undefined) return
+      cells.push(threeLineTableCellText(cell, column, THREE_LINE_TABLE_DEFAULT_MISSING_TOKEN))
+      for (let extra = 1; extra < (cell.colSpan ?? 1); extra += 1) cells.push('')
+    })
+    return cells
+  })
+  return { header, rows }
+}
+
 /**
  * Render a real Markdown pipe table.
  *
@@ -215,56 +268,6 @@ export function markdownPipeTable(
     `| ${cells.map(escapeCell).join(' | ')} |`
   const rule = `| ${header.map(() => '---').join(' | ')} |`
   return `${[line(header), rule, ...rows.map(line)].join('\n')}\n`
-}
-
-/** A pipe table read back into the cells it was written from. */
-export interface ParsedPipeTable {
-  readonly header: ReadonlyArray<string>
-  readonly rows: ReadonlyArray<ReadonlyArray<string>>
-}
-
-/**
- * Read a pipe table back into its header and body rows.
- *
- * THE INVERSE OF {@link markdownPipeTable}, AND ONLY OF IT. This reads the format this module writes,
- * which is what lets a caller render a table's machine-readable twin without a second authority on
- * what the paper prints — a Markdown table written by another tool may carry alignment markers,
- * padding or escapes this writer never emits, and anything this reader does not fully recognize is
- * REFUSED rather than partly understood.
- *
- * The escaping is invertible because the writer escapes every `|` exactly once: splitting on the
- * exact separator `" | "` cannot hit an escaped pipe, and removing one backslash from each `\|`
- * restores the original for any number of backslashes before it.
- *
- * WHAT IS NOT RECOVERABLE, and is not guessed at: the writer folds a newline inside a cell to a space
- * and trims the cell, so a reader that needs those characters must read them where they are still
- * whole. The caller is told the table's cells, not the text a cell was rendered from.
- *
- * @param markdown - a pipe table as {@link markdownPipeTable} wrote it.
- * @returns the header cells and the body rows, or undefined when the text is not one of those tables.
- */
-export function parsePipeTable(markdown: string): ParsedPipeTable | undefined {
-  const lines = markdown.replace(/\n+$/u, '').split('\n')
-  const first = lines[0]
-  const second = lines[1]
-  if (first === undefined || second === undefined) return undefined
-  const cellsOf = (line: string): ReadonlyArray<string> | undefined => {
-    if (!line.startsWith('| ') || !line.endsWith(' |')) return undefined
-    return line.slice(2, -2).split(' | ').map(cell => cell.replaceAll('\\|', '|'))
-  }
-  const header = cellsOf(first)
-  // THE RULE IS PART OF THE FORMAT, not decoration: without it the text is a paragraph of pipes, and
-  // accepting it would report a table a Markdown reader does not draw as one.
-  const rule = cellsOf(second)
-  if (header === undefined || rule === undefined) return undefined
-  if (rule.length !== header.length || rule.some(cell => cell !== '---')) return undefined
-  const rows: Array<ReadonlyArray<string>> = []
-  for (const line of lines.slice(2)) {
-    const cells = cellsOf(line)
-    if (cells === undefined || cells.length !== header.length) return undefined
-    rows.push(cells)
-  }
-  return { header, rows }
 }
 
 /**

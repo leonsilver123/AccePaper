@@ -12,12 +12,14 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
 import { resolveResearchProfile } from '../src/runner/research-profile.ts'
-import { checkPackagedFiles, citedAttachments, csvRecords, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
-import { parsePipeTable } from '../src/runner/paper-format.ts'
+import { checkPackagedFiles, citedAttachments, csvRecords, packagedTablesOf, planRunPackage, sanitizeForExport, writeRunPackage } from '../src/runner/package-export.ts'
+import { tableCellsOf } from '../src/runner/paper-format.ts'
+import type { StagedFile } from '../src/runner/staged-directory.ts'
 import { sourcesForMode } from '../src/runner/citation-bindings.ts'
 import type { ReferencePdfRead } from '../src/runner/package-export.ts'
 import type { DocumentCompiler } from '../src/runner/document-compile.ts'
@@ -523,7 +525,7 @@ describe('a package that says which state it describes', () => {
 })
 
 describe('the tables a package carries', () => {
-  it('writes the printed table and its machine-readable twin, read out of one another', async () => {
+  it('writes the printed table and its machine-readable twin, both from the model the document holds', async () => {
     // THE TABLE WAS IN THE PACKAGE ONLY AS PROSE INSIDE THE MANUSCRIPT. A reader who wants the
     // numbers had to find them in Markdown, and nothing offered them to a tool. Both forms are read
     // out of the block the manuscript holds, so the CSV cannot describe a different table from the
@@ -538,14 +540,65 @@ describe('the tables a package carries', () => {
     const csv = plan.files.find(file => file.path === 'tables/table-1.csv')?.content ?? ''
     // The printed form carries the caption the paper prints with the table.
     expect(markdown).toContain('**Table 1.**')
-    // THE TWO FORMS ARE ONE TABLE. The CSV's records are the printed table's cells, which is the
-    // property that makes it a twin rather than a second reading of the run.
-    const printed = markdown.replace(/^\*\*Table 1\.\*\* .*\n\n/u, '')
-    const parsed = parsePipeTable(printed)
+    // THE TWO FORMS ARE ONE TABLE, and the evidence is the MODEL the block carries rather than one
+    // form re-read out of the other: the CSV's records are the cells that model states.
+    const artifact = getArtifact(store, run.runId, 'manuscript') as Record<string, unknown> | undefined
+    const block = (artifact?.['document'] as { sections: ReadonlyArray<{ blocks: ReadonlyArray<Record<string, unknown>> }> })
+      .sections.flatMap(section => section.blocks).find(entry => entry['kind'] === 'table')
+    const cells = tableCellsOf(block?.['model'] as ThreeLineTableModel)
     const records = csv.trimEnd().split('\n').map(line => line.split(','))
-    expect(records[0]).toEqual([...(parsed?.header ?? [])])
-    expect(records.slice(1)).toEqual((parsed?.rows ?? []).map(row => [...row]))
+    expect(records[0]).toEqual([...cells.header])
+    expect(records.slice(1)).toEqual(cells.rows.map(row => [...row]))
     expect(records.length).toBe(3)
+  })
+
+  it('writes the twin from the structured model, so a cell the printed table cannot carry survives', () => {
+    // THE MODEL IS WHAT BOTH FORMS ARE READ FROM. A pipe table ends a row at a newline, so a cell
+    // holding one is flattened in the printed table — and a twin parsed back out of that rendering
+    // reported the flattened text as the table's own. Written from the model, the cell is quoted
+    // whole and any reader gets back what the table says.
+    const files: StagedFile[] = []
+    const tables = packagedTablesOf({
+      sections: [{
+        id: 'results',
+        heading: 'Results',
+        blocks: [{
+          kind: 'table',
+          label: 'Table 1',
+          caption: 'Measured results',
+          markdown: '| Method |\n| --- |\n| one two |\n',
+          model: {
+            columns: [{ header: 'Method' }],
+            rows: [[{ kind: 'text', text: 'one\ntwo' }]],
+          },
+        }],
+      }],
+    }, files)
+
+    expect(tables.map(table => table.label)).toEqual(['Table 1'])
+    expect(files.map(file => file.path)).toEqual(['tables/table-1.md', 'tables/table-1.csv'])
+    // The printed form is the rendering the document carries, newline flattened and all.
+    expect(files[0]?.content).toContain('| one two |')
+    // The twin is a CSV record whose field carries the newline, quoted the way RFC 4180 requires.
+    expect(files[1]?.content).toBe('Method\n"one\ntwo"\n')
+  })
+
+  it('carries no table whose block declares no model, rather than a caption over nothing', () => {
+    // THE MODEL IS WHAT MAKES A BLOCK A TABLE. A `table` block without one is not the block the
+    // writing step splices in — this reader runs at the artifact boundary, where a value came out of
+    // a durable store — and publishing its caption over an unreadable rendering would report a table
+    // the run does not have.
+    const files: StagedFile[] = []
+    const tables = packagedTablesOf({
+      sections: [{
+        id: 'results',
+        heading: 'Results',
+        blocks: [{ kind: 'table', label: 'Table 1', caption: 'Measured results', markdown: '| Method |\n| --- |\n| x |\n' }],
+      }],
+    }, files)
+
+    expect(tables).toEqual([])
+    expect(files).toEqual([])
   })
 
   it('names both files in the manifest, and says where the numbers came from', async () => {
@@ -555,7 +608,6 @@ describe('the tables a package carries', () => {
 
     expect(entry?.markdown).toBe('tables/table-1.md')
     expect(entry?.csv).toBe('tables/table-1.csv')
-    expect(entry?.csvRefusal).toBeUndefined()
     for (const path of ['tables/table-1.md', 'tables/table-1.csv']) {
       expect(manifest.numberSources[path]).toContain('mvp-results')
     }

@@ -30,7 +30,7 @@ import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from 
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
 import type { ReferenceFileReader } from './reference-files.ts'
-import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
+import { STEP_EXECUTOR_REGISTRY, stepProducerOf } from './registry.ts'
 import { reportPaperQuality } from './paper-quality.ts'
 import type { PaperQualityReport } from './paper-quality.ts'
 import { checkBibliography, referenceEntriesOf } from './bibliography.ts'
@@ -38,7 +38,8 @@ import type { BibliographyWriter } from './bibliography.ts'
 import { bibliographyOf } from './citation-bindings.ts'
 import type { CitationUse, SourceRecord } from './citation-bindings.ts'
 import { metricsForStudy } from './metrics.ts'
-import { parsePipeTable } from './paper-format.ts'
+import { tableCellsOf } from './paper-format.ts'
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 
 /**
  * What a package needs to know about one step.
@@ -76,16 +77,8 @@ export interface PackagedTable {
   readonly label: string
   /** Package-relative path of the printed table, e.g. `tables/table-1.md`. */
   readonly markdown: string
-  /** Package-relative path of the machine-readable twin, when one could be laid out. */
-  readonly csv?: string
-  /**
-   * Why the twin is not beside the printed table, when it is not.
-   *
-   * A CSV IS NOT WRITTEN RATHER THAN WRITTEN WRONG: the twin is read back out of the table the paper
-   * prints, and text that is not a pipe table is refused. An absent file with no sentence would read
-   * as a run that produced no table.
-   */
-  readonly csvRefusal?: string
+  /** Package-relative path of the machine-readable twin, e.g. `tables/table-1.csv`. */
+  readonly csv: string
 }
 
 /**
@@ -192,22 +185,40 @@ function referencePdfNameOf(citeKey: string): string | undefined {
 /** The tables the run's document holds, read from the artifact a durable store keeps them in. */
 function documentTablesOf(
   document: unknown,
-): ReadonlyArray<{ readonly label: string; readonly caption: string; readonly markdown: string }> {
+): ReadonlyArray<{
+  readonly label: string
+  readonly caption: string
+  readonly markdown: string
+  readonly model: ThreeLineTableModel
+}> {
   const sections = (document as { readonly sections?: unknown } | undefined)?.sections
   if (!Array.isArray(sections)) return []
   return sections.flatMap((section) => {
     const blocks = (section as { readonly blocks?: unknown }).blocks
     if (!Array.isArray(blocks)) return []
-    return blocks.flatMap((block): ReadonlyArray<{ label: string; caption: string; markdown: string }> => {
+    return blocks.flatMap((block): ReadonlyArray<{
+      readonly label: string
+      readonly caption: string
+      readonly markdown: string
+      readonly model: ThreeLineTableModel
+    }> => {
       const entry = block as {
         readonly kind?: unknown
         readonly label?: unknown
         readonly caption?: unknown
         readonly markdown?: unknown
+        readonly model?: unknown
       }
+      // THE MODEL IS WHAT MAKES THIS A TABLE this package can carry: the Markdown beside it is one
+      // rendering of it and the CSV twin is another, so a block declaring itself a table without one
+      // is reported as no table rather than published as a caption over a rendering nothing can be
+      // checked against. The `null` in this cast is the boundary's, not the interface's: the document
+      // came out of a durable store, where a key the interface forbids is still a value to refuse.
+      const model = entry.model as ThreeLineTableModel | null | undefined
       return entry.kind === 'table' && typeof entry.label === 'string' && typeof entry.caption === 'string'
         && typeof entry.markdown === 'string' && entry.markdown.trim() !== ''
-        ? [{ label: entry.label, caption: entry.caption, markdown: entry.markdown }]
+        && model !== undefined && model !== null && typeof model === 'object' && Array.isArray(model.columns)
+        ? [{ label: entry.label, caption: entry.caption, markdown: entry.markdown, model }]
         : []
     })
   })
@@ -256,9 +267,12 @@ export function citedAttachments(
 /**
  * The tables a document holds, written as the two files each one becomes.
  *
- * TWO FORMS OF ONE TABLE, and both are read out of the block the manuscript holds rather than
- * re-derived from the run's measurements: the paper prints one table, and a second construction of it
- * is how the CSV and the printed table come to disagree.
+ * TWO FORMS OF ONE TABLE, EVERY CARDINALITY OF EACH READ FROM THE MODEL. The structured model the
+ * `three-line-table` capability returned travels on the document's `table` block; the printed
+ * Markdown is the rendering the block carries, and the CSV is written from the model's own cells. The
+ * twin used to be parsed back out of the printed Markdown, which is a lossy round trip through the
+ * pipe renderer — a cell carrying a newline is drawn as a space — so a table whose cells held one
+ * could not be recovered from the file the paper prints.
  *
  * EXTRACTED RATHER THAN INLINED because two directories carry these files — the run package and the
  * run's working directory — and a second copy of this loop is how the CSV in one of them stops being
@@ -277,18 +291,9 @@ export function packagedTablesOf(
     const stem = `tables/${table.label.trim().toLowerCase().replace(/\s+/gu, '-')}`
     const markdown = `${stem}.md`
     files.push({ path: markdown, content: markdownFile([`**${table.label}.** ${table.caption}`, '', table.markdown]) })
-    const parsed = parsePipeTable(table.markdown)
-    if (parsed === undefined) {
-      tables.push({
-        label: table.label,
-        markdown,
-        csvRefusal: 'the table as the manuscript prints it is not a pipe table this package can read'
-          + ' back, so no machine-readable twin was written',
-      })
-      continue
-    }
+    const cells = tableCellsOf(table.model)
     const csv = `${stem}.csv`
-    files.push({ path: csv, content: csvRecords([parsed.header, ...parsed.rows]) })
+    files.push({ path: csv, content: csvRecords([cells.header, ...cells.rows]) })
     tables.push({ label: table.label, markdown, csv })
   }
   return tables
@@ -1119,7 +1124,7 @@ export function planRunPackage(
       // the verdict rest on.
       ...tables.flatMap((table): Array<[string, string]> => [
         [table.markdown, TABLE_NUMBER_SOURCE],
-        ...(table.csv === undefined ? [] : [[table.csv, TABLE_NUMBER_SOURCE] as [string, string]]),
+        [table.csv, TABLE_NUMBER_SOURCE],
       ]),
     ]),
     tables,
@@ -1181,10 +1186,18 @@ export function previousArtifactRefsOf(
 /**
  * Read the step table a package records, off the run as it stands now.
  *
- * The kinds and producers come from the executor registry — the audit source of truth for both —
- * rather than from a drive result, so a package exported AFTER the drive (an operator asking for the
- * final one) states the same table a package exported at the end of the drive does. A step the
- * registry does not know is reported as such instead of being given a kind it did not run under.
+ * The kinds come from the executor registry — the declared identity, which a package exported BEFORE
+ * a step runs states as well as one exported after — rather than from a drive result, so a package
+ * exported AFTER the drive (an operator asking for the final one) states the same table a package
+ * exported at the end of the drive does. A step the registry does not know is reported as such
+ * instead of being given a kind it did not run under.
+ *
+ * THE PRODUCER IS READ OFF THE STEP'S OWN COMMITTED ARTIFACTS, because for D3-writing it is not the
+ * declared brand: the entry names the `three-line-table` capability the step executes, while the
+ * manuscript records the channel that wrote the prose, and a run whose draft came from a configured
+ * model used to be exported as a table rendered by a tool. The values are taken from the STEP, never
+ * from the registry's slug, which keeps only the latest value: `manuscript` is republished by D4, E1
+ * and an acceptance, so reading it by slug would report D3's row with a later step's producer.
  *
  * @param store - the run store.
  * @param runId - the run to read.
@@ -1197,12 +1210,13 @@ export function packageRunFactsOf(store: ResearchRunStore, runId: string): Packa
     steps: getStepDefinitions().map((definition) => {
       const state = snapshot.steps[definition.id]
       const entry = STEP_EXECUTOR_REGISTRY.get(definition.id)
+      const committed = definition.outputs.map(slug => state?.artifacts[slug])
       return {
         stepId: definition.id,
         status: state?.status ?? 'pending',
         attemptId: state?.attemptId ?? 0,
         kind: entry?.kind ?? 'unknown',
-        producer: entry?.producer ?? 'unknown',
+        producer: entry === undefined ? 'unknown' : stepProducerOf(entry, committed),
         outputSlugs: [...(state?.outputs ?? [])],
         // THE DISCRIMINANT, not the verdict object: the manifest's audit table records what each
         // component decided (`passed` / `blocked` / `failed` / `abstained`), and a table of

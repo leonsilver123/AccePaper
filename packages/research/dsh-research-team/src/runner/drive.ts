@@ -50,7 +50,14 @@ import {
   submitGateVerdict,
 } from '@deepseek-ai/dsh-research-core'
 
-import { FIXED_TS, type RunContext, STEP_EXECUTOR_REGISTRY, TRUTHFULNESS_LEVELS, type Truthfulness } from './registry.ts'
+import {
+  FIXED_TS,
+  type RunContext,
+  STEP_EXECUTOR_REGISTRY,
+  stepProducerOf,
+  TRUTHFULNESS_LEVELS,
+  type Truthfulness,
+} from './registry.ts'
 import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
 import { experimentStudy } from './platoon-sim.ts'
 import { requireStudyAdapter } from './study-adapter.ts'
@@ -356,8 +363,10 @@ export async function driveStep(
   // artifact's own tag is the more specific statement. A step whose artifacts
   // disagree declares nothing here and falls back to the registry entry.
   const declaredKinds = new Set<Truthfulness>()
+  const produced: unknown[] = []
   for (const slug of stepDef.outputs) {
     const value = getArtifact(store, runId, slug)
+    produced.push(value)
     const record =
       value !== null && typeof value === 'object' && !Array.isArray(value)
         ? (value as Record<string, unknown>)
@@ -380,7 +389,11 @@ export async function driveStep(
     status,
     attemptId,
     kind: effectiveKind,
-    producer: entry.producer,
+    // WHAT PRODUCED THIS STEP, from the same place the level comes from: the artifacts it committed.
+    // The static entry declares what the step runs UNDER, and for a step whose channel is a
+    // deployment fact (`D3-writing` writes its prose with a model or with the fixture) the two are
+    // different strings — see {@link stepProducerOf}.
+    producer: stepProducerOf(entry, produced),
     outputSlugs: stepDef.outputs,
     artifacts,
     verdicts,

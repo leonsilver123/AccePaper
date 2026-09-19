@@ -18,6 +18,8 @@
 // refused with the tool named. A compile that fails is refused with the compiler's own stderr, and the
 // caller keeps whatever it had: producing a document is not allowed to destroy the previous one.
 
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
+
 /** What a compile produces. */
 export type CompileFormat =
   /** One self-contained HTML file: the figures are inline SVG and the equations render in the browser. */
@@ -54,8 +56,23 @@ export type DocumentBlock =
     /** The PNG bytes, base64, when the producing tool emitted one. */
     readonly pngBase64?: string
   }
-  /** A table, carried as the renderer's own Markdown (a native table, not an image). */
-  | { readonly kind: 'table'; readonly label: string; readonly caption: string; readonly markdown: string }
+  /**
+   * A table, carried as its structured model AND as the Markdown rendered from it.
+   *
+   * THE MODEL IS THE TABLE and the Markdown is one rendering of it: a compiled document embeds the
+   * Markdown, while the machine-readable twin a package carries is written from the model's cells. A
+   * second reading of the printed Markdown could not restore what the pipe renderer flattened — a
+   * cell carrying a newline is drawn as a space — so both forms are read from the model instead. The
+   * model travels WITH the block, which is also what carries it through a republish: a step that
+   * rebuilds the document's prose carries its floats as they are.
+   */
+  | {
+    readonly kind: 'table'
+    readonly label: string
+    readonly caption: string
+    readonly markdown: string
+    readonly model: ThreeLineTableModel
+  }
   /** A diagram, carried as its Mermaid source. */
   | { readonly kind: 'diagram'; readonly label: string; readonly caption: string; readonly mermaid: string }
   /** Display mathematics, carried as LaTeX. */

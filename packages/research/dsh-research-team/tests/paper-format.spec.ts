@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { renderThreeLineTable } from '@deepseek-ai/dsh-research-tools'
+import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 
 import {
   citedFloats,
@@ -18,8 +20,8 @@ import {
   markdownPipeTable,
   numberFloats,
   numberedReferences,
-  parsePipeTable,
   tableBlock,
+  tableCellsOf,
 } from '../src/runner/paper-format.ts'
 
 describe('the paper formatting layer', () => {
@@ -156,40 +158,77 @@ describe('the paper formatting layer', () => {
   })
 })
 
-describe('reading a pipe table back', () => {
-  it('recovers the cells a table was written from, including the characters that had to be escaped', () => {
-    // THE ROUND TRIP IS WHAT MAKES THE CSV TWIN TRUSTWORTHY: the machine-readable form is read back
-    // out of the table the paper prints, so the two cannot describe different tables.
-    const header = ['Method', 'Minimum TTC (s)']
-    const rows = [
-      ['HV-AV-HV', '12.45'],
-      // The characters that end a Markdown cell, a CSV field, or both.
-      ['a|b', '1,2'],
-      ['said "x"', '3.0'],
-      ['trailing\\', '4.0'],
-      ['back\\|slash', '5.0'],
-    ]
-    const parsed = parsePipeTable(markdownPipeTable(header, rows))
-    expect(parsed?.header).toEqual(header)
-    expect(parsed?.rows).toEqual(rows)
+describe('reading a table\'s cells out of its model', () => {
+  /** The model the rendering tool returns, normalized, for a table built out of the given cells. */
+  function modelOf(
+    columns: ReadonlyArray<Record<string, unknown>>,
+    rows: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>,
+  ): ThreeLineTableModel {
+    return renderThreeLineTable(
+      { columns, rows } as unknown as ThreeLineTableModel,
+      'markdown',
+      0,
+    ).table
+  }
+
+  it('gives both forms of the table the model\'s own cells, with each column\'s unit in the header', () => {
+    // ONE SOURCE FOR THE PRINTED TABLE AND ITS TWIN. The CSV is written from these cells and the
+    // Markdown is rendered from them, so the two cannot describe different tables — which is what the
+    // round trip through the printed Markdown used to buy, at the cost of the characters it flattens.
+    const cells = tableCellsOf(modelOf(
+      [{ header: 'Method' }, { header: 'Minimum TTC', unit: 's' }],
+      [
+        [{ kind: 'text', text: 'HV-AV-HV' }, { kind: 'text', text: '12.45' }],
+        // The characters that end a Markdown cell, a CSV field, or both: what the CELL holds is the
+        // text, and each format escapes it its own way afterwards.
+        [{ kind: 'text', text: 'a|b' }, { kind: 'text', text: 'said "x"' }],
+      ],
+    ))
+    expect(cells.header).toEqual(['Method', 'Minimum TTC (s)'])
+    expect(cells.rows).toEqual([['HV-AV-HV', '12.45'], ['a|b', 'said "x"']])
   })
 
-  it('flattens a newline the way the writer did rather than inventing one back', () => {
-    // THE LOSS IS THE WRITER'S AND IS NOT UNDONE HERE. A cell whose text carried a newline was folded
-    // to a space when it was written; a reader that guessed a newline back would report text nobody
-    // wrote. What comes back is what the paper prints.
-    const parsed = parsePipeTable(markdownPipeTable(['a'], [['one\ntwo']]))
-    expect(parsed?.rows).toEqual([['one two']])
+  it('keeps a newline inside a cell, which is what the printed Markdown cannot carry', () => {
+    // THE LOSS THIS REMOVES. A pipe table ends a row at a newline, so `markdownPipeTable` folds one
+    // inside a cell to a space — and the CSV twin, read back out of that rendering, could not restore
+    // it. Read from the model, the cell is what the model states, and CSV quoting carries it.
+    const cells = tableCellsOf(modelOf(
+      [{ header: 'a' }],
+      [[{ kind: 'text', text: 'one\ntwo' }]],
+    ))
+    expect(cells.rows).toEqual([['one\ntwo']])
+    // AND THE PRINTED FORM STILL FLATTENS IT, because it has to: the two renderings differ by what
+    // the formats can carry, not by what the table says.
+    expect(markdownPipeTable(cells.header, cells.rows)).toBe('| a |\n| --- |\n| one two |\n')
   })
 
-  it('refuses text that is not one of these tables', () => {
-    // PARTLY UNDERSTOOD IS REFUSED, not partly read: a caller that took the rows of a paragraph, or of
-    // a table another tool wrote with alignment markers, would report a table the paper does not have.
-    expect(parsePipeTable('just a paragraph')).toBeUndefined()
-    expect(parsePipeTable('')).toBeUndefined()
-    expect(parsePipeTable('| a | b |\n| a | b |\n')).toBeUndefined()
-    expect(parsePipeTable('| a | b |\n| --- | --- |\n| one |\n')).toBeUndefined()
-    expect(parsePipeTable('a | b\n| --- | --- |\n')).toBeUndefined()
-    expect(parsePipeTable('| a | b |\n| :--- | ---: |\n| one | two |\n')).toBeUndefined()
+  it('reads a model with no columns as a table with no cells, which the pipe renderer then refuses', () => {
+    // THE MODEL ARRIVES FROM A DURABLE STORE, so this reader does not assume the tool validated it:
+    // the tool refuses a model with no columns, and a document read back off disk is not the tool's
+    // output any more. No columns means no cell has a column to be read against — including the
+    // header — and the caller that renders a pipe table is the one that refuses it.
+    const cells = tableCellsOf({
+      columns: [],
+      rows: [[{ kind: 'text', text: 'x' }]],
+    } as unknown as ThreeLineTableModel)
+    expect(cells.header).toEqual([])
+    expect(cells.rows).toEqual([[]])
+    expect(() => markdownPipeTable(cells.header, cells.rows)).toThrow(/no columns/u)
+  })
+
+  it('pads a cell that spans columns so every row is as wide as the header', () => {
+    // NEITHER FORMAT CAN MERGE CELLS: a row that dropped the spanned columns would be a record of the
+    // wrong width, and `markdownPipeTable` refuses one outright.
+    const cells = tableCellsOf(modelOf(
+      [{ header: 'Method' }, { header: 'Minimum TTC' }, { header: 'Change' }],
+      [
+        [{ kind: 'text', text: 'both arms', colSpan: 2 }, { kind: 'text', text: 'n/a' }],
+        [{ kind: 'missing' }, { kind: 'number', value: 12.45 }, { kind: 'number', value: -3.2 }],
+      ],
+    ))
+    expect(cells.rows[0]).toEqual(['both arms', '', 'n/a'])
+    // A MISSING CELL IS THE MODEL'S OWN TOKEN, not an empty string: an absent number and a zero are
+    // different facts on a results table.
+    expect(cells.rows[1]?.[0]).not.toBe('')
   })
 })
