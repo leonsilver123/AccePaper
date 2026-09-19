@@ -33,6 +33,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { MockCitationResolverAdapter } from '@deepseek-ai/dsh-research-core'
 import type { SourceRegistryMode } from '@deepseek-ai/dsh-research-core'
 import type { CitedItem } from './zotero-registration.ts'
+import type { ZoteroAttachmentPolicy } from './zotero-provider.ts'
 import type { LiteratureSearchAdapter } from '@deepseek-ai/dsh-research-tools'
 
 import { OpenAlexLiteratureAdapter } from './openalex-adapter.ts'
@@ -191,6 +192,19 @@ export interface SourceLibraryConfig {
   readonly mcpServerName: string
   readonly timeoutMs?: number
   readonly pageSize?: number
+  /**
+   * Whether this deployment reads an attachment's own bytes, and where from.
+   *
+   * A DEPLOYMENT setting like every field here, and ABSENT IS `'none'`: no attachment file is read,
+   * and `readAttachment` refuses without requesting anything. Reading a file off the machine is
+   * opted into, so pointing a deployment at a library changes nothing about its disk by itself.
+   *
+   * THIS IS NOT THE `.bib` RULE, AND IT DOES NOT RELAX IT. The entry a run publishes still carries no
+   * path, and this does not become one: the location of a file never leaves the provider, which
+   * returns its bytes with the version and the hash they were read at — see
+   * {@link ZoteroAttachmentPolicy}.
+   */
+  readonly attachments?: ZoteroAttachmentPolicy
   /** The venue to record for an item whose own record states none. */
   readonly fallbackVenue?: string
   /**

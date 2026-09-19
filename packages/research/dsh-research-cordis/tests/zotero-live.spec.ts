@@ -26,6 +26,9 @@
  *   4. evidence that moved makes the old verdict unusable;
  *   5. an unreachable library is an outage, never an empty collection or a substituted corpus;
  *   6. the `.bib` parses, its fields are the source's, and no local path is in it.
+ *
+ * AND ONE CASE THE LIST DOES NOT COVER — the attachment's own bytes, read at the version the passage
+ * was read at — was added on 2026-09-19 with the capability it exercises.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,6 +64,8 @@ const LIBRARY_PATH = 'users/0'
 const COLLECTION = 'ILFASAAE'
 /** The one item this deployment designates as a source its run may cite. */
 const ITEM: CitedItem = { itemKey: 'UA5MIGG3', page: 4, bibtexKey: 'rocheWhatHappensWhen2020' }
+/** The PDF of that item, as the library's own children listing names it. */
+const ATTACHMENT = 'PU2XWW83'
 
 /**
  * Whether the local library is answering.
@@ -118,7 +123,7 @@ describe.skipIf(!live)('the configured library, through the product\'s own clien
 
     provider = new ZoteroProvider(
       { apiBase: API_BASE, localLibraryPath: LIBRARY_PATH, mcpServerName: 'zotero', timeoutMs: 60_000 },
-      (url, init) => fetch(url, { signal: init.signal }),
+      (url, init) => fetch(url, init),
       { get: name => registrations.get(name) },
     )
     read = await readRegistrations(provider, [ITEM])
@@ -140,6 +145,45 @@ describe.skipIf(!live)('the configured library, through the product\'s own clien
     expect(registration?.acquisition).toBe('live-library-read')
     expect(registration?.evidence?.attachment?.key).toBe('PU2XWW83')
     expect(registration?.evidence?.locator).toContain('page 4 of 10')
+  })
+
+  it('reads the designated attachment\'s own bytes, at the version the passage was bound to', async () => {
+    // THE WHOLE ROUTE, WALKED AGAINST THE REAL LIBRARY. Measured 2026-09-19: the file route answers a
+    // POINTER (`302`, `Location: file:///…/storage/<key>/<name>.pdf`) rather than the file, so what
+    // this case establishes is that the pointer resolves, that the bytes are a PDF, and that they are
+    // the version the registration bound the passage to — which is the only thing that makes the file
+    // and the passage the same source.
+    const bytesOf = new ZoteroProvider(
+      {
+        apiBase: API_BASE,
+        localLibraryPath: LIBRARY_PATH,
+        mcpServerName: 'zotero',
+        timeoutMs: 60_000,
+        // THE DEPLOYMENT'S OWN DECISION, stated here because this case is what exercises it.
+        attachments: 'local-cache',
+      },
+      (url, init) => fetch(url, init),
+      { get: name => registrations.get(name) },
+    )
+    const file = await bytesOf.readAttachment(ITEM.itemKey, ATTACHMENT)
+    expect(file.ok).toBe(true)
+    if (!file.ok) return
+    expect(String.fromCharCode(...file.file.bytes.slice(0, 5))).toBe('%PDF-')
+    expect(file.file.size).toBeGreaterThan(1_000)
+    expect(file.file.bytes.byteLength).toBe(file.file.size)
+    expect(file.file.sha256).toMatch(/^[0-9a-f]{64}$/u)
+    expect(file.file.attachment.key).toBe(ATTACHMENT)
+    expect(file.file.attachment.contentType).toBe('application/pdf')
+    expect(file.file.attachment.filename).toContain('.pdf')
+    expect(String(file.file.attachment.version)).toBe(
+      read.registrations[0]?.evidence?.attachment?.version,
+    )
+
+    // AND A KEY THE ITEM DOES NOT HOLD IS REFUSED, rather than answered with another file.
+    const absent = await bytesOf.readAttachment(ITEM.itemKey, 'ZZZZZZZZ')
+    expect(absent.ok).toBe(false)
+    if (absent.ok) return
+    expect(absent.failure.code).toBe('attachment-unreadable')
   })
 
   it('returns the page that was asked for, with the tool\'s own header removed', async () => {
@@ -270,7 +314,7 @@ describe.skipIf(!live)('the configured library, through the product\'s own clien
     // value, and an outage must not become a successful read, an empty corpus, or a fixture.
     const dead = new ZoteroProvider(
       { apiBase: 'http://127.0.0.1:23118/api', localLibraryPath: LIBRARY_PATH, mcpServerName: 'zotero', timeoutMs: 5_000 },
-      (url, init) => fetch(url, { signal: init.signal }),
+      (url, init) => fetch(url, init),
       { get: name => registrations.get(name) },
     )
     const collection = await dead.readCollection(COLLECTION)

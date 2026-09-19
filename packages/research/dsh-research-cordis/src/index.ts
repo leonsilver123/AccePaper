@@ -685,8 +685,15 @@ export class ResearchEngine extends Service {
           mcpServerName: library.mcpServerName,
           ...(library.timeoutMs === undefined ? {} : { timeoutMs: library.timeoutMs }),
           ...(library.pageSize === undefined ? {} : { pageSize: library.pageSize }),
+          // PASSED THROUGH, NOT RESOLVED HERE. The policy is the provider's own setting and its
+          // constructor is where it is validated, so a value naming no policy fails THIS load rather
+          // than leaving a run under a policy the deployment did not choose.
+          ...(library.attachments === undefined ? {} : { attachments: library.attachments }),
         },
-        (url, init) => fetch(url, { signal: init.signal }),
+        // THE INIT IS FORWARDED WHOLE. The attachment route is read with its redirect visible — on a
+        // real library the redirect IS the answer — so a wrapper that kept only the signal would make
+        // this HTTP layer follow a `file://` location and fail.
+        (url, init) => fetch(url, init),
         // READ LAZILY: the loader starts entries concurrently, so `tools` may not exist yet when this
         // constructor runs, and a port that resolved it once would be permanently undefined.
         {

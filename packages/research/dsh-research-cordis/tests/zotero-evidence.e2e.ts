@@ -104,7 +104,7 @@ describe.skipIf(!live)('the deployment\'s reviewer, reading the passage the libr
   function toolRegistry(): {
     get?: (name: string) => { execute(args: unknown, exec: { readonly signal: AbortSignal }): Promise<unknown> } | undefined
   } | undefined {
-    return ctxRef?.get('tools') as ReturnType<typeof toolRegistry>
+    return ctxRef?.get('tools')
   }
 
   beforeAll(async () => {
@@ -140,7 +140,7 @@ describe.skipIf(!live)('the deployment\'s reviewer, reading the passage the libr
 
     const provider = new ZoteroProvider(
       { apiBase: API_BASE, localLibraryPath: 'users/0', mcpServerName: 'zotero', timeoutMs: 60_000 },
-      (url, init) => fetch(url, { signal: init.signal }),
+      (url, init) => fetch(url, init),
       { get: name => toolRegistry()?.get?.(name) },
     )
     read = await readRegistrations(provider, [ITEM])

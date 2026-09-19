@@ -39,8 +39,24 @@
 // cannot be told apart the reply is NOT evidence, and the route that cannot be separated — the
 // full-text rendering — is reachable only as navigation. A page marker does not make a reply clean
 // either: the page route's envelope is stripped by the same rule, and `where` names what was removed.
+//
+// THE ENDPOINT NAMES AN ATTACHMENT'S FILE, IT DOES NOT SERVE IT. Measured 2026-09-19 against Zotero
+// 9.0.6: `GET {apiBase}/{library}/items/{attachmentKey}/file` answers `302` with a
+// `Location: file:///…/storage/<key>/<name>.pdf` and an empty body, and following that redirect is
+// refused by the HTTP layer ("URL scheme must be a HTTP(S) scheme"). So reading a file is TWO steps —
+// the endpoint says where the file is, and the bytes are read from THERE — which is why
+// {@link ZoteroProvider.readAttachment} resolves a location instead of just streaming a response. A
+// location that is not a file on this machine is refused rather than followed, and no path ever
+// leaves this module: what a caller receives is the bytes with the version and the hash they were
+// read at.
+//
+// AND READING A FILE IS THE DEPLOYMENT'S DECISION. {@link ZoteroAttachmentPolicy} is `'none'` unless
+// a deployment states otherwise, and under `'none'` nothing is requested at all — so a deployment
+// that says nothing about it behaves exactly as it did before the capability existed.
 
 import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 import { checkBibtexEntry, literatureIdOf } from './zotero-bibliography.ts'
 import type {
@@ -68,6 +84,68 @@ export interface ZoteroProviderConfig {
   readonly timeoutMs?: number
   /** How many items one page asks for. */
   readonly pageSize?: number
+  /**
+   * Whether this deployment reads an attachment's own bytes, and where from.
+   *
+   * OMITTED IS `'none'`, AND THAT READS NOTHING: {@link ZoteroProvider.readAttachment} refuses with
+   * `attachment-disabled` before it makes a request, so a deployment that states nothing here keeps
+   * exactly the behaviour it had before the capability existed. `'local-cache'` states that this
+   * deployment's library keeps its files on the machine the provider runs on, which is what makes
+   * reading them a decision the deployment makes rather than a caller.
+   */
+  readonly attachments?: ZoteroAttachmentPolicy
+}
+
+/**
+ * Whether this deployment reads an attachment's own bytes, and where from.
+ *
+ * `'local-cache'` states that this deployment's library keeps its files on this machine and that the
+ * provider may read them; `'none'` reads nothing. A DEPLOYMENT setting for the same reason
+ * {@link ZoteroProviderConfig.apiBase} is: which library's files are on this disk is a fact about the
+ * machine, never a request parameter.
+ */
+export type ZoteroAttachmentPolicy = 'none' | 'local-cache'
+
+/** Every {@link ZoteroAttachmentPolicy}. */
+export const ATTACHMENT_POLICIES: readonly ZoteroAttachmentPolicy[] = ['none', 'local-cache']
+
+/**
+ * Whether a value names an attachment policy.
+ *
+ * @param value - the value a deployment declared, or any value read from configuration.
+ * @returns true when the value names a policy.
+ */
+export function isAttachmentPolicy(value: unknown): value is ZoteroAttachmentPolicy {
+  return typeof value === 'string' && (ATTACHMENT_POLICIES as ReadonlyArray<string>).includes(value)
+}
+
+/**
+ * The policy a deployment has when it declares none: no attachment file is read.
+ *
+ * THE DEFAULT IS THE ABSENCE OF THE CAPABILITY. Reading a file off the machine is opted into, so an
+ * undeclared deployment cannot begin doing it because a field was added to the code.
+ */
+export const DEFAULT_ATTACHMENT_POLICY: ZoteroAttachmentPolicy = 'none'
+
+/**
+ * Resolve the deployment's attachment policy.
+ *
+ * AN EXPLICIT RESOLUTION STEP in the implementation that owns the setting, and it VALIDATES as it
+ * resolves: the value arrives from `cordis.yml` as untyped YAML, so a typo fails the load instead of
+ * leaving a deployment running under a policy it did not choose.
+ *
+ * @param declared - the policy the deployment stated, if it stated one.
+ * @returns the declared policy, or {@link DEFAULT_ATTACHMENT_POLICY} when none was declared.
+ * @throws {Error} when the value names no policy, naming the field and the accepted values.
+ */
+export function resolveAttachmentPolicy(declared: unknown): ZoteroAttachmentPolicy {
+  if (declared === undefined) return DEFAULT_ATTACHMENT_POLICY
+  if (!isAttachmentPolicy(declared)) {
+    throw new Error(
+      `[research] \`attachments\` must be one of ${ATTACHMENT_POLICIES.join(' | ')}, got ${JSON.stringify(declared)}`,
+    )
+  }
+  return declared
 }
 
 /**
@@ -160,6 +238,10 @@ export type ZoteroReadFailureCode =
   | 'passage-unrecognized'
   /** More than one PDF attachment could have answered, so which one did is not establishable. */
   | 'passage-unattributable'
+  /** This deployment did not enable reading attachment files, so no file is read. */
+  | 'attachment-disabled'
+  /** The named attachment is not on the item, is not a PDF, or its bytes could not be read. */
+  | 'attachment-unreadable'
 
 /** One refusal, naming what failed and where. */
 export interface ZoteroReadFailure {
@@ -204,6 +286,31 @@ export interface ZoteroAttachment {
   readonly version: number
   readonly filename?: string
   readonly contentType?: string
+}
+
+/**
+ * One attachment's own bytes, with what a reader needs to trust them.
+ *
+ * WHAT MAKES THIS THE FILE AND NOT A COPY OF SOMETHING ELSE. `attachment.version` is the version the
+ * bytes were read at, established by reading the attachment's record before the bytes and again
+ * after them and refusing a file that moved in between; `sha256` is over
+ * {@link ZoteroAttachmentFile.bytes} exactly as returned, so a reader that stores the file can show
+ * the stored copy is the one this read produced; `size` is that byte count. None of the three
+ * implies another, so all three travel.
+ *
+ * AND IT NAMES NO PATH. Where this machine keeps the file is a fact about this disk: a record that
+ * travels — into a package, a report, a `.bib` — carries the version and the hash instead. The same
+ * rule the bibliography writer follows for the library's `file` field.
+ */
+export interface ZoteroAttachmentFile {
+  /** The file's bytes, exactly as read. */
+  readonly bytes: Uint8Array
+  /** SHA-256 over {@link ZoteroAttachmentFile.bytes}, as returned. */
+  readonly sha256: string
+  /** How many bytes {@link ZoteroAttachmentFile.bytes} holds. */
+  readonly size: number
+  /** The attachment the bytes belong to, at the version they were read at. */
+  readonly attachment: ZoteroAttachment
 }
 
 /**
@@ -317,12 +424,26 @@ export interface CollectionHit {
   readonly authors: ReadonlyArray<string>
 }
 
-/** A `fetch`-shaped function; injected so the read is testable without a library. */
-export type FetchLike = (url: string, init: { readonly signal: AbortSignal }) => Promise<{
+/**
+ * A `fetch`-shaped function; injected so the read is testable without a library.
+ *
+ * A CALLER MUST FORWARD THE INIT IT IS GIVEN, not only the signal: the attachment route is read with
+ * its redirect visible because on a real library the redirect IS the answer, and a wrapper that
+ * dropped `redirect` would make the HTTP layer follow a `file://` location and fail.
+ */
+export type FetchLike = (url: string, init: {
+  readonly signal: AbortSignal
+  /** How a redirect is handled, when the route being read answers one that carries the answer. */
+  readonly redirect?: 'follow' | 'manual'
+}) => Promise<{
   readonly ok: boolean
   readonly status: number
+  /** The response's headers, where a route answers with a location rather than a body. */
+  readonly headers: { get(name: string): string | null }
   /** The response body as text. */
   readonly text: () => Promise<string>
+  /** The response body as bytes; a library that streams a file answers it here. */
+  readonly arrayBuffer: () => Promise<ArrayBuffer>
 }>
 
 /** The metadata tools this provider calls, as `ctx.tools` hands them over. */
@@ -342,9 +463,11 @@ export class ZoteroProvider {
   private readonly tools: ZoteroToolPort
   private readonly timeoutMs: number
   private readonly pageSize: number
+  /** The resolved attachment policy; `'none'` unless this deployment enabled reading files. */
+  private readonly attachments: ZoteroAttachmentPolicy
 
   /**
-   * @param config - the endpoint, the library, and the MCP namespace.
+   * @param config - the endpoint, the library, the MCP namespace, and whether files may be read.
    * @param fetchImpl - how HTTP is performed; the host's `fetch` by default.
    * @param tools - the tool registry the MCP client registered onto.
    */
@@ -354,6 +477,7 @@ export class ZoteroProvider {
     this.tools = tools
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.pageSize = config.pageSize ?? DEFAULT_PAGE_SIZE
+    this.attachments = resolveAttachmentPolicy(config.attachments)
   }
 
   /**
@@ -748,13 +872,86 @@ export class ZoteroProvider {
   }
 
   /**
-   * One item's PDF attachments, as the local API lists them.
+   * One attachment's own bytes: the file itself, not the words a tool extracted from it.
+   *
+   * A SOURCE IS READ AT ONE VERSION OR NOT AT ALL, AND A FILE IS A SOURCE. The attachment's record is
+   * read before the bytes and again after them, and a file that moved in between is REFUSED: the
+   * bytes would still be real, but calling them the file a passage was read from would not be, and
+   * that is the only thing a record of them is used for. There is deliberately NO retry here, unlike
+   * {@link ZoteroProvider.readSource}: the two reads that make a source are two views of one moment,
+   * while a re-read after a moved file would produce a coherent record of a DIFFERENT file than the
+   * one a judgement about this source was made from.
+   *
+   * WHERE THE BYTES COME FROM. On a real library the file route answers a POINTER — a `file://`
+   * location — rather than the file, so the read is two steps; see the module header for the
+   * measurement. A library that streams the bytes instead is used as it arrives.
+   *
+   * @param itemKey - the item the attachment belongs to; the pair must name one file.
+   * @param attachmentKey - the attachment whose bytes are wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the bytes with the version read at and the hash over them, or why no file was read.
+   */
+  async readAttachment(
+    itemKey: string,
+    attachmentKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly file: ZoteroAttachmentFile } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    // THE CAPABILITY IS THE DEPLOYMENT'S, CHECKED BEFORE ANYTHING IS ASKED FOR. An undeclared policy
+    // resolves to `'none'`, so this refusal is where the capability simply is not there — a caller
+    // cannot reach a file by naming one, and no request leaves the process.
+    if (this.attachments === 'none') {
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-disabled',
+          detail: 'this deployment reads no attachment files (`attachments` is `none`), so the file'
+            + ` of '${attachmentKey}' was not read and nothing was requested`,
+        },
+      }
+    }
+    const before = await this.readAttachmentRecord(itemKey, attachmentKey, signal)
+    if (!before.ok) return before
+    const bytes = await this.readAttachmentBytes(attachmentKey, signal)
+    if (!bytes.ok) return bytes
+    // THE HALF THAT MATTERS is this one: the first read says what the file was, and the second says
+    // what it still is once the bytes have been taken from the machine.
+    const after = await this.readAttachmentRecord(itemKey, attachmentKey, signal)
+    if (!after.ok) return after
+    if (after.value.version !== before.value.version) {
+      return {
+        ok: false,
+        failure: {
+          code: 'version-moved',
+          detail: `attachment '${attachmentKey}' of '${itemKey}' was at version`
+            + ` ${String(before.value.version)} and is at ${String(after.value.version)}; the file was`
+            + ' replaced while it was being read, so these bytes belong to no version a passage of this'
+            + ' source could have been read at',
+        },
+      }
+    }
+    return {
+      ok: true,
+      file: {
+        bytes: bytes.value,
+        sha256: createHash('sha256').update(bytes.value).digest('hex'),
+        size: bytes.value.byteLength,
+        attachment: before.value,
+      },
+    }
+  }
+
+  /**
+   * One item's attachments, as the local API lists them.
+   *
+   * EVERY ATTACHMENT, NOT ONLY THE PDFs: a caller that named an attachment has to be told that the
+   * file it named is not one this provider reads, and a list already filtered to PDFs would report
+   * that as the attachment not existing at all.
    *
    * @param itemKey - the item whose attachments are wanted.
    * @param signal - cancellation from the caller.
-   * @returns the PDF attachments, or why they could not be listed.
+   * @returns the attachments, or why they could not be listed.
    */
-  private async readPdfAttachments(
+  private async readAttachments(
     itemKey: string,
     signal?: AbortSignal,
   ): Promise<{ readonly ok: true; readonly value: ReadonlyArray<ZoteroAttachment> }
@@ -777,7 +974,7 @@ export class ZoteroProvider {
         },
       }
     }
-    const pdfs = read.value.flatMap((entry): ZoteroAttachment[] => {
+    const children = read.value.flatMap((entry): ZoteroAttachment[] => {
       const child = entry as {
         readonly key?: unknown
         readonly version?: unknown
@@ -786,7 +983,6 @@ export class ZoteroProvider {
       if (child === null || typeof child !== 'object') return []
       if (typeof child.key !== 'string' || typeof child.version !== 'number') return []
       if (child.data?.itemType !== 'attachment') return []
-      if (child.data.contentType !== 'application/pdf') return []
       return [{
         key: child.key,
         version: child.version,
@@ -794,7 +990,163 @@ export class ZoteroProvider {
         ...(typeof child.data.contentType === 'string' ? { contentType: child.data.contentType } : {}),
       }]
     })
-    return { ok: true, value: pdfs }
+    return { ok: true, value: children }
+  }
+
+  /**
+   * One item's PDF attachments.
+   *
+   * @param itemKey - the item whose PDFs are wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the PDF attachments, or why they could not be listed.
+   */
+  private async readPdfAttachments(
+    itemKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly value: ReadonlyArray<ZoteroAttachment> }
+    | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const attachments = await this.readAttachments(itemKey, signal)
+    if (!attachments.ok) return attachments
+    return { ok: true, value: attachments.value.filter(entry => entry.contentType === 'application/pdf') }
+  }
+
+  /**
+   * One attachment of one item, as the item's own children list it.
+   *
+   * WHY THE CHILDREN LIST AND NOT THE ATTACHMENT'S ITEM RECORD. Measured 2026-09-19: the item route
+   * answers `404` for a key the library does not hold, which arrives as an unreadable ENDPOINT — the
+   * failure an outage produces — while the list says plainly which attachments the item has. The list
+   * is also the read this provider already performs for a page, so what a caller listed and what this
+   * read checks against are one source of truth rather than two routes that could disagree.
+   *
+   * @param itemKey - the item the attachment must belong to.
+   * @param attachmentKey - the attachment wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the attachment with its own version, or why it is not one PDF of this item.
+   */
+  private async readAttachmentRecord(
+    itemKey: string,
+    attachmentKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly value: ZoteroAttachment } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const attachments = await this.readAttachments(itemKey, signal)
+    if (!attachments.ok) return attachments
+    const found = attachments.value.find(entry => entry.key === attachmentKey)
+    if (found === undefined) {
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `'${itemKey}' holds no attachment '${attachmentKey}'`
+            + (attachments.value.length === 0
+              ? ', and no attachment at all'
+              : ` (it holds ${attachments.value.map(entry => entry.key).join(', ')})`),
+        },
+      }
+    }
+    // A FILE THIS PROVIDER DOES NOT READ IS NAMED AS ITSELF. Saying "no such attachment" for a page
+    // image or a snapshot would send a reader looking for a key that is there.
+    if (found.contentType !== 'application/pdf') {
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `attachment '${attachmentKey}' of '${itemKey}' is not a PDF (its content type is`
+            + ` ${found.contentType ?? 'not declared'})`,
+        },
+      }
+    }
+    return { ok: true, value: found }
+  }
+
+  /**
+   * One attachment's bytes, over the local endpoint's file route.
+   *
+   * THE ENDPOINT NAMES THE FILE; IT DOES NOT SERVE IT. Measured 2026-09-19: the route answers `302`
+   * with a `file://` location and an empty body, and the redirect must be READ rather than followed —
+   * an HTTP client that follows it is refused by its own scheme rule. A response that does carry the
+   * bytes is used as it arrives, so a library that streams files works through the same call.
+   *
+   * @param attachmentKey - the attachment whose file is wanted.
+   * @param signal - cancellation from the caller.
+   * @returns the file's bytes, or why they could not be read.
+   */
+  private async readAttachmentBytes(
+    attachmentKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly ok: true; readonly value: Uint8Array } | { readonly ok: false; readonly failure: ZoteroReadFailure }> {
+    const url = `${this.config.apiBase}/${this.config.localLibraryPath}/items/${attachmentKey}/file`
+    let response: Awaited<ReturnType<FetchLike>>
+    try {
+      response = await this.fetchImpl(url, { signal: this.combined(signal), redirect: 'manual' })
+    } catch (error) {
+      // ZOTERO NOT RUNNING ARRIVES HERE, the same fact {@link ZoteroProvider.getJson} reports, and it
+      // is an OUTAGE rather than an attachment: nothing about this file was established.
+      return {
+        ok: false,
+        failure: {
+          code: 'endpoint-unreadable',
+          detail: `the file of '${attachmentKey}': ${error instanceof Error ? error.message : String(error)}`,
+        },
+      }
+    }
+    if (response.ok) return { ok: true, value: new Uint8Array(await response.arrayBuffer()) }
+    const location = response.headers.get('location')
+    if (location === null) {
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `the file of '${attachmentKey}' answered HTTP ${String(response.status)} without`
+            + ' naming where the file is',
+        },
+      }
+    }
+    if (!location.startsWith('file:')) {
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `the file of '${attachmentKey}' was answered at a '${schemeOf(location)}' location;`
+            + ' this provider reads a file on this machine and follows nothing else',
+        },
+      }
+    }
+    // THE LOCATION IS RESOLVED, NOT TRUSTED. `fileURLToPath` refuses a location whose host is not
+    // this machine, which keeps a file read local for the same reason the endpoint is a deployment
+    // setting rather than a request parameter.
+    let path: string
+    try {
+      path = fileURLToPath(location)
+    } catch {
+      // WHAT REACHES THIS: a location on another host, which `fileURLToPath` refuses, and a location
+      // that is malformed. Neither names a file this provider may read, and the location itself is
+      // not repeated in the refusal — it names where a machine keeps a file.
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `the file of '${attachmentKey}' was named on a host that is not this machine, so it`
+            + ' was not read',
+        },
+      }
+    }
+    try {
+      return { ok: true, value: new Uint8Array(await readFile(path)) }
+    } catch (error) {
+      // THE PATH IS NOT IN THE DETAIL. It names where THIS machine keeps the file, and a failure
+      // sentence travels into records a run's package may carry — the same reason the bibliography
+      // writer emits no `file` field. The code (`ENOENT`, `EACCES`) is what tells an operator where
+      // to look without putting a disk's layout into the product.
+      return {
+        ok: false,
+        failure: {
+          code: 'attachment-unreadable',
+          detail: `the file of '${attachmentKey}' could not be read from local storage`
+            + ` (${errorCodeOf(error)})`,
+        },
+      }
+    }
   }
 
   /**
@@ -938,6 +1290,32 @@ export class ZoteroProvider {
  */
 function libraryIdOf(library: ZoteroLibraryRef): string {
   return library.id
+}
+
+/**
+ * The scheme a location names, for a refusal that must not carry the location itself.
+ *
+ * A refusal sentence travels into records a run's package may carry, and a `file://` location is a
+ * path this machine keeps a file at, so what is reported is the KIND of place the endpoint pointed at
+ * rather than the place.
+ *
+ * @param location - the location an endpoint answered with.
+ * @returns the scheme, or that the location states none.
+ */
+function schemeOf(location: string): string {
+  const colon = location.indexOf(':')
+  return colon === -1 ? 'no scheme' : location.slice(0, colon)
+}
+
+/**
+ * The code a filesystem error carries, when it carries one.
+ *
+ * @param error - the thrown value.
+ * @returns the code Node's `fs` sets (`ENOENT`, `EACCES`, …), or that it stated none.
+ */
+function errorCodeOf(error: unknown): string {
+  const code = (error as { readonly code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : 'no code given'
 }
 
 /**

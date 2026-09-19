@@ -61,15 +61,23 @@ function fetchOver(page: string, children: ReadonlyArray<unknown> = [attachment(
   return (url) => {
     const path = url.split('?')[0] ?? ''
     if (path.endsWith('/children')) {
-      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(children)) })
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => Promise.resolve(JSON.stringify(children)),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      })
     }
     const itemKey = /\/items\/([A-Z0-9]+)$/u.exec(path)?.[1]
     return Promise.resolve({
       ok: true,
       status: 200,
+      headers: { get: () => null },
       text: () => Promise.resolve(
         itemKey === undefined ? page : JSON.stringify(byKey.get(itemKey) ?? {}),
       ),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
     })
   }
 }
@@ -231,9 +239,11 @@ describe('a collection read as the corpus', () => {
       call += 1
       if (call === 1) {
         return Promise.resolve({
-          ok: true, status: 200, text: () => Promise.resolve(
+          ok: true, status: 200, headers: { get: () => null },
+          text: () => Promise.resolve(
             JSON.stringify(Array.from({ length: 100 }, (_, i) =>
               (JSON.parse(record(`K${String(i)}`)) as ReadonlyArray<unknown>)[0]))),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
         })
       }
       return Promise.reject(new Error('the connection dropped'))

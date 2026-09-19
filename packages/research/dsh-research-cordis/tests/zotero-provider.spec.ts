@@ -44,6 +44,9 @@ const BIBTEX = String.raw`@article{rocheWhatHappensWhen2020,
 /**
  * A `fetch` that answers from a script, one page at a time.
  *
+ * NO HEADERS AND NO BYTES, which is what a JSON route needs: this stand-in serves records, and the
+ * file route that answers a location rather than a body is exercised in `zotero-attachment.spec.ts`.
+ *
  * @param pages - the bodies to answer with, in order; a page that throws is a read that failed.
  * @param onUrl - called with each URL, so a case can assert what was asked for.
  * @returns the fetch function.
@@ -58,7 +61,13 @@ function scriptedFetch(
     const page = pages[Math.min(index, pages.length - 1)]
     index += 1
     if (page instanceof Error) return Promise.reject(page)
-    return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(page ?? '[]') })
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: () => Promise.resolve(page ?? '[]'),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    })
   }
 }
 
@@ -164,7 +173,9 @@ describe('reading one source', () => {
       return Promise.resolve({
         ok: true,
         status: 200,
+        headers: { get: () => null },
         text: () => Promise.resolve(JSON.stringify(record('UA5MIGG3', version))),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       })
     }
     const read = await new ZoteroProvider({
