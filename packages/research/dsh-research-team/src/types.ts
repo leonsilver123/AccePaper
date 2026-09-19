@@ -904,6 +904,137 @@ export interface ResearchRunSnapshot {
    * different fact from a write that was attempted and refused.
    */
   readonly runPersistence: ResearchRunPersistence | null
+  /**
+   * The run's working directory: where it is, what it projects, and what is wrong with it.
+   *
+   * THE PANEL'S VIEW OF THE ONE DOCUMENT THE RUN MAINTAINS. A person who intends to edit the file
+   * has to know which version of the document the copy on disk is, whether the directory still
+   * matches the manifest that names it, and whether a projection failed — and the last of these has
+   * no other home: it is recorded on the run's audit log and reported here, because a directory that
+   * was never written looks exactly like one that was.
+   *
+   * Null when this deployment configured no directory, which is a different fact from a directory
+   * that projects nothing.
+   */
+  readonly manuscriptDirectory: ResearchManuscriptDirectory | null
+}
+
+/**
+ * One run's working directory, as the panel reads it.
+ *
+ * TWO STALENESS FACTS AND THEY ARE DISTINGUISHABLE: `edited` is about the files on disk, and
+ * `runMoved` is about the run. The remedies differ — a re-projection for the first, a re-render for
+ * the second — so a view that showed one flag would send a person to the wrong repair.
+ */
+export interface ResearchManuscriptDirectory {
+  /** The directory the run's document is written to. */
+  readonly directory: string
+  /** Whether the directory holds a manifest this build can read. */
+  readonly projected: boolean
+  /** The document version the directory projects, or null when it projects none. */
+  readonly projectedVersion: number | null
+  /** The document version the run holds now, or null when it holds none. */
+  readonly currentVersion: number | null
+  /** Whether the run holds a version the directory does not project. */
+  readonly runMoved: boolean
+  /** Files on disk whose bytes are not the ones the manifest recorded. */
+  readonly edited: ReadonlyArray<string>
+  /** One sentence naming what is wrong and what repairs it; empty when nothing is. */
+  readonly drift: string
+  /**
+   * Why the last projection failed, when one did.
+   *
+   * Read off the run's own audit log, not from this process's memory: a run read back from its file
+   * in a later process reports the failure the run recorded.
+   */
+  readonly projectionError?: string
+}
+
+/** A person handing an edited document file back, as the panel asks for it. */
+export interface ResearchManuscriptImportRequest {
+  readonly runId: string
+  /**
+   * Which of the run's files is being handed back.
+   *
+   * A FORMAT AND NOT A PATH. The file is read from the run's own working directory, which the
+   * deployment configured; letting a client name a path would let it point the import at any file on
+   * the host, and the deployment setting is where that decision belongs.
+   */
+  readonly format: string
+  /**
+   * The run revision and document version the editor read before editing.
+   *
+   * Both are required by the operation. A caller that cannot name the state it edited is asking the
+   * pipeline to adopt bytes against whatever the run happens to hold.
+   */
+  readonly expectedRevision?: number
+  readonly expectedManuscriptVersion?: number
+}
+
+/** What an import published, and what the round trip did not carry back. */
+export interface ResearchManuscriptImport {
+  readonly runId: string
+  /** The directory the file was read from and the new version was projected back into. */
+  readonly directory: string
+  /** The path inside it the file was read from. */
+  readonly path: string
+  /** SHA-256 of the bytes read. */
+  readonly fileSha256: string
+  /** The document version this replaced. */
+  readonly replacedVersion: number
+  /** The new document version, as the registry now holds it. */
+  readonly version: number
+  readonly contentHash: string
+  /** The sections the file's headings matched, by section id. */
+  readonly matched: ReadonlyArray<string>
+  /** Headings in the file that name no section of this document. */
+  readonly unmatchedHeadings: ReadonlyArray<string>
+  /** Sections the file says nothing about, which were carried forward untouched. */
+  readonly unmentionedSections: ReadonlyArray<string>
+  /**
+   * What the round trip through this format did not carry back.
+   *
+   * THE LOSSES ARE THE RECORD. A `.docx` loses comments, cross-reference fields and embedded media
+   * that a `.tex` keeps; the operation states which ones held rather than reporting an import that
+   * looks exact.
+   */
+  readonly losses: ReadonlyArray<{ readonly part: string; readonly reason: string }>
+  /** Whether the new version reached the run's durable snapshot. */
+  readonly persisted: boolean
+  readonly persistenceError?: string
+  /** The working directory as it stands after the import. */
+  readonly manuscriptDirectory: ResearchManuscriptDirectory | null
+}
+
+/** A request to re-render the typeset form over the document the run now holds. */
+export interface ResearchMaterializeRequest {
+  readonly runId: string
+}
+
+/** What a re-render did, or why it was not needed. */
+export interface ResearchMaterializeResult {
+  readonly runId: string
+  /** Whether a new typeset version was published. */
+  readonly materialized: boolean
+  /**
+   * One sentence: why it was not needed, or what was re-rendered.
+   *
+   * Always present. `materialized: false` with no sentence would leave a caller unable to tell "the
+   * form is already a render of this document" from "this deployment compiles nothing".
+   */
+  readonly reason: string
+  /** The document version the run holds. */
+  readonly documentVersion: number | null
+  /** The document version the typeset form was a render of before this call, if any. */
+  readonly renderedFromVersion: number | null
+  /** The typeset version this call published, when it published one. */
+  readonly typesetVersion: number | null
+  /** The formats the re-render produced. */
+  readonly producedFormats: ReadonlyArray<string>
+  /** The formats that refused, with the compiler's own words. */
+  readonly refusals: ReadonlyArray<string>
+  /** The working directory as it stands after the call. */
+  readonly manuscriptDirectory: ResearchManuscriptDirectory | null
 }
 
 /** What persisting one run did, or why it did nothing. */

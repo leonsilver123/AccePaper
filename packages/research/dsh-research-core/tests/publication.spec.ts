@@ -1,0 +1,208 @@
+/**
+ * Publishing a new version of an artifact the run already holds, outside a step commit.
+ *
+ * EVERY REFUSAL BELOW IS A WAY OF PUBLISHING SOMETHING NOBODY PRODUCED. The operation exists because
+ * two callers — a person handing a file back, and a repair re-rendering a document a later step moved
+ * under — have no attempt to write through, and a per-slug write beside the commit receipt would
+ * leave the registry and the receipt describing different values.
+ */
+import { describe, expect, it } from 'vitest'
+import {
+  PublicationRefusal, canPublishArtifactVersion, checkPublication, getArtifact,
+  getRunSnapshot, publishArtifactVersion, startStep,
+} from '../src/index.ts'
+import { commitAll, freshStore, passStep, seedRun } from './helpers.ts'
+import { STEPS } from '../src/engine/steps.ts'
+
+/**
+ * A run holding a `manuscript`, at a version a publication can derive from.
+ *
+ * WRITTEN THROUGH THE COMMIT POINT, like every other artifact: `recordArtifact` refuses a write
+ * beside a receipt, and the operation under test is the one that exists because there is no attempt
+ * to write through.
+ */
+function runWithArtifact() {
+  const store = freshStore()
+  const runId = seedRun(store)
+  // THE STEPS BEFORE IT, because `canStart` refuses a step whose declared inputs are not there —
+  // and D3 declares the outline A1..D2 produce.
+  for (const step of STEPS) {
+    if (step.id === 'D3-writing') break
+    passStep(store, runId, step.id)
+  }
+  startStep(store, runId, 'D3-writing')
+  commitAll(store, runId, 'D3-writing', { manuscript: { title: 'the first version' } })
+  const snapshot = getRunSnapshot(store, runId)
+  const meta = snapshot.registry['manuscript']
+  if (meta === undefined) throw new Error('the fixture wrote no manuscript')
+  return { store, runId, meta, revision: snapshot.revision }
+}
+
+describe('a publication writes a new version over the one it derived from', () => {
+  it('advances the version counter, moves the revision, and names what it replaced', () => {
+    const fixture = runWithArtifact()
+    const receipt = publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'the second version' },
+      producer: 'a-person',
+      basis: 'a test published it',
+    })
+    expect(receipt.ref.version).toBe(fixture.meta.ref.version + 1)
+    expect(receipt.replacedVersion).toBe(fixture.meta.ref.version)
+    expect(receipt.replacedHash).toBe(fixture.meta.ref.contentHash)
+    expect(receipt.revision).toBeGreaterThan(fixture.revision)
+    expect(getArtifact(fixture.store, fixture.runId, 'manuscript')).toEqual({ title: 'the second version' })
+  })
+
+  it('records the publication on the run, with the basis it was made for', () => {
+    const fixture = runWithArtifact()
+    const receipt = publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'edited' },
+      producer: 'a-person',
+      basis: 'a person edited the file',
+      detail: { file: 'manuscript.tex' },
+    })
+    const events = getRunSnapshot(fixture.store, fixture.runId).events
+    const published = events.filter(event => event.kind === 'artifact-republished')
+    expect(published).toHaveLength(1)
+    expect(published[0]?.detail).toMatchObject({
+      slug: 'manuscript',
+      producer: 'a-person',
+      basis: 'a person edited the file',
+      replacedVersion: fixture.meta.ref.version,
+      detail: { file: 'manuscript.tex' },
+    })
+    expect(published[0]?.detail).toMatchObject({ ref: { version: receipt.ref.version } })
+    // A PUBLICATION IS NOT A COMMIT: nothing claims a step executed, so a reader asking which steps
+    // produced what is not handed this.
+    expect(events.some(event => event.kind === 'step-executed')).toBe(false)
+  })
+})
+
+describe('what a publication refuses', () => {
+  it('refuses a caller whose revision is not the one the run is at', () => {
+    const fixture = runWithArtifact()
+    expect(() => publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision - 1,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'stale',
+    })).toThrow(/DSH_PUBLISH_REVISION_CONFLICT/u)
+  })
+
+  it('refuses a slug the run does not hold', () => {
+    const fixture = runWithArtifact()
+    expect(() => publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'typeset',
+      expectedRevision: fixture.revision,
+      expectedVersion: 1,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'nothing to publish over',
+    })).toThrow(/DSH_PUBLISH_NO_ARTIFACT/u)
+  })
+
+  it('refuses a value derived from a version the run has left behind', () => {
+    const fixture = runWithArtifact()
+    expect(() => publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version + 4,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'the artifact moved',
+    })).toThrow(/DSH_PUBLISH_ARTIFACT_MOVED/u)
+  })
+
+  it('refuses an empty slug and an unnamed producer', () => {
+    const fixture = runWithArtifact()
+    const base = {
+      runId: fixture.runId,
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'x' },
+      basis: 'a test',
+    }
+    expect(() => publishArtifactVersion(fixture.store, { ...base, slug: '  ', producer: 'a-person' }))
+      .toThrow(/DSH_PUBLISH_NO_SLUG/u)
+    expect(() => publishArtifactVersion(fixture.store, { ...base, slug: 'manuscript', producer: ' ' }))
+      .toThrow(/DSH_PUBLISH_NO_PRODUCER/u)
+  })
+
+  it('refuses a value with no canonical encoding, writing nothing', () => {
+    const fixture = runWithArtifact()
+    expect(() => publishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { map: new Map([['a', 1]]) },
+      producer: 'a-person',
+      basis: 'unencodable',
+    })).toThrow(/DSH_PUBLISH_VALUE_NOT_PERSISTABLE/u)
+    expect(getRunSnapshot(fixture.store, fixture.runId).registry['manuscript']?.ref.version).toBe(fixture.meta.ref.version)
+  })
+
+  it('names every refusal with its own code', () => {
+    const fixture = runWithArtifact()
+    const run = fixture.store.get(fixture.runId)
+    if (run === undefined) throw new Error('the fixture created no run')
+    const refusal = checkPublication(run, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: 99,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'moved',
+    })
+    expect(refusal).toBeInstanceOf(PublicationRefusal)
+    expect(refusal?.code).toBe('DSH_PUBLISH_ARTIFACT_MOVED')
+    expect(checkPublication(run, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'fine',
+    })).toBeNull()
+  })
+})
+
+describe('the read a page makes before offering the control', () => {
+  it('answers the same refusal the operation would raise', () => {
+    const fixture = runWithArtifact()
+    const stale = canPublishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision - 1,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'stale',
+    })
+    expect(stale).toMatchObject({ ok: false, code: 'DSH_PUBLISH_REVISION_CONFLICT' })
+    expect(canPublishArtifactVersion(fixture.store, {
+      runId: fixture.runId,
+      slug: 'manuscript',
+      expectedRevision: fixture.revision,
+      expectedVersion: fixture.meta.ref.version,
+      value: { title: 'x' },
+      producer: 'a-person',
+      basis: 'fine',
+    })).toEqual({ ok: true })
+  })
+})

@@ -25,6 +25,7 @@ import type { StatementSupportAssessor } from './statement-support.ts'
 import type { SourceRecord } from './citation-bindings.ts'
 import type { ResolutionVerifier } from './resolution-verifier.ts'
 import type { ReviewPolicy } from './review-policy.ts'
+import type { ReferenceFileReader } from './reference-files.ts'
 
 /** Per-artifact producer evidence for one step. */
 export interface StepArtifactEvidence {
@@ -57,6 +58,16 @@ export interface StepOutcome {
   /** Core `runStep` outcome of the execute phase. Absent when the step declared no executor. */
   readonly executeStatus?: RunStepStatus
   readonly executeError?: string
+  /**
+   * Why the run's working directory was not updated after this step committed, when it was not.
+   *
+   * PRESENT MEANS THE STEP STILL SUCCEEDED. The projection happens after the commit and its failure
+   * is reported rather than raised — the work exists, and stopping the run because a copy of it did
+   * not land would trade real work for a durability warning. The same failure is recorded on the
+   * run's audit log, which is what the panel and the package checks read; this field is how the
+   * driver's own result states it.
+   */
+  readonly projectionError?: string
 }
 
 /** Full-run result. */
@@ -72,6 +83,15 @@ export interface RunResult {
    * never written looks exactly like one that was, until the process dies.
    */
   readonly checkpointErrors?: ReadonlyArray<string>
+  /**
+   * Working-directory projections that failed, in the order they happened.
+   *
+   * The same posture as {@link RunResult.checkpointErrors} and for the same reason: the step each one
+   * followed has already committed, so the run continues and the failure is stated. An empty list —
+   * or the field's absence — is a run whose document was projected at every step that committed, or
+   * one under a deployment that configured no working directory.
+   */
+  readonly projectionErrors?: ReadonlyArray<string>
 }
 
 /** Per-step override / scenario hooks for the driver. */
@@ -211,6 +231,23 @@ export interface DriveOptions {
    * field for why.
    */
   readonly checkpointAfterStep?: (runId: string, outcome: StepOutcome) => Promise<void> | void
+  /**
+   * The deployment's working-directory root, when it configured one.
+   *
+   * RESOLVED BY THE SERVICE FROM `ctx.research.manuscriptDirectory` and never taken from a request:
+   * the projection writes files, and `runPipeline` is a Remote method, so a client-supplied path
+   * would name a filesystem location. Absent means nothing is projected — which is a different fact
+   * from a projection that failed, and the two are reported differently.
+   */
+  readonly manuscriptDirectory?: string
+  /**
+   * The deployment's attachment reader, when it published one.
+   *
+   * The same seam the package export reads through: the working directory carries `refs-pdf/` too,
+   * and a file is asked for by the identity a reading record names rather than by a path. An absent
+   * reader, or one whose policy is `'none'`, stores nothing and says so in the manifest.
+   */
+  readonly referenceFiles?: ReferenceFileReader
 }
 
 /** Options for driving exactly one step. */
@@ -253,6 +290,10 @@ export interface DriveStepOptions {
   readonly evidenceSourceDoi?: string | undefined
   /** See {@link DriveOptions.revisionRounds}. */
   readonly revisionRounds?: number | undefined
+  /** See {@link DriveOptions.manuscriptDirectory}. */
+  readonly manuscriptDirectory?: string | undefined
+  /** See {@link DriveOptions.referenceFiles}. */
+  readonly referenceFiles?: ReferenceFileReader | undefined
 }
 
 /** Context needed to build the gate verdicts for one step attempt. */

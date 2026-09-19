@@ -173,6 +173,20 @@ export type AuditEventKind =
   | 'step-committed'
   /** A reviewed manuscript candidate was published as the run's official manuscript. */
   | 'manuscript-accepted'
+  /**
+   * A new version of an artifact the run already held was published outside a step commit.
+   *
+   * Its own kind rather than an `'artifact-recorded'`: that one is written by a commit, and a reader
+   * asking which entries a step produced must not be handed the ones a person or a repair produced.
+   */
+  | 'artifact-republished'
+  /**
+   * A run's document could not be projected onto its working directory.
+   *
+   * ONLY FAILURES ARE APPENDED; see `engine/manuscript-projection.ts` for why a success is not an
+   * event.
+   */
+  | 'manuscript-projected'
   | 'rollback'
 
 /**

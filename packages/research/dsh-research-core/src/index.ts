@@ -90,6 +90,29 @@ export type {
   ManuscriptAcceptanceRequest,
 } from './engine/acceptance.ts'
 
+// Republishing a version of an artifact the run already holds. `acceptance.ts` above is this
+// operation for one slug and one reason; this module is it for the two callers that publish outside
+// a commit — a hand-edited file handed back, and a re-render after the document moved under the
+// typeset form — and it carries the same guards, producer and audit record.
+export {
+  PublicationRefusal,
+  canPublishArtifactVersion,
+  checkPublication,
+  publishArtifactVersion,
+} from './engine/publication.ts'
+export type {
+  ArtifactPublicationReceipt,
+  ArtifactPublicationRequest,
+} from './engine/publication.ts'
+
+// The record of projecting a run's document onto a working directory. Only failures are appended:
+// a projection that landed is on disk, which is the record.
+export {
+  manuscriptProjectionFailuresOf,
+  recordManuscriptProjectionFailure,
+} from './engine/manuscript-projection.ts'
+export type { ManuscriptProjectionFailure } from './engine/manuscript-projection.ts'
+
 // ── Batch-2 modules (T07 L0 / T08 citation / T09 gates) ───────────────────────
 // Pure-logic sibling modules, wired into the package entry by the main Agent.
 // Each module owns a subpath index; the symbols below are its STABLE public

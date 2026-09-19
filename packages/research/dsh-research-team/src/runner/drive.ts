@@ -31,6 +31,7 @@ import type {
   StepExecContext,
   StepStatus,
 } from '@deepseek-ai/dsh-research-core'
+import { join } from 'node:path'
 import {
   DEFAULT_EVIDENCE_PROFILE,
   canStart,
@@ -40,6 +41,7 @@ import {
   getRunSnapshot,
   getStepDefinitionById,
   getStepDefinitions,
+  recordManuscriptProjectionFailure,
   rollback,
   runStep,
   setRunInput,
@@ -63,6 +65,8 @@ import type {
   VerdictBuildCtx,
 } from './types.ts'
 import { buildStepVerdicts } from './verdict.ts'
+import { referencePdfPlan } from './package-export.ts'
+import { planManuscriptDirectory, writeManuscriptDirectory } from './manuscript-directory.ts'
 
 export type {
   DriveOptions,
@@ -96,6 +100,64 @@ function stepOptsFrom(runCtx: RunContext, opts: DriveOptions): DriveStepOptions 
     ...(opts.toolDeps !== undefined ? { toolDeps: opts.toolDeps } : {}),
     ...(opts.evidenceSourceDoi !== undefined ? { evidenceSourceDoi: opts.evidenceSourceDoi } : {}),
     ...(opts.revisionRounds !== undefined ? { revisionRounds: opts.revisionRounds } : {}),
+    ...(opts.manuscriptDirectory !== undefined ? { manuscriptDirectory: opts.manuscriptDirectory } : {}),
+    ...(opts.referenceFiles !== undefined ? { referenceFiles: opts.referenceFiles } : {}),
+  }
+}
+
+/**
+ * Project the run's document onto its working directory, when this deployment configured one.
+ *
+ * THE SINGLE PLACE THE DRIVER OBSERVES A COMMIT, and therefore the single place this is written:
+ * `runStep` above either committed or returned a non-success status, and every other caller of the
+ * projection would be guessing which. What is projected is the run's REGISTRY — not the executor's
+ * return value — so the directory cannot describe anything the commit refused.
+ *
+ * A FAILURE HERE DOES NOT FAIL THE STEP. The step has already committed; throwing away real work in
+ * order to complain that a copy of it did not land is the trade `checkpointAfterStep` already
+ * refuses. What must not happen is the failure going unsaid, so it is recorded twice: on the run's
+ * own audit log — which is what the panel and the package checks read — and on the outcome, which is
+ * how the run's result reports it.
+ *
+ * @param store - the run store, after the commit.
+ * @param runId - the run that just committed.
+ * @param stepId - the step whose commit this follows.
+ * @param attemptId - the attempt that committed.
+ * @param opts - the driver options carrying the directory and the deployment's reader.
+ * @returns the failure as one sentence, or undefined when the projection landed or none is wanted.
+ */
+async function projectManuscript(
+  store: ResearchRunStore,
+  runId: string,
+  stepId: string,
+  attemptId: number,
+  opts: DriveStepOptions,
+): Promise<string | undefined> {
+  const root = opts.manuscriptDirectory
+  if (root === undefined) return undefined
+  try {
+    // THE REFERENCE FILES ARE READ HERE, not by the planner, for the same reason the package's are:
+    // the planner decides what the directory may carry and never touches a file. Before the first
+    // step that writes citations this asks for nothing, so a run reads its attachments only over the
+    // steps where it has any.
+    const plan = planManuscriptDirectory(store, runId, {
+      referencePdfs: await referencePdfPlan(store, runId, opts.referenceFiles, opts.sources ?? new Map()),
+    })
+    writeManuscriptDirectory(plan, root)
+    return undefined
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    const version = getRunSnapshot(store, runId).registry['manuscript']?.ref.version
+    recordManuscriptProjectionFailure(store, runId, {
+      stepId,
+      attemptId,
+      // THE DIRECTORY, not the message: a reader told where the projection was aimed can look at it,
+      // and the sentence below is what went wrong rather than where it happened.
+      directory: join(root, runId),
+      reason,
+      ...(version === undefined ? {} : { manuscriptVersion: version }),
+    })
+    return `${stepId} (attempt ${String(attemptId)}): ${reason}`
   }
 }
 
@@ -226,6 +288,12 @@ export async function driveStep(
     }
   }
 
+  // THE STEP COMMITTED. Before the gate, because the gate does not decide whether the work exists:
+  // a blocked or failed step's output IS committed, and the person editing the file has to be able
+  // to see the document the run actually holds. A failure of the projection is reported rather than
+  // raised — see {@link projectManuscript}.
+  const projectionError = await projectManuscript(store, runId, stepId, attemptId, opts)
+
   // Finalize phase — the two ways a step reaches a terminal status, and no third one.
   //
   // AN EMPTY GATE IS FINALIZED BY `completeStep`, the core's empty-gate finalize. For the pipeline's
@@ -319,6 +387,7 @@ export async function driveStep(
     usedRealTool: effectiveKind === 'real_tool_fixture_input',
     readSlugs: [...readSlugs],
     executeStatus: res.status,
+    ...(projectionError === undefined ? {} : { projectionError }),
   }
 }
 
@@ -472,10 +541,12 @@ export async function driveRun(
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
   const checkpointErrors: string[] = []
+  const projectionErrors: string[] = []
   for (const step of getStepDefinitions()) {
     if (opts.stopBefore !== undefined && step.id === opts.stopBefore) break
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
+    if (outcome.projectionError !== undefined) projectionErrors.push(outcome.projectionError)
     await checkpoint(runId, opts, outcome, checkpointErrors)
     // STOP AT THE FIRST STEP THAT DID NOT PASS. Driving on would make the NEXT
     // step's `canStart` guard throw "dependency order violated", which reports the
@@ -492,7 +563,12 @@ export async function driveRun(
     // `kind` distinguishes them, because the driver sets `humanGate` for the human gate only.
     if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
-  return { runId, steps: outcomes, ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }) }
+  return {
+    runId,
+    steps: outcomes,
+    ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }),
+    ...(projectionErrors.length === 0 ? {} : { projectionErrors }),
+  }
 }
 
 /**
@@ -600,6 +676,7 @@ export async function driveRemaining(
   const stepOpts = stepOptsFrom(runCtx, opts)
   const outcomes: StepOutcome[] = []
   const checkpointErrors: string[] = []
+  const projectionErrors: string[] = []
   let started = false
   for (const step of getStepDefinitions()) {
     if (!started) {
@@ -608,13 +685,19 @@ export async function driveRemaining(
     }
     const outcome = await driveStep(store, runId, step.id, stepOpts)
     outcomes.push(outcome)
+    if (outcome.projectionError !== undefined) projectionErrors.push(outcome.projectionError)
     await checkpoint(runId, opts, outcome, checkpointErrors)
     // Same rule as runT19B, including the human-gate distinction: stop at the first step that did
     // not pass, and continue through `gated` only when it is the human gate rather than a hold.
     if (outcome.status !== 'passed' && !(outcome.status === 'gated' && outcome.kind === 'humanGate')) break
   }
   if (!started) throw new Error(`T19B drive: unknown fromStepId '${fromStepId}'`)
-  return { runId, steps: outcomes, ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }) }
+  return {
+    runId,
+    steps: outcomes,
+    ...(checkpointErrors.length === 0 ? {} : { checkpointErrors }),
+    ...(projectionErrors.length === 0 ? {} : { projectionErrors }),
+  }
 }
 
 export { rollback }

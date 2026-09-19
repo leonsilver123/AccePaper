@@ -170,6 +170,7 @@ function project(run: RunResult, store: ResearchRunStore): ResearchRunSnapshot {
         }]
     }),
     packageExport: null,
+    manuscriptDirectory: null,
     runPersistence: null,
   }
 }

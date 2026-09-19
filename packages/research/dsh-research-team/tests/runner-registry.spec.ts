@@ -200,12 +200,12 @@ describe('the Remote snapshot shape is frozen', () => {
       'run' | 'catalog' | 'gates' | 'artifacts' | 'steps' | 'projectRevision'
       | 'evidenceProfile' | 'profileEligible' | 'submissionReady' | 'readinessNote'
       | 'execution' | 'executionError'
-      | 'packageExport' | 'runPersistence'
+      | 'packageExport' | 'runPersistence' | 'manuscriptDirectory'
     >()
     expectTypeOf<keyof RunResult['steps'][number]>().toEqualTypeOf<
       'stepId' | 'status' | 'attemptId' | 'kind' | 'producer' | 'outputSlugs'
       | 'artifacts' | 'verdicts' | 'usedRealTool' | 'readSlugs'
-      | 'executeStatus' | 'executeError'
+      | 'executeStatus' | 'executeError' | 'projectionError'
     >()
     // THE STEP CATALOGUE IS A SECOND SHAPE ON THE SAME BOUNDARY, and it was not pinned. The view
     // reads each step's display name and what it is for from here; a field added, renamed or

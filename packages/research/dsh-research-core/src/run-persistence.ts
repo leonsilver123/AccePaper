@@ -377,6 +377,8 @@ const AUDIT_EVENT_KINDS: ReadonlySet<string> = new Set<string>([
   'step-executed',
   'step-committed',
   'manuscript-accepted',
+  'artifact-republished',
+  'manuscript-projected',
   'rollback',
 ])
 

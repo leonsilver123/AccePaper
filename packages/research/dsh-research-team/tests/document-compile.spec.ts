@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { getArtifact, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import { runT19B } from '../src/runner/drive.ts'
 import {
-  checkCompileRequest, citedKeysOf, compileManuscript, unembeddableFloats,
+  checkCompileRequest, citedKeysOf, compileManuscript, renderDocumentMarkdown, unembeddableFloats,
 } from '../src/runner/document-compile.ts'
 import type {
   CompileFormat, CompiledDocument, DocumentBlock, DocumentCompiler, ManuscriptDocument,
@@ -307,3 +307,66 @@ describe('a run that compiles its document', () => {
     expect(manuscript.packageFiles['manuscript.html']).toBeUndefined()
   })
 })
+
+describe('rendering the document as one Markdown file', () => {
+  it('writes every block kind and the reference list as the paper prints it', () => {
+    const rendered = renderDocumentMarkdown(renderDocument())
+    expect(rendered).toMatch(/^# /u)
+    expect(rendered).toContain('## Results')
+    expect(rendered).toContain('![A drawing.](figures/figure-1.svg)')
+    expect(rendered).toContain('**Figure 2.** A drawing.')
+    expect(rendered).toContain('```mermaid')
+    expect(rendered).toContain('$$s^{*} = s_{0}$$')
+    expect(rendered).toContain('## References')
+    expect(rendered).toContain('1. Chen, Y. Safe and stable. 2026.')
+    expect(rendered.endsWith('\n')).toBe(true)
+  })
+
+  it('leaves the reference heading out of a document that cites nothing', () => {
+    expect(renderDocumentMarkdown({ title: 'T', sections: [], references: [] })).toBe('# T\n')
+  })
+})
+
+describe('a float a format cannot carry', () => {
+  it('names a figure with no raster in a non-HTML format, and a diagram in every one', () => {
+    const document = renderDocument()
+    expect(unembeddableFloats(document, 'latex').map(entry => entry.label)).toEqual(['Figure 1', 'Figure 3'])
+    expect(unembeddableFloats(document, 'html').map(entry => entry.label)).toEqual(['Figure 3'])
+  })
+
+  it('refuses a submission that would claim to carry a float it cannot', () => {
+    const refusals = checkCompileRequest(
+      { document: renderDocument(), format: 'latex', mode: 'submission' },
+      stubCompiler(['latex']),
+    )
+    expect(refusals.map(refusal => refusal.code)).toContain('compile-asset-unembeddable')
+    // A DRAFT LISTS THEM INSTEAD, which is what keeps a half-rendered document from being reported
+    // as a finished one.
+    expect(checkCompileRequest({ document: renderDocument(), format: 'latex', mode: 'draft' }, stubCompiler(['latex'])))
+      .not.toContainEqual(expect.objectContaining({ code: 'compile-asset-unembeddable' }))
+  })
+})
+
+/**
+ * A document carrying one of every block, one figure with a raster and one without.
+ *
+ * @returns the document.
+ */
+function renderDocument(): ManuscriptDocument {
+  return {
+    title: 'A study',
+    sections: [{
+      id: 'results',
+      heading: 'Results',
+      blocks: [
+        { kind: 'prose', text: 'The quantity fell [@k].' },
+        { kind: 'figure', label: 'Figure 1', caption: 'A drawing.', svg: '<svg/>' },
+        { kind: 'figure', label: 'Figure 2', caption: 'A drawing.', svg: '<svg/>', pngBase64: 'AAAA' },
+        { kind: 'diagram', label: 'Figure 3', caption: 'A roadmap.', mermaid: 'graph TD' },
+        { kind: 'equation', label: 'Equation 1', latex: 's^{*} = s_{0}' },
+        { kind: 'table', label: 'Table 1', caption: 'The numbers.', markdown: '| a |\n|---|\n| 1 |' },
+      ],
+    }],
+    references: [{ citeKey: 'k', entry: 'Chen, Y. Safe and stable. 2026.', number: 1 }],
+  }
+}

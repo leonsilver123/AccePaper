@@ -64,3 +64,57 @@ describe('a format this deployment cannot produce', () => {
       .rejects.toThrow(/cannot produce 'html'/u)
   })
 })
+
+describe('reading a document back', () => {
+  it('reads the LaTeX this compiler produced, and states what the round trip lost', async () => {
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc' })
+    if (!compiler.formats.includes('latex')) {
+      // No pandoc on this machine: the refusal path is asserted below.
+      expect(compiler.formats).toEqual([])
+      return
+    }
+    const tex = await compiler.compile({ document: DOCUMENT, format: 'latex', mode: 'draft' })
+    const back = await compiler.read({ format: 'latex', content: tex.content, encoding: 'utf8' })
+    // THE TEXT COMES BACK AS IT WAS WRITTEN, which is what "a LaTeX round trip is nearly exact"
+    // means — and the mathematics survives as display mathematics rather than as an escaped string.
+    expect(back.markdown).toContain('The quantity fell')
+    expect(back.markdown).toContain('s^{*} = s_{0} + v T')
+    // WHAT PANDOC COULD NOT EXPRESS IS REPORTED RATHER THAN SILENTLY LEFT IN THE TEXT.
+    for (const loss of back.losses) {
+      expect(loss.part).not.toBe('')
+      expect(loss.reason.length).toBeGreaterThan(20)
+    }
+  })
+
+  it('reads a DOCX back and says the images were extracted rather than read as floats', async () => {
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc' })
+    if (!compiler.formats.includes('docx')) {
+      expect(compiler.formats).toEqual([])
+      return
+    }
+    const docx = await compiler.compile({ document: DOCUMENT, format: 'docx', mode: 'draft' })
+    const back = await compiler.read({ format: 'docx', content: docx.content, encoding: 'base64' })
+    expect(back.markdown).toContain('The quantity fell')
+    // THE FIGURE CAME BACK AS A LINK TO AN EXTRACTED FILE, which is the loss a Word round trip has
+    // and the reason the run carries the float forward instead of adopting it.
+    expect(back.losses.map(loss => loss.part)).toContain('images')
+  })
+
+  it('refuses a format that cannot be read back, naming it', async () => {
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc' })
+    await expect(compiler.read({ format: 'pdf', content: '', encoding: 'base64' }))
+      .rejects.toThrow(/not a format that can be read back/u)
+    await expect(compiler.read({ format: 'html', content: '<p/>', encoding: 'utf8' }))
+      .rejects.toThrow(/not a format that can be read back/u)
+  })
+
+  it('reports pandoc\'s own words when it cannot read the file', async () => {
+    const compiler = await PandocCompiler.probe({ executable: 'pandoc' })
+    if (!compiler.formats.includes('latex')) {
+      expect(compiler.formats).toEqual([])
+      return
+    }
+    await expect(compiler.read({ format: 'docx', content: 'bm90IGEgZG9jeA==', encoding: 'base64' }))
+      .rejects.toThrow(/./u)
+  })
+})

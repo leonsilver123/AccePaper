@@ -18,10 +18,13 @@
 | `document` | 这个部署拥有哪套文档工具链(`executable`,可选 `latexEngine`) | 不编译:运行照旧导出 Markdown 稿件,并在工件上记录它没有被编译 |
 | `figures` | 哪个解释器装了科研绘图库(`executable`),于是 float 是被**画出来**的而不是以源码形态发出 | 内置渲染器画,每张 float 记下没有库画过它,路线图保持 Mermaid 源码、其编译产物装不下 |
 | `workspace` | 引擎创建的**每个** agent 会话的绝对工作目录 | `process.cwd()` |
+| `casePackDirectory` / `packageDirectory` / `snapshotDirectory` / `manuscriptDirectory` | Case Pack、run 的可复现包、持久快照、run 的工作文档分别写到哪里 | 各自什么都不写:不加载 pack、不导出包、不持久化 run、不投影文档 |
 
 `workspace` 不是可有可无的:`{{cwd}}` 是**严格**系统提示变量,且每个出货 bundle 的 persona 都引用它。没有工作目录的会话会在**提示装配**阶段失败 —— 在任何请求到达提供方**之前**。`prose` 行**不**重复声明目录(`ProseChannelConfig` 把它 `Omit` 掉),所以每个部署只在一处写明它。
 
 ## 已知限制与延期工作
+
+- **工作目录装着一次 run 维护的那一份文档,而它需要一套文档工具链**(2026-09-19):`manuscriptDirectory` 与它旁边三个目录同样解析 —— 一个**部署**设置,因为 `runPipeline` 是 Remote 方法,由请求给出的路径等于让浏览器决定宿主往哪写文件。它的全部用途就是装一份人可以编辑、再交回来的文档,因此**点名它却不点名 `document` 的部署在加载时就被拒**,理由一并给出,而不是在第一次 run 的最后一步才发现。**`PandocCompiler.read` 是编译那道缝的另一个方向**:`.tex` 以文本进、`.docx` 以字节进,回来的是 Markdown 加上这次转换**没有**带回来的东西 —— Word 批注靠 OOXML 包里真实存在的 `word/comments.xml` 部件来判定,所以那是该文件确实有时才报的损失,而不是对每个 `.docx` 都宣称的损失。PDF 与 HTML 都以「读不回来的格式」被拒:一个是渲染产物,另一个不是人编辑的那份文档。**这里没有的**:这张损失表是这个读者**检测到**的东西,不是「其它什么都没丢」的证明 —— pandoc 转换错了却没丢掉的那个 Word 特性不会被点名。
 
 - **PDF 这条路真的在要 PDF,而编译产物装不下的图会被点名而不是丢掉**(2026-09-17,R01/R02):PDF 分支此前传 `-t latex --pdf-engine=…`、取 pandoc 的 stdout 写成 `manuscript.pdf` —— 本次复核复现:**退出码 0、没有 `%PDF-` 头、内容是 LaTeX 文本**。现在它把 LaTeX 源渲染到文件、对**那个文件**跑引擎、把 `.pdf` 按**字节**读回(编译产物的 `encoding: 'base64'`),并拒绝:非零退出、什么文件都没写、或写出的头五个字节不是 `%PDF-` 的引擎。**图需要它所在格式能读懂的渲染**:HTML 内联工具画出的 SVG,LaTeX 不支持 SVG,因此内联**同一个工具、同一份 spec** 产出的 PNG,两者都作为资产随文档一起走(`assets/figure-1.png`),于是一份 `.tex` 在运行之外也能构建。**路线图不是图**:Mermaid 块是源码,因此没有静态渲染的路线图会在两种格式下都被报成 NOT EMBEDDED(`assets.dropped`),而不是被打上一个图号印出来;携带它的投稿级编译会被 `compile-asset-unembeddable` 拒绝。**这里没有的**:不点名绘图 provider 的部署,其路线图仍然只有 Mermaid 一种形态,所以它的包会把那个 float 报成文档装不下的东西。
 

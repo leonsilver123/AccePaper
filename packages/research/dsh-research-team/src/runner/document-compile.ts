@@ -147,6 +147,48 @@ export interface DocumentCompiler {
   /** The formats this compiler can produce on THIS deployment, so a missing engine is known in advance. */
   readonly formats: ReadonlyArray<CompileFormat>
   compile(request: CompileRequest): Promise<CompiledDocument>
+  /**
+   * Read a document back out of one of the formats this compiler produced, when it can.
+   *
+   * OPTIONAL, AND THE ROUND TRIP IS WHY IT EXISTS. A person edits `manuscript.tex` or
+   * `manuscript.docx` and hands it back, and turning those bytes into the document model is a
+   * conversion the toolchain does rather than something this package can parse: a `.docx` is a ZIP of
+   * OOXML and a `.tex` is TeX. A deployment whose compiler cannot read a format refuses that import
+   * with the format named, which is a different fact from a file that could not be read.
+   *
+   * WHAT IT MUST NOT DO is claim the conversion is exact. The reader returns the losses it knows
+   * about, and the caller records them on the run: a `.docx` carries comments, cross-reference fields
+   * and embedded media that no Markdown rendering holds, while a `.tex` holds its text and its
+   * mathematics verbatim.
+   *
+   * @param request - the format, and the file as content or as bytes.
+   * @returns the document as Markdown, and what the conversion did not carry.
+   */
+  read?(request: DocumentReadRequest): Promise<ReadDocument>
+}
+
+/** One document read back, and what the format it was read from could not carry. */
+export interface ReadDocument {
+  /** The document as Markdown, as the reader rendered it. */
+  readonly markdown: string
+  /** What this round trip did not carry back, in the reader's own words. */
+  readonly losses: ReadonlyArray<RoundTripLoss>
+}
+
+/** One thing a round trip through a document format does not carry back unchanged. */
+export interface RoundTripLoss {
+  /** Which part of the document it is about — `images`, `comments`, `cross-references`. */
+  readonly part: string
+  /** What happened to it, stated so a reader knows what to check by hand. */
+  readonly reason: string
+}
+
+/** What a compiler is asked to read back. */
+export interface DocumentReadRequest {
+  readonly format: CompileFormat
+  /** The file's content, encoded as {@link encoding} says. */
+  readonly content: string
+  readonly encoding: 'utf8' | 'base64'
 }
 
 /** Why a compile was refused. */
@@ -174,6 +216,70 @@ const FILE_NAME_BY_FORMAT: Readonly<Record<CompileFormat, string>> = {
   latex: 'manuscript.tex',
   docx: 'manuscript.docx',
   pdf: 'manuscript.pdf',
+}
+
+/**
+ * The path a float's rendered SVG is written to: `figures/<label>.svg`.
+ *
+ * THE LABEL IS THE FLOAT'S OWN NAME, not a number assigned here: the plan numbers a float when it
+ * decides the float exists, and a second numbering is how a caption and a file come to name
+ * different figures.
+ *
+ * @param label - the float's label, as the document carries it.
+ * @returns the path, relative to the directory the document is written in.
+ */
+export function figurePathOf(label: string): string {
+  return `figures/${label.trim().toLowerCase().replace(/\s+/gu, '-')}.svg`
+}
+
+/**
+ * One block of the document as Markdown.
+ *
+ * THE FIGURE IS AN IMAGE LINK rather than the inline SVG the compiler embeds: a directory holds the
+ * renders as their own files, and a Markdown document that inlined a kilobyte of SVG per figure
+ * would be one a person could not read past.
+ *
+ * @param block - the block.
+ * @returns the block's Markdown.
+ */
+function blockAsMarkdown(block: DocumentBlock): string {
+  switch (block.kind) {
+    case 'prose':
+      return block.text
+    case 'figure':
+      return `![${block.caption}](${figurePathOf(block.label)})\n\n**${block.label}.** ${block.caption}`
+    case 'table':
+      return `${block.markdown}\n\n**${block.label}.** ${block.caption}`
+    case 'diagram':
+      return ['```mermaid', block.mermaid, '```', '', `**${block.label}.** ${block.caption}`].join('\n')
+    case 'equation':
+      return `$$${block.latex}$$`
+  }
+}
+
+/**
+ * The document as one Markdown file.
+ *
+ * THE RUN'S DOCUMENT, RENDERED ONCE. This is what the working directory holds as `manuscript.md` and
+ * what a person edits: the same document model the compiler renders, written in the form both this
+ * package and pandoc read back. The reference list is printed with the numbers the document assigns,
+ * which is what the paper itself prints.
+ *
+ * @param document - the document.
+ * @returns the Markdown, ending with exactly one newline.
+ */
+export function renderDocumentMarkdown(document: ManuscriptDocument): string {
+  const blocks: string[] = []
+  for (const section of document.sections) {
+    blocks.push(`## ${section.heading}`, ...section.blocks.map(blockAsMarkdown))
+  }
+  if (document.references.length > 0) {
+    blocks.push(
+      '## References',
+      ...document.references.map((reference, index) => `${String(reference.number ?? index + 1)}. ${reference.entry}`),
+    )
+  }
+  return `${[`# ${document.title}`, ...blocks].join('\n\n').replace(/\n+$/u, '')}\n`
 }
 
 /**
@@ -298,9 +404,109 @@ export async function compileManuscript(
   }
 }
 
+/** One file one compile produced, with what it is. */
+export interface CompiledFile {
+  readonly path: string
+  readonly content: string
+  readonly encoding?: 'utf8' | 'base64'
+  readonly kind: 'document' | 'asset'
+  /** The format a DOCUMENT was compiled to. An asset belongs to a document rather than a format. */
+  readonly format?: CompileFormat
+}
+
+/** Everything one pass over the document's formats produced. */
+export interface ManuscriptCompileResult {
+  /** Every file the pass produced: the documents, and the assets they embed. */
+  readonly files: ReadonlyArray<CompiledFile>
+  /** The formats this deployment declared, as the compile recorded them. */
+  readonly declaredFormats: ReadonlyArray<CompileFormat>
+  /** Which formats a document was actually produced for. */
+  readonly producedFormats: ReadonlyArray<CompileFormat>
+  /** The floats each produced format carries, by format. */
+  readonly embedded: Readonly<Record<string, ReadonlyArray<string>>>
+  /** The floats a format did not carry, with the compiler's reason and the format. */
+  readonly dropped: ReadonlyArray<{ readonly label: string; readonly reason: string; readonly format: string }>
+  /** Every refusal, as `[code] detail`, in the order the formats were asked for. */
+  readonly refusals: ReadonlyArray<string>
+  /** The tool that compiled, or null when this deployment names none. */
+  readonly tool: string | null
+}
+
+/**
+ * Compile the document to every format this deployment declared, and report what each one lost.
+ *
+ * THE PASS IS ONE FUNCTION SO IT CANNOT BE DONE TWICE DIFFERENTLY. E1 renders the document once and
+ * the repair after a hand acceptance re-renders it; a second copy of this loop is how the `.docx` a
+ * journal is handed comes to be a rendering of a different format set than the `.tex` beside it.
+ *
+ * PDF IS ASKED FOR ONLY WHEN THE DEPLOYMENT CAN PRODUCE ONE. `formats` is the compiler's own probe,
+ * so a machine with no LaTeX engine is not asked for a PDF it would refuse — and HTML, LaTeX and DOCX
+ * are ALWAYS requested, even when there is no compiler at all, because a deployment that configured
+ * none must reach the artifact with `compile-compiler-missing` on it. That is a reader's only way to
+ * tell "not compiled" from "compiled badly".
+ *
+ * NOTHING HERE THROWS. A format the compiler refuses is recorded with the compiler's own words, and
+ * the pass continues: the manuscript this run produced is complete without a compiled form, and a
+ * deployment without a compiler is a fact about the deployment.
+ *
+ * @param document - the document to compile, as the writing steps approved it.
+ * @param compiler - the deployment's compiler, or undefined when it named none.
+ * @param mode - whether the result is meant to be the paper. `submission` refuses a float that
+ *   cannot be embedded; the run's own render is a `draft`.
+ * @returns every file the pass produced, and what each format carried.
+ */
+export async function compileManuscriptFormats(
+  document: ManuscriptDocument,
+  compiler: DocumentCompiler | undefined,
+  mode: 'draft' | 'submission' = 'draft',
+): Promise<ManuscriptCompileResult> {
+  const declaredFormats = compiler?.formats ?? []
+  const formats: ReadonlyArray<CompileFormat> = declaredFormats.includes('pdf')
+    ? ['html', 'latex', 'docx', 'pdf']
+    : ['html', 'latex', 'docx']
+  const files: CompiledFile[] = []
+  const refusals: string[] = []
+  const embedded: Record<string, ReadonlyArray<string>> = {}
+  const dropped: Array<{ label: string; reason: string; format: string }> = []
+  const producedFormats: CompileFormat[] = []
+  for (const format of formats) {
+    // WHAT IS COMPILED IS THE DOCUMENT THE MANUSCRIPT ARTIFACT CARRIES — not a document assembled
+    // here. A compiler renders what the writing steps approved, and the step's own contribution is
+    // the rendering, not the paper.
+    const result = await compileManuscript({ document, format, mode }, compiler)
+    if (!result.ok) {
+      refusals.push(...result.refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`))
+      continue
+    }
+    producedFormats.push(format)
+    files.push({
+      path: result.compiled.fileName,
+      content: result.compiled.content,
+      encoding: result.compiled.encoding,
+      kind: 'document',
+      format: result.compiled.format,
+    })
+    // THE ASSETS THE DOCUMENT EMBEDS travel beside it, as bytes, so the compiled file is buildable
+    // outside this run and the figures can be reconciled by their labels rather than by a count.
+    for (const asset of result.compiled.files) {
+      files.push({ path: asset.path, content: asset.base64, encoding: 'base64', kind: 'asset' })
+    }
+    embedded[format] = result.compiled.assets.embedded
+    dropped.push(...result.compiled.assets.dropped.map(entry => ({ ...entry, format })))
+  }
+  return {
+    files,
+    declaredFormats,
+    producedFormats,
+    embedded,
+    dropped,
+    refusals,
+    tool: compiler?.tool ?? null,
+  }
+}
+
 /**
  * The floats a format cannot embed, with the reason for each.
- *
  * A FIGURE NEEDS A RENDERING THE FORMAT UNDERSTANDS (HTML takes the SVG, LaTeX takes the raster) and a
  * DIAGRAM NEEDS A STATIC RENDERING NOBODY HAS PRODUCED: a Mermaid block is source, and a document that
  * prints that source under the caption `Figure 2` has a float the reader cannot see. Reported by label

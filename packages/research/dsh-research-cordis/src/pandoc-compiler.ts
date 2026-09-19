@@ -58,6 +58,25 @@ interface ManuscriptDocument {
   readonly references: ReadonlyArray<{ readonly citeKey: string; readonly entry: string; readonly number?: number }>
 }
 
+/** What a compiler is asked to read back; the seam's own shape, restated (see the note above). */
+interface DocumentReadRequest {
+  readonly format: CompileFormat
+  readonly content: string
+  readonly encoding: 'utf8' | 'base64'
+}
+
+/** One thing a round trip through a document format does not carry back. */
+interface RoundTripLoss {
+  readonly part: string
+  readonly reason: string
+}
+
+/** One document read back, and what the format it was read from could not carry. */
+interface ReadDocument {
+  readonly markdown: string
+  readonly losses: ReadonlyArray<RoundTripLoss>
+}
+
 /** One file a compile produced besides the document — a figure the document embeds. */
 interface CompiledAsset {
   readonly path: string
@@ -516,6 +535,88 @@ export class PandocCompiler {
       throw new Error(result.stderr.trim() === '' ? `exit ${String(result.code)}` : result.stderr.trim())
     }
     return result.stdout
+  }
+
+  /**
+   * Read a document a person handed back, out of one of the formats this compiler produced.
+   *
+   * THE OTHER DIRECTION OF THE SAME SEAM. A `.tex` is TeX and a `.docx` is a ZIP of OOXML, so turning
+   * either into the document model is a conversion the toolchain does rather than something the
+   * research packages parse. What comes back is Markdown — the form the working directory holds and
+   * the form the import assembles from — and this method states what the conversion did NOT carry,
+   * because a reader that reported an exact round trip would be wrong about every Word file.
+   *
+   * @param request - the format, and the file as content or as bytes.
+   * @returns the document as Markdown, and what this format did not carry back.
+   * @throws {Error} when the format is not one that can be read back, or when pandoc exits non-zero.
+   */
+  async read(request: DocumentReadRequest): Promise<ReadDocument> {
+    if (request.format !== 'latex' && request.format !== 'docx') {
+      throw new Error(
+        `'${request.format}' is not a format that can be read back: a PDF is a rendering and an HTML`
+        + ' file is not the document a person edits',
+      )
+    }
+    const losses: RoundTripLoss[] = []
+    if (request.format === 'docx') {
+      const bytes = Buffer.from(request.content, 'base64')
+      // A WORD COMMENT IS STORED IN ITS OWN PART of the OOXML package, so the ZIP's own index says
+      // whether this file had any. Reporting the loss unconditionally would be a claim about every
+      // `.docx`; this reports it when the package really carries comments.
+      if (bytes.includes(Buffer.from('word/comments.xml', 'latin1'))) {
+        losses.push({
+          part: 'comments',
+          reason: 'this document carries Word comments and no Markdown rendering keeps them; anything'
+            + ' a reviewer wrote in one is gone from the version handed back',
+        })
+      }
+      const markdown = await this.readVia(request, ['-f', 'docx', '-t', 'markdown+tex_math_dollars'])
+      if (/!\[[^\]]*\]\(media\//u.test(markdown)) {
+        losses.push({
+          part: 'images',
+          reason: 'pandoc extracted the embedded images into a media folder beside the document and'
+            + ' linked to them; the drawings were not read back as the floats the run holds',
+        })
+      }
+      return { markdown, losses }
+    }
+    const markdown = await this.readVia(request, ['-f', 'latex', '-t', 'markdown+tex_math_dollars'])
+    // RAW TEX THAT SURVIVED THE CONVERSION is a command pandoc could not express in Markdown, and a
+    // reader told the round trip was exact would have no reason to look for it.
+    if (/\\begin\{|^\\[A-Za-z]+$/mu.test(markdown)) {
+      losses.push({
+        part: 'raw-tex',
+        reason: 'this document uses LaTeX commands that have no Markdown form, and they appear in the'
+          + ' result as raw TeX rather than as the structure they described',
+      })
+    }
+    return { markdown, losses }
+  }
+
+  /**
+   * Run pandoc as a reader: a text file on stdin, a `.docx` written to a temporary file first.
+   *
+   * @param request - the file and how its content is encoded.
+   * @param args - pandoc's reader and writer arguments.
+   * @returns pandoc's stdout.
+   * @throws {Error} with pandoc's own stderr when it exits non-zero.
+   */
+  private async readVia(request: DocumentReadRequest, args: ReadonlyArray<string>): Promise<string> {
+    if (request.encoding === 'utf8') return await this.runToStdout(request.content, args)
+    const work = mkdtempSync(join(tmpdir(), 'dsh-read-'))
+    try {
+      // PANDOC READS A `.docx` FROM A PATH, not from a stream: the format is a package, and a
+      // reader that was handed the bytes on stdin would be reading whatever its `-f docx` guessed.
+      const source = join(work, 'returned.docx')
+      writeFileSync(source, Buffer.from(request.content, 'base64'))
+      const result = await runIn(this.config.executable, [...args, source], '', this.timeoutMs, work)
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() === '' ? `exit ${String(result.code)}` : result.stderr.trim())
+      }
+      return result.stdout
+    } finally {
+      rmSync(work, { recursive: true, force: true })
+    }
   }
 
   /** Run pandoc writing its output to a file. */

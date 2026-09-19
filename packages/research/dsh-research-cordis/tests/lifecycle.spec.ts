@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { ResearchEngine } from '../src/index.ts'
 
@@ -65,5 +66,28 @@ describe('ResearchEngine Cordis adapter (P1.6 v2)', () => {
     const runId = ctx.research.createRun()
     ctx.research.setRunInput(runId, 'domain-direction', 'ML')
     expect(ctx.research.canStart(runId, 'A1-landscape')).toBe(true)
+  })
+
+  it('resolves manuscriptDirectory beside the other deployment directories, and refuses it without a document', async () => {
+    const workspace = process.cwd()
+    const ctx = new Context()
+    await ctx.plugin(ResearchEngine, {
+      workspace,
+      manuscriptDirectory: 'manuscripts',
+      document: { executable: 'pandoc-that-is-not-installed' },
+    })
+    // RESOLVED THE WAY EVERY OTHER DIRECTORY IS: relative to the deployment's workspace, so the
+    // engine carries where the files go and the runner-side service writes them.
+    expect(ctx.research.manuscriptDirectory).toBe(join(workspace, 'manuscripts'))
+    await ctx.fiber.dispose()
+  })
+
+  it('refuses manuscriptDirectory with no document toolchain, at load and with the reason', async () => {
+    const ctx = new Context()
+    // A DIRECTORY WHOSE WHOLE PURPOSE IS TO HOLD A DOCUMENT, with nothing to produce one: a
+    // deployment that configured this alone would find out at the last step of its first run.
+    await expect(ctx.plugin(ResearchEngine, { manuscriptDirectory: 'manuscripts' }))
+      .rejects.toThrow(/`manuscriptDirectory` requires `document`/u)
+    expect(ctx.research as ResearchEngine | undefined).toBeUndefined()
   })
 })

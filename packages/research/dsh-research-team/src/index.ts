@@ -36,7 +36,7 @@
 // commits are synchronous observers only, so no event/status observer is
 // needed to keep the durable fold or the guard current.
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -55,6 +55,11 @@ import type {
   ResearchRunSummaryEntry,
   ResearchRunSaveRetry,
   ResearchRunSnapshot,
+  ResearchManuscriptDirectory,
+  ResearchManuscriptImport,
+  ResearchManuscriptImportRequest,
+  ResearchMaterializeRequest,
+  ResearchMaterializeResult,
   ResearchRunStart,
   ResearchStartRequest,
   ResearchPackageExport,
@@ -107,8 +112,19 @@ import type { StatementSupportAssessor } from './runner/statement-support.ts'
 import type { BibliographyWriter } from './runner/bibliography.ts'
 import { sourcesForMode } from './runner/citation-bindings.ts'
 import type { SourceRecord } from './runner/citation-bindings.ts'
-import { renderBibliography, citedAttachments } from './runner/package-export.ts'
-import type { ReferencePdfPlan, ReferencePdfRead } from './runner/package-export.ts'
+import { renderBibliography } from './runner/package-export.ts'
+import { referencePdfPlan } from './runner/package-export.ts'
+import type { ReferencePdfPlan } from './runner/package-export.ts'
+import {
+  describeManuscriptDirectoryDrift, manuscriptDirectoryDrift, planManuscriptDirectory,
+  readDocumentManifest, writeManuscriptDirectory,
+} from './runner/manuscript-directory.ts'
+import {
+  MANUSCRIPT_IMPORT_PRODUCER, MANUSCRIPT_RETURN_FORMATS, assembleImportedManuscript,
+  readManuscriptReturn,
+} from './runner/manuscript-import.ts'
+import type { ManuscriptReturnFormat } from './runner/manuscript-import.ts'
+import { compileManuscriptFormats, renderDocumentMarkdown } from './runner/document-compile.ts'
 import { isReferenceFileReader } from './runner/reference-files.ts'
 import type { ReferenceFileReader } from './runner/reference-files.ts'
 import type { ResolutionVerifier } from './runner/resolution-verifier.ts'
@@ -139,6 +155,9 @@ import {
   getArtifact,
   getRunSnapshot,
   getStepDefinitions,
+  manuscriptProjectionFailuresOf,
+  publishArtifactVersion,
+  recordManuscriptProjectionFailure,
   rollback,
 } from '@deepseek-ai/dsh-research-core'
 import type { AuditEvent, EvidenceProfile } from '@deepseek-ai/dsh-research-core'
@@ -295,6 +314,7 @@ declare module '@deepseek-ai/cordis' {
  * @param execution - whether a driver is on the run in THIS process.
  * @param executionError - why the driver stopped with a failure, when it did.
  * @param saveFailure - why the run's last durable write did not land, when it did not.
+ * @param manuscriptRoot - the deployment's working-directory root, when it configured one.
  * @returns the run, the step catalogue, and the recorded verdicts, artifacts and states.
  */
 function snapshotOf(
@@ -306,6 +326,7 @@ function snapshotOf(
   execution: ResearchRunExecution = 'stopped',
   executionError?: string,
   saveFailure?: string,
+  manuscriptRoot?: string,
 ): ResearchRunSnapshot {
   const snapshot = getRunSnapshot(store, runId)
   const readiness = readinessOfRun(store, runId, evidenceProfile)
@@ -392,6 +413,44 @@ function snapshotOf(
     execution,
     packageExport,
     runPersistence,
+    manuscriptDirectory: manuscriptDirectoryViewOf(store, runId, manuscriptRoot),
+  }
+}
+
+/**
+ * The run's working directory as the panel reads it, or null when none is configured.
+ *
+ * THE AUDIT LOG IS THE HOME OF A FAILURE, not this process's memory: a run read back from its file
+ * in a later process reports the projection failure the run recorded, and a projection that
+ * succeeded is on disk where the manifest already says so.
+ *
+ * @param store - the run store.
+ * @param runId - the run to read.
+ * @param root - the deployment's configured root, or undefined.
+ * @returns the view, or null when no directory is configured.
+ */
+function manuscriptDirectoryViewOf(
+  store: ResearchRunStore,
+  runId: string,
+  root: string | undefined,
+): ResearchManuscriptDirectory | null {
+  if (root === undefined) return null
+  const directory = join(root, runId)
+  const manifest = readDocumentManifest(directory)
+  const currentVersion = getRunSnapshot(store, runId).registry['manuscript']?.ref.version ?? null
+  const drift = manifest === null ? undefined : manuscriptDirectoryDrift(directory, manifest, {
+    manuscriptVersion: currentVersion,
+  })
+  const failure = manuscriptProjectionFailuresOf(getRunSnapshot(store, runId).events).at(-1)
+  return {
+    directory,
+    projected: manifest !== null,
+    projectedVersion: manifest?.manuscriptRef?.version ?? null,
+    currentVersion,
+    runMoved: drift?.runMoved ?? false,
+    edited: drift?.edited ?? [],
+    drift: drift === undefined ? '' : describeManuscriptDirectoryDrift(drift),
+    ...(failure === undefined ? {} : { projectionError: failure.reason }),
   }
 }
 
@@ -494,6 +553,33 @@ function documentWithProse(
 /** Wait one follow interval. */
 async function waitForRead(): Promise<void> {
   await new Promise<void>((resolve) => { setTimeout(resolve, RUN_FOLLOW_TICK_MS) })
+}
+
+/**
+ * The byte count and digest of one compiled file, as the compile record states them.
+ *
+ * @param content - the file's content, encoded as {@link encoding} says.
+ * @param encoding - how the content is encoded; base64 means the bytes are the file.
+ * @returns the two facts every reader of a compiled document needs.
+ */
+function digestsOf(
+  content: string,
+  encoding: 'utf8' | 'base64' | undefined,
+): { readonly bytes: number; readonly sha256: string } {
+  const bytes = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8')
+  return { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+}
+
+/**
+ * The document version a typeset form records it rendered, when it records one.
+ *
+ * @param typeset - the typeset artifact's value, or undefined when the run holds none.
+ * @returns the version, or undefined.
+ */
+function typesetRenderedVersionOf(typeset: unknown): number | undefined {
+  if (typeset === null || typeof typeset !== 'object') return undefined
+  const rendered = (typeset as { readonly manuscriptRef?: { readonly version?: unknown } }).manuscriptRef
+  return typeof rendered?.version === 'number' ? rendered.version : undefined
 }
 
 /**
@@ -771,7 +857,7 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       run.runId,
       store,
-      () => snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence),
+      () => snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence, 'stopped', undefined, undefined, this.hostManuscriptDirectory()),
       // The approval persists through the SAME writer the run did, so a decision is as durable as
       // the run that produced it — and only the persistence half is wanted here. Handing the
       // decision to memory alone left the snapshot saying E2 `gated` after a person had approved
@@ -782,7 +868,7 @@ export class ResearchTeamService extends TypertRemoteService {
       // the projection calls it unready.
       () => persistence,
     )
-    return snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence)
+    return snapshotOf(store, run.runId, evidenceProfile, packageExport, persistence, 'stopped', undefined, undefined, this.hostManuscriptDirectory())
   }
 
   /**
@@ -817,6 +903,21 @@ export class ResearchTeamService extends TypertRemoteService {
    *
    * @returns the declared profile, or {@link DEFAULT_EVIDENCE_PROFILE}.
    */
+  /**
+   * The working-directory root this deployment configured, when it configured one.
+   *
+   * Read off the research engine the way every other deployment setting is, and never from a request:
+   * the projection writes files, and `runPipeline` is a Remote method. The engine refuses at load a
+   * deployment that configures this with no document toolchain, so a root reaching here is one whose
+   * deployment can produce the files the directory is for.
+   *
+   * @returns the resolved root, or undefined.
+   */
+  private hostManuscriptDirectory(): string | undefined {
+    const research = this.ctx.get('research') as { manuscriptDirectory?: string } | undefined
+    return research?.manuscriptDirectory
+  }
+
   /**
    * The document compiler this deployment configured, or undefined when it configured none.
    *
@@ -924,35 +1025,7 @@ export class ResearchTeamService extends TypertRemoteService {
    * @returns the plan the exporter records, whether or not any file was read.
    */
   private async referencePdfPlanOf(store: ResearchRunStore, runId: string): Promise<ReferencePdfPlan> {
-    const reader = this.hostReferenceFiles()
-    if (reader === undefined || reader.policy === 'none') return { policy: 'none' }
-    const requests = citedAttachments(store, runId, this.hostSources())
-    const reads = await Promise.all(requests.map(async (request): Promise<ReferencePdfRead> => {
-      try {
-        const read = await reader.read({
-          sourceIdentity: request.readFrom.sourceIdentity,
-          attachmentKey: request.readFrom.key,
-        })
-        return {
-          citeKey: request.citeKey,
-          readFrom: request.readFrom,
-          file: read.ok
-            ? {
-              key: read.attachmentKey,
-              version: read.attachmentVersion,
-              sha256: read.sha256,
-              base64: read.base64,
-            }
-            : { failure: read.reason },
-        }
-      } catch (error) {
-        // A THROW IS THE READER FAILING, not the file being absent, and both reach a reader as the
-        // reason this source has no file. A throw escaping here would abandon the package for one
-        // library error; the reason still carries the error rather than a location.
-        return { citeKey: request.citeKey, readFrom: request.readFrom, file: { failure: errorMessage(error) } }
-      }
-    }))
-    return { policy: 'local-cache', reads }
+    return await referencePdfPlan(store, runId, this.hostReferenceFiles(), this.hostSources())
   }
 
   /**
@@ -1334,13 +1407,13 @@ export class ResearchTeamService extends TypertRemoteService {
     rememberRun(
       restored.runId,
       restored.store,
-      () => snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted),
+      () => snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted, 'stopped', undefined, undefined, this.hostManuscriptDirectory()),
       () => this.recordRun(run, restored.store).then(recorded => recorded.persistence),
       // A resumed run has stopped driving by the time it can be approved, so the write this resume
       // ended with is what says whether it is on disk.
       () => persisted,
     )
-    return snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted)
+    return snapshotOf(restored.store, restored.runId, evidenceProfile, null, persisted, 'stopped', undefined, undefined, this.hostManuscriptDirectory())
   }
 
   /**
@@ -1444,6 +1517,7 @@ export class ResearchTeamService extends TypertRemoteService {
       active.state,
       active.error,
       save?.error,
+      this.hostManuscriptDirectory(),
     )
   }
 
@@ -1667,6 +1741,301 @@ export class ResearchTeamService extends TypertRemoteService {
   }
 
   /**
+   * Bring the run's working directory up to date with the run, whatever moved.
+   *
+   * TWO REPAIRS AND THEY ARE DIFFERENT, which is why this exists beside the driver's own projection.
+   * The driver projects after every commit, so an ordinary run's directory is current; what it
+   * cannot do is run after an operation that is NOT a commit — a person's hand acceptance, or an
+   * import — because no step ran and there is no place in the driver that observes one. An edited
+   * file left in the directory would be the previous version's text under the current version's
+   * name, which is the one thing the whole round trip exists to prevent.
+   *
+   * A PROJECTION FAILURE IS REPORTED, NOT RAISED, for the same reason the driver's is: the operation
+   * that moved the document has already published it, and the failure is recorded on the run's audit
+   * log where the panel and the package checks read it.
+   *
+   * @param store - the run store.
+   * @param runId - the run whose directory is being brought up to date.
+   * @returns the failure as one sentence, or undefined when it landed or none is wanted.
+   */
+  private async projectManuscriptDirectory(store: ResearchRunStore, runId: string): Promise<string | undefined> {
+    const root = this.hostManuscriptDirectory()
+    if (root === undefined) return undefined
+    try {
+      const plan = planManuscriptDirectory(store, runId, {
+        referencePdfs: await this.referencePdfPlanOf(store, runId),
+      })
+      writeManuscriptDirectory(plan, root)
+      return undefined
+    } catch (error) {
+      const reason = errorMessage(error)
+      const version = getRunSnapshot(store, runId).registry['manuscript']?.ref.version
+      recordManuscriptProjectionFailure(store, runId, {
+        stepId: 'outside-a-step',
+        attemptId: 0,
+        directory: join(root, runId),
+        reason,
+        ...(version === undefined ? {} : { manuscriptVersion: version }),
+      })
+      return reason
+    }
+  }
+
+  /**
+   * Adopt a file a person edited in the run's working directory, as a NEW version of the document.
+   *
+   * THE OTHER HALF OF THE ROUND TRIP. The driver writes the document to disk at every commit so a
+   * person can edit it; this is how an edit comes back. It is an OPERATION and not a read of
+   * whatever is on disk: the file must be one this run projected, the version it was projected from
+   * must be the version the run holds, and the result is published through core's publication
+   * operation — its own guards, its own producer, its own audit record — so the run can state who
+   * produced this version and over what.
+   *
+   * A CHANGED SENTENCE LOSES ITS JUDGEMENT, and that is the mechanism working rather than a defect
+   * to smooth over: the reading record travels with the version, its hashes no longer match the
+   * sentence, and the next typeset refuses the citation. Re-reading is the remedy, exactly as it is
+   * after a revision.
+   *
+   * @param request - the run, the format, and the versions the editor read.
+   * @returns what was published, and what the round trip did not carry back.
+   * @throws {Error} when this process holds no such run, when the deployment configured no working
+   *   directory, when the directory holds no manifest, or when core refuses the publication.
+   */
+  @Remote('importManuscript')
+  async importManuscript(request: ResearchManuscriptImportRequest): Promise<ResearchManuscriptImport> {
+    const active = this.heldRun(request.runId)
+    const root = this.hostManuscriptDirectory()
+    if (root === undefined) {
+      throw new Error(
+        '[research] this deployment configures no manuscript directory, so there is no file to hand back',
+      )
+    }
+    const format = request.format
+    if (!(MANUSCRIPT_RETURN_FORMATS as ReadonlyArray<string>).includes(format)) {
+      throw new Error(
+        `[research] '${format}' is not a format this operation reads back (it reads`
+        + ` ${MANUSCRIPT_RETURN_FORMATS.join(', ')})`,
+      )
+    }
+    const directory = join(root, request.runId)
+    const manifest = readDocumentManifest(directory)
+    if (manifest === null) {
+      throw new Error(
+        `[research] run '${request.runId}' has no document manifest in '${directory}': nothing states`
+        + ' which version of the document the file on disk was projected from',
+      )
+    }
+    const current = getRunSnapshot(active.store, request.runId).registry['manuscript']
+    if (current === undefined) {
+      throw new Error(`[research] run '${request.runId}' holds no document to import over`)
+    }
+    // THE BASELINE IS THE RUN'S, NOT THE FILE'S. A directory projected from a version the run has
+    // left behind cannot be imported: whatever moved in between would be reverted by publishing this
+    // file, and the person editing it was looking at a document the study no longer stands behind.
+    if (manifest.manuscriptRef === null || manifest.manuscriptRef.version !== current.ref.version) {
+      throw new Error(
+        `[research] the file in '${directory}' was projected from document version`
+        + ` ${String(manifest.manuscriptRef?.version ?? 0)} and the run holds version`
+        + ` ${String(current.ref.version)} — re-project the directory, or hand back the file this run`
+        + ' produced',
+      )
+    }
+    if (request.expectedRevision === undefined || request.expectedManuscriptVersion === undefined) {
+      throw new Error(
+        '[research] an import must state the run revision and the document version the editor read —'
+        + ' without them it adopts bytes against whatever the run happens to hold',
+      )
+    }
+    const read = await readManuscriptReturn(directory, format as ManuscriptReturnFormat, manifest, this.hostDocumentCompiler())
+    if (!read.ok) throw new Error(`[research] the file was not imported: ${read.reason}`)
+    const previous = getArtifact(active.store, request.runId, 'manuscript')
+    const assembled = assembleImportedManuscript(previous, read.file.markdown)
+    const receipt = publishArtifactVersion(active.store, {
+      runId: request.runId,
+      slug: 'manuscript',
+      expectedRevision: request.expectedRevision,
+      expectedVersion: request.expectedManuscriptVersion,
+      value: assembled.value,
+      producer: MANUSCRIPT_IMPORT_PRODUCER,
+      basis: `a person edited '${read.file.path}' and handed it back`,
+      detail: {
+        file: { path: read.file.path, format: read.file.format, sha256: read.file.sha256, projectedSha256: read.file.projectedSha256 },
+        matched: assembled.matched,
+        unmatchedHeadings: assembled.unmatchedHeadings,
+        unmentionedSections: assembled.unmentionedSections,
+        losses: read.file.losses,
+      },
+    })
+    // THE DIRECTORY FOLLOWS THE RUN. The file the person edited is replaced by the version that was
+    // published, so an editor left open on a stale copy cannot be mistaken for the current one. A
+    // failure here is REPORTED rather than raised — the version is published — and it reaches the
+    // caller through `manuscriptDirectory.projectionError`, which reads the run's own audit log.
+    await this.projectManuscriptDirectory(active.store, request.runId)
+    const saved = await this.serialized(
+      () => this.persistRun(active.store, request.runId, this.savedRevisionOf(active) ?? 0),
+    ).catch((error: unknown) => ({
+      runId: request.runId, revision: null, interrupted: [], error: errorMessage(error),
+    })) ?? null
+    this.noteSave(active, saved)
+    return {
+      runId: request.runId,
+      directory,
+      path: read.file.path,
+      fileSha256: read.file.sha256,
+      replacedVersion: receipt.replacedVersion,
+      version: receipt.ref.version,
+      contentHash: String(receipt.ref.contentHash),
+      matched: assembled.matched,
+      unmatchedHeadings: assembled.unmatchedHeadings,
+      unmentionedSections: assembled.unmentionedSections,
+      losses: read.file.losses,
+      // A WRITE THAT ANSWERED NULL is a deployment with no snapshot root: the version is in the
+      // store and nowhere else, which is the same fact the run's own persistence reports.
+      persisted: saved !== null && saved.revision !== null,
+      ...(saved?.error === undefined ? {} : { persistenceError: saved.error }),
+      manuscriptDirectory: manuscriptDirectoryViewOf(active.store, request.runId, root),
+    }
+  }
+
+  /**
+   * Re-render the typeset form over the document the run holds now.
+   *
+   * THE REPAIR PATH AFTER A HAND ACCEPTANCE OR AN IMPORT. Both publish a new version of the document
+   * without running a step, so the typeset form stays a render of the version before it — and
+   * `checkFinalPackage`'s `manuscript-typeset` refuses a submission whose form is a render of the
+   * document the paper was rather than the paper. This compiles the document the run holds and
+   * republishes the typeset form as a render of it.
+   *
+   * WHAT IT DOES NOT DO IS RE-RUN E1's GATES. The obligations E1 checks were discharged where the
+   * document was assembled and their verdicts are recorded against that step; re-running them here
+   * would be a second adjudication nothing records. What a hand edit costs is spent elsewhere and on
+   * purpose: an approval names the artifact versions it was taken on, so the acceptance that moved
+   * the document leaves the approval stale and the run cannot be exported as final until a person
+   * approves the version that now exists.
+   *
+   * @param request - the run whose typeset form is to be re-rendered.
+   * @returns what was rendered, or why nothing was.
+   * @throws {Error} when this process holds no such run.
+   */
+  @Remote('materializeManuscript')
+  async materializeManuscript(request: ResearchMaterializeRequest): Promise<ResearchMaterializeResult> {
+    const active = this.heldRun(request.runId)
+    const root = this.hostManuscriptDirectory()
+    const store = active.store
+    const registry = getRunSnapshot(store, request.runId).registry
+    const documentVersion = registry['manuscript']?.ref.version ?? null
+    const renderedFromVersion = typesetRenderedVersionOf(getArtifact(store, request.runId, 'typeset'))
+    if (documentVersion === null) {
+      return {
+        runId: request.runId, materialized: false,
+        reason: 'this run holds no document, so there is nothing to render',
+        documentVersion: null, renderedFromVersion: renderedFromVersion ?? null, typesetVersion: null,
+        producedFormats: [], refusals: [],
+        manuscriptDirectory: manuscriptDirectoryViewOf(store, request.runId, root),
+      }
+    }
+    if (renderedFromVersion === documentVersion && registry['typeset'] !== undefined) {
+      return {
+        runId: request.runId, materialized: false,
+        reason: `the typeset form already renders the document the run holds (version ${String(documentVersion)})`,
+        documentVersion, renderedFromVersion, typesetVersion: registry['typeset'].ref.version,
+        producedFormats: [], refusals: [],
+        manuscriptDirectory: manuscriptDirectoryViewOf(store, request.runId, root),
+      }
+    }
+    const manuscript = getArtifact(store, request.runId, 'manuscript')
+    const document = (manuscript as { readonly document?: unknown } | undefined)?.document
+    if (document === null || typeof document !== 'object' || !Array.isArray((document as { sections?: unknown }).sections)) {
+      return {
+        runId: request.runId, materialized: false,
+        reason: 'the run\'s document carries no sections, so there is nothing a compiler could render',
+        documentVersion, renderedFromVersion: renderedFromVersion ?? null, typesetVersion: registry['typeset']?.ref.version ?? null,
+        producedFormats: [], refusals: [],
+        manuscriptDirectory: manuscriptDirectoryViewOf(store, request.runId, root),
+      }
+    }
+    const compiled = await compileManuscriptFormats(document as ManuscriptDocument, this.hostDocumentCompiler(), 'draft')
+    const previous = (getArtifact(store, request.runId, 'typeset') ?? {}) as Record<string, unknown>
+    const rendered = renderDocumentMarkdown(document as ManuscriptDocument)
+    // THE COMPILED TEXT DOCUMENTS ARE REPLACED, AND THE REST OF THE PACKAGE FILES ARE KEPT. A stale
+    // `.tex` beside a fresh `.docx` is the disagreement this call exists to remove; the roadmap
+    // source and the table tool's rendering are not renderings of the document's prose and are
+    // carried forward unchanged.
+    const previousFiles = (previous['packageFiles'] ?? {}) as Record<string, string>
+    const replacedPaths = new Set(compiled.files.filter(file => file.encoding !== 'base64').map(file => file.path))
+    const packageFiles: Record<string, string> = Object.fromEntries(
+      Object.entries(previousFiles).filter(([path]) => !replacedPaths.has(path) && path !== 'manuscript.md'),
+    )
+    for (const file of compiled.files) {
+      if (file.encoding !== 'base64') packageFiles[file.path] = file.content
+    }
+    packageFiles['manuscript.md'] = rendered
+    const currentManuscriptRef = registry['manuscript']?.ref
+    const value: Record<string, unknown> = {
+      ...previous,
+      ...(currentManuscriptRef === undefined ? {} : { manuscriptRef: { ...currentManuscriptRef } }),
+      manuscript: rendered,
+      compilation: {
+        tool: compiled.tool,
+        formats: compiled.declaredFormats,
+        compiled: compiled.files.map(file => file.path),
+        // THE COMPILED DOCUMENTS, ONE PER FORMAT, WITH WHAT EACH ONE IS — the same record E1 writes,
+        // so the package checks read a re-rendered form exactly as they read a rendered one.
+        documents: compiled.files
+          .filter(file => file.kind === 'document')
+          .map(file => ({
+            format: file.format ?? null,
+            path: file.path,
+            ...digestsOf(file.content, file.encoding),
+            ...(file.encoding === 'base64' ? { base64: file.content } : {}),
+          })),
+        assets: compiled.files
+          .filter(file => file.kind === 'asset')
+          .map(file => ({ path: file.path, base64: file.content })),
+        floatsEmbedded: compiled.embedded,
+        floatsDropped: compiled.dropped,
+        refusals: compiled.refusals,
+      },
+      packageFiles,
+      // WHAT THIS REPLACED, so a reader can tell a re-rendered form from the one E1 produced and see
+      // which document version it was a render of before.
+      materializedAt: new Date().toISOString(),
+      materializedFrom: renderedFromVersion,
+    }
+    const receipt = publishArtifactVersion(store, {
+      runId: request.runId,
+      slug: 'typeset',
+      expectedRevision: getRunSnapshot(store, request.runId).revision,
+      expectedVersion: registry['typeset']?.ref.version ?? 0,
+      value,
+      producer: 'materialize-manuscript',
+      basis: `the document moved to version ${String(documentVersion)} after the typeset form was`
+        + ` rendered from version ${String(renderedFromVersion ?? 0)}, so the form was re-rendered`,
+      detail: { documentVersion, renderedFromVersion, producedFormats: compiled.producedFormats },
+    })
+    const projectionError = await this.projectManuscriptDirectory(store, request.runId)
+    const saved = await this.serialized(
+      () => this.persistRun(store, request.runId, this.savedRevisionOf(active) ?? 0),
+    ).catch((error: unknown) => ({
+      runId: request.runId, revision: null, interrupted: [], error: errorMessage(error),
+    })) ?? null
+    this.noteSave(active, saved)
+    return {
+      runId: request.runId,
+      materialized: true,
+      reason: `re-rendered the typeset form over document version ${String(documentVersion)}`
+        + ` (it was a render of ${String(renderedFromVersion ?? 0)})`
+        + (projectionError === undefined ? '' : `; the working directory was not updated: ${projectionError}`),
+      documentVersion,
+      renderedFromVersion: renderedFromVersion ?? null,
+      typesetVersion: receipt.ref.version,
+      producedFormats: compiled.producedFormats,
+      refusals: compiled.refusals,
+      manuscriptDirectory: manuscriptDirectoryViewOf(store, request.runId, root),
+    }
+  }
+
+  /**
    * {@link runPipeline}, exposed to Remote clients.
    *
    * The browser surface had no way to start a run: the driver's production entry
@@ -1730,12 +2099,19 @@ export class ResearchTeamService extends TypertRemoteService {
     const statementAssessor = this.hostStatementAssessor()
     const resolutionVerifier = this.hostResolutionVerifier()
     const reviewPolicy = this.hostReviewPolicy()
+    // THE WORKING DIRECTORY AND THE READER THAT FILLS ITS `refs-pdf/`, resolved here with everything
+    // else the driver is given: the projection runs inside the driver, so a deployment setting that
+    // reached the service but not this list would leave the directory never written.
+    const manuscriptDirectory = this.hostManuscriptDirectory()
+    const referenceFiles = this.hostReferenceFiles()
     return {
       evidenceProfile: this.hostEvidenceProfile(),
       researchProfile: this.hostResearchProfile(),
       ...(documentCompiler !== undefined ? { documentCompiler } : {}),
       ...(figureProvider !== undefined ? { figureProvider } : {}),
       ...(statementAssessor === undefined ? {} : { statementAssessor }),
+      ...(manuscriptDirectory === undefined ? {} : { manuscriptDirectory }),
+      ...(referenceFiles === undefined ? {} : { referenceFiles }),
       // THE CITABLE SOURCES, from the registry this deployment configured. Passed always: a run told
       // to draw on a literature library must not fall back to the checked-in corpus, and the map it
       // was given is the whole of what it may cite — empty when the library could not be read.
@@ -2684,7 +3060,7 @@ export class ResearchTeamService extends TypertRemoteService {
         continue
       }
       if (found === null) continue
-      const snapshot = snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped')
+      const snapshot = snapshotOf(found.restored.store, runId, this.hostEvidenceProfile(), null, found.persistence, 'stopped', undefined, undefined, this.hostManuscriptDirectory())
       entries.push({
         runId,
         execution: 'stopped',
@@ -2904,6 +3280,9 @@ export class ResearchTeamService extends TypertRemoteService {
       null,
       found.persistence,
       'stopped',
+      undefined,
+      undefined,
+      this.hostManuscriptDirectory(),
     )
   }
 

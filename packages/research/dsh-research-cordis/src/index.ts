@@ -314,6 +314,27 @@ export interface Config {
    */
   readonly snapshotDirectory?: string
   /**
+   * Directory the run's working document is projected to. Omitted, no working directory is written.
+   *
+   * THE DOCUMENT A PERSON EDITS. One run maintains one document, and it lives here: `<root>/<runId>/`
+   * holds the manuscript, the compiled deliverables, the figures they embed, the tables the paper
+   * prints, the reference files a judgement rests on, and a `document-manifest.json` naming every one
+   * of them. It is a PROJECTION of the run's registry — replaced whole after each step that commits —
+   * and never the authority: the registry is.
+   *
+   * A DEPLOYMENT setting for the same reason as the three above. `runPipeline` is a Remote method, so
+   * a request-supplied path would let a browser choose where the host writes files, and the import
+   * operation reads its file from here rather than from a path a client named.
+   *
+   * REQUIRES {@link Config.document}: a directory whose whole purpose is to hold a document that can
+   * be edited and handed back has nothing to put in it without a compiler, and a deployment that
+   * configured the directory alone would find out when the first run reached its last step. This
+   * load refuses it instead.
+   *
+   * Relative paths resolve against {@link Config.workspace}.
+   */
+  readonly manuscriptDirectory?: string
+  /**
    * Absolute working directory for every agent session this engine creates (prose
    * writes and model-ready tool invocations). Omitted, it resolves to the
    * deployment's `process.cwd()`.
@@ -535,6 +556,11 @@ export class ResearchEngine extends Service {
    * configured none. Read by the runner-side service, which performs the save and restore.
    */
   readonly snapshotDirectory: string | undefined
+  /**
+   * Resolved directory the run's working document is projected to, or undefined when the
+   * deployment configured none. Read by the runner-side service, which writes the projection.
+   */
+  readonly manuscriptDirectory: string | undefined
   /**
    * The real-model prose writer when `config.prose` names a route, else undefined.
    * Public for the same reason {@link ResearchEngine.toolDeps} is: the team service
@@ -770,6 +796,19 @@ export class ResearchEngine extends Service {
     this.casePackDirectory = resolveCasePackDirectory(config.casePackDirectory, this.sessionCwd)
     this.packageDirectory = resolveCasePackDirectory(config.packageDirectory, this.sessionCwd)
     this.snapshotDirectory = resolveCasePackDirectory(config.snapshotDirectory, this.sessionCwd)
+    this.manuscriptDirectory = resolveCasePackDirectory(config.manuscriptDirectory, this.sessionCwd)
+    // REFUSED HERE, where the value enters, rather than at the last step of the first run that
+    // reaches for it: a working directory holds a document, and a deployment that names no document
+    // toolchain has nothing to project into it. The check reads the CONFIGURATION and not
+    // `documentCompiler`, which the probe fills asynchronously — a deployment that named an
+    // executable the machine does not have is a different failure, reported by the compile.
+    if (this.manuscriptDirectory !== undefined && config.document === undefined) {
+      throw new Error(
+        '[research] `manuscriptDirectory` requires `document`: a working directory holds the run\'s'
+        + ' document and the compiled files a person edits, and this deployment names no document'
+        + ` toolchain to produce them with (got "${this.manuscriptDirectory}")`,
+      )
+    }
     this.stepTimeoutMs = config.stepTimeoutMs
     this.revisionRounds = config.revisionRounds
     // Refused here, where the value enters, rather than at the step it would abort: a bound below

@@ -179,9 +179,9 @@ import type { ExecutionIdentity, ResolutionVerifier as ResolutionVerifierPort } 
 import type { ResolutionVerifier } from './resolution-verifier.ts'
 import { DEFAULT_REVIEW_POLICY, reviewSatisfaction } from './review-policy.ts'
 import type { ReviewPolicy, ReviewedRound } from './review-policy.ts'
-import { compileManuscript, documentOf } from './document-compile.ts'
+import { compileManuscriptFormats, documentOf } from './document-compile.ts'
 import type {
-  CompileFormat, DocumentBlock, DocumentCompiler, DocumentReference, ManuscriptDocument,
+  DocumentBlock, DocumentCompiler, DocumentReference, ManuscriptDocument,
 } from './document-compile.ts'
 import type { FigureProvider } from './figure-provider.ts'
 import {
@@ -4160,71 +4160,17 @@ async function e1Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // reproducibility, manifest) and writes the whole set to disk. A path whose upstream step
   // did not run has no content and is OMITTED, never declared empty — the earlier version of
   // this artifact listed five filenames no step wrote, which read as run output.
-  // EVERY FILE ONE COMPILE PRODUCED, EACH WITH WHAT IT IS. A compiled document and a figure the
-  // document embeds are both files of the same compile, and they are not the same kind of thing: the
-  // `.docx` is the deliverable and the `.png` belongs to it. The kind is taken from where the compile
-  // put it — its own `fileName` versus its `files` — rather than guessed from the path.
-  const compiled: Array<{
-    readonly path: string
-    readonly content: string
-    readonly encoding?: 'utf8' | 'base64'
-    readonly kind: 'document' | 'asset'
-    /** The format a DOCUMENT was compiled to. An asset belongs to a document rather than a format. */
-    readonly format?: CompileFormat
-  }> = []
-  const compileRefusals: string[] = []
-  // WHICH FLOATS THE COMPILED DOCUMENT ACTUALLY CARRIES, per format: a figure that could not be
-  // embedded is a figure the reader will not see, and the artifact says so rather than leaving it to
-  // be inferred from the presence of a file.
-  const embeddedFloats: Record<string, ReadonlyArray<string>> = {}
-  const droppedFloats: Array<{ readonly label: string; readonly reason: string; readonly format: string }> = []
-  // PDF IS COMPILED WHEN THE DEPLOYMENT CAN PRODUCE ONE, and only then: `formats` is the compiler's
-  // own probe, so a machine with no LaTeX engine is not asked for a PDF it would refuse. The document
-  // is the SAME one the HTML and the LaTeX were rendered from, so the three formats cannot describe
-  // different manuscripts — and the PDF is what a referee receives, which is why leaving it out of the
-  // run's own artifacts made "the deployment has an engine" unverifiable from a package.
-  // DOCX AND LATEX ARE THE DELIVERABLES: most journals' submission systems take a Word file, some
-  // want the LaTeX source, and both are produced from the same document model. PDF is compiled
-  // ADDITIONALLY when the deployment has a LaTeX engine for it, and is never the thing a journal is
-  // handed here — a PDF this pipeline produced is a reading copy, not the submission.
-  // THE THREE DELIVERABLES ARE ALWAYS REQUESTED, even when there is no compiler at all: a deployment
-  // that configured none must reach the artifact with `compile-compiler-missing` on it, which is a
-  // reader's only way to tell "not compiled" from "compiled badly". PDF is requested only when the
-  // deployment's own probe says it can produce one, because "this machine has no LaTeX engine" is a
-  // property of the deployment rather than a compile that failed.
-  const compileFormats = (ctx.documentCompiler?.formats ?? []).includes('pdf')
-    ? (['html', 'latex', 'docx', 'pdf'] as const)
-    : (['html', 'latex', 'docx'] as const)
-  for (const format of compileFormats) {
-    // WHAT IS COMPILED IS THE DOCUMENT THE MANUSCRIPT ARTIFACT CARRIES — not a document this step
-    // assembled. That is the whole point of the split: a compiler renders what the writing steps
-    // approved, and this step's own contribution is the rendering, not the paper.
-    // A DRAFT, at this point in the run: that document has not been approved by a person yet, so what
-    // it compiles is a working document. A float that cannot be embedded is recorded here and
-    // REFUSED when a submission-grade compile is asked for at export time.
-    const result = await compileManuscript({ document, format, mode: 'draft' }, ctx.documentCompiler)
-    if (result.ok) {
-      compiled.push({
-        path: result.compiled.fileName,
-        content: result.compiled.content,
-        encoding: result.compiled.encoding,
-        kind: 'document',
-        format: result.compiled.format,
-      })
-      // THE ASSETS THE DOCUMENT EMBEDS travel beside it, as bytes, so the compiled file is buildable
-      // outside this run and the figures can be reconciled by their labels rather than by a count.
-      for (const asset of result.compiled.files) {
-        compiled.push({ path: asset.path, content: asset.base64, encoding: 'base64', kind: 'asset' })
-      }
-      embeddedFloats[format] = result.compiled.assets.embedded
-      droppedFloats.push(...result.compiled.assets.dropped.map(entry => ({ ...entry, format })))
-      continue
-    }
-    // NOT A FAILED STEP: the manuscript this run produced is complete without a compiled form, and a
-    // deployment without a compiler is a fact about the deployment. It is recorded, with the reason,
-    // so a reader of the package can tell "not compiled" from "compiled badly".
-    compileRefusals.push(...result.refusals.map(refusal => `[${refusal.code}] ${refusal.detail}`))
-  }
+  // EVERY FILE ONE COMPILE PRODUCED, EACH WITH WHAT IT IS — and the pass itself lives in
+  // `document-compile.ts`, because the repair after a hand acceptance re-renders the same document
+  // and a second copy of this loop is how the `.docx` and the `.tex` come to be renderings of
+  // different format sets. A DRAFT, at this point in the run: that document has not been approved by
+  // a person yet, so what it compiles is a working document. A float that cannot be embedded is
+  // recorded there and REFUSED when a submission-grade compile is asked for at export time.
+  const compile = await compileManuscriptFormats(document, ctx.documentCompiler, 'draft')
+  const compiled = compile.files
+  const compileRefusals = compile.refusals
+  const embeddedFloats = compile.embedded
+  const droppedFloats = compile.dropped
   const pkg = nonEmptyPackageFiles({
     // The compiled DOCUMENTS are text, so they belong with the other text files.
     ...Object.fromEntries(compiled

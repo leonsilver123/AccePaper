@@ -14,17 +14,22 @@
 // The manifest records paths relative to the package root and never the absolute directory
 // it was written to; `sanitizeForExport` strips anything that looks like a secret.
 
-import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { getArtifact, getAuditHistory, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import { readinessOfRun } from './submission-readiness.ts'
+import {
+  checkWrittenFiles, writeStagedDirectory,
+} from './staged-directory.ts'
+import type { StagedFile, WrittenFile, WrittenFileCheck } from './staged-directory.ts'
 import {
   checkFinalPackage, finalPackageApprovalOf, finalPackageFactsOf, finalPackageStateOf,
 } from './final-package.ts'
 import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from './final-package.ts'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { SubmissionReadiness } from './submission-readiness.ts'
+import type { ReferenceFileReader } from './reference-files.ts'
 import { STEP_EXECUTOR_REGISTRY } from './registry.ts'
 import { reportPaperQuality } from './paper-quality.ts'
 import type { PaperQualityReport } from './paper-quality.ts'
@@ -60,27 +65,10 @@ export interface PackageRunFacts {
 }
 
 /** One file the package will contain, as content rather than as a name. */
-export interface PackageFile {
-  /** Path relative to the package root, with forward slashes. */
-  readonly path: string
-  readonly content: string
-  /**
-   * How {@link content} is encoded.
-   *
-   * A compiled figure or a PDF is BYTES, and writing base64 text where a PNG belongs produces a file
-   * that looks written and is not the asset. `base64` means the writer decodes; `utf8` (the default)
-   * means it encodes.
-   */
-  readonly encoding?: 'utf8' | 'base64'
-}
+export type PackageFile = StagedFile
 
 /** One written file, with what was checked about it after the write. */
-export interface PackagedFile {
-  readonly path: string
-  readonly bytes: number
-  /** SHA-256 of the written bytes, lower-case hex. */
-  readonly sha256: string
-}
+export type PackagedFile = WrittenFile
 
 /** One table the package carries, as the run's document holds it. */
 export interface PackagedTable {
@@ -266,22 +254,126 @@ export function citedAttachments(
 }
 
 /**
- * The reference files a package carries, with what was checked about each one.
+ * The tables a document holds, written as the two files each one becomes.
+ *
+ * TWO FORMS OF ONE TABLE, and both are read out of the block the manuscript holds rather than
+ * re-derived from the run's measurements: the paper prints one table, and a second construction of it
+ * is how the CSV and the printed table come to disagree.
+ *
+ * EXTRACTED RATHER THAN INLINED because two directories carry these files — the run package and the
+ * run's working directory — and a second copy of this loop is how the CSV in one of them stops being
+ * the table the other prints.
+ *
+ * @param document - the manuscript's `document` value, as the artifact carries it.
+ * @param files - the files written so far, which the table files are appended to.
+ * @returns the manifest section, one entry per table the document holds.
+ */
+export function packagedTablesOf(
+  document: unknown,
+  files: StagedFile[],
+): ReadonlyArray<PackagedTable> {
+  const tables: PackagedTable[] = []
+  for (const table of documentTablesOf(document)) {
+    const stem = `tables/${table.label.trim().toLowerCase().replace(/\s+/gu, '-')}`
+    const markdown = `${stem}.md`
+    files.push({ path: markdown, content: markdownFile([`**${table.label}.** ${table.caption}`, '', table.markdown]) })
+    const parsed = parsePipeTable(table.markdown)
+    if (parsed === undefined) {
+      tables.push({
+        label: table.label,
+        markdown,
+        csvRefusal: 'the table as the manuscript prints it is not a pipe table this package can read'
+          + ' back, so no machine-readable twin was written',
+      })
+      continue
+    }
+    const csv = `${stem}.csv`
+    files.push({ path: csv, content: csvRecords([parsed.header, ...parsed.rows]) })
+    tables.push({ label: table.label, markdown, csv })
+  }
+  return tables
+}
+
+/**
+ * The reference files a caller may hand to an export, read from the deployment's library.
+ *
+ * READ HERE AND NOT IN THE PLANNERS, which decide what a directory carries and never touch a file:
+ * reading an attachment is a file or a network read. What is read is exactly what the run's own
+ * reading records name — one file per cited source whose judgement was made from a file rather than
+ * from a page of text.
+ *
+ * A READ THAT FAILS IS RECORDED, NOT THROWN. One attachment the library cannot hand back is a fact
+ * about that source, and a caller that refused to write because one file was missing would take away
+ * the export a reader can still use. An ABSENT reader, or one whose policy is `none`, is not a
+ * failure: nothing is attempted and the manifest says the deployment stores no reference files.
+ *
+ * EXTRACTED SO BOTH CALLERS SHARE IT. The run's package and the run's working directory each carry
+ * `refs-pdf/`, and a second implementation of "which bytes may be stored" is how the two come to
+ * store different files for the same citation.
+ *
+ * @param store - the run store.
+ * @param runId - the run being written.
+ * @param reader - the deployment's reader, or undefined when it published none.
+ * @param sources - the sources this run may cite, from the registry it configured.
+ * @returns the plan the manifest records, whether or not any file was read.
+ */
+export async function referencePdfPlan(
+  store: ResearchRunStore,
+  runId: string,
+  reader: ReferenceFileReader | undefined,
+  sources: ReadonlyMap<string, SourceRecord>,
+): Promise<ReferencePdfPlan> {
+  if (reader === undefined || reader.policy === 'none') return { policy: 'none' }
+  const requests = citedAttachments(store, runId, sources)
+  const reads = await Promise.all(requests.map(async (request): Promise<ReferencePdfRead> => {
+    try {
+      const read = await reader.read({
+        sourceIdentity: request.readFrom.sourceIdentity,
+        attachmentKey: request.readFrom.key,
+      })
+      return {
+        citeKey: request.citeKey,
+        readFrom: request.readFrom,
+        file: read.ok
+          ? {
+            key: read.attachmentKey,
+            version: read.attachmentVersion,
+            sha256: read.sha256,
+            base64: read.base64,
+          }
+          : { failure: read.reason },
+      }
+    } catch (error) {
+      // A THROW IS THE READER FAILING, not the file being absent, and both reach a reader as the
+      // reason this source has no file. A throw escaping here would abandon the write for one library
+      // error; the reason still carries the error rather than a location.
+      return {
+        citeKey: request.citeKey,
+        readFrom: request.readFrom,
+        file: { failure: error instanceof Error ? error.message : String(error) },
+      }
+    }
+  }))
+  return { policy: 'local-cache', reads }
+}
+
+/**
+ * The reference files a directory carries, with what was checked about each one.
  *
  * NOTHING IS STORED THAT IS NOT THE FILE THE JUDGEMENT WAS MADE FROM. Bytes are stored under the
  * cite key that cites them, and a file whose version is not the version the reading record states
- * belongs to a DIFFERENT file than the passage — storing it would put a document in the package that
- * no judgement rests on, under a name that says one does. That is refused with the two versions, and
- * so is a read that returned another attachment, or one whose bytes do not hash to what the reader
- * said they hashed to.
+ * belongs to a DIFFERENT file than the passage — storing it would put a document in the directory
+ * that no judgement rests on, under a name that says one does. That is refused with the two versions,
+ * and so is a read that returned another attachment, or one whose bytes do not hash to what the
+ * reader said they hashed to.
  *
  * @param plan - the deployment's decision, and the reads the caller made.
  * @param files - the files written so far, which the stores are appended to.
- * @returns the manifest section, and the paths this package stores.
+ * @returns the manifest section, and the paths this directory stores.
  */
-function storeReferencePdfs(
+export function packageReferencePdfs(
   plan: ReferencePdfPlan,
-  files: PackageFile[],
+  files: StagedFile[],
 ): RunPackageManifest['referencePdfs'] {
   // THE DEPLOYMENT'S DECISION IS THE FIRST THING THE MANIFEST SAYS. An empty `refs-pdf/` and a
   // deployment that reads no files are different facts, and a reader given a list would take the
@@ -930,32 +1022,12 @@ export function planRunPackage(
 
   // THE TABLES THE PAPER PRINTS, AS THEIR OWN FILES. The document carries them as blocks, and a
   // package that carries the whole document and no table is one where a reader wanting the numbers
-  // has to find them in Markdown prose. TWO FORMS OF ONE TABLE, and both are read out of the block
-  // the manuscript holds rather than re-derived from the run's measurements: the paper prints one
-  // table, and a second construction of it is how the CSV and the printed table come to disagree.
-  const tables: PackagedTable[] = []
-  for (const table of documentTablesOf(draftArtifact?.document)) {
-    const stem = `tables/${table.label.trim().toLowerCase().replace(/\s+/gu, '-')}`
-    const markdown = `${stem}.md`
-    files.push({ path: markdown, content: markdownFile([`**${table.label}.** ${table.caption}`, '', table.markdown]) })
-    const parsed = parsePipeTable(table.markdown)
-    if (parsed === undefined) {
-      tables.push({
-        label: table.label,
-        markdown,
-        csvRefusal: 'the table as the manuscript prints it is not a pipe table this package can read'
-          + ' back, so no machine-readable twin was written',
-      })
-      continue
-    }
-    const csv = `${stem}.csv`
-    files.push({ path: csv, content: csvRecords([parsed.header, ...parsed.rows]) })
-    tables.push({ label: table.label, markdown, csv })
-  }
+  // has to find them in Markdown prose.
+  const tables = packagedTablesOf(draftArtifact?.document, files)
   // THE REFERENCE FILES, WHEN THE DEPLOYMENT READS THEM. Planned here rather than by the caller
   // because this module decides what a package may carry: the caller hands back what it read, and
   // the version each file must agree with is checked below.
-  const referencePdfs = storeReferencePdfs(options.referencePdfs ?? { policy: 'none' }, files)
+  const referencePdfs = packageReferencePdfs(options.referencePdfs ?? { policy: 'none' }, files)
 
   const written = new Set(files.map(file => file.path))
   // THE ARTIFACT VERSIONS THIS PACKAGE IS A READING OF. Recorded from the run's registry at plan
@@ -1146,17 +1218,10 @@ export function packageRunFactsOf(store: ResearchRunStore, runId: string): Packa
 /**
  * Write a package plan to disk, and publish it only once it is complete.
  *
- * STAGED, VERIFIED, THEN SWAPPED IN. A package is the directory AND the manifest beside it, and the
- * two are only the same object while every entry still matches. Writing files in place makes a
- * half-finished export indistinguishable from a finished one: the reader who opens the directory
- * after a failure finds a manifest from the previous export sitting beside files from the failed one,
- * and nothing on disk says which entries are which. So the files go into a staging directory, the
- * staged package is checked against its own manifest, and only then does it replace what was there.
- * A failure anywhere before the swap leaves the previous package exactly as it was.
- *
- * Every file is written, then re-read through `statSync` so a zero-byte or unreadable file is
- * reported here rather than discovered by whoever opens the package. The manifest is written LAST,
- * so a manifest that exists means the files it names were written.
+ * STAGED, VERIFIED, THEN SWAPPED IN, which is now the shared discipline every directory this package
+ * publishes uses — see `staged-directory.ts` for why the two callers cannot each have their own copy
+ * of it. The manifest is written LAST, so a manifest that exists means the files it names were
+ * written.
  *
  * @param plan - the files and manifest to write.
  * @param directory - the package root; created when absent, replaced when it is already there.
@@ -1168,83 +1233,18 @@ export function writeRunPackage(
   plan: { readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest },
   directory: string,
 ): RunPackageManifest {
-  const staging = `${directory}.staging-${randomUUID().slice(0, 8)}`
-  try {
-    const manifest = writePackageFiles(plan, staging)
-    const failed = checkPackagedFiles(staging, manifest).filter(check => check.status !== 'ok')
-    if (failed.length > 0) {
-      throw new Error(
-        '[run-package] the staged package does not match its own manifest: '
-        + failed.map(check => `${check.path} (${check.status})`).join(', '),
-      )
-    }
-    publish(staging, directory)
-    return manifest
-  } catch (error) {
-    rmSync(staging, { recursive: true, force: true })
-    throw error
-  }
-}
-
-/** Write every file of a plan into one directory, and the manifest last. */
-function writePackageFiles(
-  plan: { readonly files: ReadonlyArray<PackageFile>; readonly manifest: RunPackageManifest },
-  directory: string,
-): RunPackageManifest {
-  mkdirSync(directory, { recursive: true })
-  const written: PackagedFile[] = []
-  for (const file of plan.files) {
-    const target = join(directory, file.path)
-    mkdirSync(dirname(target), { recursive: true })
-    writeFileSync(target, file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : file.content)
-    const size = statSync(target).size
-    if (size === 0) {
-      throw new Error(`[run-package] ${file.path} was written empty — refusing to publish a package with a hole in it`)
-    }
-    // THE DIGEST IS OVER THE BYTES THAT LANDED, read back from disk rather than recomputed from the
-    // string: a base64 asset and its digest must describe the same file, and hashing the encoded form
-    // here would make every asset's digest wrong.
-    written.push({ path: file.path, bytes: size, sha256: createHash('sha256').update(readFileSync(target)).digest('hex') })
-  }
-  const manifest: RunPackageManifest = { ...plan.manifest, files: written }
-  writeFileSync(join(directory, 'run-manifest.json'), jsonFile(manifest), 'utf8')
-  return manifest
-}
-
-/**
- * Move a completed staging directory into place, keeping the package that was there.
- *
- * THE OLD PACKAGE IS MOVED ASIDE, NOT DELETED: a rename that fails — a lock, a full disk — is
- * followed by putting it back, so the failure mode is "the package is the one from before" rather
- * than "there is no package".
- *
- * @param staging - the verified package.
- * @param directory - where it belongs.
- */
-function publish(staging: string, directory: string): void {
-  const superseded = `${directory}.superseded-${randomUUID().slice(0, 8)}`
-  const replacing = existsSync(directory)
-  if (replacing) renameSync(directory, superseded)
-  try {
-    renameSync(staging, directory)
-  } catch (error) {
-    if (replacing) renameSync(superseded, directory)
-    throw error
-  }
-  if (replacing) rmSync(superseded, { recursive: true, force: true })
+  return writeStagedDirectory({
+    files: plan.files,
+    manifestName: 'run-manifest.json',
+    manifest: (files) => {
+      const manifest: RunPackageManifest = { ...plan.manifest, files }
+      return { value: manifest, text: jsonFile(manifest) }
+    },
+  }, directory).manifest
 }
 
 /** One file's state against what a manifest says about it. */
-export interface PackagedFileCheck {
-  readonly path: string
-  /** `ok` means present, the stated number of bytes, and the stated digest. */
-  readonly status: 'ok' | 'missing' | 'bytes-differ' | 'digest-differs'
-  readonly expectedBytes: number
-  readonly expectedSha256: string
-  /** What is on disk now; absent when the file is not there at all. */
-  readonly observedBytes?: number
-  readonly observedSha256?: string
-}
+export type PackagedFileCheck = WrittenFileCheck
 
 /**
  * Compare a written package on disk with the manifest that names it.
@@ -1266,25 +1266,7 @@ export function checkPackagedFiles(
   directory: string,
   manifest: Pick<RunPackageManifest, 'files'>,
 ): ReadonlyArray<PackagedFileCheck> {
-  return manifest.files.map((file) => {
-    const target = join(directory, file.path)
-    if (statSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
-      return { path: file.path, status: 'missing', expectedBytes: file.bytes, expectedSha256: file.sha256 }
-    }
-    const bytes = readFileSync(target)
-    const digest = createHash('sha256').update(bytes).digest('hex')
-    const observed = { observedBytes: bytes.length, observedSha256: digest }
-    if (digest === file.sha256) {
-      return { path: file.path, status: 'ok', expectedBytes: file.bytes, expectedSha256: file.sha256, ...observed }
-    }
-    return {
-      path: file.path,
-      status: bytes.length === file.bytes ? 'digest-differs' : 'bytes-differ',
-      expectedBytes: file.bytes,
-      expectedSha256: file.sha256,
-      ...observed,
-    }
-  })
+  return checkWrittenFiles(directory, manifest.files)
 }
 
 /**
