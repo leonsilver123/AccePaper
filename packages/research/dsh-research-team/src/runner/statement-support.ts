@@ -19,6 +19,7 @@
 // claim's verdict — it records that the sentence was not assessed, which is a different fact from a
 // sentence that was assessed and found wanting.
 
+import { citedKeysIn } from './citation-bindings.ts'
 import type { CitationReadScope, CitationSupport, SourceJudgement, Statement } from './citation-bindings.ts'
 
 /** What one sentence's citation was found to rest on, recorded against that sentence. */
@@ -110,6 +111,15 @@ export type StatementSupportRefusalCode =
   | 'statement-unrelated'
   /** The sentence rests on a reading that cannot establish it — an abstract for a detailed claim. */
   | 'statement-beyond-scope'
+  /**
+   * The sentence cites a source this run never reviewed.
+   *
+   * THE KEY IS NOT ON THE ROSTER, so there is no passage, no reading and no judgement to check the
+   * sentence against — the citation names a work that was retrieved and never read. Distinct from
+   * `statement-unassessed`, which is about a reviewed source whose sentence nobody read against it:
+   * this one has no source to read.
+   */
+  | 'statement-source-unreviewed'
 
 /** One refusal, naming the sentence and the source it cites. */
 export interface StatementSupportRefusal {
@@ -121,6 +131,11 @@ export interface StatementSupportRefusal {
 
 /**
  * How one sentence's citation stands, given what has been assessed about it.
+ *
+ * THE ITERATION IS OVER THE ROSTER, which is what bounds this check's question: it asks, for each
+ * source this run reviewed, whether the sentences citing it were read against it. A sentence citing a
+ * key the roster does not carry never reaches the inner loop, so it is not answered by this function
+ * at all — {@link checkCitationRoster} is the other direction of the same reading.
  *
  * @param assessments - every assessment this run holds.
  * @param statements - the manuscript's cited sentences.
@@ -186,6 +201,56 @@ export function checkStatementSupport(
         citeKey: judgement.citeKey,
         detail: `'${statement.statementId}' cites '${judgement.citeKey}', which was assessed`
           + ` '${assessment.support}': ${assessment.basis}`,
+      })
+    }
+  }
+  return refusals
+}
+
+/**
+ * Every source a sentence cites that this run never reviewed, refused.
+ *
+ * THE HOLE THIS CLOSES WAS AN ITERATION. {@link checkStatementSupport} walks the REVIEWED SOURCES and
+ * asks which sentences cite each one; `bindJudgements` builds its bindings the same way round; and
+ * `checkCitationUse` judges the roster before any prose exists. A sentence citing a key outside that
+ * list is examined by none of them, so the manuscript passes D3 unchanged. MEASURED ON THE
+ * DEPLOYMENT, 2026-09-20 (run `418936db`): the draft's introduction cited
+ * `cite-10.1007/s40534-016-0117-3` — an OpenAlex landscape hit (W2512479688) on no roster and in no
+ * writer's request — and D3 accepted the manuscript. E1 refused it one step later, as
+ * `citation-target-missing` and `citation-unreviewed-source`, which is a step too late to tell the
+ * writer anything and reports a citation defect as a formatting step's problem.
+ *
+ * IT IS NOT GATED ON THE ASSESSOR, unlike the sentence reading beside it. Whether a cited source is
+ * one this run reviewed is a fact about the run's own roster rather than a verdict some reader
+ * reached, so a deployment that can read no sentences may still not publish a citation to a work
+ * nobody read.
+ *
+ * THE REFUSAL NAMES THE KEY AND SAYS WHAT IS MISSING, because the sentence it belongs to is rewritten
+ * with this text quoted into the instruction: "not on the roster" alone would leave the writer
+ * choosing between a citation it cannot justify and no citation at all.
+ *
+ * @param statements - the manuscript's cited sentences.
+ * @param judgements - the sources this run reviewed.
+ * @returns one refusal per cited key the roster does not carry, in the order a reader meets them.
+ */
+export function checkCitationRoster(
+  statements: ReadonlyArray<Statement>,
+  judgements: ReadonlyArray<SourceJudgement>,
+): ReadonlyArray<StatementSupportRefusal> {
+  const reviewed = new Set(judgements.map(judgement => judgement.citeKey))
+  const refusals: StatementSupportRefusal[] = []
+  for (const statement of statements) {
+    for (const key of citedKeysIn(statement.text)) {
+      if (reviewed.has(key)) continue
+      refusals.push({
+        code: 'statement-source-unreviewed',
+        statementId: statement.statementId,
+        citeKey: key,
+        detail: `'${statement.statementId}' cites '${key}', which is not one of the sources this run`
+          + ' reviewed — the work was retrieved and never read, so nothing establishes what that'
+          + ' citation claims and the sentence rests on no passage. Either cite one of the sources'
+          + ' listed under `citations` in a sentence that states what its passage establishes, or'
+          + ' state the sentence without citing any source.',
       })
     }
   }

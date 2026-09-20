@@ -171,7 +171,7 @@ import { assessmentsFor } from './evidence-corpus.ts'
 import { argumentPlanOf, checkArgumentPlan, claimOutcomeOf, contractFor } from './argument-plan.ts'
 import { checkPresentationPlan } from './presentation-plan.ts'
 import type { ArgumentPlan } from './argument-plan.ts'
-import { assessStatements, checkStatementSupport } from './statement-support.ts'
+import { assessStatements, checkCitationRoster, checkStatementSupport } from './statement-support.ts'
 import type { StatementSupportRefusal } from './statement-support.ts'
 import type { StatementSupportAssessor } from './statement-support.ts'
 import type { StatementAssessment } from './statement-support.ts'
@@ -3207,9 +3207,15 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
       assessments = assessor === undefined
         ? []
         : await assessStatements(assessor, statements, judgements, assessments)
-      roundRefusals = assessor === undefined
-        ? []
-        : checkStatementSupport(assessments, statements, judgements)
+      // TWO QUESTIONS, AND ONLY ONE OF THEM NEEDS A READER. Whether a passage establishes a sentence
+      // is something only a deployment that can read sentences can answer, so that half is gated on
+      // the assessor. Whether the sentence cites a source this run reviewed is a fact about the run's
+      // own roster, and a citation to a work nobody read is refused either way — see
+      // `checkCitationRoster` for the run that reached E1 with one.
+      roundRefusals = [
+        ...(assessor === undefined ? [] : checkStatementSupport(assessments, statements, judgements)),
+        ...checkCitationRoster(statements, judgements),
+      ]
       owedUncited = bindJudgements(judgements, statements, assessments).uncited
         .filter(judgement => owedCiteKeys.has(judgement.citeKey))
         .map(judgement => judgement.citeKey)
@@ -3303,9 +3309,14 @@ async function d3Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
   // passage against a sentence, so refusing its runs would be refusing the deployment rather than the
   // manuscript. What it must not do is the thing this unit removes — claim a sentence-level verdict
   // it never made — which is why the empty list is on the artifact rather than left to inference.
-  const supportRefusals = assessor === undefined
-    ? []
-    : checkStatementSupport(assessments, statements, judgements)
+  // THE SAME TWO QUESTIONS THE ROUNDS WERE READ AGAINST, asked once more of the text they ended on.
+  // A refused citation is answered by another round where there is budget for one, and the reason is
+  // quoted to the writer; a run whose budget ran out — or whose deployment configured no rounds —
+  // stops here with that same reason rather than carrying it to E1.
+  const supportRefusals = [
+    ...(assessor === undefined ? [] : checkStatementSupport(assessments, statements, judgements)),
+    ...checkCitationRoster(statements, judgements),
+  ]
   if (supportRefusals.length > 0) {
     throw new Error(
       `[D3-writing] [${supportRefusals[0]?.code ?? 'statement-unassessed'}] `

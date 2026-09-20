@@ -68,6 +68,9 @@ const OWED_KEYS = ['cite-10.1109/tits.2026.3727135']
 /** The reviewed sources the paper may cite but owes nothing to. */
 const UNSUPPORTING_KEYS = ['cite-10.1016/j.trb.2025.103352', 'cite-10.1155/2017/3082781']
 
+/** A key no roster carries: a work on the topic that was retrieved and never read. */
+const UNREVIEWED_KEY = 'cite-10.1016/j.trb.2024.999999'
+
 /**
  * A writer that answers every prose step in that step's own format, and D3 with prose citing nothing.
  *
@@ -227,11 +230,17 @@ describe('a run whose manuscript cites none of the sources it reviewed', () => {
 
 
 describe('a run that cites a source it never reviewed', () => {
-  it('is refused, because being retrieved is not being read', async () => {
+  it('is refused where the prose is written, naming the key nobody read', async () => {
     // A SOURCE ON THE SAME TOPIC IS WHAT A SEARCH RETURNS. A model that cites one of the landscape
     // scan's hits — a real DOI, a real paper, no reviewed judgement about what it establishes — is
-    // refused rather than published, and it is refused on BOTH counts: the reference list does not
-    // carry the key, and the run holds no judgement binding that source to a statement.
+    // refused rather than published.
+    //
+    // WHERE THE REFUSAL LANDS IS THE POINT OF THIS CASE. It used to land at `E1-format`, and the run
+    // that measured it (2026-09-20, `418936db`) cited `cite-10.1007/s40534-016-0117-3` — an OpenAlex
+    // landscape hit, W2512479688, on no roster — through D3 and died at E1, which is a step too late
+    // to tell the writer anything and reports a citation defect as a formatting step's problem. D3
+    // reads the manuscript it just wrote, so it is where the citation can be answered: the reason
+    // below is quoted verbatim into the rewrite instruction.
     const store: ResearchRunStore = new Map()
     const run = await runT19B(store, {
       studyPlan: DEFAULT_PLAN,
@@ -239,15 +248,47 @@ describe('a run that cites a source it never reviewed', () => {
         // THE REVIEWED SOURCES ARE ALL CITED, so the draft is not refused for leaving one unused —
         // the scenario under test is the source that was never reviewed.
         `Prior work on this quantity has been reported ${REVIEWED_KEYS.map(key => `[@${key}]`).join(' ')}`
-        + ' and one further study [@cite-10.1016/j.trb.2024.999999].'
+        + ` and one further study [@${UNREVIEWED_KEY}].`
         + ' The comparison is drawn in Figure 1, Figure 2 and Table 1.',
       ),
       casePackInputs: planCasePackInputs(loadCasePack(CASE_PACK_DIR)),
     })
-    const e1 = run.steps.find(step => step.stepId === 'E1-format')
-    expect(e1?.status).toBe('in_progress')
-    expect(e1?.executeError).toContain('citation-target-missing')
-    expect(e1?.executeError).toContain('citation-unreviewed-source')
+    const d3 = run.steps.find(step => step.stepId === 'D3-writing')
+    expect(d3?.status).toBe('in_progress')
+    expect(d3?.executeError).toContain('statement-source-unreviewed')
+    // THE OFFENDING KEY IS NAMED, and so is what is missing behind it: a refusal that said only "not
+    // on the roster" would leave the writer choosing between a citation it cannot justify and none.
+    expect(d3?.executeError).toContain(UNREVIEWED_KEY)
+    expect(d3?.executeError).toContain('the work was retrieved and never read')
+    // AND NOTHING WAS PUBLISHED: the refusal precedes the artifact the later steps read.
+    expect(getArtifact(store, run.runId, 'manuscript')).toBeUndefined()
+  })
+
+  it('is STILL refused at E1, which reads a manuscript assembled by any route', async () => {
+    // THE BACKSTOP, AND IT IS NOT REDUNDANT. D3's check reads the sentences it wrote; E1's reads the
+    // assembled manuscript, which a person may replace, an import may supply, or a later step may
+    // edit. Weakening either is how a citation to a work nobody read reaches a referee.
+    //
+    // E1 IS DRIVEN HERE WITH A REAL RUN'S MANUSCRIPT AND ONE EDIT, so the refusal can only come from
+    // the citation that was added.
+    const store: ResearchRunStore = new Map()
+    const run = await runT19B(store)
+    const draft = getArtifact(store, run.runId, 'manuscript') as {
+      sections: ReadonlyArray<{ id: string; heading: string; bodyText: string }>
+    }
+    const edited = {
+      ...draft,
+      sections: draft.sections.map((section, index) => index === 0
+        ? { ...section, bodyText: `${section.bodyText} One further study reports this [@${UNREVIEWED_KEY}].` }
+        : section),
+    }
+    const entry = STEP_EXECUTOR_REGISTRY.get('E1-format')
+    const e1Ctx: ExecCtx = {
+      ...execCtx('E1-format'),
+      getInput: slug => (slug === 'manuscript' ? edited : getArtifact(store, run.runId, slug)),
+      readInputRef: slug => getRunSnapshot(store, run.runId).registry[slug]?.ref,
+    }
+    await expect(entry?.executor(e1Ctx)).rejects.toThrow(/citation-unreviewed-source/u)
   })
 })
 
