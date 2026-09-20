@@ -70,7 +70,9 @@ export {
   isComplete,
   getAuditHistory,
   approvalStalenessOf,
+  unsatisfiedInputs,
 } from './engine/state-machine.ts'
+export type { UnsatisfiedInput } from './engine/state-machine.ts'
 export { ResearchError, ResearchValueError, ResearchRunError } from './engine/state-machine.ts'
 
 // Manuscript acceptance: publishing a REVIEWED candidate as the run's official manuscript. It is not

@@ -36,6 +36,10 @@ function readyFacts(overrides: Partial<FinalPackageFacts> = {}): FinalPackageFac
     packagedFiles: ['manuscript.md', 'experiment-tables.md', 'run-summary.md'],
     artifactRefs: { read: ['typeset@1'], moved: [] },
     compilation: { tool: null, dropped: [] },
+    // THE PAPER CITES THE SOURCES IT HELD, which is what every other condition in this file assumes
+    // and what makes this fixture the case where nothing is wrong. The cases about the citation
+    // count itself move this, and nothing else here does.
+    citations: { made: 3, held: 3 },
     // THE TYPESET FORM IS A RENDER OF THE DOCUMENT THE RUN HOLDS, and this deployment declared no
     // submission format it produces — the case where it compiles nothing, which the cases below move.
     typeset: {
@@ -169,6 +173,34 @@ describe('a final package is what every condition holds', () => {
       .toEqual(['production-evidence', 'approval-recorded'])
     // The refusal, however, is one sentence: the first condition to fix.
     expect(finalPackageRefusalOf(checks)).toContain('[final-package-refused] production-evidence:')
+  })
+})
+
+describe('a manuscript that cites nothing', () => {
+  it('is refused when the run held sources it could have cited', () => {
+    // THE DEFECT EVERY CITATION CHECK PASSES BY EMPTINESS. They compare two sets — what the body
+    // cites and what the reference list carries — and two empty sets are equal, so a manuscript with
+    // no markers and no bibliography satisfied all of them. This is the count, and the run's own
+    // record is what says it held something to cite.
+    const check = checkOf(readyFacts({ citations: { made: 0, held: 3 } }), 'manuscript-cites-sources')
+    expect(check.passed).toBe(false)
+    expect(check.detail).toContain('cites nothing')
+    expect(check.detail).toContain('held 3 source(s)')
+    expect(finalPackageStateOf(checkFinalPackage(readyFacts({ citations: { made: 0, held: 3 } })))).toBe('draft')
+  })
+
+  it('is NOT refused when the run held nothing, which is a different fact', () => {
+    // A STUDY WITH NO LITERATURE IS NOT A DEFECT IN THE PAPER. The run's own record says it had
+    // nothing to cite, and refusing it would refuse runs the pipeline is allowed to produce.
+    const check = checkOf(readyFacts({ citations: { made: 0, held: 0 } }), 'manuscript-cites-sources')
+    expect(check.passed).toBe(true)
+    expect(check.detail).toContain('held no source to cite')
+  })
+
+  it('passes a manuscript that cites, and says how many', () => {
+    const check = checkOf(readyFacts({ citations: { made: 2, held: 5 } }), 'manuscript-cites-sources')
+    expect(check.passed).toBe(true)
+    expect(check.detail).toContain('cites 2 source(s)')
   })
 })
 

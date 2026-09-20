@@ -699,13 +699,15 @@ function parseArtifactRef(raw: unknown, what: string, slug: string): ArtifactRec
 /**
  * The non-step producers this run's own log records publishing `slug`, as a set.
  *
- * A PUBLICATION IS ITS OWN EVIDENCE. `publishArtifactVersion` is the only writer that records a
- * producer which is not a step, and it appends an `artifact-republished` event naming the slug and
- * the producer. Reading the roster out of the run's log rather than out of a constant kept here is
- * what makes the check complete: the constant can only ever name the producers THIS file knows
- * about, and the ones a deployment adds are the ones that matter — a run whose manuscript had been
- * imported, or whose typeset form had been re-rendered, was refused as unreadable by the very
- * snapshot that recorded it.
+ * READ FOR SNAPSHOTS A BUILD BEFORE THE PRODUCER INHERITANCE WROTE. A publication now records the
+ * publisher in `publishedBy` and keeps the replaced entry's `producerStepId`, so a registry entry it
+ * writes names a step and this roster is not consulted. What it still admits is the format this file
+ * may be handed from an older `dsh`: `publishArtifactVersion` appended an `artifact-republished`
+ * event naming the slug and the producer, so the name is in the run's own log. Reading it there
+ * rather than from a constant kept here is what makes the check complete: the constant can only ever
+ * name the producers THIS file knows about, and the ones a deployment adds are the ones that
+ * matter — a run whose manuscript had been imported, or whose typeset form had been re-rendered, was
+ * refused as unreadable by the very snapshot that recorded it.
  *
  * @param events - the run's parsed audit events.
  * @param slug - the artifact whose publishers are wanted.
@@ -740,7 +742,7 @@ function parseRegistry(raw: unknown, events: ReadonlyArray<AuditEvent>): Record<
     )
     // TWO KINDS OF NON-STEP PRODUCER, AND THE CHECK MUST ADMIT BOTH. It catches a record that names
     // something the pipeline never ran — corruption, or a format from another build — and it must not
-    // also reject the two ways the product deliberately publishes without a step:
+    // also reject the two ways an EARLIER build recorded publishing without a step:
     //   - an ACCEPTANCE, which core writes with `ACCEPTANCE_PRODUCER`. Refusing it made the snapshot
     //     unreadable, so a study whose manuscript had been accepted could not be restored AT ALL:
     //     `listRuns` threw, the picker came back empty, and the acceptance was durable only until the
@@ -750,6 +752,9 @@ function parseRegistry(raw: unknown, events: ReadonlyArray<AuditEvent>): Record<
     //     file cannot know. It reads the name out of the run's own log instead: see
     //     {@link republishedProducersOf}. Fixing only the acceptance left the other two producers
     //     rejected by the same check, so an imported or repaired run could be neither saved nor read.
+    // THE CURRENT WRITERS NAME A STEP, because a publication inherits the producer link of the entry
+    // it replaces and records the publisher in `publishedBy`. Both allowances above are kept for the
+    // records an older build wrote; dropping them would make those studies unreadable here.
     if (
       producerStepId !== ACCEPTANCE_PRODUCER
       && getStepDefinitionById(producerStepId) === undefined
@@ -764,6 +769,12 @@ function parseRegistry(raw: unknown, events: ReadonlyArray<AuditEvent>): Record<
     if (typeof rec.invalidated !== 'boolean') {
       throw new SnapshotInvalidError(`${what}.invalidated must be a boolean.`)
     }
+    // WHO PUBLISHED THIS VERSION, when a publication rather than a step wrote it. OPTIONAL, and its
+    // absence is a fact: a committed entry was written by the step `producerStepId` names. Required
+    // would refuse every snapshot written before publications recorded a publisher.
+    const publishedBy = rec.publishedBy === undefined
+      ? undefined
+      : asString(rec.publishedBy, `${what}.publishedBy`)
     registry[slug] = {
       slug,
       producerStepId,
@@ -771,6 +782,7 @@ function parseRegistry(raw: unknown, events: ReadonlyArray<AuditEvent>): Record<
         rec.producerAttemptId,
         `${what}.producerAttemptId`,
       ),
+      ...(publishedBy === undefined ? {} : { publishedBy }),
       value: rec.value,
       producedAt: asNumber(rec.producedAt, `${what}.producedAt`),
       invalidated: rec.invalidated,

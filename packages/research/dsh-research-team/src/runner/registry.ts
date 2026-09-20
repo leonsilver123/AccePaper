@@ -765,9 +765,11 @@ const D3_PRODUCER = `${THREE_LINE_TABLE_TOOL_ID}@${THREE_LINE_TABLE_TOOL_VERSION
  * states the roster as a PERMISSION with an obligation inside it (only the sources whose reading
  * established the claim are owed a citation) and adds the rewrite rounds and the pre-send check to
  * the record, so a request written under "every reviewed source must be cited" is not read as one
- * written under the rule that replaced it.
+ * written under the rule that replaced it. v6 adds D2's constraints part — the run's own record and
+ * the direction rule a quality role reads the title against — so a `paper-outline` written by a model
+ * that was never told what its title may assert is distinguishable from one that was.
  */
-const PROSE_REQUEST_VERSION = 'prose-request-v5'
+const PROSE_REQUEST_VERSION = 'prose-request-v6'
 
 const D4_PRODUCER = 'fixture:rebuttal'
 
@@ -2819,9 +2821,25 @@ async function d2Executor(ctx: ExecCtx): Promise<Record<string, unknown>> {
 
   const writer = ctx.proseWriter
   if (writer !== undefined) {
+    // WHAT THIS RUN'S RECORD SAID, as the rule bounding the title reads it. The title is a claim
+    // about the work, and a quality role grades it against the run's own measurement rather than
+    // against the prose: the measured change and what it did to the claim are the two facts that
+    // decide which direction words a headline may state, and they are read here from the same
+    // measurement D3's obligations are built from (`claimOutcomeOf`, which `argumentPlanOf` calls).
+    const commitment = ctx.runCtx.commitment
+    const measuredPct = measureOutcome(ctx).improvementPct
     const request: ResearchProseRequest = {
       stepId: 'D2-framework',
-      instruction: frameworkInstruction({ sectionIds: OUTLINE_SKELETON.map(section => section.id) }),
+      instruction: frameworkInstruction({
+        sectionIds: OUTLINE_SKELETON.map(section => section.id),
+        measurement: {
+          metricLabel: planOf(ctx).metric.label,
+          measuredPct,
+          outcome: claimOutcomeOf(measuredPct, commitment?.direction ?? 'increase', commitment?.thresholdPct),
+          committedDirection: commitment?.direction ?? 'increase',
+          ...(commitment === undefined ? {} : { thresholdPct: commitment.thresholdPct }),
+        },
+      }),
       context: {
         ...planContextOf(planOf(ctx)),
         claim: claim?.assertion ?? claimRef,

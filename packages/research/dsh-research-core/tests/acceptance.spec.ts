@@ -60,8 +60,14 @@ describe('an acceptance publishes the candidate over the manuscript', () => {
 
     expect(after.registry[ACCEPTED_MANUSCRIPT_SLUG]?.ref.version).toBe(fixture.manuscript.meta.ref.version + 1)
     expect(receipt.revision).toBe(fixture.revision + 1)
-    // A PERSON DECIDING IS NOT A STEP EXECUTING, and the registry says which it was.
-    expect(after.registry[ACCEPTED_MANUSCRIPT_SLUG]?.producerStepId).toBe(ACCEPTANCE_PRODUCER)
+    // A PERSON DECIDING IS NOT A STEP EXECUTING, and the registry says which it was — in the field
+    // that says it: the accepted version keeps the MANUSCRIPT's producer link, because that link is
+    // what the engine schedules on and an entry naming a person satisfied no downstream input, and
+    // `publishedBy` is where the acceptance is recorded beside it.
+    const accepted = after.registry[ACCEPTED_MANUSCRIPT_SLUG]
+    expect(accepted?.publishedBy).toBe(ACCEPTANCE_PRODUCER)
+    expect(accepted?.producerStepId).toBe(fixture.manuscript.meta.producerStepId)
+    expect(accepted?.producerAttemptId).toBe(fixture.manuscript.meta.producerAttemptId)
     const record = after.events.filter(event => event.kind === 'manuscript-accepted').at(-1) as
       { detail?: { replacedVersion?: number | null; candidateId?: string } } | undefined
     // THE AUDIT NAMES WHAT IT REPLACED, or it says an acceptance happened and not what it changed.

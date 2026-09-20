@@ -17,11 +17,12 @@
 // run's own records — its step statuses, its registry, its approval, its last write — and never from
 // a caller's claim about them.
 //
-// ONE DEFINITION OF READY, IN TWO SCOPES. Nine of the conditions below are about the MANUSCRIPT: is
+// ONE DEFINITION OF READY, IN TWO SCOPES. Ten of the conditions below are about the MANUSCRIPT: is
 // the evidence the kind that may carry a submission, was there a manuscript, is the typeset form a
 // render of the document the run holds, did every step close, does it have every section, is any
 // concern still open, does the approval still cover it, does the compiled document carry its floats,
-// has it had the review the deployment requires. Seven are about the DELIVERY: is there an approval,
+// does the manuscript cite the sources the run held, has it had the review the deployment requires.
+// Seven are about the DELIVERY: is there an approval,
 // does it still cover what the run holds, will the package carry the files the manuscript declares,
 // does it carry the documents the compile produced, are those documents the ones that were compiled,
 // does the package describe the state the run is in, is that state on disk. `checkManuscript`
@@ -33,6 +34,8 @@
 import { createHash } from 'node:crypto'
 import { approvalStalenessOf, getArtifact, getRunSnapshot, getStepDefinitions } from '@deepseek-ai/dsh-research-core'
 import type { ApprovalRecord, EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { assessmentsFor } from './evidence-corpus.ts'
+import { citedKeysIn } from './citation-bindings.ts'
 import { checkVenueRules } from './venue-rules.ts'
 import type { VenueRuleRefusalCode } from './venue-rules.ts'
 import type { JournalProfile } from './research-profile.ts'
@@ -67,6 +70,8 @@ export type FinalPackageCheckCode =
   | 'manuscript-typeset'
   /** The typeset form was re-rendered by the repair path, so no gate has judged this document. */
   | 'manuscript-gated'
+  /** The manuscript cites nothing while the run held sources it could have cited. */
+  | 'manuscript-cites-sources'
   /** A submission format the deployment declared has no document, or one that does not survive it. */
   | 'typeset-complete'
   /** The target journal's requirements have not been read, so nothing was checked against them. */
@@ -211,6 +216,23 @@ export interface ManuscriptFacts {
    * for the fact: the review policy's own evaluation, made where the rounds were taken.
    */
   readonly review?: { readonly satisfied: boolean; readonly reason: string }
+  /**
+   * What the manuscript cites, and what the run held for it to cite.
+   *
+   * A PAPER THAT CITES NOTHING PASSES EVERY CITATION CHECK BY EMPTINESS. The manuscript's citation
+   * checks are set comparisons between what the body cites and what the reference list carries, and
+   * both loops are vacuous when both sets are empty — so a run whose roster was empty produced a
+   * paper with no citations at all, which reads to a referee as a paper with no literature rather
+   * than as the misconfiguration it is. `held` is what the run had to cite: the keys its own prose
+   * requests offered the writer, and the sources the evidence corpus reviewed for this run's claim.
+   * See {@link citationFactsOf}.
+   */
+  readonly citations: {
+    /** How many distinct citation markers the manuscript's sections carry. */
+    readonly made: number
+    /** How many distinct sources the run held that the paper could have cited. */
+    readonly held: number
+  }
 }
 
 /** Everything the checks read, gathered from the run rather than asserted by a caller. */
@@ -410,6 +432,25 @@ export function checkManuscript(facts: ManuscriptFacts): ReadonlyArray<FinalPack
             + ' — a submission whose figures are missing is not the paper',
     },
     {
+      // A PAPER THAT CITES NOTHING IS NOT A PAPER, whatever made it that way. This is the ONE
+      // condition that reads the citation COUNT rather than a citation's target, and it is here
+      // because every other check in the chain is a set comparison: two empty sets are equal, so a
+      // manuscript with no markers and no reference list satisfied all of them. The run's own record
+      // says what it held (see {@link ManuscriptFacts.citations}), and a paper that cites none of it
+      // states no position its evidence establishes — which is the defect the citation layer exists
+      // to prevent, with the sign flipped.
+      code: 'manuscript-cites-sources',
+      passed: facts.citations.made > 0 || facts.citations.held === 0,
+      detail: facts.citations.made > 0
+        ? `the manuscript cites ${String(facts.citations.made)} source(s)`
+        : facts.citations.held === 0
+          ? 'the run held no source to cite, so a manuscript that cites none is the result rather'
+            + ' than a defect'
+          : `the manuscript cites nothing, and this run held ${String(facts.citations.held)} source(s)`
+            + ' it could have cited — a paper whose body cites no source reads as a paper with no'
+            + ' literature, which is not what this run has',
+    },
+    {
       // A MANUSCRIPT WHOSE REVIEW DID NOT FINISH IS NOT THE PAPER EITHER. The deployment states how
       // many complete readings it requires and what "complete" means; a run that has not met it — too
       // few rounds, an issue still open, or a revision nobody has read — may be exported as the draft
@@ -494,6 +535,7 @@ const FINAL_PACKAGE_CHECK_ORDER: ReadonlyArray<FinalPackageCheckCode> = [
   'manuscript-produced',
   'manuscript-typeset',
   'manuscript-gated',
+  'manuscript-cites-sources',
   'every-step-closed',
   'no-refused-sections',
   'no-open-issues',
@@ -783,8 +825,65 @@ export function manuscriptFactsOf(
       .map(definition => approvalStalenessOf(store, runId, definition.id))
       .find(reason => reason !== undefined),
     compilation: compilationOf(store, runId),
+    citations: citationFactsOf(store, runId),
     ...reviewOf(store, runId),
   }
+}
+
+/**
+ * What the manuscript cites, and what this run held for it to cite.
+ *
+ * TWO QUESTIONS, ANSWERED FROM TWO RECORDS THE RUN WROTE ITSELF.
+ *
+ * `made` counts the distinct citation markers the manuscript's sections carry. A marker is the only
+ * thing in the text this pipeline reads as a citation, so the count is exact rather than a guess at
+ * prose.
+ *
+ * `held` is the larger of two independent statements of what the run had to cite, because either one
+ * alone can be empty while the other is not:
+ *   - the cite keys the run's own prose requests offered its writer, which is the roster D3 built
+ *     from `judgementsFor` and gave the writer as `citations`;
+ *   - the sources the evidence corpus has reviewed for THIS claim, which is what the anchoring gate
+ *     reads. A run whose configured registry could not join those assessments — the deployment's
+ *     registry is keyed by whatever it minted — held them and could not cite them, and that is
+ *     exactly the state this fact exists to make visible.
+ *
+ * @param store - the run store, still live at this point.
+ * @param runId - the run being read.
+ * @returns the two counts.
+ */
+export function citationFactsOf(
+  store: ResearchRunStore,
+  runId: string,
+): ManuscriptFacts['citations'] {
+  const snapshot = getRunSnapshot(store, runId)
+  const manuscript = asRecord(readArtifact(store, runId, 'manuscript'))
+  const sections = Array.isArray(manuscript.sections)
+    ? manuscript.sections
+    : asRecord(manuscript.document).sections
+  const made = new Set((Array.isArray(sections) ? sections : [])
+    .flatMap((section): string[] => {
+      const bodyText = (section as { bodyText?: unknown } | null)?.bodyText
+      return typeof bodyText === 'string' ? [...citedKeysIn(bodyText)] : []
+    })).size
+  const requests = Array.isArray(manuscript.proseRequests) ? manuscript.proseRequests : []
+  const offered = new Set(requests.flatMap((request): string[] => {
+    const citations = (request as { citations?: unknown } | null)?.citations
+    return Array.isArray(citations)
+      ? citations.flatMap((citation): string[] => {
+        const citeKey = (citation as { citeKey?: unknown } | null)?.citeKey
+        return typeof citeKey === 'string' ? [citeKey] : []
+      })
+      : []
+  }))
+  // THE CLAIM THIS RUN IS COMMITTED TO. Read off the artifact that records it, falling back to the
+  // plan frozen in the spec: a manuscript published by an acceptance carries whatever the caller
+  // assembled, so the artifact is not the only place the identity lives.
+  const frozenRef = asRecord(asRecord(snapshot.spec['studyPlan']).claim).ref
+  const claimRef = typeof manuscript.claimRef === 'string'
+    ? manuscript.claimRef
+    : typeof frozenRef === 'string' ? frozenRef : ''
+  return { made, held: Math.max(offered.size, assessmentsFor(claimRef).length) }
 }
 
 /**

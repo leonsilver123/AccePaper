@@ -96,6 +96,8 @@ export type PackageCheckCode =
   | 'manuscript-typeset'
   /** The typeset form was re-rendered by the repair path, so no gate has judged this document. */
   | 'manuscript-gated'
+  /** The manuscript cites nothing while the run held sources it could have cited. */
+  | 'manuscript-cites-sources'
   /** A submission format the deployment declared has no document, or one that does not survive it. */
   | 'typeset-complete'
 
@@ -117,6 +119,7 @@ const PACKAGE_CHECK_KEYS: Readonly<Record<PackageCheckCode, ResearchKey>> = {
   'run-saved': 'packageCheck.run-saved',
   'manuscript-typeset': 'packageCheck.manuscript-typeset',
   'manuscript-gated': 'packageCheck.manuscript-gated',
+  'manuscript-cites-sources': 'packageCheck.manuscript-cites-sources',
   'typeset-complete': 'packageCheck.typeset-complete',
 }
 

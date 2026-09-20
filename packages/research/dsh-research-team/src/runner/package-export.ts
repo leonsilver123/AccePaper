@@ -24,7 +24,7 @@ import {
 } from './staged-directory.ts'
 import type { StagedFile, WrittenFile, WrittenFileCheck } from './staged-directory.ts'
 import {
-  checkFinalPackage, finalPackageApprovalOf, finalPackageFactsOf, finalPackageStateOf,
+  checkFinalPackage, citationFactsOf, finalPackageApprovalOf, finalPackageFactsOf, finalPackageStateOf,
 } from './final-package.ts'
 import type { FinalPackageApproval, FinalPackageCheck, FinalPackageState } from './final-package.ts'
 import type { EvidenceProfile, ResearchRunStore } from '@deepseek-ai/dsh-research-core'
@@ -1109,6 +1109,11 @@ export function planRunPackage(
     },
     floatsNotRendered: (typeset?.floatsNotRendered as ReadonlyArray<string> | undefined) ?? [],
     referenceCount: (typeset?.manuscriptCounts as { references?: number } | undefined)?.references ?? 0,
+    // WHAT THE RUN HELD TO CITE, read from the run's own record by the same function the package's
+    // conditions read — see `citationFactsOf`. Zero for a run that had nothing, which is what keeps
+    // the rule from firing on a study with no literature rather than on one whose sources never
+    // reached the writer.
+    sourcesHeld: citationFactsOf(store, runId).held,
     ...(metric === undefined ? {} : { metric }),
   })
 

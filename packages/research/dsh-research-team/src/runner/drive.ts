@@ -30,6 +30,7 @@ import type {
   StepDefinition,
   StepExecContext,
   StepStatus,
+  UnsatisfiedInput,
 } from '@deepseek-ai/dsh-research-core'
 import { join } from 'node:path'
 import {
@@ -48,6 +49,7 @@ import {
   setRunSpec,
   startStep,
   submitGateVerdict,
+  unsatisfiedInputs,
 } from '@deepseek-ai/dsh-research-core'
 
 import {
@@ -58,6 +60,7 @@ import {
   TRUTHFULNESS_LEVELS,
   type Truthfulness,
 } from './registry.ts'
+import { citableSourceRefusal, reviewedSources } from './citation-bindings.ts'
 import { EMPTY_CLAIM_MATERIAL } from './redteam-review.ts'
 import { experimentStudy } from './platoon-sim.ts'
 import { requireStudyAdapter } from './study-adapter.ts'
@@ -173,33 +176,64 @@ async function projectManuscript(
 /**
  * Why a step cannot start, as far as the driver can tell from public state.
  *
- * `canStart` decides; this explains. It reads the step's recorded status and resolves each declared
- * input the same way the executor will, so the answer names the fact the caller needs instead of
- * the ordering rule that happened to reject it.
+ * `canStart` decides; this explains, BY ASKING `canStart`'S OWN TWO QUESTIONS — the step's status,
+ * and `unsatisfiedInputs` for each declared input. It used to ask whether each input had a VALUE,
+ * which is not what the engine reads: an artifact published over a step's — by an import, an
+ * acceptance, or a repair — holds a value the step reads and a producer link no passed step matches,
+ * so the engine refused and this function reported "its status and declared inputs both look
+ * startable to the driver". The message named a cause that was not the cause, for the one state it
+ * was written to explain. An explanation that answers a different question from the decision is
+ * worse than no explanation: it sends the reader to look at ordering.
  *
  * @param store - the run store.
  * @param runId - the run to inspect.
  * @param stepId - the step that was refused.
- * @param stepDef - the step's definition, for its declared inputs.
  * @returns a one-line reason.
  */
-function startabilityOf(
-  store: ResearchRunStore,
-  runId: string,
-  stepId: string,
-  stepDef: StepDefinition,
-): string {
+function startabilityOf(store: ResearchRunStore, runId: string, stepId: string): string {
   const status = getRunSnapshot(store, runId).steps[stepId]?.status
   if (status !== undefined && status !== 'pending') {
     return `its status is '${status}', and only a 'pending' step can start`
   }
-  const missing = stepDef.inputs.filter(input => resolveStepInput(store, runId, input) === undefined)
-  if (missing.length > 0) {
-    return `it is missing ${missing.map(input => `'${input}'`).join(', ')}`
+  const blocked = unsatisfiedInputs(store, runId, stepId)
+  if (blocked.length > 0) {
+    return `its declared inputs are not satisfied — ${blocked.map(describeBlockedInput).join('; ')}`
   }
-  // The engine refused and the driver can see nothing wrong: say exactly that rather than
-  // inventing an ordering problem.
-  return 'the engine refused it, and its status and declared inputs both look startable to the driver'
+  // The engine refused and both of its own questions answer 'no cause', which is reachable only if
+  // the engine reads an input this driver's step definition does not declare. Say that rather than
+  // repeating the claim that everything looks startable.
+  return 'the engine refused it, and the driver cannot read the cause off the step\'s status or its'
+    + ' declared inputs'
+}
+
+/**
+ * One unsatisfied input, as a clause a reader can act on.
+ *
+ * @param input - what {@link unsatisfiedInputs} found.
+ * @returns the clause naming the slug and the condition it failed.
+ */
+function describeBlockedInput(input: UnsatisfiedInput): string {
+  switch (input.reason) {
+    case 'absent':
+      return `'${input.slug}' is not held by this run and was never seeded`
+    case 'invalidated':
+      return `'${input.slug}' was invalidated by a rollback of '${input.producerStepId ?? 'its producer'}'`
+    case 'producer-not-passed':
+      return `'${input.slug}' was produced by '${input.producerStepId ?? 'a step'}', which is`
+        + ` '${input.producerStatus ?? 'unstarted'}' rather than 'passed'`
+    case 'stale-attempt':
+      return `'${input.slug}' was produced by attempt ${String(input.producerAttemptId ?? 0)} of`
+        + ` '${input.producerStepId ?? 'a step'}' and the run holds attempt`
+        + ` ${String(input.liveAttemptId ?? 0)} of it`
+    default:
+      /* v8 ignore next -- UnsatisfiedInput.reason is closed; every member is handled above. */
+      return assertNever(input.reason)
+  }
+}
+
+/* v8 ignore next 3 -- UnsatisfiedInput.reason is closed; every member is handled above. */
+function assertNever(value: never): never {
+  throw new Error(`unreachable unsatisfied-input reason: ${JSON.stringify(value)}`)
 }
 
 /** Drive exactly one step end-to-end (dependency guard → execute → gate → E2 stop). */
@@ -217,10 +251,10 @@ export async function driveStep(
     // NAME THE CAUSE, not the symptom. "dependency order violated" was this thread's recurring
     // red herring: it was printed for a step held by an abstention, for a step whose inputs were
     // missing, and for a step that was simply not pending — and every time the reader was sent
-    // looking at the ordering. `canStart` is the decision; this only explains it, using the same
-    // input reader the driver uses.
+    // looking at the ordering. `canStart` is the decision; this only explains it, asking `canStart`'s
+    // own questions of the engine rather than a near-enough one of its own.
     throw new Error(
-      `T19B drive: step '${stepId}' cannot start — ${startabilityOf(store, runId, stepId, stepDef)}`,
+      `T19B drive: step '${stepId}' cannot start — ${startabilityOf(store, runId, stepId)}`,
     )
   }
 
@@ -516,6 +550,12 @@ export function prepareRun(
       + ' type must be the same configuration',
     )
   }
+  // AND WHETHER THE REGISTRY THE DEPLOYMENT CONFIGURED CAN SUPPLY WHAT THIS CLAIM'S EVIDENCE IS.
+  // Refused HERE rather than at D3, because D3 is where the writer is handed the empty roster and the
+  // operator who configured the registry is nowhere near it. See `citableSourceRefusal`: the run it
+  // refuses would pass every anchoring gate on the corpus and publish a paper that cites nothing.
+  const uncitable = citableSourceRefusal(plan.claim.ref, opts.sources ?? reviewedSources())
+  if (uncitable !== null) throw new Error(`T19B drive: ${uncitable}`)
   const runCtx: RunContext = createRunContext(
     timestamp,
     plan,

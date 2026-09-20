@@ -44,6 +44,10 @@ function cleanInput(overrides: Partial<PaperQualityInput> = {}): PaperQualityInp
     // crafted sections below are about objects, statements and directions, and a fixture that
     // accidentally carried references would have every such case failing for a second reason.
     referenceCount: 0,
+    // AND NOTHING TO CITE EITHER, for the same reason: "the run held sources and the paper cites
+    // none" is its own case below, and a fixture that held sources would fire that rule on every
+    // case here.
+    sourcesHeld: 0,
     metric: { name: 'min-ttc-seconds', direction: 'higher is better', changePct: -38.2 },
     ...overrides,
   }
@@ -88,6 +92,20 @@ describe('a bibliography the prose never uses', () => {
     }))
     expect(findings.map(finding => finding.code)).toEqual(['no-literature-position'])
     expect(findings[0]?.detail).toContain('never says what it builds on')
+  })
+
+  it('catches a run that held sources when the document carries no bibliography at all', () => {
+    // THE LIST THE DEFECT REMOVES. A manuscript whose roster never reached the writer carries no
+    // references AND no citations, and the rule used to need `referenceCount > 0` — so it read the
+    // absence of a bibliography as "has nothing to cite" and stayed silent about a paper that cites
+    // nothing although the run held sources for it.
+    const findings = reviewPaperQuality(cleanInput({
+      sourcesHeld: 3,
+      sections: [{ id: 'introduction', heading: 'Introduction', bodyText: 'We test one claim about platoon control.' }],
+    }))
+    expect(findings.map(finding => finding.code)).toEqual(['no-literature-position'])
+    expect(findings[0]?.detail).toContain('held 3 source(s) to cite')
+    expect(findings[0]?.evidence).toContain('sources held: 3')
   })
 
   it('is silent when the text cites, and silent when there is nothing to cite', () => {
@@ -245,6 +263,9 @@ describe('the same baseline on a different research task', () => {
       crossReferences: manuscript.crossReferences,
       floatsNotRendered: manuscript.floatsNotRendered,
       referenceCount: manuscript.manuscriptCounts.references,
+      // THIS REAL RUN CITED ITS SOURCES, so the count is what the run held: the same value the
+      // package's own quality report is given. See `package-export.ts`.
+      sourcesHeld: manuscript.manuscriptCounts.references,
       metric: {
         name: baseline.baseline.metric.name,
         direction: baseline.baseline.metric.direction,
@@ -289,6 +310,9 @@ describe('the shipped run, read by the baseline', () => {
       crossReferences: manuscript.crossReferences,
       floatsNotRendered: manuscript.floatsNotRendered,
       referenceCount: manuscript.manuscriptCounts.references,
+      // THIS REAL RUN CITED ITS SOURCES, so the count is what the run held: the same value the
+      // package's own quality report is given. See `package-export.ts`.
+      sourcesHeld: manuscript.manuscriptCounts.references,
       metric: {
         name: baseline.baseline.metric.name,
         direction: baseline.baseline.metric.direction,

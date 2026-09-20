@@ -75,6 +75,16 @@ export interface PaperQualityInput {
   readonly floatsNotRendered: ReadonlyArray<string>
   /** How many references the document carries, so "cites nothing" can be told from "has nothing". */
   readonly referenceCount: number
+  /**
+   * How many sources the run held and the paper could have cited.
+   *
+   * THE SECOND HALF OF {@link referenceCount}, and the reason the rule can speak when the document
+   * carries no bibliography at all. An empty reference list is produced by two different states: a
+   * run with nothing to cite, which is a fact about the study, and a run whose sources never reached
+   * the writer, which is a fact about the deployment. Only this count tells them apart, and the
+   * first state is silent while the second is the defect the citation layer exists to prevent.
+   */
+  readonly sourcesHeld: number
   /** The metric the paper reports, when the run registered one. */
   readonly metric?: QualityMetric
 }
@@ -261,16 +271,27 @@ export function reviewPaperQuality(input: PaperQualityInput): ReadonlyArray<Pape
   // problem: a reader cannot tell what the work builds on or what it is answering, and no amount of
   // citation-style checking can see it. The rule needs both halves: a bibliography to have, and a
   // text that never uses it.
+  //
+  // AND A RUN THAT HELD SOURCES AND CITES NONE IS THE SAME DEFECT WITH THE LIST MISSING. The rule
+  // used to need `referenceCount > 0`, which is the half the defect removes: a manuscript whose
+  // roster never reached the writer carries no references and cites nothing, and the rule read that
+  // as "has nothing to cite". `sourcesHeld` is what the run itself recorded holding, so the silence
+  // is now only for the run that truly had nothing.
   const citesInText = input.sections
     .filter(section => section.id !== 'references' && section.heading.toLowerCase() !== 'references')
     .some(section => CITATION_LABEL.test(section.bodyText))
-  if (input.referenceCount > 0 && !citesInText) {
+  if (!citesInText && (input.referenceCount > 0 || input.sourcesHeld > 0)) {
     findings.push({
       code: 'no-literature-position',
       where: 'the manuscript',
-      detail: `the document carries ${String(input.referenceCount)} reference(s) and no sentence in the`
-        + ' text cites any of them, so the paper never says what it builds on',
-      evidence: `references: ${String(input.referenceCount)}, citations in text: 0`,
+      detail: input.referenceCount > 0
+        ? `the document carries ${String(input.referenceCount)} reference(s) and no sentence in the`
+          + ' text cites any of them, so the paper never says what it builds on'
+        : `this run held ${String(input.sourcesHeld)} source(s) to cite and the manuscript cites none`
+          + ' of them: the paper never says what it builds on',
+      evidence: input.referenceCount > 0
+        ? `references: ${String(input.referenceCount)}, citations in text: 0`
+        : `references: 0, sources held: ${String(input.sourcesHeld)}, citations in text: 0`,
     })
   }
 
@@ -349,11 +370,11 @@ export function reportPaperQuality(input: PaperQualityInput): PaperQualityReport
         : { outcome: 'no-defect-found' }
     }
     if (code === 'no-literature-position') {
-      return input.referenceCount === 0
+      return input.referenceCount === 0 && input.sourcesHeld === 0
         ? {
           outcome: 'not-applicable',
-          reason: 'the document carries no bibliography, so "cites nothing" cannot be told from'
-            + ' "has nothing to cite"',
+          reason: 'the document carries no bibliography and the run held no source to cite, so'
+            + ' "cites nothing" cannot be told from "has nothing to cite"',
         }
         : { outcome: 'no-defect-found' }
     }

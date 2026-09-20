@@ -203,8 +203,30 @@ describe('T19-B recovery — replay / duplicate protection', () => {
     // looking at the ordering when the real cause was a hold, a status, or a missing input. The
     // assertion is on the cause now, so the class of misleading message stays retired.
     const { store, runId, runCtx } = freshStore()
+    // THE CAUSE IS THE ENGINE'S OWN ANSWER TO `canStart`, read through `unsatisfiedInputs`: the
+    // input is not held and never seeded, which is one of four conditions and not the same as the
+    // step being unable to start for another reason.
     await expect(driveStep(store, runId, 'A2-claim', { runCtx })).rejects.toThrow(
-      /missing 'landscape-map'/i,
+      /'landscape-map' is not held by this run/i,
+    )
+  })
+
+  it('names the producer that is holding it when the artifact is there and the step is not passed', async () => {
+    // THE STATE THE OLD MESSAGE COULD NOT DESCRIBE, and the one it was written for: a held step's
+    // output IS in the registry (the commit runs before the gate), so every declared input has a
+    // value and the driver that asked "does this input have a value" found nothing wrong. It then
+    // reported that the step "looks startable to the driver" for a step the engine had refused,
+    // which is the misleading message `startabilityOf` exists to remove.
+    const { store, runId, runCtx } = freshStore()
+    const held = await driveStep(store, runId, 'A1-landscape', {
+      runCtx,
+      abstainComponents: () => ['B'],
+    })
+    expect(held.status).toBe('gated')
+    // The artifact the next step declares is present, which is what made the old answer wrong.
+    expect(getArtifact(store, runId, 'landscape-map')).toBeDefined()
+    await expect(driveStep(store, runId, 'A2-claim', { runCtx })).rejects.toThrow(
+      /'landscape-map' was produced by 'A1-landscape', which is 'gated' rather than 'passed'/,
     )
   })
 

@@ -42,6 +42,9 @@ function facts(overrides: Partial<ManuscriptFacts> = {}): ManuscriptFacts {
     openIssues: [],
     staleApproval: undefined,
     compilation: { tool: null, dropped: [] },
+    // A READY MANUSCRIPT CITES ITS SOURCES. See `final-package.spec.ts` for the condition this
+    // feeds: a paper that cites nothing while the run held sources is not ready.
+    citations: { made: 3, held: 3 },
     ...overrides,
     // THE TYPESET FORM RENDERS THE DOCUMENT THE RUN HOLDS, and this deployment declared no submission
     // format it produces. STATED AFTER THE SPREAD so the field is required in the result, the way

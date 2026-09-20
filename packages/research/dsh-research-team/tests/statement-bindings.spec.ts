@@ -261,11 +261,12 @@ describe('what a section was asked for is part of the run', () => {
       }>
       proseRequestVersion: string
     }
-    // v5 IS THE SHAPE THIS RUN RECORDED: the roster states which sources the paper OWES a citation
+    // v6 IS THE SHAPE THIS RUN RECORDED: the roster states which sources the paper OWES a citation
     // (v4 required every reviewed source to be cited), the request carries the round it belongs to,
-    // and the artifact carries what each rewrite round was told and changed. A request recorded
-    // before those rules existed is not read as one written under them.
-    expect(draft.proseRequestVersion).toBe('prose-request-v5')
+    // the artifact carries what each rewrite round was told and changed, and D2's instruction states
+    // the run's own record as the bound on what the title may assert. A request recorded before those
+    // rules existed is not read as one written under them.
+    expect(draft.proseRequestVersion).toBe('prose-request-v6')
     const ids = draft.proseRequests.map(entry => entry.sectionId)
     expect(ids).toContain('introduction')
     expect(ids.length).toBeGreaterThan(1)

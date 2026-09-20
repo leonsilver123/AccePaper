@@ -37,7 +37,13 @@ import { nextProjectRevision } from '../domain/project.ts'
  */
 export const ACCEPTED_MANUSCRIPT_SLUG = 'manuscript'
 
-/** The producer recorded on an accepted manuscript: a person deciding, not a step executing. */
+/**
+ * The publisher recorded on an accepted manuscript: a person deciding, not a step executing.
+ *
+ * IT IS A `publishedBy`, NOT A `producerStepId`. The accepted version keeps the producer link of the
+ * version it replaced — the engine schedules on that link, and an entry naming a person satisfied no
+ * downstream input — so this name travels in the field that says who published what the run holds.
+ */
 export const ACCEPTANCE_PRODUCER = 'human-acceptance'
 
 /** What an acceptance is about, as the caller states it. */
@@ -203,10 +209,14 @@ export function acceptManuscriptCandidate(
   }
   run.registry[ACCEPTED_MANUSCRIPT_SLUG] = {
     slug: ACCEPTED_MANUSCRIPT_SLUG,
-    // A PERSON DECIDING IS NOT A STEP EXECUTING, and the record says so: a reader of the registry can
-    // tell an artifact a step produced from one a person accepted.
-    producerStepId: ACCEPTANCE_PRODUCER,
-    producerAttemptId: 0,
+    // THE ACCEPTED VERSION INHERITS THE MANUSCRIPT'S PRODUCER LINK, and `publishedBy` records the
+    // acceptance beside it. A PERSON DECIDING IS NOT A STEP EXECUTING, which is why the publisher is
+    // named at all; but the slug is the same artifact, read by the same downstream steps, and an
+    // entry naming a person told the engine the document came from a step that never ran — so every
+    // step after the acceptance could not start.
+    producerStepId: previous?.producerStepId ?? ACCEPTANCE_PRODUCER,
+    producerAttemptId: previous?.producerAttemptId ?? 0,
+    publishedBy: ACCEPTANCE_PRODUCER,
     value: request.value,
     producedAt: acceptedAt,
     invalidated: false,

@@ -470,6 +470,7 @@ export function getRunSnapshot(store: ResearchRunStore, runId: string): RunSnaps
       invalidated: r.invalidated,
       ref: cloneValue(r.ref) as ArtifactRecordMeta['ref'],
       projectRevision: r.projectRevision,
+      ...(r.publishedBy === undefined ? {} : { publishedBy: r.publishedBy }),
     }
   }
   const snapshot: RunSnapshot = {
@@ -533,6 +534,79 @@ function isInputSatisfied(run: RunState, slug: string): boolean {
     return true
   }
   return slug in run.inputs // DEP-7: seedable run input (permanent across rollback)
+}
+
+/** Why one of a step's declared inputs does not satisfy it. */
+export interface UnsatisfiedInput {
+  /** The input slug the step declares. */
+  readonly slug: string
+  /**
+   * Which of {@link isInputSatisfied}'s conditions the input fails.
+   *
+   * THE CONDITIONS ARE SEPARATE ANSWERS, not one: "the run does not hold this artifact", "a rollback
+   * invalidated it", "the step that wrote it has not passed", and "the run has moved past the attempt
+   * that wrote it" are four states with four different remedies, and a caller told only that the input
+   * is missing cannot tell which it is in.
+   */
+  readonly reason: 'absent' | 'invalidated' | 'producer-not-passed' | 'stale-attempt'
+  /** The producer the registry entry names, for the two reasons that are about it. */
+  readonly producerStepId?: string
+  /** The status that producer is in, or 'unstarted' when the run holds no such step. */
+  readonly producerStatus?: StepStatus | 'unstarted'
+  /** The attempt id the entry records, for `stale-attempt`. */
+  readonly producerAttemptId?: number
+  /** The attempt the producer is at now, for `stale-attempt`. */
+  readonly liveAttemptId?: number
+}
+
+/**
+ * The declared inputs of a step that do not satisfy it, and why each one does not.
+ *
+ * THE SAME QUESTION {@link canStart} ASKS, ANSWERED WITH ITS REASONS. A caller explaining a refusal
+ * has to read the conditions the decision was made from; a caller that re-derived "is this input
+ * missing" from the artifact values instead reports that everything looks in order for a step the
+ * engine has refused — which is what `startabilityOf` did, and the explanation it produced named a
+ * cause that was not the cause.
+ *
+ * @param store - the caller-owned run store that holds the run.
+ * @param runId - the run to read; it must already exist in `store` (RUN_NOT_FOUND).
+ * @param stepId - the step to read; an id outside the pipeline yields no inputs to report.
+ * @returns one entry per unsatisfied input, in the order the step declares them.
+ */
+export function unsatisfiedInputs(
+  store: ResearchRunStore,
+  runId: string,
+  stepId: string,
+): ReadonlyArray<UnsatisfiedInput> {
+  const run = ensureRun(store, runId)
+  const step = lookupStep(stepId)
+  if (!step) return []
+  return step.inputs.flatMap((slug): UnsatisfiedInput[] => {
+    const rec = run.registry[slug]
+    if (rec === undefined) {
+      return slug in run.inputs ? [] : [{ slug, reason: 'absent' as const }]
+    }
+    if (rec.invalidated) return [{ slug, reason: 'invalidated', producerStepId: rec.producerStepId }]
+    const producer = run.steps.get(rec.producerStepId)
+    if (!producer || producer.status !== 'passed') {
+      return [{
+        slug,
+        reason: 'producer-not-passed',
+        producerStepId: rec.producerStepId,
+        producerStatus: producer?.status ?? 'unstarted',
+      }]
+    }
+    if (producer.attempt_id !== rec.producerAttemptId) {
+      return [{
+        slug,
+        reason: 'stale-attempt',
+        producerStepId: rec.producerStepId,
+        producerAttemptId: rec.producerAttemptId,
+        liveAttemptId: producer.attempt_id,
+      }]
+    }
+    return []
+  })
 }
 
 /** True iff the step is pending and every input is satisfied by a passed-producer artifact or a seed.

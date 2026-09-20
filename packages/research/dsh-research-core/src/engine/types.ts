@@ -154,6 +154,17 @@ export interface ArtifactRecord {
    * derive it from the first.
    */
   readonly projectRevision: ProjectRevision
+  /**
+   * Who published THIS version, when a publication rather than a step wrote it.
+   *
+   * A PUBLICATION INHERITS THE PRODUCER LINK OF THE VERSION IT REPLACES, so a slug a person edited
+   * still satisfies the steps that read it — see `publishArtifactVersion`. That inheritance would
+   * lose the fact that a person, not a step, produced this text, so the publisher is recorded here
+   * beside it and in the audit record of the publication itself. Absent on a committed artifact:
+   * the step named by `producerStepId` wrote it. The audit record of the publication carries the
+   * same name, so the fact is durable in two places rather than one.
+   */
+  readonly publishedBy?: string
 }
 
 /** The kinds of record the run's append-only audit log holds. Every state-machine
@@ -357,6 +368,8 @@ export interface ArtifactRecordMeta {
   readonly ref: ArtifactRef
   /** The project revision the artifact was produced under; see {@link ArtifactRecord}. */
   readonly projectRevision: ProjectRevision
+  /** The publisher of this version, when a publication rather than a step wrote it. */
+  readonly publishedBy?: string
 }
 
 /** Read-only run snapshot (deep-cloned on return; artifact values excluded — fetch via getArtifact). */

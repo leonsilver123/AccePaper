@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  PublicationRefusal, canPublishArtifactVersion, checkPublication, getArtifact,
-  getRunSnapshot, publishArtifactVersion, startStep,
+  PublicationRefusal, canPublishArtifactVersion, canStart, checkPublication, getArtifact,
+  getRunSnapshot, publishArtifactVersion, startStep, unsatisfiedInputs,
 } from '../src/index.ts'
 import { commitAll, freshStore, passStep, seedRun } from './helpers.ts'
 import { STEPS } from '../src/engine/steps.ts'
@@ -83,6 +83,96 @@ describe('a publication writes a new version over the one it derived from', () =
     // A PUBLICATION IS NOT A COMMIT: nothing claims a step executed, so a reader asking which steps
     // produced what is not handed this.
     expect(events.some(event => event.kind === 'step-executed')).toBe(false)
+  })
+})
+
+describe('a publication leaves the steps that read the slug able to run', () => {
+  /**
+   * The state a publication exists for: a run waiting on a step that reads the published slug.
+   *
+   * `D4-rebuttal` declares `manuscript`, which D3 committed, so the engine will start it — and the
+   * question below is whether it still can once a person's version of that document is in the
+   * registry.
+   */
+  function published(
+    publisher = 'manuscript-import',
+  ): {
+    readonly store: ReturnType<typeof freshStore>
+    readonly runId: string
+    readonly meta: NonNullable<ReturnType<typeof runWithArtifact>>['meta']
+    readonly startableBefore: boolean
+  } {
+    const store = freshStore()
+    const runId = seedRun(store)
+    for (const step of STEPS) {
+      if (step.id === 'D3-writing') break
+      passStep(store, runId, step.id)
+    }
+    // D3 ITSELF HAS PASSED, which is the state a run waiting on D4 is in: the step that wrote the
+    // document is closed, so `D4-rebuttal`'s declared input is satisfied by a passed producer. This
+    // is the one thing `runWithArtifact` above is not — it leaves D3 in progress, because its tests
+    // are about what a publication writes rather than about what it satisfies.
+    passStep(store, runId, 'D3-writing')
+    const before = getRunSnapshot(store, runId)
+    const meta = before.registry['manuscript']
+    if (meta === undefined) throw new Error('the fixture wrote no manuscript')
+    const startableBefore = canStart(store, runId, 'D4-rebuttal')
+    publishArtifactVersion(store, {
+      runId,
+      slug: 'manuscript',
+      expectedRevision: before.revision,
+      expectedVersion: meta.ref.version,
+      value: { title: 'hand edited' },
+      producer: publisher,
+      basis: 'a person handed the file back',
+    })
+    return { store, runId, meta, startableBefore }
+  }
+
+  it('keeps the producer link the engine schedules on, and records the publisher beside it', () => {
+    // THE DEPENDENCY THE PIPELINE SCHEDULED ON IS THE STEP THAT PRODUCED THE REPLACED VALUE. An
+    // entry naming the publisher instead told `canStart` that the input came from a step that never
+    // ran, so an imported or repaired run could not be driven past the step that reads the slug —
+    // and the only way back was to roll that step back and re-commit it, discarding the edit.
+    const run = published()
+    // THE RUN WAS STARTABLE BEFORE, which is what makes the assertion below about the publication.
+    expect(run.startableBefore).toBe(true)
+    const entry = getRunSnapshot(run.store, run.runId).registry['manuscript']
+    expect(entry?.producerStepId).toBe(run.meta.producerStepId)
+    expect(entry?.producerAttemptId).toBe(run.meta.producerAttemptId)
+    // AND WHO PUBLISHED IT IS STILL READABLE off the registry entry the reader is looking at, not
+    // only out of the audit log.
+    expect(entry?.publishedBy).toBe('manuscript-import')
+    expect(entry?.ref.version).toBe(run.meta.ref.version + 1)
+    expect(getArtifact(run.store, run.runId, 'manuscript')).toEqual({ title: 'hand edited' })
+  })
+
+  it('leaves every step that declares the slug startable, with no unsatisfied input', () => {
+    const run = published()
+    for (const stepId of ['D4-rebuttal', 'E1-format']) {
+      expect(canStart(run.store, run.runId, stepId), stepId).toBe(true)
+      expect(unsatisfiedInputs(run.store, run.runId, stepId), stepId).toEqual([])
+    }
+  })
+
+  it('inherits transitively, so a slug published twice still names the step it came from', () => {
+    const run = published()
+    const snapshot = getRunSnapshot(run.store, run.runId)
+    const first = snapshot.registry['manuscript']
+    if (first === undefined) throw new Error('the fixture published nothing')
+    publishArtifactVersion(run.store, {
+      runId: run.runId,
+      slug: 'manuscript',
+      expectedRevision: snapshot.revision,
+      expectedVersion: first.ref.version,
+      value: { title: 'hand edited twice' },
+      producer: 'materialize-manuscript',
+      basis: 'a repair re-rendered it',
+    })
+    const second = getRunSnapshot(run.store, run.runId).registry['manuscript']
+    expect(second?.producerStepId).toBe(run.meta.producerStepId)
+    expect(second?.publishedBy).toBe('materialize-manuscript')
+    expect(canStart(run.store, run.runId, 'D4-rebuttal')).toBe(true)
   })
 })
 

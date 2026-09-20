@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { getArtifact, getRunSnapshot, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
+import { getArtifact, getRunSnapshot, publishArtifactVersion, type ResearchRunStore } from '@deepseek-ai/dsh-research-core'
 import type { ThreeLineTableModel } from '@deepseek-ai/dsh-research-tools'
 import type { RunResult } from '../src/runner/types.ts'
 import { runT19B } from '../src/runner/drive.ts'
@@ -521,6 +521,43 @@ describe('a package that says which state it describes', () => {
     // AND THE PACKAGE IS NOT FINAL, whatever else holds: a reading of a state the run has left is not
     // the package to hand anyone.
     expect(second.state).toBe('draft')
+  })
+})
+
+describe('a package of a manuscript that cites nothing', () => {
+  it('refuses the export when the run held sources, whatever removed the citations', async () => {
+    // THE OUTCOME, NOT THE CAUSE. Every other citation check is a set comparison between the body
+    // and the reference list, and a run whose roster never reached the writer produced two empty
+    // sets: the paper cites nothing, its bibliography is empty, and each check was satisfied by
+    // emptiness. A person can also remove the citations by editing, which is the same artifact.
+    const { store, run } = await realRun()
+    const snapshot = getRunSnapshot(store, run.runId)
+    const meta = snapshot.registry['manuscript']
+    const value = getArtifact(store, run.runId, 'manuscript') as
+      { readonly sections: ReadonlyArray<{ readonly bodyText: string }> } | undefined
+    if (meta === undefined || value === undefined) throw new Error('the run produced no manuscript')
+    publishArtifactVersion(store, {
+      runId: run.runId,
+      slug: 'manuscript',
+      expectedRevision: snapshot.revision,
+      expectedVersion: meta.ref.version,
+      // THE SAME DOCUMENT WITH EVERY CITATION MARKER REMOVED, which is what the writer's prose is
+      // when the roster it was given was empty.
+      value: {
+        ...value,
+        sections: value.sections.map(section => ({
+          ...section,
+          bodyText: section.bodyText.replace(/\[@[^\]\s]+\]/gu, ''),
+        })),
+      },
+      producer: 'manuscript-import',
+      basis: 'a person removed the citations',
+    })
+    const manifest = planRunPackage(store, run, 'production').manifest
+    const check = manifest.checks.find(entry => entry.code === 'manuscript-cites-sources')
+    expect(check?.passed).toBe(false)
+    expect(check?.detail).toContain('held')
+    expect(manifest.state).toBe('draft')
   })
 })
 

@@ -388,6 +388,7 @@ function snapshotOf(
     producerAttemptId: meta.producerAttemptId,
     producedAt: meta.producedAt,
     invalidated: meta.invalidated,
+    ...(meta.publishedBy === undefined ? {} : { publishedBy: meta.publishedBy }),
   }))
 
   return {

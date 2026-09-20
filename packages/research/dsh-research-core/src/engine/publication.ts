@@ -18,6 +18,15 @@
  *   - a producer that is empty (an artifact whose producer nobody can name is one whose origin
  *     cannot be read off the registry).
  *
+ * WHO WROTE THIS TEXT, AND WHICH STEP IT CAME FROM, ARE TWO FACTS. A published entry inherits the
+ * replaced entry's `producerStepId` and `producerAttemptId` and records the publisher in
+ * `publishedBy`. The inherited pair is what the engine schedules on — `canStart` requires a step's
+ * input to name a PASSED step at the attempt that wrote it — and a slug whose entry named a publisher
+ * satisfied no downstream input at all, so a run whose manuscript a person had edited could not be
+ * driven past the step that reads it. Inheriting is not a claim that the step wrote this text: the
+ * publication, its basis, its replaced version and the publisher are all in the audit record, and
+ * `publishedBy` says the same thing on the registry entry a reader is looking at.
+ *
  * WHAT IT DOES NOT DO: it does not decide whether the new value is any good, does not move a step's
  * status, and does not invalidate the versions that were derived from the superseded one. The
  * registry keeps one entry per slug, so a reader that recorded the previous version still holds a
@@ -59,7 +68,8 @@ export interface ArtifactPublicationRequest {
   /** The new value, as the caller produced it from the version above. */
   readonly value: unknown
   /**
-   * Who produced the new version, recorded on the registry entry.
+   * Who published the new version, recorded on the registry entry as `publishedBy` and in the audit
+   * record.
    *
    * A STEP ID WOULD BE A LIE HERE, so the field is a name in the producer vocabulary rather than an
    * id: `producerStepId` records which step wrote an entry, and neither of this operation's callers
@@ -199,10 +209,19 @@ export function publishArtifactVersion(
   }
   run.registry[request.slug] = {
     slug: request.slug,
-    // A PERSON OR AN OPERATION DECIDING IS NOT A STEP EXECUTING, and the record says so — see
-    // {@link ArtifactPublicationRequest.producer}.
-    producerStepId: request.producer,
-    producerAttemptId: 0,
+    // THE PUBLICATION INHERITS THE PRODUCER LINK OF THE VERSION IT REPLACES. The engine decides
+    // whether a step may start from `producerStepId`/`producerAttemptId`, so a published slug whose
+    // entry named a producer that is not a passed step satisfied NO downstream input: an imported or
+    // repaired run could not be driven past the step that reads the slug again, and the only way back
+    // was to roll the step back and re-commit it, discarding the edit the publication exists to keep.
+    // The dependency the pipeline scheduled on is the step that produced the value this one replaces,
+    // and it is still the same artifact under the same slug.
+    producerStepId: previous.producerStepId,
+    producerAttemptId: previous.producerAttemptId,
+    // WHO PUBLISHED IT, kept beside the inherited link. The inherited fields answer "which step does
+    // this artifact come from"; they cannot answer "a person wrote this text", and the audit record
+    // of the publication is not where a reader of the registry would look.
+    publishedBy: request.producer,
     value: request.value,
     producedAt: publishedAt,
     invalidated: false,

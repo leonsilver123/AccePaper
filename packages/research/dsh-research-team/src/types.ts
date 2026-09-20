@@ -672,6 +672,14 @@ export interface ResearchArtifactMetaView {
   readonly producerAttemptId: number
   readonly producedAt: number
   readonly invalidated: boolean
+  /**
+   * Who published this version, when a person or an operation published it rather than a step.
+   *
+   * THE PRODUCER LINK ABOVE NO LONGER NAMES THE PUBLISHER: a publication inherits the replaced
+   * entry's `producerStepId`/`producerAttemptId` so the steps after it can still start, and this is
+   * what says a person wrote this text.
+   */
+  readonly publishedBy?: string
 }
 
 /**

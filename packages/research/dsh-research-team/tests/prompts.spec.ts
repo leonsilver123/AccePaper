@@ -24,6 +24,21 @@ import { revisionInstruction, sectionInstruction, sectionRevisionOf } from '../s
 import { D4_AUTHOR_INSTRUCTIONS_VERSION, REBUTTAL_INSTRUCTION } from '../src/runner/prompts/d4-rebuttal.ts'
 import { LINE_JOIN, PROSE_JOIN, instructionOf, labelledLines } from '../src/runner/prompts/skeleton.ts'
 import type { InstructionParts } from '../src/runner/prompts/skeleton.ts'
+import type { OutlineMeasurement } from '../src/runner/prompts/d2-framework.ts'
+
+/**
+ * The run's own measurement, as D2's instruction states it.
+ *
+ * The platoon study's own numbers, the ones every other spec in this package uses: a claim that
+ * committed to an increase of at least 20 %, and a record that measured a fall of 38.2 %.
+ */
+const outlineMeasurement: OutlineMeasurement = {
+  metricLabel: 'minimum time-to-collision',
+  measuredPct: -38.2,
+  outcome: 'refuted',
+  committedDirection: 'increase',
+  thresholdPct: 20,
+}
 
 describe('the skeleton an instruction is assembled from', () => {
   it('assembles the parts it is given, in the skeleton order and not the caller\'s', () => {
@@ -97,13 +112,55 @@ describe('the instruction each step sends', () => {
     // THE COUNT AND THE ORDER ARE STATED IN THE FORMAT, which is what an offline route answered
     // wrongly when the format was prose about a separator. Three ids here, three placeholders, and
     // the parenthetical names them in order.
-    expect(frameworkInstruction({ sectionIds: ['a', 'b', 'c'] })).toBe([
+    expect(frameworkInstruction({ sectionIds: ['a', 'b', 'c'], measurement: outlineMeasurement })).toBe([
       'Write the title and section headings for the paper that reports this work.',
       'Reply with exactly these two lines and nothing else:',
       'TITLE: <a specific paper title>',
       'SECTIONS: <heading> | <heading> | <heading>',
       '  (one per placeholder, in this order: a, b, c)',
+      'The title and the section headings may state a direction only where the run\'s own record found'
+      + ' that direction. The direction words in the title are read against that record and a title'
+      + ' that asserts the direction the measurement contradicts is refused — a headline claiming the'
+      + ' quantity rose above a study that measured it falling is a defect this pipeline refuses'
+      + ' rather than a matter of emphasis. A heading is a claim like the title, read the same way:'
+      + ' state the direction the record found, or state no direction at all.'
+      + ' This run\'s record measures a change of -38.2% in the minimum time-to-collision — it fell —'
+      + ' against a claim that committed to an increase of at least 20%. The measurement CONTRADICTS'
+      + ' the claim, so a title or a heading that states an increase asserts the finding this study'
+      + ' refuted.',
     ].join('\n'))
+  })
+
+  it('states the run\'s own record, at the strength the check that reads the title applies it', () => {
+    // THE CONSTRAINT IS THE RUN'S, NOT A HOUSE STYLE: `red-claim` reads the title's direction words
+    // against the record and refuses a headline that asserts the finding the study refuted, and D2 is
+    // where that headline is written. A pre-send reading of this instruction refused it on the
+    // deployment, 2026-09-20 — "it states nothing limiting what the title and headings may assert" —
+    // which was a finding about the instruction and not about the check.
+    const refuted = frameworkInstruction({ sectionIds: ['a'], measurement: outlineMeasurement })
+    expect(refuted).toContain('it fell')
+    expect(refuted).toContain('asserts the finding this study refuted')
+    // A MEASUREMENT THAT SUPPORTS THE CLAIM PERMITS THE DIRECTION IT FOUND: the check refuses a
+    // contradicting direction and nothing else, so a constraint that forbade every direction word
+    // would be a rule this pipeline does not have.
+    const supported = frameworkInstruction({
+      sectionIds: ['a'],
+      measurement: { ...outlineMeasurement, measuredPct: 38.2, outcome: 'supported' },
+    })
+    expect(supported).toContain('it rose')
+    expect(supported).toContain('states what this study found')
+    expect(supported).not.toContain('asserts the finding this study refuted')
+    // AND A CLAIM THAT STATED NO THRESHOLD SAYS SO rather than being reported as one that stated 0 %.
+    const unbounded = frameworkInstruction({
+      sectionIds: ['a'],
+      measurement: {
+        metricLabel: 'minimum time-to-collision',
+        measuredPct: -38.2,
+        outcome: 'refuted',
+        committedDirection: 'increase',
+      },
+    })
+    expect(unbounded).toContain('committed to an increase with no threshold stated')
   })
 
   it('pins what D4 asks for', () => {

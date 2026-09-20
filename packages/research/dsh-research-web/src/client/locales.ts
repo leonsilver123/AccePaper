@@ -425,6 +425,7 @@ export const zh = {
   'packageCheck.run-saved': '这次运行已落盘',
   'packageCheck.manuscript-typeset': '排版稿渲染的正是这次运行当前持有的那一版文档',
   'packageCheck.manuscript-gated': '这一版文档还没有经过任何一道关卡的裁决',
+  'packageCheck.manuscript-cites-sources': '稿件引用了这次运行所持有的来源',
   'packageCheck.typeset-complete': '部署声明的投稿格式都有对应文件,且字节与编译记录一致',
 } as const
 
@@ -847,5 +848,6 @@ export const en: Record<ResearchKey, string> = {
   'packageCheck.run-saved': 'the run reached the disk',
   'packageCheck.manuscript-typeset': 'the typeset form renders the version of the document the run holds',
   'packageCheck.manuscript-gated': 'no gate has judged the version of the document the run holds',
+  'packageCheck.manuscript-cites-sources': 'the manuscript cites the sources the run held',
   'packageCheck.typeset-complete': 'every submission format the deployment declared has its document, carrying the bytes the compile recorded',
 }

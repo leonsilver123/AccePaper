@@ -1379,12 +1379,14 @@ describe('what a process accepted, the next process reads off the disk', () => {
       expect(listed.find(entry => entry.runId === reported.runId)?.execution).toBe('stopped')
 
       // LOADED, with the manuscript a person published: the version moved past the one the writing
-      // steps left, and the producer names the person rather than a step.
+      // steps left, and the record says a person published this version.
       const snapshot = await next.service.runSnapshot({ runId: reported.runId })
-      // THE MANUSCRIPT A PERSON PUBLISHED, named by the producer rather than by a step: D3 wrote the
-      // first one, D4 republished it, and this one is neither's.
+      // THE MANUSCRIPT A PERSON PUBLISHED, and WHERE THAT IS RECORDED: the entry keeps the producer
+      // link of the version it replaced — D4's, which is what the engine schedules the steps after
+      // it on — and `publishedBy` is what says the text a person published came from a person.
       const manuscript = snapshot?.artifacts.find(artifact => artifact.slug === 'manuscript')
-      expect(manuscript?.producerStepId).toBe('human-acceptance')
+      expect(manuscript?.publishedBy).toBe('human-acceptance')
+      expect(manuscript?.producerStepId).toBe('D4-rebuttal')
 
       // THE RECORD ON DISK AGREES, and the text it published is the text in the manuscript.
       const record = JSON.parse(
@@ -1394,9 +1396,9 @@ describe('what a process accepted, the next process reads off the disk', () => {
       expect(record.manuscriptVersion).toBe(reported.acceptance?.manuscriptVersion)
       expect(record.persisted).toBe(true)
       const onDisk = JSON.parse(readFileSync(join(root, reported.runId, 'research-run-snapshot.json'), 'utf8')) as {
-        registry: Record<string, { producerStepId: string; ref: { version: number } }>
+        registry: Record<string, { producerStepId: string; publishedBy?: string; ref: { version: number } }>
       }
-      expect(onDisk.registry['manuscript']?.producerStepId).toBe('human-acceptance')
+      expect(onDisk.registry['manuscript']?.publishedBy).toBe('human-acceptance')
       expect(onDisk.registry['manuscript']?.ref.version).toBe(reported.acceptance?.manuscriptVersion)
     } finally {
       await next.dispose()

@@ -49,6 +49,9 @@ function facts(): FinalPackageFacts {
       documents: [],
     },
     compilation: { tool: null, dropped: [] },
+    // NOTHING HELD AND NOTHING CITED: this fixture satisfies nothing, and the condition's own
+    // values do not matter to what this spec reads the function for.
+    citations: { made: 0, held: 0 },
     approval: undefined,
     declaredFiles: [],
     packagedFiles: [],

@@ -65,7 +65,14 @@ export type CitationAccess =
 
 /** One source, as it was retrieved, with every field the source itself stated. */
 export interface SourceRecord {
-  /** The identifier the retrieval service gave it. */
+  /**
+   * The identity this chain cites and resolves the source by.
+   *
+   * FOR A REGISTERED SOURCE IT IS THE DOI THE RECORD STATES (see `citationIdOf`), because the
+   * reviewed assessment this record has to be joined to names its source by DOI; a curated source's
+   * id is its DOI for the same reason. The identifier the retrieval service minted stays on the
+   * source's own evidence binding.
+   */
   readonly id: string
   /** The DOI or other scheme the source is identified by, when it stated one. */
   readonly ref: { readonly kind: string; readonly id: string }
@@ -338,6 +345,32 @@ export function reviewedSources(): ReadonlyMap<string, SourceRecord> {
 }
 
 /**
+ * The identity a registered source is cited and judged under.
+ *
+ * THE DOI IT STATES, WHEN IT STATES ONE, because every other end of this chain keys on the DOI:
+ * `judgementsFor` resolves a reviewed assessment by `assessment.sourceDoi`, `citeKeyOf` mints the
+ * writer's marker from the id, and `bibliographyOf` resolves a citation by it. A registration keyed
+ * by `registration.identity` — `zotero:<type>:<library>:<itemKey>`, which is never a DOI — could
+ * therefore never carry a judgement, and a run under a library registry passed every anchoring gate
+ * on the reviewed corpus and then wrote a paper with nothing citable in it.
+ *
+ * THE REGISTRY IDENTITY IS NOT LOST. It is the key of the source's own `EvidenceBinding.sourceIdentity`
+ * (see `sourceRecordOf`), which is what the deployment's attachment reader resolves — the reader is
+ * handed an identity, not a DOI, and the two naming one work are not interchangeable.
+ *
+ * A REGISTRATION THAT STATES A NON-DOI REFERENCE keeps its identity: nothing else in this run keys
+ * on an ISBN or an arXiv id, so the identity is the only name the citation chain can carry.
+ *
+ * @param registration - the source, as the reading package handed it over.
+ * @returns the id its judgements, markers and reference entries are all keyed by.
+ */
+export function citationIdOf(registration: SourceRegistration): string {
+  return registration.ref.kind === 'doi' && registration.ref.id !== ''
+    ? registration.ref.id
+    : registration.identity
+}
+
+/**
  * One source a deployment's registry offered, as a record the citation chain can use.
  *
  * @param registration - the source, as the reading package handed it over.
@@ -345,7 +378,7 @@ export function reviewedSources(): ReadonlyMap<string, SourceRecord> {
  */
 export function sourceRecordOf(registration: SourceRegistration): SourceRecord {
   return {
-    id: registration.identity,
+    id: citationIdOf(registration),
     ref: registration.ref,
     title: registration.title,
     authors: registration.authors,
@@ -368,6 +401,10 @@ export function sourceRecordOf(registration: SourceRegistration): SourceRecord {
  *
  * `combined` registers each source WITH ITS OWN ORIGIN rather than pooling two lists, so which
  * registry a reference came from survives into the bibliography.
+ *
+ * A REGISTERED SOURCE IS KEYED BY THE DOI IT STATES, which is the one name every other part of this
+ * chain resolves a judgement, a marker and a reference entry by — see `citationIdOf`. The two modes
+ * agreeing on that key is what makes `combined` one set of sources rather than two.
  *
  * @param mode - which registry this run draws on.
  * @param registrations - what the library registry offered, empty for a run that does not read one.
@@ -557,6 +594,42 @@ export function judgementsFor(
       }]
     })
     .sort((left, right) => left.citeKey.localeCompare(right.citeKey))
+}
+
+/**
+ * Why this run cannot cite the evidence it holds, or null when it can.
+ *
+ * THE STATE THIS NAMES IS INVISIBLE WHERE IT IS PRODUCED. A claim the compiled corpus has reviewed
+ * assessments for, a registry whose sources the run cannot join those assessments to, and the run
+ * then has NO citable source: D3 is handed an empty roster, writes a paper permitted to cite nothing,
+ * and every downstream check is satisfied by emptiness — `checkManuscriptCitations` runs neither of
+ * its loops when the body cites nothing and the reference list is empty. The result is a manuscript
+ * that cites nothing at all, which reads to a referee as a paper with no literature rather than as a
+ * misconfiguration, and the person who can fix it is the one who configured the registry, at the
+ * point where the run is set up.
+ *
+ * A CLAIM WITH NO REVIEWED ASSESSMENT IS NOT THIS STATE. It is a claim the corpus says nothing about,
+ * and the B channel reports that itself — under the production profile it abstains and the run holds,
+ * which is a recorded outcome rather than a configuration a person has to change. Refusing it here
+ * would refuse every study this repository ships that is not the default one.
+ *
+ * @param claimRef - the claim identity the run is committed to.
+ * @param sources - the sources its configured registry offered.
+ * @returns the refusal, naming what was reviewed and what could not be cited, or null.
+ */
+export function citableSourceRefusal(
+  claimRef: string,
+  sources: ReadonlyMap<string, SourceRecord>,
+): string | null {
+  const reviewed = assessmentsFor(claimRef).length
+  if (reviewed === 0) return null
+  const citable = judgementsFor(claimRef, sources).length
+  if (citable > 0) return null
+  return `this run's claim has ${String(reviewed)} reviewed source(s) in the evidence corpus, and the`
+    + ' configured source registry yields none of them as citable'
+    + ` (${String(sources.size)} source(s) configured) — every anchoring gate would pass on the`
+    + ' corpus while the paper was written with nothing it may cite. Point the registry at sources'
+    + ' this claim has been reviewed for, or run the claim the corpus carries'
 }
 
 /**
