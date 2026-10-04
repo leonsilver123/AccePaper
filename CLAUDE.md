@@ -43,7 +43,7 @@ The service name `agentTeams` also belongs to `packages/experimental/agent-team`
 
 `@deepseek-ai/dsh-research-app` is **not** in the shipped `PROFILE_TEMPLATES` (`packages/boot/app-boot/src/profile.ts`), so `dsh web --profile web` alone does not mount it. Add it to the profile's `dsh.profile.bundles` after `dsh-base` and `dsh-web-app`; the patch then moves the webserver fallback port from 3080 to **1120** (an explicit `--port` still wins).
 
-The recorded boot procedure, its four attempts, and the seed/junction steps are in `plan/overnight/2026-09-09/t30-attempts.md`. It depended on one committed fix: `ResearchTeamService.static inject` must list `'tools'`, because construction installs the tool guard.
+The boot procedure's one committed dependency is that `ResearchTeamService.static inject` must list `'tools'`, because construction installs the tool guard.
 
 ## Commands for the research surface
 
@@ -70,11 +70,6 @@ Fixture evidence never upgrades to real evidence; passing tests are not completi
 
 ## Where current state lives
 
-The planning corpus is tracked here and is the authority on status. Each research package carries a README alongside its file-header contract comments (`ce2ed07c`, 2026-09-12, added the five; this file claimed until 2026-09-14 that there were none). None of those READMEs has a Chinese counterpart yet, so `verify-translation-pairing` lists them.
+Each research package carries a README alongside its file-header contract comments (`ce2ed07c`, 2026-09-12, added the five; this file claimed until 2026-09-14 that there were none). None of those READMEs has a Chinese counterpart yet, so `verify-translation-pairing` lists them.
 
-- `plan/overnight/2026-09-09/t30-attempts.md` — newest technical truth: the port-1120 boot recipe and its failure modes.
-- `plan/overnight/2026-09-09/HANDOFF-2026-09-09.md` — status matrix, git topology, environment traps, prioritized next steps. Predates the successful Attempt 4.
-- `project-plan/05_execution_wbs.md` — WBS tasks `T01`–`T44`; `project-plan/06_test_acceptance.md` — gates `G1`–`G18` and the execution-record format; `project-plan/overnight/<date>/` — `execution-ledger.md`, `coverage-report.md`, `audit-register.md`.
-- `project-plan/overnight/2026-09-03/decisions.md` — user rulings `DEC-001`–`005`, which explain why several contracts look as they do.
-
-Traps when reading them: `plan/overnight/...` and `project-plan/overnight/...` are different directories, neither complete alone. The documents were written from other checkouts (`G:\AccePaper-main\deepseek-harness-dev`, `C:\Users\Leon\...`), so their paths and some status claims are stale against this tree — check the code before trusting either. `morning-report.md` opens with its own corrections block; read that before its body.
+The planning corpus that used to sit beside them (`plan/`, `project-plan/`) is no longer tracked in this repository. Its documents were written from other checkouts and their paths and status claims were already stale against this tree, so the code was the authority even while they were present.

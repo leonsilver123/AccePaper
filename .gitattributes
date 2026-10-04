@@ -13,11 +13,3 @@
 # Pairing records are generated from the three confirmed owner-blob pairs.
 # The worktree-local installer registers the fail-closed driver command.
 *.i18n.yaml merge=dsh-translation-pairing
-project-plan/**/*.bundle filter=lfs diff=lfs merge=lfs -text
-# A run package is evidence, and its manifest's SHA-256 is over these bytes. The working tree has
-# to keep them exactly as the run wrote them — trailing spaces included, since the tables the run
-# produces are column-aligned — and no line-ending conversion may sit between the file on disk and
-# the digest beside it. Without this, `git diff --check` demanded a trim that would have invalidated
-# every digest in the manifest: the delivered package lost twenty bytes that way, and could no
-# longer be verified against the manifest it came with.
-project-plan/**/package-*/** -text -whitespace
